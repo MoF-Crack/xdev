@@ -1,0 +1,53 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+bin/
+build/bin/
+build/download-audit-*.json
+build/download-audit-*.md
+build/linkaudit-cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/package.json.md5
+
+# Go
+vendor/
+
+# Test
+*.test
+*.out
+*.prof
+
+# Config (user-specific)
+.xmdevenvmt/
+
+# Runtime state (toolsHashFullCheck)
+progress.json
+
+# Stray junk (Windows nul device encoding artifacts)
+nul
+nul?
+
+# Signing keys (public key may be committed; private key never)
+keys/priv.key
