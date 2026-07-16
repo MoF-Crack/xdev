@@ -17,3 +17,7 @@ frontend/wailsjs/go/models.ts -whitespace
 
 # Markdown hard line breaks intentionally use trailing spaces.
 build/manifest-changes-unsigned.md -whitespace
+UNI_ENV_开发文档.md -whitespace
+docs/download-cache-recovery.md -whitespace
+docs/security-audit-verification.md -whitespace
+docs/security-audit.md -whitespace

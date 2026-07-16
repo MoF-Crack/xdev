@@ -1,0 +1,28 @@
+- [x] `isInsideNodeDir` 在路径含 `\node\` 但无 node.exe 时返回 `false`
+- [x] yarn/pnpm 在非 Node.js 安装目录下被正确识别为独立包管理器
+- [x] `getVersion` 能正确获取 cmake、make、gradle 等工具的版本号
+- [x] `extractVersion` 能解析 `cmake version X.Y.Z`、`GNU Make X.Y` 等格式
+- [x] 迁移工具后版本号显示真实版本而非 "local"
+- [x] `localInfo` 结构体包含 `Source` 字段，迁移工具标记为 "local"
+- [x] 前端工具列表中 local 来源工具有视觉标记
+- [x] `MigrateLocalToolByMove` 方法实现目录移动迁移
+- [x] 移动迁移失败时有回滚机制
+- [x] 前端迁移界面提供 Junction/移动方式选择
+- [x] `TestMirrorConnectivity` API 返回连通状态和延迟
+- [x] 前端镜像配置卡片有测试按钮和结果显示
+- [x] `DashboardStats` 包含 `InstalledTools []InstalledToolInfo` 字段
+- [x] 前端仪表盘展示已安装工具版本列表
+- [x] 安装成功后自动删除对应缓存包和 `.sha256` 文件
+- [x] `GetCacheBreakdown` API 返回缓存分类统计
+- [x] `CleanCache` API 支持按分类清理
+- [x] 前端设置页面展示缓存分类明细和清理按钮
+- [x] 侧边栏新增"环境变量"独立导航项
+- [x] 环境变量管理页面功能完整（与原 Settings 中一致）
+- [x] Settings 页面已移除环境变量管理卡片
+- [x] `GetAboutInfo` API 返回版本号、构建日期等信息
+- [x] 侧边栏底部新增"关于"导航项
+- [x] 关于页面展示应用名称、版本、构建信息、项目链接
+- [x] `go vet ./...` 零警告
+- [x] `go test ./internal/...` 全部通过
+- [x] CLI 和 GUI 二进制编译成功
+- [x] Wails 绑定生成正确，TypeScript 类型更新
