@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ""
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Lint
+        run: go vet ./...
+
+      - name: Build CLI
+        run: go build -ldflags="-s -w" -o xdev${{ matrix.ext }} .
+
+      - name: Test
+        run: go test ./... -v -count=1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdev-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: xdev${{ matrix.ext }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Sign manifests
+        if: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY != '' }}
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
+        run: |
+          mkdir -p keys
+          echo "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
+          chmod 600 keys/priv.key
+          go build -o xdev .
+          ./xdev sign-manifests --manifests-dir manifests --priv-key keys/priv.key
+
+      - name: Build all platforms
+        env:
+          PUB_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+        run: |
+          mkdir -p dist
+          LDFLAGS="-s -w"
+          if [ -n "$PUB_KEY" ]; then
+            LDFLAGS="$LDFLAGS -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$PUB_KEY"
+          fi
+          GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/xdev-linux-amd64 .
+          GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/xdev-linux-arm64 .
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/xdev-windows-amd64.exe .
+          GOOS=darwin   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/xdev-darwin-amd64 .
+          GOOS=darwin   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/xdev-darwin-arm64 .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
