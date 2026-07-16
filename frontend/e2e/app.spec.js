@@ -1,0 +1,377 @@
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test } from '@playwright/test';
+import { createInitializedWailsBrowserMocks, createWailsBrowserMocks } from '../test/mocks/wails.js';
+
+const cases = {
+  setup: { viewport: { width: 1024, height: 640 }, theme: 'dark', locale: 'en' },
+  dashboard: { viewport: { width: 1440, height: 900 }, theme: 'dark', locale: 'zh' },
+  catalog: { viewport: { width: 1024, height: 640 }, theme: 'light', locale: 'en' },
+  settings: { viewport: { width: 1440, height: 900 }, theme: 'light', locale: 'zh' },
+  drawer: { viewport: { width: 1440, height: 900 }, theme: 'dark', locale: 'en' },
+  progress: { viewport: { width: 1024, height: 640 }, theme: 'light', locale: 'zh' },
+};
+
+async function openApp(page, testInfo, options, initialized = true) {
+  testInfo.pageErrors = [];
+  page.on('pageerror', (error) => testInfo.pageErrors.push(error.message));
+  await page.setViewportSize(options.viewport);
+  await page.addInitScript(({ theme, locale }) => {
+    localStorage.setItem('xdev-theme', theme);
+    localStorage.setItem('locale', locale);
+  }, options);
+  await page.addInitScript(initialized ? createInitializedWailsBrowserMocks : createWailsBrowserMocks);
+  await page.goto('/');
+  await page.addStyleTag({ content: `
+    *, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }
+  ` });
+}
+
+async function expectDocumentContained(page) {
+  expect(await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }))).toEqual(expect.objectContaining({ documentWidth: await page.evaluate(() => window.innerWidth) }));
+}
+
+async function expectInViewport(locator, viewport) {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+}
+
+async function expectNoSeriousAxeViolations(page) {
+  const { violations } = await new AxeBuilder({ page }).analyze();
+  const serious = violations.filter(({ impact }) => impact === 'critical' || impact === 'serious');
+  expect(serious).toEqual([]);
+  return serious;
+}
+
+async function expectVisibleStateAccessible(page, include = 'main') {
+  const results = await new AxeBuilder({ page }).include(include).analyze();
+  expect(results.violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
+}
+
+async function expectVisibleDialogAccessible(page) {
+  const dialog = page.getByRole('dialog').last();
+  await expect(dialog).toBeVisible();
+  const results = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
+  expect(results.violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
+}
+
+test.afterEach(async ({}, testInfo) => {
+  expect(testInfo.pageErrors ?? []).toEqual([]);
+});
+
+test('setup wizard visual baseline', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.setup, false);
+  await expect(page.locator('.setup-card')).toBeVisible();
+  await expectDocumentContained(page);
+  const setupBox = await page.locator('.setup-card').boundingBox();
+  expect(setupBox.x).toBeGreaterThanOrEqual(0);
+  expect(setupBox.x + setupBox.width).toBeLessThanOrEqual(cases.setup.viewport.width);
+  expect(setupBox.y).toBeGreaterThanOrEqual(0);
+  await page.locator('.setup-nav').scrollIntoViewIfNeeded();
+  await expect(page.locator('.setup-nav')).toBeVisible();
+  expect(await page.locator('.setup-card').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.locator('.setup-card')).toHaveScreenshot('setup-wizard.png', { animations: 'disabled' });
+});
+
+test('dashboard visual baseline', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.dashboard);
+  await page.getByText('仪表盘', { exact: true }).click();
+  await expect(page.getByText('已安装工具', { exact: true })).toBeVisible();
+  await expectDocumentContained(page);
+  await expectInViewport(page.locator('.app-shell__content'), cases.dashboard.viewport);
+  await expect(page.locator('.metric-card')).toHaveCount(4);
+  for (const metric of await page.locator('.metric-card').all()) await expect(metric).toBeVisible();
+  await expect(page.getByText('路径', { exact: true })).toBeVisible();
+  await expect(page.getByText('快捷操作', { exact: true })).toBeVisible();
+  await expect(page.getByText('已安装工具', { exact: true })).toBeVisible();
+  const dashboardAxe = await expectNoSeriousAxeViolations(page);
+  expect(dashboardAxe.some(({ id }) => id === 'color-contrast')).toBe(false);
+  await expect(page).toHaveScreenshot('dashboard-1440-dark-zh.png', { animations: 'disabled' });
+});
+
+test('tool catalog visual baseline', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.catalog);
+  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+  await expectDocumentContained(page);
+  await expectInViewport(page.locator('.app-shell__content'), cases.catalog.viewport);
+  await expect(page.locator('[data-testid="tool-search"]')).toBeVisible();
+  await expect(page.locator('[data-testid="hide-unavailable"]')).toBeVisible();
+  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+  await expect(page.getByText('20.18.0', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('[data-action="detail"]').first()).toBeVisible();
+  await expect(page.locator('[data-action="favorite"]').first()).toBeVisible();
+  const catalogOverflow = await page.locator('.tool-catalog *').evaluateAll((elements) => elements.filter((element) => {
+    const box = element.getBoundingClientRect();
+    const scrollContainer = element.closest('.responsive-data-table');
+    return !scrollContainer && (box.left < 0 || box.right > window.innerWidth);
+  }).map((element) => element.outerHTML.slice(0, 120)));
+  expect(catalogOverflow).toEqual([]);
+  await expect(page).toHaveScreenshot('catalog-1024-light-en.png', { animations: 'disabled' });
+});
+
+test('package manager and favorite actions reach the correct Wails APIs', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.catalog);
+  await page.getByText('Package Managers', { exact: true }).click();
+  await page.locator('[data-testid="hide-unavailable"]').uncheck();
+  await expect(page.getByText('Install from vendor site', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Install' }).first().click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.InstallPackageManager)).toBe(1);
+  await page.getByRole('button', { name: 'Update' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.UpdatePackageManager)).toBe(1);
+  await page.getByRole('row').filter({ has: page.getByText('npm', { exact: true }) }).getByRole('button', { name: 'Favorite', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.AddFavorite)).toBe(1);
+});
+
+test('settings visual baseline', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.settings);
+  await page.getByText('设置', { exact: true }).last().click();
+  await expect(page.getByRole('group', { name: '语言' })).toBeVisible();
+  await expectDocumentContained(page);
+  await expectInViewport(page.locator('.app-shell__content'), cases.settings.viewport);
+  expect(await page.locator('.app-shell__content').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.getByRole('button', { name: '保存镜像' })).toBeVisible();
+  await expectNoSeriousAxeViolations(page);
+  await expect(page).toHaveScreenshot('settings-1440-light-zh.png', { animations: 'disabled' });
+});
+
+test('settings actions reach Wails APIs and destructive cache requires confirmation', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 1440, height: 900 }, theme: 'light', locale: 'en' });
+  await page.getByText('Settings', { exact: true }).last().click();
+  await page.locator('[data-action="theme"]').uncheck();
+  await page.locator('[data-action="locale"]').selectOption('zh');
+  await page.locator('[data-action="path-mode"]').selectOption('direct');
+  await page.locator('[data-action="mirror-test"]').first().click();
+  await page.locator('[data-action="mirror-save"]').click();
+  await page.locator('[data-action="proxy-enable"]').check();
+  await page.getByLabel('HTTP proxy').fill('http://127.0.0.1:8080');
+  await page.locator('[data-action="proxy-test"]').click();
+  await page.locator('[data-action="proxy-save"]').click();
+  await page.locator('[data-action="run-diagnostics"]').click();
+  await page.locator('[data-action="cache-clean-all"]').click();
+  expect(await page.evaluate(() => window.__wailsCalls.CleanCache)).toEqual([]);
+  await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetPathMode: [['direct']], TestMirrorConnectivity: [['https://nodejs.org/dist']], SetProxyConfig: [['http://127.0.0.1:8080', '', '', true]], RunDiagnostics: 1, CleanCache: [['all']] });
+  expect((await new AxeBuilder({ page }).include('.settings-page').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+});
+
+test('environment actions and migration reach Wails APIs', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 1024, height: 720 }, theme: 'dark', locale: 'en' });
+  await page.getByText('Env Vars', { exact: true }).last().click();
+  await page.setViewportSize({ width: 640, height: 720 });
+  await page.locator('[data-action="scope-all"]').click();
+  await page.locator('[data-action="validate"]').click();
+  await page.getByLabel('Tool name').fill('java'); await page.getByLabel('Variable name').fill('JAVA_HOME'); await page.getByLabel('Variable value').fill('C:\\Java');
+  await page.locator('[data-action="save-env"]').click();
+  await page.locator('[data-action="scope-dev"]').click();
+  await page.locator('.env-card[data-row="JAVA_HOME"] [data-action="edit-env"]').click();
+  await page.locator('.env-card[data-row="JAVA_HOME"] [data-action="delete-env"]').click();
+  await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  await page.locator('[data-action="migration-scan"]').click();
+  await page.locator('[data-action="migration-single"]').click();
+  await page.locator('[data-action="migration-scan"]').click();
+  await page.locator('[data-action="migration-all"]').click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetEnvVar: [['java', 'JAVA_HOME', 'C:\\Java', 'user']], DeleteEnvVar: [['java', 'JAVA_HOME', 'user']], ScanMigration: 2, MigrateSingle: expect.any(Array) });
+  expect((await new AxeBuilder({ page }).include('.env-page').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+});
+
+test('project, task, plugin, and service pages preserve API contracts and confirmations', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
+  await page.locator('[data-view="project"]').click();
+  await expectVisibleStateAccessible(page);
+  await page.getByLabel('tool name').fill('go'); await page.getByLabel('version').fill('1.24'); await page.locator('[data-action="set-project-tool"]').click();
+  await page.locator('[data-action="unset-project-tool"]').click(); expect(await page.evaluate(() => window.__wailsCalls.UnsetProjectTool)).toEqual([]);
+  await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  await expect(page.locator('[data-action="install-lockfile"]')).toBeVisible();
+  expect(await page.evaluate(() => window.__wailsCalls.GetLockfile)).toBe(1);
+  await page.locator('[data-action="run-project-task"]').dblclick(); await page.locator('[data-action="install-lockfile"]').click();
+  await page.locator('[data-view="tasks"]').click(); await expectVisibleStateAccessible(page);
+  await page.locator('[data-view="plugins"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-action="open-create-plugin"]').click(); await expectVisibleDialogAccessible(page); await page.locator('[data-field="plugin-name"]').fill('demo'); await page.locator('[data-action="create-plugin"]').click();
+  await page.locator('[data-view="services"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-service="redis"] [data-action="start-service"]').click(); await page.locator('[data-service="postgres"] [data-action="stop-service"]').click(); expect(await page.evaluate(() => window.__wailsCalls.StopService)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetProjectTool: [['go', '1.24']], UnsetProjectTool: [['node']], RunProjectTask: [['build']], InstallFromLockfile: [[]], CreatePlugin: [['demo']], StartService: [['redis']], StopService: [['postgres']] });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).include('main').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+});
+
+test('AI, isolation, remote, custom tools, and about pages preserve API contracts', async ({ page }, testInfo) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
+  await page.locator('[data-view="ai"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-field="suggest-tool"]').fill('node'); await page.locator('[data-action="suggest"]').click(); await page.locator('[data-field="diagnose-problem"]').fill('path'); await page.locator('[data-action="diagnose"]').click(); await page.locator('[data-field="chat-message"]').fill('hello'); await page.keyboard.press('Control+Enter');
+  await page.locator('[data-view="isolate"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-action="setup"]').click(); await page.locator('[data-field="isolate-command"]').fill('node --version'); await page.locator('[data-action="exec"]').click(); await page.locator('[data-action="teardown"]').click(); expect(await page.evaluate(() => window.__wailsCalls.IsolateTeardown)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  await page.locator('[data-view="remote"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-field="remote-image"]').fill('ubuntu:22.04'); await page.locator('[data-action="create-remote"]').click(); await page.locator('[data-action="copy-address"]').click(); expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('C:\\remote'); await page.locator('[data-field="remote-command"]').fill('pwd'); await page.locator('[data-action="exec-remote"]').click(); await page.locator('[data-action="destroy-remote"]').click(); expect(await page.evaluate(() => window.__wailsCalls.DestroyRemoteInstance)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  await page.locator('[data-view="custom-tools"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-action="open-add-tool"]').click(); await expectVisibleDialogAccessible(page); await page.locator('[data-field="tool-name"]').fill('new'); await page.locator('[data-field="tool-display-name"]').fill('New'); await page.locator('[data-field="tool-url"]').fill('https://example.test/new.zip'); const addButton = page.locator('[data-action="submit-tool"]').getByRole('button', { name: 'Add' }); await addButton.click(); await expect.poll(() => page.evaluate(() => window.__wailsCalls.AddCustomTool.length)).toBe(1); await expect(addButton).toBeEnabled(); await page.locator('[data-action="submit-tool"]').getByRole('button', { name: 'Cancel' }).click(); await page.locator('[data-action="install-tool"]').click(); await page.locator('[data-action="remove-tool"]').click(); expect(await page.evaluate(() => window.__wailsCalls.RemoveCustomTool)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
+  await page.locator('[data-view="about"]').click(); await expect(page.getByText('1.0.0', { exact: true })).toBeVisible(); await expectVisibleStateAccessible(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).include('main').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ AISuggest: [['node']], AIDiagnose: [['path']], AIChat: [['hello']], IsolateSetup: [['container']], IsolateExec: [[['node', '--version']]], IsolateTeardown: [[]], CreateRemoteInstance: [['docker', 'ubuntu:22.04', '', 22, 'root', '']], ExecRemoteInstance: [['docker', 'remote-1', ['pwd']]], DestroyRemoteInstance: [['docker', 'remote-1']], InstallCustomTool: [['demo']], RemoveCustomTool: [['demo']] });
+});
+
+test('tool detail drawer visual baseline', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.drawer);
+  await page.getByText('Node.js', { exact: true }).click();
+  await expect(page.locator('.n-drawer')).toBeVisible();
+  await expectDocumentContained(page);
+  const drawerPanel = page.locator('.n-drawer-content-wrapper');
+  await expectInViewport(drawerPanel, cases.drawer.viewport);
+  expect(await drawerPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Install' }).first()).toBeVisible();
+  await expect(page).toHaveScreenshot('tool-drawer-1440-dark-en.png', { animations: 'disabled' });
+});
+
+test('tool detail drawer returns focus to its detail trigger', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.drawer);
+  const trigger = page.locator('[data-action="detail"]').first();
+  await trigger.focus();
+  await trigger.click();
+  await expect(page.locator('.n-drawer')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.n-drawer')).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test('command palette supports keyboard navigation and restores trigger focus', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.catalog);
+  const trigger = page.getByRole('button', { name: 'Open command palette' });
+  await trigger.focus();
+  await page.keyboard.press('Control+K');
+
+  const combobox = page.getByRole('combobox', { name: 'Search commands, pages, and tools' });
+  await expect(combobox).toBeFocused();
+  await expectVisibleDialogAccessible(page);
+  await expect(combobox).toHaveAttribute('aria-activedescendant', /command-option-/);
+  await page.keyboard.press('End');
+  const activeId = await combobox.getAttribute('aria-activedescendant');
+  await expect(page.locator(`#${activeId}`)).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Escape');
+
+  await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test('installation progress visual baseline', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.progress);
+  await page.getByText('Node.js', { exact: true }).click();
+  await page.getByRole('button', { name: '安装' }).locator(':not([disabled])').first().click();
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    tool: 'node', version: '22.14.0', percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s',
+  }));
+  await expect(page.locator('.n-modal')).toBeVisible();
+  await expectDocumentContained(page);
+  await expectInViewport(page.locator('.n-modal'), cases.progress.viewport);
+  expect(await page.locator('.n-modal').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.getByRole('button', { name: '暂停' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '继续' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '取消' })).toBeVisible();
+  expect(await page.locator('.n-modal').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const progressAxe = await expectNoSeriousAxeViolations(page);
+  expect(progressAxe.some(({ id }) => id === 'color-contrast')).toBe(false);
+  await expect(page).toHaveScreenshot('install-progress-1024-light-zh.png', {
+    animations: 'disabled',
+    maxDiffPixels: 20,
+  });
+});
+
+test('installation pause resume and cancel use the active task and protect the dialog', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.progress);
+  await expectVisibleStateAccessible(page, '.tool-catalog');
+  const detailTrigger = page.locator('[data-action="detail"]').first();
+  await detailTrigger.click();
+  await expectVisibleStateAccessible(page, '.n-drawer');
+  await page.getByRole('button', { name: '安装' }).first().click();
+  await expect(page.locator('.n-modal')).toBeVisible();
+  await expectVisibleDialogAccessible(page);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.n-modal')).toBeVisible();
+  await page.locator('.n-modal-mask').click({ position: { x: 2, y: 2 } });
+  await expect(page.locator('.n-modal')).toBeVisible();
+  await page.getByRole('button', { name: '暂停' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.PauseDownload)).toEqual([['node@22.14.0']]);
+  await expect(page.getByRole('button', { name: '继续' })).toBeEnabled();
+  await page.getByRole('button', { name: '继续' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.ResumeDownload)).toEqual([['node@22.14.0']]);
+  await page.getByRole('button', { name: '取消' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.CancelDownload)).toEqual([['node@22.14.0']]);
+  await expect(page.locator('.n-modal')).toBeHidden();
+  await expect(detailTrigger).toBeFocused();
+});
+
+test('narrow app shell is compact, contained, and has no serious accessibility violations', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
+  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+
+  await expect(page.locator('.app-sidebar')).toHaveCSS('width', '56px');
+  await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  const results = await new AxeBuilder({ page })
+    .include('.title-bar')
+    .include('.app-sidebar')
+    .analyze();
+  expect(results.violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
+});
+
+test('setup page has no new detectable accessibility violations', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.setup, false);
+  await expect(page.locator('.setup-card')).toBeVisible();
+  const results = await new AxeBuilder({ page })
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
+async function expectNoAxeViolations(page) {
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+}
+
+test('setup radios support label click, Space, Arrow keys, step flow, and focus', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.setup, false);
+  const systemDrive = page.getByRole('radio', { name: /C:/ });
+  const recommendedDrive = page.getByRole('radio', { name: /D:/ });
+  await expect(recommendedDrive).toBeChecked();
+  await systemDrive.locator('xpath=ancestor::label').click({ position: { x: 200, y: 20 } });
+  await expect(systemDrive).toBeChecked();
+  await recommendedDrive.focus();
+  await page.keyboard.press('Space');
+  await expect(recommendedDrive).toBeChecked();
+  await page.keyboard.press('ArrowLeft');
+  await expect(systemDrive).toBeChecked();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByRole('heading', { name: 'Confirm Configuration' })).toBeFocused();
+  await expectNoAxeViolations(page);
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect(page.locator('[data-step-heading="1"]')).toBeFocused();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Confirm & Save' }).click();
+  await expect(page.getByRole('heading', { name: 'Setup Complete!' })).toBeFocused();
+  await expectNoAxeViolations(page);
+  await page.getByRole('button', { name: 'Start Using' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.InitConfig)).toEqual([['C:\\XDev']]);
+});
+
+test('setup normal, error, and narrow custom path states remain accessible and contained', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { ...cases.setup, viewport: { width: 320, height: 400 } }, false);
+  await expectNoAxeViolations(page);
+  await page.getByRole('button', { name: 'Browse for installation path' }).click();
+  await expect(page.locator('[data-testid="selected-path"]')).toContainText('server');
+  await expectDocumentContained(page);
+  await page.getByRole('button', { name: 'Next' }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
+  await expectNoAxeViolations(page);
+
+  await page.addInitScript(() => { window.__failSetupDrives = true; });
+  await page.reload();
+  await expect(page.locator('#setup-load-error')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+  await expectNoAxeViolations(page);
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.locator('#setup-load-error')).toBeFocused();
+  await page.evaluate(() => { window.__failSetupDrives = false; });
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.getByRole('radio', { name: /C:/ })).toBeFocused();
+});

@@ -1,0 +1,98 @@
+name: android-platform
+display_name: Android Platform (android.jar)
+description: Android SDK platform providing android.jar and framework APIs.
+homepage: https://developer.android.com/tools/releases/platforms
+category: mobile
+shims: []
+env_vars:
+    ANDROID_HOME: '{{install}}\..'
+    ANDROID_PLATFORM: '{{install}}'
+versions:
+    - version: "35"
+      stable: true
+      release: "2024-10-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-35_r01.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-35_r01.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 70000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-35_r01.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-35_r01.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 70000000
+          strip: 0
+    - version: "34"
+      stable: true
+      release: "2023-08-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-34-ext7_r03.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-34-ext7_r03.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 65000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-34-ext7_r03.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-34-ext7_r03.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 65000000
+          strip: 0
+    - version: "33"
+      stable: true
+      release: "2023-04-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-33_r01.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-33_r01.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 62000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-33_r01.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-33_r01.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 62000000
+          strip: 0
+    - version: "31"
+      stable: true
+      release: "2021-10-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-31_r01.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-31_r01.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 58000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-31_r01.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-31_r01.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 58000000
+          strip: 0
+remote:
+    type: html
+    url: https://dl.google.com/android/repository/
+    path: ""
+    pattern: platform-(\d+)_r
+latest: "35"
+lts: "34"
+install_root: android-sdk

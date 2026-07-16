@@ -1,0 +1,2 @@
+<template><FormSection id="appearance" :title="t('settings.theme')"><label><input data-action="theme" type="checkbox" :checked="modelValue" aria-label="Theme" @change="$emit('update:modelValue', $event.target.checked)"> {{ modelValue ? t('theme.dark') : t('theme.light') }}</label></FormSection></template>
+<script setup>import FormSection from '../FormSection.vue'; defineProps({ modelValue:Boolean, t:{type:Function,required:true} }); defineEmits(['update:modelValue']);</script>

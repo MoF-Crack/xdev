@@ -1,0 +1,6 @@
+{
+  "tool": "python",
+  "sha256_map": "{\"3.10.15\":{\"darwin/arm64\":\"c4a52379f7500d3f1d325a9f423704471703566223ba999d260a287f0d470162\",\"linux/x86_64\":\"5c965abbeae4ebef8d51b7049e8faa2f16bbe95b89dfb820139dea84faf32f90\",\"windows/amd64\":\"ab4a63bc0e4f33f24fe35199bbc422beae12a839348f6a6dcb220f96dd382a51\"},\"3.11.10\":{\"darwin/arm64\":\"1e99a02135009dcf2c1fd7aeb6f3c9c92aa34589b4ec06ac9d11a642d2c20934\",\"linux/x86_64\":\"277e4ec45719aa0cc5d0cb4ac55d504cf810a0582a6b79f2d0f55c1ad057e29e\",\"windows/amd64\":\"236b4d7554430ee55d95b475277ed8cd7d9cf73146e01da094d2acf67b559353\"},\"3.12.7\":{\"darwin/arm64\":\"80a7d0ebe8b0f0756d0fc918f315ad0cb914de3d53a5968d381ba8925ab6c423\",\"linux/x86_64\":\"9fe07a480d2c252dfa8ab4e7cb4bd55cd61e0a2f281751885e63fbf9752a9b7c\",\"windows/amd64\":\"b2430b7dedd56b06afe988b98596ce9d6ceb9577d4cddb6b4ee70e6f4cf7182d\"}}",
+  "timestamp": "2026-07-08T12:35:12.018833Z",
+  "signature": "J3ezinPmpqVR978KZXm2gKhgZstefscmkWT21EdcbNZTPQvN2umVKGSOCAaTqhzgxyisGteIp8uT2H4G3CXpDA=="
+}

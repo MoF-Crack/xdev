@@ -1,0 +1,124 @@
+name: zig
+display_name: Zig
+description: Systems programming language designed to be robust, optimal, and reusable.
+homepage: https://ziglang.org/
+category: language
+shims:
+  - zig
+env_vars:
+  ZIG_HOME: "{{install}}"
+latest: "0.13.0"
+lts: ""
+versions:
+  - version: "0.13.0"
+    stable: true
+    release: "2024-06-07"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-windows-x86_64-0.13.0.zip
+        sha256: d859994725ef9402381e557c60bb57497215682e355204d754ee3df75ee3c158
+        size: 75000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-linux-x86_64-0.13.0.tar.xz
+        sha256: d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
+        size: 45000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.xz
+        url: https://ziglang.org/download/0.13.0/zig-macos-aarch64-0.13.0.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-aarch64-0.13.0.tar.xz
+        sha256: 46fae219656545dfaf4dce12fb4e8685cec5b51d721beee9389ab4194d43394c
+        size: 42000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.13.0/zig-macos-x86_64-0.13.0.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-x86_64-0.13.0.tar.xz
+        sha256: 8b06ed1091b2269b700b3b07f8e3be3b833000841bae5aa6a09b1a8b4773effd
+        size: 43000000
+        strip: 1
+  - version: "0.12.1"
+    stable: true
+    release: "2024-05-13"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://ziglang.org/download/0.12.1/zig-windows-x86_64-0.12.1.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-windows-x86_64-0.12.1.zip
+        sha256: 52459b147c2de4d7c28f6b1a4b3d571c114e96836bf8e31c953a7d2f5e94251c
+        size: 73000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.12.1/zig-linux-x86_64-0.12.1.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-linux-x86_64-0.12.1.tar.xz
+        sha256: 8860fc9725c2d9297a63008f853e9b11e3c5a2441217f99c1e3104cc6fa4a443
+        size: 44000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.xz
+        url: https://ziglang.org/download/0.12.1/zig-macos-aarch64-0.12.1.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-aarch64-0.12.1.tar.xz
+        sha256: 6587860dbbc070e1ee069e1a3d18ced83b7ba7a80bf67b2c57caf7c9ce5208b1
+        size: 41000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.12.1/zig-macos-x86_64-0.12.1.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-x86_64-0.12.1.tar.xz
+        sha256: 68f309c6e431d56eb42648d7fe86e8028a23464d401a467831e27c26f1a8d9c9
+        size: 42000000
+        strip: 1
+  - version: "0.11.0"
+    stable: true
+    release: "2023-08-04"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://ziglang.org/download/0.11.0/zig-windows-x86_64-0.11.0.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-windows-x86_64-0.11.0.zip
+        sha256: 142caa3b804d86b4752556c9b6b039b7517a08afa3af842645c7e2dcd125f652
+        size: 70000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-linux-x86_64-0.11.0.tar.xz
+        sha256: 2d00e789fec4f71790a6e7bf83ff91d564943c5ee843c5fd966efc474b423047
+        size: 42000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.xz
+        url: https://ziglang.org/download/0.11.0/zig-macos-aarch64-0.11.0.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-aarch64-0.11.0.tar.xz
+        sha256: c6ebf927bb13a707d74267474a9f553274e64906fd21bf1c75a20bde8cadf7b2
+        size: 39000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.11.0/zig-macos-x86_64-0.11.0.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-x86_64-0.11.0.tar.xz
+        sha256: 1c1c6b9a906b42baae73656e24e108fd8444bb50b6e8fd03e9e7a3f8b5f05686
+        size: 40000000
+        strip: 1
+remote:
+  type: github
+  url: "ziglang/zig"
+  pattern: "(\\d+\\.\\d+\\.\\d+)$"

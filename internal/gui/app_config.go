@@ -1,0 +1,436 @@
+// app_config.go implements configuration management methods for the GUI.
+//
+// Provides:
+//   - GetConfig: returns the full configuration as JSON
+//   - GetMirrorConfig / SetMirrorConfig: per-tool mirror URLs
+//   - GetPathMode / SetPathMode: PATH management mode (shim/direct/auto)
+//   - GetProxyConfig / SetProxyConfig: HTTP/HTTPS proxy settings
+//   - GetDrives: enumerate available drives (Windows only)
+//   - OpenInFileExplorer: open a directory in the OS file manager
+//   - SelectDirectory: native directory picker dialog
+//   - ValidateDirectory: check if a directory is suitable for xdev home
+//
+// Mirror speed testing (SpeedTestMirror) runs concurrent HEAD requests
+// against configured mirrors and returns latency rankings.
+package gui
+
+import (
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/shim"
+	"github.com/xmdemt/xdev/internal/util"
+)
+
+// GetMirrorConfig returns the current mirror configuration.
+func (a *App) GetMirrorConfig() map[string]string {
+	cfg := a.getCfg()
+	return cfg.Mirror
+}
+
+// SetMirrorConfig updates the mirror configuration and saves.
+func (a *App) SetMirrorConfig(mirrors map[string]string) error {
+	for tool, rawURL := range mirrors {
+		if err := util.IsSafeHTTPSExternalURL(rawURL); err != nil {
+			return fmt.Errorf("mirror URL for %s is unsafe: %w", tool, err)
+		}
+	}
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.cfg.Mirror = mirrors
+	return a.cfg.Save()
+}
+
+// RunDiagnostics performs basic health checks and returns results.
+func (a *App) RunDiagnostics() []DiagnosticResult {
+	cfg := a.getCfg()
+	var results []DiagnosticResult
+
+	// Check directories exist
+	dirs := map[string]string{
+		"XMDevDir":    cfg.Core.XMDevDir,
+		"InstallDir":  cfg.Core.InstallDir,
+		"ShimDir":     cfg.Core.ShimDir,
+		"CacheDir":    cfg.Core.CacheDir,
+		"DownloadDir": cfg.Core.DownloadDir,
+		"EnvDir":      cfg.Core.EnvDir,
+	}
+	for name, dir := range dirs {
+		_, err := os.Stat(dir)
+		dr := DiagnosticResult{
+			Check: name,
+			Path:  dir,
+			OK:    err == nil,
+		}
+		if err != nil {
+			dr.Error = err.Error()
+		}
+		results = append(results, dr)
+	}
+
+	// Check shim directory is in PATH
+	inPath := false
+	pathEnv := os.Getenv("PATH")
+	for _, p := range filepath.SplitList(pathEnv) {
+		if p == cfg.Core.ShimDir {
+			inPath = true
+			break
+		}
+	}
+	results = append(results, DiagnosticResult{
+		Check: "ShimDir in PATH",
+		Path:  cfg.Core.ShimDir,
+		OK:    inPath,
+	})
+
+	return results
+}
+
+// GetConfig returns the current configuration.
+func (a *App) GetConfig() ConfigInfo {
+	cfg := a.getCfg()
+	return ConfigInfo{
+		XMDevDir:    cfg.Core.XMDevDir,
+		InstallDir:  cfg.Core.InstallDir,
+		ShimDir:     cfg.Core.ShimDir,
+		CacheDir:    cfg.Core.CacheDir,
+		DownloadDir: cfg.Core.DownloadDir,
+		PathMode:    cfg.GetPathMode(),
+		Proxy: ProxyInfo{
+			HTTP:    cfg.Proxy.HTTP,
+			HTTPS:   cfg.Proxy.HTTPS,
+			NoProxy: cfg.Proxy.NoProxy,
+			Enabled: cfg.Proxy.Enabled,
+		},
+	}
+}
+
+// GetPathMode returns the current PATH management mode ("shim" or "direct").
+func (a *App) GetPathMode() string {
+	cfg := a.getCfg()
+	return cfg.GetPathMode()
+}
+
+// SetPathMode switches the PATH management mode and migrates the PATH entries.
+func (a *App) SetPathMode(mode string) error {
+	cfg := a.getCfg()
+	oldMode := cfg.GetPathMode()
+	if mode == oldMode {
+		return nil
+	}
+	if mode != "shim" && mode != "direct" {
+		return fmt.Errorf("invalid path mode: %s (must be 'shim' or 'direct')", mode)
+	}
+
+	logInfo("[SetPathMode] switching from %s to %s", oldMode, mode)
+
+	// 获取所有已激活的工具
+	currentDir := filepath.Join(cfg.Core.XMDevDir, "current")
+	entries, err := os.ReadDir(currentDir)
+	if err != nil {
+		return fmt.Errorf("failed to read current directory: %w", err)
+	}
+
+	var activeTools []struct {
+		name string
+		p    plugin.Plugin
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// 检查是否是有效的 Junction/目录
+		linkPath := filepath.Join(currentDir, e.Name())
+		if _, err := os.Stat(linkPath); err != nil {
+			continue
+		}
+		if p, ok := a.registry.Get(e.Name()); ok {
+			activeTools = append(activeTools, struct {
+				name string
+				p    plugin.Plugin
+			}{name: e.Name(), p: p})
+		}
+	}
+
+	if mode == "direct" {
+		// shim → direct: 移除 shim 目录，添加 current/<tool>/bin 路径
+		// 1. 为每个活跃工具添加 current/<tool>/bin 到 PATH
+		for _, at := range activeTools {
+			toolCurrentDir := filepath.Join(cfg.Core.XMDevDir, "current", at.name)
+			binPaths := env.ToolBinPaths(at.name, toolCurrentDir)
+			if len(binPaths) > 0 {
+				if err := env.AddCurrentBinPaths(binPaths); err != nil {
+					logWarn("[SetPathMode] failed to add %s bin paths: %v", at.name, err)
+				} else {
+					logInfo("[SetPathMode] added %s bin paths to PATH", at.name)
+				}
+			}
+		}
+		// 2. 从 PATH 中移除 shim 目录
+		if err := env.RemoveFromUserPath(cfg.Core.ShimDir); err != nil {
+			logWarn("[SetPathMode] failed to remove shim dir from PATH: %v", err)
+		} else {
+			logInfo("[SetPathMode] removed shim dir from PATH")
+		}
+		// 3. 删除 shim 文件（节省磁盘空间）
+		for _, at := range activeTools {
+			for _, shimName := range at.p.Shims() {
+				shimPath := filepath.Join(cfg.Core.ShimDir, shimName)
+				os.Remove(shimPath)
+				if runtime.GOOS == "windows" {
+					os.Remove(shimPath + ".exe")
+				}
+			}
+		}
+		logInfo("[SetPathMode] removed shim files")
+	} else {
+		// direct → shim: 移除 current/<tool>/bin 路径，添加 shim 目录，创建 shim 文件
+		// 1. 从 PATH 中移除所有 current/ 前缀的条目
+		if err := env.RemoveAllCurrentPaths(currentDir); err != nil {
+			logWarn("[SetPathMode] failed to remove current paths from PATH: %v", err)
+		} else {
+			logInfo("[SetPathMode] removed current paths from PATH")
+		}
+		// 2. 将 shim 目录添加到 PATH 最前面
+		if err := env.SetWindowsUserPath(cfg.Core.ShimDir); err != nil {
+			logWarn("[SetPathMode] failed to add shim dir to PATH: %v", err)
+		} else {
+			logInfo("[SetPathMode] added shim dir to PATH")
+		}
+		// 3. 为每个活跃工具创建 shim 文件
+		ins := a.newInstaller(cfg)
+		for _, at := range activeTools {
+			for _, shimName := range at.p.Shims() {
+				shimExe := ins.ResolveShimExe()
+				if err := shim.InstallShim(cfg.Core.ShimDir, shimName, shimExe); err != nil {
+					logWarn("[SetPathMode] failed to create shim %s: %v", shimName, err)
+				} else {
+					logInfo("[SetPathMode] created shim: %s", shimName)
+				}
+			}
+		}
+	}
+
+	// 保存配置
+	if err := cfg.SetPathMode(mode); err != nil {
+		logWarn("[SetPathMode] failed to save config: %v", err)
+	}
+	shim.InvalidateShimIndex()
+	env.BroadcastEnvironmentChange()
+
+	logInfo("[SetPathMode] mode switched to %s", mode)
+	return nil
+}
+
+// GetProxyConfig returns the current proxy configuration.
+func (a *App) GetProxyConfig() ProxyInfo {
+	cfg := a.getCfg()
+	return ProxyInfo{
+		HTTP:    cfg.Proxy.HTTP,
+		HTTPS:   cfg.Proxy.HTTPS,
+		NoProxy: cfg.Proxy.NoProxy,
+		Enabled: cfg.Proxy.Enabled,
+	}
+}
+
+// SetProxyConfig updates proxy settings.
+func (a *App) SetProxyConfig(http, https, noProxy string, enabled bool) error {
+	cfg := a.getCfg()
+	return cfg.SetProxy(http, https, noProxy, enabled)
+}
+
+// TestMirrorConnectivity 测试镜像源连通性
+func (a *App) TestMirrorConnectivity(mirrorURL string) ProxyTestResult {
+	// Security (N-4): Validate the URL to prevent SSRF — the frontend
+	// could supply an internal/loopback URL to probe the network.
+	if err := util.IsSafeExternalURL(mirrorURL); err != nil {
+		return ProxyTestResult{
+			Success: false,
+			Message: fmt.Sprintf("URL 不安全: %v", err),
+		}
+	}
+	result := ProxyTestResult{
+		Success: false,
+		Message: "",
+		Latency: 0,
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("too many redirects")
+			}
+			// Security (N-4): block HTTPS→HTTP downgrade.
+			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return fmt.Errorf("insecure redirect: %s → %s", via[0].URL, req.URL)
+			}
+			return nil
+		},
+	}
+
+	start := time.Now()
+	resp, err := client.Head(mirrorURL)
+	latency := time.Since(start).Milliseconds()
+	result.Latency = latency
+
+	if err != nil {
+		result.Message = fmt.Sprintf("连接失败: %v", err)
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		result.Success = true
+		result.Message = fmt.Sprintf("连接成功 (HTTP %d, %dms)", resp.StatusCode, latency)
+	} else {
+		result.Message = fmt.Sprintf("HTTP %d (%dms)", resp.StatusCode, latency)
+	}
+	return result
+}
+
+// TestProxy tests the proxy connection by making a HEAD request.
+func (a *App) TestProxy(proxyURL, testURL string) ProxyTestResult {
+	if testURL == "" {
+		testURL = "https://www.google.com"
+	}
+	// Security (N-5): Validate the test URL to prevent SSRF via the
+	// proxy — the frontend could supply an internal/loopback URL.
+	if err := util.IsSafeExternalURL(testURL); err != nil {
+		return ProxyTestResult{
+			Success: false,
+			Message: fmt.Sprintf("测试 URL 不安全: %v", err),
+		}
+	}
+	result := ProxyTestResult{
+		Success: false,
+		Message: "",
+		Latency: 0,
+	}
+
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		result.Message = fmt.Sprintf("无效的代理地址: %v", err)
+		return result
+	}
+
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) { return parsed, nil },
+	}
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
+
+	start := time.Now()
+	resp, err := client.Head(testURL)
+	latency := time.Since(start).Milliseconds()
+	result.Latency = latency
+
+	if err != nil {
+		result.Message = fmt.Sprintf("连接失败: %v", err)
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		result.Success = true
+		result.Message = fmt.Sprintf("连接成功 (HTTP %d, %dms)", resp.StatusCode, latency)
+	} else {
+		result.Message = fmt.Sprintf("HTTP %d (%dms)", resp.StatusCode, latency)
+	}
+	return result
+}
+
+// GetCacheBreakdown 遍历 CacheDir，按文件扩展名分类统计大小
+func (a *App) GetCacheBreakdown() CacheBreakdown {
+	cfg := a.getCfg()
+	var breakdown CacheBreakdown
+
+	entries, err := os.ReadDir(cfg.Core.CacheDir)
+	if err != nil {
+		return breakdown
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		size := info.Size()
+		name := entry.Name()
+		breakdown.TotalCount++
+
+		switch {
+		case strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".tgz"):
+			breakdown.Archives += size
+		case strings.HasSuffix(name, ".sha256"):
+			breakdown.ShaFiles += size
+		case strings.HasSuffix(name, ".part"):
+			breakdown.PartFiles += size
+		case name == "tool_scan_cache.json":
+			breakdown.ScanCache += size
+		default:
+			breakdown.OtherFiles += size
+		}
+	}
+
+	return breakdown
+}
+
+// CleanCache 按分类删除缓存文件
+// category: "archives" | "shaFiles" | "partFiles" | "all"
+func (a *App) CleanCache(category string) error {
+	cfg := a.getCfg()
+
+	entries, err := os.ReadDir(cfg.Core.CacheDir)
+	if err != nil {
+		return fmt.Errorf("读取缓存目录失败: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		shouldDelete := false
+
+		switch category {
+		case "archives":
+			shouldDelete = strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".tgz")
+		case "shaFiles":
+			shouldDelete = strings.HasSuffix(name, ".sha256")
+		case "partFiles":
+			shouldDelete = strings.HasSuffix(name, ".part")
+		case "all":
+			shouldDelete = true
+		default:
+			return fmt.Errorf("未知的缓存分类: %s", category)
+		}
+
+		if shouldDelete {
+			if err := os.Remove(filepath.Join(cfg.Core.CacheDir, name)); err != nil {
+				logWarn("[CleanCache] 删除缓存文件失败 %s: %v", name, err)
+			}
+		}
+	}
+
+	return nil
+}

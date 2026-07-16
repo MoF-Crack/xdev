@@ -1,0 +1,113 @@
+name: node
+display_name: Node.js
+description: JavaScript runtime built on Chrome's V8 engine.
+homepage: https://nodejs.org/
+category: language
+shims:
+    - node
+    - npm
+    - npx
+    - corepack
+env_vars:
+    NODE_HOME: '{{install}}'
+versions:
+    - version: 20.18.0
+      stable: true
+      release: "2024-10-03"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip
+          mirror_url: https://npmmirror.com/mirrors/node/v20.18.0/node-v20.18.0-win-x64.zip
+          sha256: f5cea43414cc33024bbe5867f208d1c9c915d6a38e92abeee07ed9e563662297
+          size: 30500000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-darwin-arm64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v20.18.0/node-v20.18.0-darwin-arm64.tar.xz
+          sha256: 678e062bdae3824aa997bd469580a4dda48fd51f61d3679b6ba06352e6cef38f
+          size: 42000000
+          strip: 1
+        - os: darwin
+          arch: x86_64
+          format: tar.xz
+          url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-darwin-x64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v20.18.0/node-v20.18.0-darwin-x64.tar.xz
+          sha256: 63e150a3bb4f31743257d8597262c6b5f0a2356e7c42002e29d5f7d1bf161f08
+          size: 43000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v20.18.0/node-v20.18.0-linux-x64.tar.xz
+          sha256: 4543670b589593f8fa5f106111fd5139081da42bb165a9239f05195e405f240a
+          size: 44000000
+          strip: 1
+        - os: linux
+          arch: arm64
+          format: tar.xz
+          url: https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-arm64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v20.18.0/node-v20.18.0-linux-arm64.tar.xz
+          sha256: a9ce85675ba33f00527f6234d90000946c0936fb4fca605f1891bb5f4fe6fb0a
+          size: 42000000
+          strip: 1
+    - version: 22.10.0
+      stable: true
+      release: "2024-10-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://nodejs.org/dist/v22.10.0/node-v22.10.0-win-x64.zip
+          mirror_url: https://npmmirror.com/mirrors/node/v22.10.0/node-v22.10.0-win-x64.zip
+          sha256: d68dce8f7a73305a496e719485ca6647387d9410cb7eb5933b5d9b4afc5593bd
+          size: 32000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://nodejs.org/dist/v22.10.0/node-v22.10.0-darwin-arm64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v22.10.0/node-v22.10.0-darwin-arm64.tar.xz
+          sha256: 1e075186b54bac99434c5a41f5bf526e9729c8010dc05cb0da426fb0d5b97170
+          size: 44000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://nodejs.org/dist/v22.10.0/node-v22.10.0-linux-x64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v22.10.0/node-v22.10.0-linux-x64.tar.xz
+          sha256: 406791658a8bce3bc21fab786f45877adad391ea20badc87e1d65c7478b75062
+          size: 46000000
+          strip: 1
+    - version: 18.20.4
+      stable: true
+      release: "2024-09-04"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://nodejs.org/dist/v18.20.4/node-v18.20.4-win-x64.zip
+          mirror_url: https://npmmirror.com/mirrors/node/v18.20.4/node-v18.20.4-win-x64.zip
+          sha256: a2864d9048fb83cc85e3b2c3d18f5731b69cae8964bb029f5cdecbb0820eccd7
+          size: 28000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://nodejs.org/dist/v18.20.4/node-v18.20.4-linux-x64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v18.20.4/node-v18.20.4-linux-x64.tar.xz
+          sha256: 592eb35c352c7c0c8c4b2ecf9c19d615e78de68c20b660eb74bd85f8c8395063
+          size: 41000000
+          strip: 1
+remote:
+    type: github
+    url: nodejs/node
+    path: ""
+    pattern: v?(\d+\.\d+\.\d+)$
+latest: 20.18.0
+lts: 20.18.0
+install_root: ""

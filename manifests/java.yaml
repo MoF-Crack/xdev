@@ -1,0 +1,185 @@
+name: java
+display_name: Eclipse Temurin
+description: Adoptium Temurin OpenJDK distributions. Java 26 (STS), 25/21 (LTS), 17/11 (LTS) — all GA builds with pinned SHA-256.
+homepage: https://adoptium.net/
+category: language
+shims:
+  - java
+  - javac
+  - jar
+  - jshell
+env_vars:
+  JAVA_HOME: "{{install}}"
+latest: "26"
+lts: "25"
+versions:
+  - version: "26"
+    stable: true
+    release: "2025-10-21"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_x64_windows_hotspot_26.0.1_8.zip"
+        sha256: 81b35819085dd73a204c3219464c5f154cb111a526ec63dad793c0eefd469b3d
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_x64_linux_hotspot_26.0.1_8.tar.gz"
+        sha256: 8e512f13e575a43655fc92319436c94890c137b9035cc6bd6f9cf24239704d3a
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_aarch64_linux_hotspot_26.0.1_8.tar.gz"
+        sha256: 613f9b2861dea937b24d5eca745ef8567733b377d0bb612195acaad0e3f61360
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_x64_mac_hotspot_26.0.1_8.tar.gz"
+        sha256: 032df492c8749864ee8b135e3d0ea5a17ef5c847309d5fdf8f1dd55e246b8319
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_aarch64_mac_hotspot_26.0.1_8.tar.gz"
+        sha256: 10c436258e24693ce8baf13dbffce98b77275797455e8b72510967547f13234a
+        strip: 1
+  - version: "25"
+    stable: true
+    release: "2026-01-20"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_x64_windows_hotspot_25.0.3_9.zip"
+        sha256: 709312cd0420296d9b9de917fe6e28a5b979e875ee5ab91783fb79bcd5857235
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_x64_linux_hotspot_25.0.3_9.tar.gz"
+        sha256: 69264a7a211bf5029830d07bc3370f879769d62ebc5b5488e90c9343a2da0e1f
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.3_9.tar.gz"
+        sha256: 3e4287cb98870ba824ed698854bdc27cff984254caf66dd12cc291e7bfdde26b
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_x64_mac_hotspot_25.0.3_9.tar.gz"
+        sha256: 4c539a18b4d656960ff6766727e9ca546fc17f7a29714dba9e7b47bdcb37c447
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.3_9.tar.gz"
+        sha256: 7baab4d69a15554e119b86ff78d40e3fdc28819b5b322955c913cebfe3f6a37c
+        strip: 1
+  - version: "21"
+    stable: true
+    release: "2025-04-15"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip"
+        sha256: d3625e7cadf23787ea540229544b6e2ab494b3b54da1801879e583e1dfee0a64
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz"
+        sha256: 4b2220e232a97997b436ca6ab15cbf70171ecff52958a46159dfa5a8c44ca4de
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.11_10.tar.gz"
+        sha256: 8d498ec88e1c1989fab95c6784240ab92d011e29c54d20a3f9c324b13476f9ad
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_mac_hotspot_21.0.11_10.tar.gz"
+        sha256: 34180eb03e6d207c388cce3da668f6cc7cd7508c185c24782fadac2c9c0e66f9
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.11_10.tar.gz"
+        sha256: 6ebcf221c9b41507b14c098e93c6ead6440b8d9bd154f8ec666c4c73abbdb201
+        strip: 1
+  - version: "17"
+    stable: true
+    release: "2025-04-15"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_x64_windows_hotspot_17.0.19_10.zip"
+        sha256: b5b235c48adf6a081874b812c630b9f4b5f637b7a5ed18b9174d08a41ec4c235
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_x64_linux_hotspot_17.0.19_10.tar.gz"
+        sha256: d8afc263758141a66e0e3aafc321e783f7016696f4eaea067d340a269037d331
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.19_10.tar.gz"
+        sha256: 83a52172678ec8975164648654869cb2e71d7c748b47aca94b29bbfa10c18e81
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_x64_mac_hotspot_17.0.19_10.tar.gz"
+        sha256: 03632d1fbf139ab3719a9f4b47dc206251449b87557143c822336dbf8c06560f
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jdk_aarch64_mac_hotspot_17.0.19_10.tar.gz"
+        sha256: 8fa1eff40bb637a33613b2ccb8b12c70dc3661cc22cf8e784943715769a05336
+        strip: 1
+  - version: "11"
+    stable: true
+    release: "2025-01-21"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.31%2B11/OpenJDK11U-jdk_x64_windows_hotspot_11.0.31_11.zip"
+        sha256: 5695bd8fed700acb74e0c13945fc6d7564441a31d345c100b82ee1aac553a6b7
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.31%2B11/OpenJDK11U-jdk_x64_linux_hotspot_11.0.31_11.tar.gz"
+        sha256: 1e9de64586b519c0a981319489257cabedd9457599f3823424a87c3158fbe939
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.31%2B11/OpenJDK11U-jdk_aarch64_linux_hotspot_11.0.31_11.tar.gz"
+        sha256: 257f4d39e060658fc2eb89a803ca43b3f337e64e253f2d94ebae1d85c9ef5f69
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.31%2B11/OpenJDK11U-jdk_x64_mac_hotspot_11.0.31_11.tar.gz"
+        sha256: e541fa6c6100b6dd6ae0c92c96ae8d97ed4d94ddefb0cd2770dae4772bfc9d9e
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.31%2B11/OpenJDK11U-jdk_aarch64_mac_hotspot_11.0.31_11.tar.gz"
+        sha256: e3377bbe07f4396ba03adcfc5f3d71d151d6a7b858abdf1d0dd20ac4d8d709b0
+        strip: 1

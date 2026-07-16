@@ -1,0 +1,104 @@
+name: scala
+display_name: Scala
+description: A modern multi-paradigm programming language designed to express common programming patterns in a concise, elegant, and type-safe way.
+homepage: https://www.scala-lang.org/
+category: language
+shims:
+  - scala
+  - scalac
+  - scaladoc
+  - sbt
+env_vars:
+  SCALA_HOME: "{{install}}"
+latest: "3.5.2"
+lts: "2.13.15"
+versions:
+  - version: "3.5.2"
+    stable: true
+    release: "2024-09-25"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://github.com/scala/scala3/releases/download/3.5.2/scala3-3.5.2.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/3.5.2/scala3-3.5.2.zip
+        sha256: 126ac1885a059cbcbe473e6e3280f8ba29c0f703a41e3e7c74032489f03a4751
+        size: 30000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/scala/scala3/releases/download/3.5.2/scala3-3.5.2.tar.gz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/3.5.2/scala3-3.5.2.tar.gz
+        sha256: 899de4f9aca56989ce337d8390fbf94967bc70c9e8420e79f375d1c2ad00ff99
+        size: 28000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://github.com/scala/scala3/releases/download/3.5.2/scala3-3.5.2.tar.gz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/3.5.2/scala3-3.5.2.tar.gz
+        sha256: 899de4f9aca56989ce337d8390fbf94967bc70c9e8420e79f375d1c2ad00ff99
+        size: 28000000
+        strip: 1
+  - version: "2.13.15"
+    stable: true
+    release: "2024-09-23"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://github.com/scala/scala/releases/download/v2.13.15/scala-2.13.15.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/2.13.15/scala-2.13.15.zip
+        sha256: 51bb685af76523e0649a1a2d98dd0f59cd645bcac187219dd179ca81e05bc2de
+        size: 25000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/scala/scala/releases/download/v2.13.15/scala-2.13.15.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/2.13.15/scala-2.13.15.tgz
+        sha256: 740af711fd2690a6ff3346fc0fb97cfabe0cf21842418167c77569ae837662d9
+        size: 23000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://github.com/scala/scala/releases/download/v2.13.15/scala-2.13.15.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/2.13.15/scala-2.13.15.tgz
+        sha256: 740af711fd2690a6ff3346fc0fb97cfabe0cf21842418167c77569ae837662d9
+        size: 23000000
+        strip: 1
+  - version: "2.12.20"
+    stable: true
+    release: "2024-09-23"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://github.com/scala/scala/releases/download/v2.12.20/scala-2.12.20.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/2.12.20/scala-2.12.20.zip
+        sha256: c6d20174606ebda79e3b6bdc552e820458e1b1f0234cdfc8440c040d8ab5a3ae
+        size: 24000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/scala/scala/releases/download/v2.12.20/scala-2.12.20.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/2.12.20/scala-2.12.20.tgz
+        sha256: fc870ab2d7df49b4dc9cb06f5d8b18c4f9e96aa36c3dae9a244a0a5634b5f0e3
+        size: 22000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://github.com/scala/scala/releases/download/v2.12.20/scala-2.12.20.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/2.12.20/scala-2.12.20.tgz
+        sha256: fc870ab2d7df49b4dc9cb06f5d8b18c4f9e96aa36c3dae9a244a0a5634b5f0e3
+        size: 22000000
+        strip: 1
+remote:
+  type: github
+  owner: scala
+  repo: scala3
+  pattern: "(\\d+\\.\\d+\\.\\d+)$"

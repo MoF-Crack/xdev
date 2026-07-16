@@ -1,0 +1,105 @@
+name: android-platform-tools
+display_name: Android Platform Tools
+description: Android SDK platform-tools includes adb, fastboot and sqlite3.
+homepage: https://developer.android.com/tools/releases/platform-tools
+category: mobile
+shims:
+    - adb
+    - fastboot
+    - sqlite3
+env_vars:
+    ANDROID_HOME: '{{install}}\..'
+    ANDROID_PLATFORM_TOOLS: '{{install}}'
+versions:
+    - version: 35.0.2
+      stable: true
+      release: "2024-09-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r35.0.2-win.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r35.0.2-win.zip
+          sha256: 2975a3eac0b19182748d64195375ad056986561d994fffbdc64332a516300bb9
+          size: 15000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r35.0.2-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r35.0.2-linux.zip
+          sha256: acfdcccb123a8718c46c46c059b2f621140194e5ec1ac9d81715be3d6ab6cd0a
+          size: 14000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r35.0.2-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r35.0.2-darwin.zip
+          sha256: 1820078db90bf21628d257ff052528af1c61bb48f754b3555648f5652fa35d78
+          size: 13000000
+          strip: 0
+        - os: darwin
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r35.0.2-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r35.0.2-darwin.zip
+          sha256: 1820078db90bf21628d257ff052528af1c61bb48f754b3555648f5652fa35d78
+          size: 13000000
+          strip: 0
+    - version: 34.0.5
+      stable: true
+      release: "2024-01-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r34.0.5-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r34.0.5-windows.zip
+          sha256: 3f8320152704377de150418a3c4c9d07d16d80a6c0d0d8f7289c22c499e33571
+          size: 14000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r34.0.5-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r34.0.5-linux.zip
+          sha256: 362f8f6218af0f4c61e5aaafb8e255a426c7a0ee00127dfab7371775081d3124
+          size: 13000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r34.0.5-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r34.0.5-darwin.zip
+          sha256: b2c9757744a9d01fcc616b893ac6236233caf1bdf2ef384d73371ab68bfc4a43
+          size: 12000000
+          strip: 0
+    - version: 33.0.3
+      stable: true
+      release: "2023-03-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r33.0.3-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r33.0.3-windows.zip
+          sha256: 1e59afd40a74c5c0eab0a9fad3f0faf8a674267106e0b19921be9f67081808c2
+          size: 13000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/platform-tools_r33.0.3-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r33.0.3-linux.zip
+          sha256: ab885c20f1a9cb528eb145b9208f53540efa3d26258ac3ce4363570a0846f8f7
+          size: 12000000
+          strip: 0
+remote:
+    type: html
+    url: https://dl.google.com/android/repository/
+    path: ""
+    pattern: platform-tools_r(\d+\.\d+\.\d+)
+latest: 35.0.2
+lts: 34.0.5
+install_root: android-sdk

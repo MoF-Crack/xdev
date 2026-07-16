@@ -1,0 +1,103 @@
+name: kotlin
+display_name: Kotlin
+description: Modern programming language that makes developers happier.
+homepage: https://kotlinlang.org/
+category: language
+shims:
+    - kotlinc
+    - kotlin
+env_vars:
+    KOTLIN_HOME: '{{install}}'
+versions:
+    - version: 2.0.21
+      stable: true
+      release: "2024-10-23"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v2.0.21/kotlin-compiler-2.0.21.zip
+          sha256: 9c9493ef06913a37485ffd7ce8be41b9f4b5acdad036d677634b15232b0506ce
+          size: 85000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v2.0.21/kotlin-compiler-2.0.21.zip
+          sha256: fa6d8fd7834d1e29c6ac4ddd0af4330451afe72ba7f69e5536426b2995a73957
+          size: 85000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v2.0.21/kotlin-compiler-2.0.21.zip
+          sha256: fd69cfbbf0684834ec72732611020453945e9be2ecc636ccd250e49a93554559
+          size: 85000000
+          strip: 1
+    - version: 1.9.24
+      stable: true
+      release: "2024-05-08"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v1.9.24/kotlin-compiler-1.9.24.zip
+          sha256: b59a1228713e785e7b6a6850fd91a8c12edb4de3aadcd5f488d8d8d6a2146e59
+          size: 80000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v1.9.24/kotlin-compiler-1.9.24.zip
+          sha256: 634c76b18968480313db86d4972b6d49a25d33c6eadfecc0d870a3e0f84fd805
+          size: 80000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v1.9.24/kotlin-compiler-1.9.24.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v1.9.24/kotlin-compiler-1.9.24.zip
+          sha256: fd30e0130ee1e2948e7c0f68b3318939ea5ab97e0724ea9c2a8ccd5d2b1da68d
+          size: 80000000
+          strip: 1
+    - version: 1.8.22
+      stable: true
+      release: "2023-06-07"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v1.8.22/kotlin-compiler-1.8.22.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v1.8.22/kotlin-compiler-1.8.22.zip
+          sha256: 043926b250d6aa4f03953ead67217605b8196bfa9f59cd8a52dc648e8cfd0a06
+          size: 75000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v1.8.22/kotlin-compiler-1.8.22.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v1.8.22/kotlin-compiler-1.8.22.zip
+          sha256: 2b5307fe94afecd3ce93d2b3c208bfeca7fea409619f5f0100d24248b30b0f56
+          size: 75000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v1.8.22/kotlin-compiler-1.8.22.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v1.8.22/kotlin-compiler-1.8.22.zip
+          sha256: f7cdd18f1ad250d22ef13ed37ffecf673054f7a2c3cab947a109126eb2f31549
+          size: 75000000
+          strip: 1
+remote:
+    type: github
+    url: JetBrains/kotlin
+    path: ""
+    pattern: v(\d+\.\d+\.\d+)$
+latest: 2.0.21
+lts: ""
+install_root: ""

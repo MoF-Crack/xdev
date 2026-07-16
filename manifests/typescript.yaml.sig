@@ -1,0 +1,6 @@
+{
+  "tool": "typescript",
+  "sha256_map": "{\"5.5.4\":{\"darwin/arm64\":\"2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586\",\"linux/x86_64\":\"2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586\",\"windows/amd64\":\"2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586\"},\"5.6.3\":{\"darwin/arm64\":\"ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa\",\"linux/x86_64\":\"ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa\",\"windows/amd64\":\"ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa\"},\"5.7.3\":{\"darwin/arm64\":\"80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb\",\"linux/x86_64\":\"80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb\",\"windows/amd64\":\"80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb\"}}",
+  "timestamp": "2026-07-08T12:35:12.0231382Z",
+  "signature": "d5hal3DV1ikkf2YFdAiHzi0EXQn9M62ros6FpQSMeNvOkYiT1MUgpOaHoufhLZkFThgQ0lGWBtSfhKbEeqwhAA=="
+}

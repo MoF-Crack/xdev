@@ -1,0 +1,6 @@
+{
+  "tool": "kotlin",
+  "sha256_map": "{\"1.8.22\":{\"darwin/arm64\":\"f7cdd18f1ad250d22ef13ed37ffecf673054f7a2c3cab947a109126eb2f31549\",\"linux/x86_64\":\"2b5307fe94afecd3ce93d2b3c208bfeca7fea409619f5f0100d24248b30b0f56\",\"windows/amd64\":\"043926b250d6aa4f03953ead67217605b8196bfa9f59cd8a52dc648e8cfd0a06\"},\"1.9.24\":{\"darwin/arm64\":\"fd30e0130ee1e2948e7c0f68b3318939ea5ab97e0724ea9c2a8ccd5d2b1da68d\",\"linux/x86_64\":\"634c76b18968480313db86d4972b6d49a25d33c6eadfecc0d870a3e0f84fd805\",\"windows/amd64\":\"b59a1228713e785e7b6a6850fd91a8c12edb4de3aadcd5f488d8d8d6a2146e59\"},\"2.0.21\":{\"darwin/arm64\":\"fd69cfbbf0684834ec72732611020453945e9be2ecc636ccd250e49a93554559\",\"linux/x86_64\":\"fa6d8fd7834d1e29c6ac4ddd0af4330451afe72ba7f69e5536426b2995a73957\",\"windows/amd64\":\"9c9493ef06913a37485ffd7ce8be41b9f4b5acdad036d677634b15232b0506ce\"}}",
+  "timestamp": "2026-07-08T12:35:12.0128845Z",
+  "signature": "90AqnCeqVeSxRJvYJefocYzSsl8UWQ1OE1ODMk93IIknvQXKHv37quQKXPb7h/cokyoNl7owPRkyxlOp3buRBw=="
+}

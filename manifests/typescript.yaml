@@ -1,0 +1,101 @@
+name: typescript
+display_name: TypeScript
+description: TypeScript is a strongly typed programming language that builds on JavaScript, giving you better tooling at any scale.
+homepage: https://www.typescriptlang.org/
+category: language
+shims:
+  - tsc
+  - tsserver
+env_vars:
+  TYPESCRIPT_HOME: "{{install}}"
+latest: "5.7.3"
+lts: ""
+versions:
+  - version: "5.7.3"
+    stable: true
+    release: "2025-01-15"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://registry.npmjs.org/typescript/-/typescript-5.7.3.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.7.3.tgz
+        sha256: 80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb
+        size: 5000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-5.7.3.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.7.3.tgz
+        sha256: 80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb
+        size: 5000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-5.7.3.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.7.3.tgz
+        sha256: 80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb
+        size: 5000000
+        strip: 1
+  - version: "5.6.3"
+    stable: true
+    release: "2024-10-15"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://registry.npmjs.org/typescript/-/typescript-5.6.3.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.6.3.tgz
+        sha256: ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa
+        size: 4800000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-5.6.3.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.6.3.tgz
+        sha256: ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa
+        size: 4800000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-5.6.3.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.6.3.tgz
+        sha256: ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa
+        size: 4800000
+        strip: 1
+  - version: "5.5.4"
+    stable: true
+    release: "2024-07-30"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://registry.npmjs.org/typescript/-/typescript-5.5.4.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.5.4.tgz
+        sha256: 2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586
+        size: 4600000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-5.5.4.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.5.4.tgz
+        sha256: 2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586
+        size: 4600000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-5.5.4.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.5.4.tgz
+        sha256: 2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586
+        size: 4600000
+        strip: 1
+remote:
+  type: npm
+  package: typescript
+  pattern: "^(\\d+\\.\\d+\\.\\d+)$"

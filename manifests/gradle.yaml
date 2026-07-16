@@ -1,0 +1,94 @@
+name: gradle
+display_name: Gradle
+description: Gradle is a build automation tool for multi-language software development.
+homepage: https://gradle.org/
+category: build
+shims:
+    - gradle
+env_vars:
+    GRADLE_HOME: '{{install}}'
+versions:
+    - version: 8.10.2
+      stable: true
+      release: "2024-10-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-8.10.2-bin.zip
+          sha256: 31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26
+          size: 130000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-8.10.2-bin.zip
+          sha256: 31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26
+          size: 130000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-8.10.2-bin.zip
+          sha256: 31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26
+          size: 130000000
+          strip: 1
+    - version: "8.5"
+      stable: true
+      release: "2023-11-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-8.5-bin.zip
+          sha256: 9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026
+          size: 120000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-8.5-bin.zip
+          sha256: 9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026
+          size: 120000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-8.5-bin.zip
+          sha256: 9d926787066a081739e8200858338b4a69e837c3a821a33aca9db09dd4a41026
+          size: 120000000
+          strip: 1
+    - version: 7.6.4
+      stable: true
+      release: "2023-07-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-7.6.4-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-7.6.4-bin.zip
+          sha256: 4b084c72c52f3ed7e72565bc72e684885b1f0c92bc19c79cc54a6f9d501a92bb
+          size: 110000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-7.6.4-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-7.6.4-bin.zip
+          sha256: 5763f6e36eb1a0ce6d057e5166b06b57c147d3e8a295a75d1f1e30ee0b286da6
+          size: 110000000
+          strip: 1
+remote:
+    type: github
+    url: gradle/gradle
+    path: ""
+    pattern: v(\d+\.\d+\.\d+)$
+latest: 8.10.2
+lts: "8.5"
+install_root: ""

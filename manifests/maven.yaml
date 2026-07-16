@@ -1,0 +1,92 @@
+name: maven
+display_name: Apache Maven
+description: Apache Maven is a software project management and comprehension tool.
+homepage: https://maven.apache.org/
+category: build
+shims:
+  - mvn
+env_vars:
+  MAVEN_HOME: "{{install}}"
+latest: "3.9.9"
+lts: "3.9.6"
+versions:
+  - version: "3.9.9"
+    stable: true
+    release: "2024-09-01"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
+        sha256: 4ec3f26fb1a692473aea0235c300bd20f0f9fe741947c82c1234cefd76ac3a3c
+        size: 9500000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
+        sha256: 7a9cdf674fc1703d6382f5f330b3d110ea1b512b51f1652846d9e4e8a588d766
+        size: 9000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz
+        sha256: 7a9cdf674fc1703d6382f5f330b3d110ea1b512b51f1652846d9e4e8a588d766
+        size: 9000000
+        strip: 1
+  - version: "3.9.6"
+    stable: true
+    release: "2023-11-01"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.zip
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.zip
+        sha256: 83aaf914c785c9faed661f223000a92d1de9553f5c82d3b4362e66d9c031625f
+        size: 9000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
+        sha256: 6eedd2cae3626d6ad3a5c9ee324bd265853d64297f07f033430755bd0e0c3a4b
+        size: 8500000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz
+        sha256: 6eedd2cae3626d6ad3a5c9ee324bd265853d64297f07f033430755bd0e0c3a4b
+        size: 8500000
+        strip: 1
+  - version: "3.8.8"
+    stable: true
+    release: "2023-04-01"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://archive.apache.org/dist/maven/maven-3/3.8.8/binaries/apache-maven-3.8.8-bin.zip
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.8.8/binaries/apache-maven-3.8.8-bin.zip
+        sha256: 2e181515ce8ae14b7a904c40bb4794831f5fd1d9641107a13b916af15af4001a
+        size: 8500000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.8.8/binaries/apache-maven-3.8.8-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.8.8/binaries/apache-maven-3.8.8-bin.tar.gz
+        sha256: 17811e108701af5985bf5167abbd47c06e92c6c6bd1c13a1a1c095c9b4ecc32a
+        size: 8000000
+        strip: 1
+remote:
+  type: github
+  url: "apache/maven"
+  pattern: "maven-(\\d+\\.\\d+\\.\\d+)$"

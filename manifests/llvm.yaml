@@ -1,0 +1,82 @@
+name: llvm
+display_name: LLVM/Clang
+description: The LLVM compiler infrastructure, including clang, lld, and related tools.
+homepage: https://llvm.org/
+category: build
+shims:
+    - clang
+    - clang++
+    - lld
+    - llvm-ar
+    - llvm-nm
+    - llvm-objcopy
+    - llvm-objdump
+    - llvm-readelf
+    - llvm-strip
+env_vars:
+    LLVM_HOME: '{{install}}'
+versions:
+    - version: 18.1.8
+      stable: true
+      release: "2024-06-18"
+      archives:
+        - os: windows
+          arch: amd64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-pc-windows-msvc.tar.xz
+          mirror_url: ""
+          sha256: df1ef8ed5b64ff370d98dd0e524ab1889f5753e06660371644e2e64b9c6dbb41
+          size: 940000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          mirror_url: ""
+          sha256: f9bdf104e5ab162ddb26a12cf4da376cd124f359bf0114b6b666b726c943949d
+          size: 1000000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-arm64-apple-macos11.tar.xz
+          mirror_url: ""
+          sha256: 4d31fca006e3b0f47898ee10581f86979c995182f7483a8690abb6de1aea401d
+          size: 800000000
+          strip: 1
+    - version: 17.0.6
+      stable: true
+      release: "2023-11-28"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.exe
+          mirror_url: ""
+          sha256: 24b61544dc40c27aab2618472bf63142eb98d6c8bbbbbc16f67e6cfc66747af3
+          size: 900000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04.tar.xz
+          mirror_url: ""
+          sha256: f6a059904f65967d73ffd59e331bd5e3b5aa6abacedd8d6e95aeca72feca3808
+          size: 1000000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/clang+llvm-17.0.6-arm64-apple-darwin22.0.tar.xz
+          mirror_url: ""
+          sha256: 74a404077dbef47a197a7321bc2b6e2f3ee1494536dd2fbb7468135e1f2f9464
+          size: 800000000
+          strip: 1
+remote:
+    type: github
+    url: ""
+    path: ""
+    pattern: ^llvmorg-(\d+\.\d+\.\d+)$
+latest: 18.1.8
+lts: ""
+install_root: ""

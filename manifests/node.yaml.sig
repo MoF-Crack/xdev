@@ -1,0 +1,6 @@
+{
+  "tool": "node",
+  "sha256_map": "{\"18.20.4\":{\"linux/x86_64\":\"592eb35c352c7c0c8c4b2ecf9c19d615e78de68c20b660eb74bd85f8c8395063\",\"windows/amd64\":\"a2864d9048fb83cc85e3b2c3d18f5731b69cae8964bb029f5cdecbb0820eccd7\"},\"20.18.0\":{\"darwin/arm64\":\"678e062bdae3824aa997bd469580a4dda48fd51f61d3679b6ba06352e6cef38f\",\"darwin/x86_64\":\"63e150a3bb4f31743257d8597262c6b5f0a2356e7c42002e29d5f7d1bf161f08\",\"linux/arm64\":\"a9ce85675ba33f00527f6234d90000946c0936fb4fca605f1891bb5f4fe6fb0a\",\"linux/x86_64\":\"4543670b589593f8fa5f106111fd5139081da42bb165a9239f05195e405f240a\",\"windows/amd64\":\"f5cea43414cc33024bbe5867f208d1c9c915d6a38e92abeee07ed9e563662297\"},\"22.10.0\":{\"darwin/arm64\":\"1e075186b54bac99434c5a41f5bf526e9729c8010dc05cb0da426fb0d5b97170\",\"linux/x86_64\":\"406791658a8bce3bc21fab786f45877adad391ea20badc87e1d65c7478b75062\",\"windows/amd64\":\"d68dce8f7a73305a496e719485ca6647387d9410cb7eb5933b5d9b4afc5593bd\"}}",
+  "timestamp": "2026-07-08T12:35:12.0165623Z",
+  "signature": "twQzZCqVfMHs4si2pEZDADO72FbZ2mutbtB55p+WDEJ9Bx1lO0ve93WXHmfOrj/mGA9VKu7OLZQ3ypgqwifbBw=="
+}

@@ -1,0 +1,2 @@
+<template><FormSection :title="t('settings.language')"><label for="settings-language">{{ t('settings.language') }}</label><select id="settings-language" data-action="locale" :value="modelValue" @change="$emit('update:modelValue',$event.target.value)"><option value="en">English</option><option value="zh">中文</option></select></FormSection></template>
+<script setup>import FormSection from '../FormSection.vue'; defineProps({modelValue:String,t:{type:Function,required:true}}); defineEmits(['update:modelValue']);</script>

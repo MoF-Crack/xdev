@@ -1,0 +1,46 @@
+name: android-emulator
+display_name: Android Emulator
+description: Android emulator binary (emulator-headless, qemu-system-*) for running AVDs.
+homepage: https://developer.android.com/studio/run/emulator
+category: mobile
+install_root: "android-sdk"
+shims:
+  - emulator
+  - emulator-headless
+env_vars:
+  ANDROID_HOME: "{{install}}\\..\\.."
+latest: "15081367"
+lts: "15081367"
+versions:
+  - version: "15081367"
+    stable: true
+    release: "2026-04-02"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://dl.google.com/android/repository/emulator-windows_x64-15081367.zip
+        mirror_url: https://redirector.gvt1.com/edgedl/android/repository/emulator-windows_x64-15081367.zip
+        sha256: e7de9a4965e786c719fb1607f4fdc29854a632712c1046b450e6969c2edc50ca
+        size: 418622111
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: zip
+        url: https://dl.google.com/android/repository/emulator-linux_x64-15081367.zip
+        mirror_url: https://redirector.gvt1.com/edgedl/android/repository/emulator-linux_x64-15081367.zip
+        sha256: ffb7c18282efad1702820c23d5e1fec1127671cceac2589ed03f6c7a94187690
+        size: 331543272
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: zip
+        url: https://dl.google.com/android/repository/emulator-darwin_aarch64-15081367.zip
+        mirror_url: https://redirector.gvt1.com/edgedl/android/repository/emulator-darwin_aarch64-15081367.zip
+        sha256: b3cfca6f2058ea168adb2cddcededa520e980fb5fa79c8451a415637bb92d493
+        size: 384550690
+        strip: 0
+remote:
+  type: html
+  url: "https://dl.google.com/android/repository/"
+  pattern: "emulator-\\w+-(\\d+)"

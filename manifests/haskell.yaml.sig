@@ -1,0 +1,6 @@
+{
+  "tool": "haskell",
+  "sha256_map": "{\"9.10.1\":{\"darwin/arm64\":\"5ad402e3032c414f90ec0f014ecc4f136f45ab6f5e88303291bbe416f0768036\",\"linux/x86_64\":\"330c43eea88434e2de3480e05a5ea5cf7664090ef12245602dfe8463ac5dc496\",\"windows/amd64\":\"002aa68594b60be91a1f77585ec00d4dfdd9f908554449d74b0ad08fcb9459c1\"},\"9.6.6\":{\"darwin/arm64\":\"c2a060a0a32455a88fc321963442aa7ff910e10bbdb377c02a674210f69a9145\",\"linux/x86_64\":\"a34bdfc1f65b000135d9c8eb12d69670026a64043a8b33ef5ba24b0f8e28d046\",\"windows/amd64\":\"f34388d043a74731180075c9a018acb9858deadc222e7b28fa3f569ce63bec06\"},\"9.8.4\":{\"darwin/arm64\":\"e0011fe28dc0ff7531b3a69c156dd32ffe3df05d1bf03cc05ab09c82da37c712\",\"linux/x86_64\":\"b50545b54934068a569225e3dde267a8b5aab66449330d63e02a8cf28972375e\",\"windows/amd64\":\"eef72d85ad27036075ed17be1455f4fd3b9b235e37b6e04b7ce34e6e734bd99f\"}}",
+  "timestamp": "2026-07-08T12:35:12.0102575Z",
+  "signature": "ae4mgHQkTnPtb9/1v13EzGBU+s2RrbudJ3RLQKO/IGu7ypWZ4QaQB51ECqLSuZvqRQVy9YKi3bgRaWv6PtHhAg=="
+}

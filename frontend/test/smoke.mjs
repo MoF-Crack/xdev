@@ -1,0 +1,86 @@
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const read = (path) => readFileSync(join(root, path), 'utf8');
+const failures = [];
+
+function expect(condition, message) {
+  if (!condition) failures.push(message);
+}
+
+const app = read('src/App.vue');
+const appContent = read('src/AppContent.vue');
+const appShell = read('src/layouts/AppShell.vue');
+const toolCatalogPage = read('src/pages/ToolCatalogPage.vue');
+const navigation = read('src/navigation/navigation.js');
+const setupWizard = read('src/SetupWizard.vue');
+const commandPalette = read('src/components/CommandPalette.vue');
+const theme = read('src/styles/theme.css');
+function sourceFilesIn(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFilesIn(path);
+    return /\.(?:vue|css|js|ts)$/.test(entry.name) ? [readFileSync(path, 'utf8')] : [];
+  });
+}
+const sourceFiles = sourceFilesIn(join(root, 'src'));
+
+expect(existsSync(join(root, 'src/styles/theme.css')), 'src/styles/theme.css should exist');
+expect(app.includes("import './styles/theme.css'"), 'App.vue should import theme.css');
+expect(existsSync(join(root, 'src/components/CommandPalette.vue')), 'CommandPalette component should exist');
+expect(appContent.includes('<CommandPalette'), 'AppContent.vue should render CommandPalette');
+expect(appContent.includes('<AppShell'), 'AppContent.vue should compose AppShell');
+for (const page of ['ProjectPage', 'TasksPage', 'PluginsPage', 'ServicesPage']) {
+  expect(appContent.includes(`import ${page} from './pages/${page}.vue'`), `AppContent should import ${page}`);
+  expect(appContent.includes(`<${page} v-else-if=`), `AppContent should render ${page} in the view chain`);
+}
+expect(!/v-(?:else-)?if\s*=\s*["']false["']/.test(appContent), 'AppContent should not retain disabled false template branches');
+for (const marker of ['newProjectTool', 'newProjectVersion', 'newPluginName', 'showCreatePlugin']) {
+  expect(!appContent.includes(marker), `AppContent should not retain legacy ${marker} markup or state`);
+}
+const fallbackIndex = appContent.indexOf('<ToolCatalogPage v-else');
+expect(fallbackIndex > appContent.indexOf('<ServicesPage v-else-if='), 'ToolCatalog fallback should follow the four extracted pages');
+expect(toolCatalogPage.includes('v-model') || toolCatalogPage.includes('update:searchQuery'), 'tool catalog should own its search model');
+expect(!appContent.includes('data-testid="tool-search"'), 'AppContent should not duplicate tool catalog search markup');
+expect(navigation.includes("key: 'tools-group'"), 'registry should include a tools group');
+expect(navigation.includes("key: 'environment-group'"), 'registry should include an environment group');
+expect(navigation.includes("key: 'development-group'"), 'registry should include a development group');
+expect(navigation.includes("key: 'settings-group'"), 'registry should include a settings group');
+expect(appShell.includes("window.addEventListener('keydown'"), 'AppShell should register global keyboard shortcuts');
+expect(appContent.includes('await WindowIsMaximised()'), 'maximize should immediately refresh Wails window state');
+expect(appContent.includes('.catch('), 'Wails maximize polling should handle rejected state checks');
+expect(!setupWizard.includes('#7D56F4'), 'SetupWizard should not use the old purple accent');
+expect(!setupWizard.includes('#252540'), 'SetupWizard should not use the old purple card background');
+expect(!setupWizard.includes('#1a1a2e'), 'SetupWizard should not use the old purple page background');
+expect(!appContent.includes('<style'), 'AppContent should not retain page-specific styles');
+for (const marker of ['languageOptions', 'pathModeOptions', 'switchToXdev', 'local-path', 'version-row', 'fav-tool-card', 'sider-header', 'title-btn']) {
+  expect(!appContent.includes(marker), `AppContent should not retain dead ${marker} code`);
+}
+expect(!sourceFiles.some(file => /transition\s*:\s*all\b/i.test(file)), 'source should not use transition: all');
+expect(!sourceFiles.some(file => /(?:#00e5ff|rgba\(0\s*,\s*229\s*,\s*255)/i.test(file)), 'source should not use the legacy cyan accent');
+
+const definedVars = new Set([...theme.matchAll(/(--xdev-[\w-]+)\s*:/g)].map(match => match[1]));
+const usedVars = new Set(sourceFiles.flatMap(file => [...file.matchAll(/var\((--xdev-[\w-]+)/g)].map(match => match[1])));
+for (const variable of usedVars) expect(definedVars.has(variable), `${variable} should be defined in theme.css`);
+
+const localeKeys = {};
+for (const locale of ['en', 'zh']) {
+  const messages = read(`src/i18n/locales/${locale}.ts`);
+  const keys = [...messages.matchAll(/^\s*['"]([^'"]+)['"]\s*:/gm)].map(match => match[1]);
+  expect(new Set(keys).size === keys.length, `${locale} locale should not contain duplicate keys`);
+  localeKeys[locale] = new Set(keys);
+}
+const enOnly = [...localeKeys.en].filter(key => !localeKeys.zh.has(key));
+const zhOnly = [...localeKeys.zh].filter(key => !localeKeys.en.has(key));
+expect(!enOnly.length && !zhOnly.length, `en and zh locales should contain the same keys (en-only: ${enOnly.join(', ') || 'none'}; zh-only: ${zhOnly.join(', ') || 'none'})`);
+expect(read('index.html').includes('@media (prefers-reduced-motion: reduce)'), 'pre-mount styles should honor reduced motion');
+
+if (failures.length > 0) {
+  console.error('Smoke test failed:');
+  for (const failure of failures) console.error(`- ${failure}`);
+  process.exit(1);
+}
+
+console.log('Smoke test passed');

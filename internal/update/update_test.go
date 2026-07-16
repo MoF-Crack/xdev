@@ -1,0 +1,232 @@
+package update
+
+import (
+	"testing"
+
+	"github.com/xmdemt/xdev/internal/util"
+)
+
+// ---------------------------------------------------------------------------
+// parseSemver
+// ---------------------------------------------------------------------------
+
+func TestParseSemver_Basic(t *testing.T) {
+	got := util.ParseSemverParts("1.2.3")
+	want := [3]int{1, 2, 3}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "1.2.3", got, want)
+	}
+}
+
+func TestParseSemver_ZeroVersion(t *testing.T) {
+	got := util.ParseSemverParts("0.1.0")
+	want := [3]int{0, 1, 0}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "0.1.0", got, want)
+	}
+}
+
+func TestParseSemver_WithVPrefix(t *testing.T) {
+	got := util.ParseSemverParts("v1.0.0")
+	want := [3]int{1, 0, 0}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "v1.0.0", got, want)
+	}
+}
+
+func TestParseSemver_WithPreRelease(t *testing.T) {
+	got := util.ParseSemverParts("2.3.4-beta.1")
+	want := [3]int{2, 3, 4}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "2.3.4-beta.1", got, want)
+	}
+}
+
+func TestParseSemver_VPrefixWithPreRelease(t *testing.T) {
+	got := util.ParseSemverParts("v3.1.0-rc.2")
+	want := [3]int{3, 1, 0}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "v3.1.0-rc.2", got, want)
+	}
+}
+
+func TestParseSemver_LargeNumbers(t *testing.T) {
+	got := util.ParseSemverParts("10.20.30")
+	want := [3]int{10, 20, 30}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "10.20.30", got, want)
+	}
+}
+
+func TestParseSemver_IncompleteVersion(t *testing.T) {
+	// Only major.minor — patch defaults to 0
+	got := util.ParseSemverParts("1.2")
+	want := [3]int{1, 2, 0}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "1.2", got, want)
+	}
+}
+
+func TestParseSemver_OnlyMajor(t *testing.T) {
+	got := util.ParseSemverParts("5")
+	want := [3]int{5, 0, 0}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "5", got, want)
+	}
+}
+
+func TestParseSemver_EmptyString(t *testing.T) {
+	got := util.ParseSemverParts("")
+	want := [3]int{0, 0, 0}
+	if got != want {
+		t.Errorf("util.ParseSemverParts(%q) = %v, want %v", "", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// semverLess
+// ---------------------------------------------------------------------------
+
+func TestSemverLess_Equal(t *testing.T) {
+	if semverLess("1.2.3", "1.2.3") {
+		t.Errorf("semverLess(%q, %q) = true, want false", "1.2.3", "1.2.3")
+	}
+}
+
+func TestSemverLess_LessByPatch(t *testing.T) {
+	if !semverLess("1.2.3", "1.2.4") {
+		t.Errorf("semverLess(%q, %q) = false, want true", "1.2.3", "1.2.4")
+	}
+}
+
+func TestSemverLess_LessByMinor(t *testing.T) {
+	if !semverLess("1.2.9", "1.3.0") {
+		t.Errorf("semverLess(%q, %q) = false, want true", "1.2.9", "1.3.0")
+	}
+}
+
+func TestSemverLess_LessByMajor(t *testing.T) {
+	if !semverLess("1.99.99", "2.0.0") {
+		t.Errorf("semverLess(%q, %q) = false, want true", "1.99.99", "2.0.0")
+	}
+}
+
+func TestSemverLess_GreaterByPatch(t *testing.T) {
+	if semverLess("1.2.5", "1.2.4") {
+		t.Errorf("semverLess(%q, %q) = true, want false", "1.2.5", "1.2.4")
+	}
+}
+
+func TestSemverLess_GreaterByMinor(t *testing.T) {
+	if semverLess("2.0.0", "1.9.9") {
+		t.Errorf("semverLess(%q, %q) = true, want false", "2.0.0", "1.9.9")
+	}
+}
+
+func TestSemverLess_WithVPrefix(t *testing.T) {
+	if !semverLess("v1.0.0", "v1.0.1") {
+		t.Errorf("semverLess(%q, %q) = false, want true", "v1.0.0", "v1.0.1")
+	}
+}
+
+func TestSemverLess_ZeroVersions(t *testing.T) {
+	if semverLess("0.0.0", "0.0.0") {
+		t.Errorf("semverLess(%q, %q) = true, want false", "0.0.0", "0.0.0")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// findAsset
+// ---------------------------------------------------------------------------
+
+func TestFindAsset_ExactMatch(t *testing.T) {
+	release := &ReleaseInfo{
+		Assets: []Asset{
+			{Name: "xdev-linux-amd64", BrowserDownloadURL: "http://example.com/linux"},
+			{Name: "xdev-windows-amd64.exe", BrowserDownloadURL: "http://example.com/windows"},
+			{Name: "SHA256SUMS", BrowserDownloadURL: "http://example.com/sums"},
+		},
+	}
+	asset, ok := findAsset(release, "xdev-linux-amd64")
+	if !ok {
+		t.Fatal("findAsset: expected to find exact match")
+	}
+	if asset.Name != "xdev-linux-amd64" {
+		t.Errorf("findAsset name = %q, want %q", asset.Name, "xdev-linux-amd64")
+	}
+}
+
+func TestFindAsset_NoMatch(t *testing.T) {
+	release := &ReleaseInfo{
+		Assets: []Asset{
+			{Name: "other-tool-linux-amd64", BrowserDownloadURL: "http://example.com/other"},
+		},
+	}
+	_, ok := findAsset(release, "xdev-linux-amd64")
+	if ok {
+		t.Error("findAsset: expected no match, got one")
+	}
+}
+
+func TestFindAsset_EmptyAssets(t *testing.T) {
+	release := &ReleaseInfo{}
+	_, ok := findAsset(release, "xdev-linux-amd64")
+	if ok {
+		t.Error("findAsset: expected no match for empty assets")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseSHA256SUMS
+// ---------------------------------------------------------------------------
+
+func TestParseSHA256SUMS_DoubleSpace(t *testing.T) {
+	content := "abc123def456  xdev-linux-amd64\n789xyz  other-file\n"
+	hash, err := parseSHA256SUMS(content, "xdev-linux-amd64")
+	if err != nil {
+		t.Fatalf("parseSHA256SUMS: unexpected error: %v", err)
+	}
+	if hash != "abc123def456" {
+		t.Errorf("parseSHA256SUMS hash = %q, want %q", hash, "abc123def456")
+	}
+}
+
+func TestParseSHA256SUMS_SingleSpace(t *testing.T) {
+	content := "abc123def456 xdev-linux-amd64\n"
+	hash, err := parseSHA256SUMS(content, "xdev-linux-amd64")
+	if err != nil {
+		t.Fatalf("parseSHA256SUMS: unexpected error: %v", err)
+	}
+	if hash != "abc123def456" {
+		t.Errorf("parseSHA256SUMS hash = %q, want %q", hash, "abc123def456")
+	}
+}
+
+func TestParseSHA256SUMS_NotFound(t *testing.T) {
+	content := "abc123  some-other-file\n"
+	_, err := parseSHA256SUMS(content, "xdev-linux-amd64")
+	if err == nil {
+		t.Error("parseSHA256SUMS: expected error for missing filename")
+	}
+}
+
+func TestParseSHA256SUMS_EmptyContent(t *testing.T) {
+	_, err := parseSHA256SUMS("", "xdev-linux-amd64")
+	if err == nil {
+		t.Error("parseSHA256SUMS: expected error for empty content")
+	}
+}
+
+func TestParseSHA256SUMS_MultipleEntries(t *testing.T) {
+	content := `aaa111  file-a
+bbb222  file-b
+ccc333  file-c
+`
+	hash, err := parseSHA256SUMS(content, "file-b")
+	if err != nil {
+		t.Fatalf("parseSHA256SUMS: unexpected error: %v", err)
+	}
+	if hash != "bbb222" {
+		t.Errorf("parseSHA256SUMS hash = %q, want %q", hash, "bbb222")
+	}
+}

@@ -1,0 +1,105 @@
+name: haskell
+display_name: Haskell (GHC)
+description: An advanced, purely functional programming language with a state-of-the-art compiler (GHC).
+homepage: https://www.haskell.org/
+category: language
+shims:
+    - ghc
+    - ghci
+    - cabal
+    - stack
+env_vars:
+    GHC_HOME: '{{install}}'
+versions:
+    - version: 9.10.1
+      stable: true
+      release: "2024-09-20"
+      archives:
+        - os: windows
+          arch: amd64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.10.1/ghc-9.10.1-x86_64-unknown-mingw32.tar.xz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.10.1/ghc-9.10.1-x86_64-unknown-mingw32.tar.xz
+          sha256: 002aa68594b60be91a1f77585ec00d4dfdd9f908554449d74b0ad08fcb9459c1
+          size: 280000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.10.1/ghc-9.10.1-x86_64-deb12-linux.tar.xz
+          mirror_url: ""
+          sha256: 330c43eea88434e2de3480e05a5ea5cf7664090ef12245602dfe8463ac5dc496
+          size: 260000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.10.1/ghc-9.10.1-aarch64-apple-darwin.tar.xz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.10.1/ghc-9.10.1-aarch64-apple-darwin.tar.xz
+          sha256: 5ad402e3032c414f90ec0f014ecc4f136f45ab6f5e88303291bbe416f0768036
+          size: 250000000
+          strip: 1
+    - version: 9.8.4
+      stable: true
+      release: "2024-07-09"
+      archives:
+        - os: windows
+          arch: amd64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.8.4/ghc-9.8.4-x86_64-unknown-mingw32.tar.xz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.8.4/ghc-9.8.4-x86_64-unknown-mingw32.tar.xz
+          sha256: eef72d85ad27036075ed17be1455f4fd3b9b235e37b6e04b7ce34e6e734bd99f
+          size: 270000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.8.4/ghc-9.8.4-x86_64-deb12-linux.tar.xz
+          mirror_url: ""
+          sha256: b50545b54934068a569225e3dde267a8b5aab66449330d63e02a8cf28972375e
+          size: 250000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.8.4/ghc-9.8.4-aarch64-apple-darwin.tar.xz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.8.4/ghc-9.8.4-aarch64-apple-darwin.tar.xz
+          sha256: e0011fe28dc0ff7531b3a69c156dd32ffe3df05d1bf03cc05ab09c82da37c712
+          size: 240000000
+          strip: 1
+    - version: 9.6.6
+      stable: true
+      release: "2024-05-07"
+      archives:
+        - os: windows
+          arch: amd64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.6.6/ghc-9.6.6-x86_64-unknown-mingw32.tar.xz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.6.6/ghc-9.6.6-x86_64-unknown-mingw32.tar.xz
+          sha256: f34388d043a74731180075c9a018acb9858deadc222e7b28fa3f569ce63bec06
+          size: 260000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.6.6/ghc-9.6.6-x86_64-deb11-linux.tar.xz
+          mirror_url: ""
+          sha256: a34bdfc1f65b000135d9c8eb12d69670026a64043a8b33ef5ba24b0f8e28d046
+          size: 240000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://downloads.haskell.org/~ghc/9.6.6/ghc-9.6.6-aarch64-apple-darwin.tar.xz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.6.6/ghc-9.6.6-aarch64-apple-darwin.tar.xz
+          sha256: c2a060a0a32455a88fc321963442aa7ff910e10bbdb377c02a674210f69a9145
+          size: 230000000
+          strip: 1
+remote:
+    type: github
+    url: ""
+    path: ""
+    pattern: ^v?(\d+\.\d+\.\d+)$
+latest: 9.10.1
+lts: 9.8.4
+install_root: ""

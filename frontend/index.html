@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XDev</title>
+    <link rel="icon" type="image/svg+xml" href="/src/assets/logo-small.svg">
+    <style>
+        /* Immediate dark background to prevent white flash before
+           Vue mounts.  This style is applied before any JS runs. */
+        html, body {
+            margin: 0;
+            padding: 0;
+             background-color: #111113;
+             color: #f4f4f5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                         Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden;
+        }
+        #app {
+            min-height: 100vh;
+             background-color: #111113;
+        }
+        /* Pre-mount loading indicator */
+        .pre-mount {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+             background-color: #111113;
+             color: #a1a1aa;
+            font-size: 14px;
+            gap: 16px;
+        }
+        .pre-mount-text {
+            letter-spacing: 2px;
+            opacity: 0;
+            animation: preMountFadeIn 0.6s ease forwards;
+        }
+        .pre-mount-bar {
+            width: 120px;
+            height: 2px;
+             background: rgba(129, 140, 248, 0.12);
+            border-radius: 1px;
+            overflow: hidden;
+            position: relative;
+        }
+        .pre-mount-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -40%;
+            width: 40%;
+            height: 100%;
+             background: linear-gradient(90deg, transparent, #818cf8, transparent);
+            border-radius: 1px;
+            animation: preMountSlide 1.4s ease-in-out infinite;
+        }
+        @keyframes preMountFadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes preMountSlide {
+            0%   { left: -40%; }
+            100% { left: 100%; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .pre-mount-text { opacity: 1; animation: none; }
+            .pre-mount-bar::after { left: 30%; animation: none; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="pre-mount">
+            <span class="pre-mount-text">Loading XDev…</span>
+            <div class="pre-mount-bar"></div>
+        </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

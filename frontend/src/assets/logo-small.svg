@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="xGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0097A7"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="32" height="32" rx="6" fill="#0A1628"/>
+  <!-- Subtle border -->
+  <rect width="32" height="32" rx="6" fill="none" stroke="rgba(0,229,255,0.12)" stroke-width="0.5"/>
+  <!-- X shape -->
+  <path d="M5,3 L12,3 L16,13 L20,3 L27,3 L18,16 L27,29 L20,29 L16,19 L12,29 L5,29 L14,16 Z" fill="url(#xGrad)"/>
+  <!-- Center node -->
+  <circle cx="16" cy="16" r="2.2" fill="#00E5FF"/>
+  <circle cx="16" cy="16" r="1.1" fill="#FFFFFF" opacity="0.85"/>
+  <!-- Branch hints -->
+  <line x1="16" y1="13.5" x2="11" y2="9" stroke="#00E5FF" stroke-width="0.9" opacity="0.45" stroke-linecap="round"/>
+  <line x1="16" y1="13.5" x2="21" y2="9" stroke="#00E5FF" stroke-width="0.9" opacity="0.45" stroke-linecap="round"/>
+  <line x1="16" y1="18.5" x2="11" y2="23" stroke="#00E5FF" stroke-width="0.9" opacity="0.45" stroke-linecap="round"/>
+  <line x1="16" y1="18.5" x2="21" y2="23" stroke="#00E5FF" stroke-width="0.9" opacity="0.45" stroke-linecap="round"/>
+  <!-- Circuit nodes -->
+  <circle cx="8" cy="7" r="1" fill="#00E5FF" opacity="0.4"/>
+  <circle cx="24" cy="7" r="1" fill="#00E5FF" opacity="0.4"/>
+  <circle cx="8" cy="25" r="1" fill="#00E5FF" opacity="0.4"/>
+  <circle cx="24" cy="25" r="1" fill="#00E5FF" opacity="0.4"/>
+</svg>

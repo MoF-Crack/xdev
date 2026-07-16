@@ -1,0 +1,79 @@
+name: lua
+display_name: Lua
+description: Lightweight, high-level, multi-paradigm programming language designed for embedded use.
+homepage: https://www.lua.org/
+category: language
+shims:
+    - lua
+    - luac
+env_vars:
+    LUA_HOME: '{{install}}'
+versions:
+    - version: 5.5.0
+      stable: true
+      release: "2025-12-15"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://sourceforge.net/projects/luabinaries/files/5.5.0/Tools%20Executables/lua-5.5.0_Win64_bin.zip/download
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/joedf/LuaBuilds/v5.5.0/lua-5.5.0_Win64_bin.zip
+          sha256: 7825cb261d0dc61cb0e1511d451ceaf10bf72d2bba1855bfd3350add190e0024
+          size: 1500000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.lua.org/ftp/lua-5.5.0.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/lua/ftp/lua-5.5.0.tar.gz
+          sha256: 57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d
+          size: 1500000
+          strip: 0
+    - version: 5.4.8
+      stable: true
+      release: "2025-12-16"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://sourceforge.net/projects/luabinaries/files/5.4.8/Tools%20Executables/lua-5.4.8_Win64_bin.zip/download
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/joedf/LuaBuilds/v5.4.8/lua-5.4.8_Win64_bin.zip
+          sha256: 20321e893509e575d2454dd7bbf05342c1f3cb1b3788c0ec5a55ae4279dde169
+          size: 1500000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.lua.org/ftp/lua-5.4.8.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/lua/ftp/lua-5.4.8.tar.gz
+          sha256: 4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+          size: 1500000
+          strip: 0
+    - version: 5.3.6
+      stable: true
+      release: "2021-07-13"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://sourceforge.net/projects/luabinaries/files/5.3.6/Tools%20Executables/lua-5.3.6_Win64_bin.zip/download
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/joedf/LuaBuilds/v5.3.6/lua-5.3.6_Win64_bin.zip
+          sha256: 5150a30db5b62956d1bca4c2f3e5d1e08c00e398d8c902f0572b09f014012287
+          size: 1400000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.lua.org/ftp/lua-5.3.6.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/lua/ftp/lua-5.3.6.tar.gz
+          sha256: fc5fd69bb8736323f026672b1b7235da613d7177e72558893a0bdcd320466d60
+          size: 1400000
+          strip: 0
+remote:
+    type: github
+    url: ""
+    path: ""
+    pattern: ^v(\d+\.\d+\.\d+)$
+latest: 5.5.0
+lts: 5.3.6
+install_root: ""

@@ -1,0 +1,65 @@
+name: sbt
+display_name: sbt (Scala Build Tool)
+description: The interactive build tool for Scala and Java projects. Used by the Scala ecosystem as the primary build system.
+homepage: https://www.scala-sbt.org/
+category: build
+shims:
+  - sbt
+env_vars:
+  SBT_HOME: "{{install}}"
+latest: "1.10.2"
+lts: ""
+versions:
+  - version: "1.10.2"
+    stable: true
+    release: "2024-07-21"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://github.com/sbt/sbt/releases/download/v1.10.2/sbt-1.10.2.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/sbt/sbt/v1.10.2/sbt-1.10.2.zip
+        sha256: e27d40d5faef41f6768792b21b3fd403669beee709a3c4cc907edf473fa5f077
+        size: 7000000
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/sbt/sbt/releases/download/v1.10.2/sbt-1.10.2.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/sbt/sbt/v1.10.2/sbt-1.10.2.tgz
+        sha256: a716dd018bd68bc7a95a2dd10337663aa76f443ad6c99deabe5eadd1adfc7639
+        size: 6000000
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://github.com/sbt/sbt/releases/download/v1.10.2/sbt-1.10.2.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/sbt/sbt/v1.10.2/sbt-1.10.2.tgz
+        sha256: a716dd018bd68bc7a95a2dd10337663aa76f443ad6c99deabe5eadd1adfc7639
+        size: 6000000
+        strip: 0
+  - version: "1.9.9"
+    stable: true
+    release: "2024-03-07"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://github.com/sbt/sbt/releases/download/v1.9.9/sbt-1.9.9.zip
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/sbt/sbt/v1.9.9/sbt-1.9.9.zip
+        sha256: e296035788dff678c4416f85c6030b51ec2b5f2b6b72e940c80b7763b34bc5d9
+        size: 7000000
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/sbt/sbt/releases/download/v1.9.9/sbt-1.9.9.tgz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/sbt/sbt/v1.9.9/sbt-1.9.9.tgz
+        sha256: c57cae60c2122ca1bba77184dfb4d0d25fc6c18805394ab36ab6208b0c0f262f
+        size: 6000000
+        strip: 0
+remote:
+  type: github
+  owner: sbt
+  repo: sbt
+  pattern: "^v?(\\d+\\.\\d+\\.\\d+)$"

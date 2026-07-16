@@ -1,0 +1,6 @@
+{
+  "tool": "android-platform-tools",
+  "sha256_map": "{\"33.0.3\":{\"linux/x86_64\":\"ab885c20f1a9cb528eb145b9208f53540efa3d26258ac3ce4363570a0846f8f7\",\"windows/amd64\":\"1e59afd40a74c5c0eab0a9fad3f0faf8a674267106e0b19921be9f67081808c2\"},\"34.0.5\":{\"darwin/arm64\":\"b2c9757744a9d01fcc616b893ac6236233caf1bdf2ef384d73371ab68bfc4a43\",\"linux/x86_64\":\"362f8f6218af0f4c61e5aaafb8e255a426c7a0ee00127dfab7371775081d3124\",\"windows/amd64\":\"3f8320152704377de150418a3c4c9d07d16d80a6c0d0d8f7289c22c499e33571\"},\"35.0.2\":{\"darwin/arm64\":\"1820078db90bf21628d257ff052528af1c61bb48f754b3555648f5652fa35d78\",\"darwin/x86_64\":\"1820078db90bf21628d257ff052528af1c61bb48f754b3555648f5652fa35d78\",\"linux/x86_64\":\"acfdcccb123a8718c46c46c059b2f621140194e5ec1ac9d81715be3d6ab6cd0a\",\"windows/amd64\":\"2975a3eac0b19182748d64195375ad056986561d994fffbdc64332a516300bb9\"}}",
+  "timestamp": "2026-07-08T12:35:12.0049123Z",
+  "signature": "vk2lL9xJny1AYyrWBBtwSaeY1M61XE7tSp7jAx5XOmSOU9n/46Pc/tXDty0KHFHv7Ue4IbUIvK3cKUes2x0vBw=="
+}

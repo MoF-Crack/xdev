@@ -1,0 +1,57 @@
+name: make
+display_name: GNU Make
+description: GNU Make is a tool which controls the generation of executables and other non-source files of a program.
+homepage: https://www.gnu.org/software/make/
+category: build
+shims:
+    - make
+env_vars: {}
+versions:
+    - version: 4.4.1
+      stable: true
+      release: "2023-10-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/xpack-dev-tools/windows-build-tools-xpack/releases/download/v4.4.1-3/xpack-windows-build-tools-4.4.1-3-win32-x64.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/xpack-dev-tools/windows-build-tools-xpack/v4.4.1-3/xpack-windows-build-tools-4.4.1-3-win32-x64.zip
+          sha256: 4eaaef6d3cae6b40897d6191936a98803f328dca57edd0a8520fa1bf9bc106d3
+          size: 2600000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+          mirror_url: https://mirrors.aliyun.com/gnu/make/make-4.4.1.tar.gz
+          sha256: dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
+          size: 2300000
+          strip: 0
+    - version: "4.3"
+      stable: true
+      release: "2020-01-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/xpack-dev-tools/windows-build-tools-xpack/releases/download/v4.3.0-1/xpack-windows-build-tools-4.3.0-1-win32-x64.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/xpack-dev-tools/windows-build-tools-xpack/v4.3.0-1/xpack-windows-build-tools-4.3.0-1-win32-x64.zip
+          sha256: a6c397a6a46c5ba210b80165ee640faa5caf3b070797b70806b299a41aa3e87d
+          size: 2400000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://ftp.gnu.org/gnu/make/make-4.3.tar.gz
+          mirror_url: https://mirrors.aliyun.com/gnu/make/make-4.3.tar.gz
+          sha256: e05fdde47c5f7ca45cb697e973894ff4f5d79e13b750ed57d7b66d8defc78e19
+          size: 2200000
+          strip: 0
+remote:
+    type: github
+    url: ezwinports/make
+    path: ""
+    pattern: ^v?(\d+\.\d+\.\d+)$
+latest: 4.4.1
+lts: "4.3"
+install_root: ""

@@ -1,0 +1,96 @@
+name: flutter
+display_name: Flutter SDK
+description: Google's portable UI toolkit for building native applications across mobile, web and desktop.
+homepage: https://flutter.dev/
+category: mobile
+shims:
+    - flutter
+    - dart
+env_vars:
+    FLUTTER_HOME: '{{install}}'
+    PUB_CACHE: '{{install}}\.pub-cache'
+versions:
+    - version: 3.44.1
+      stable: true
+      release: "2026-06-02"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.44.1-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/windows/flutter_windows_3.44.1-stable.zip
+          sha256: 1e83bc8c032ea7f11a41a8f5e2853f7793ebcddacb5268cb0d3409023932091e
+          size: 1200000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_3.44.1-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_3.44.1-stable.zip
+          sha256: 988b51887cd4f8da73e44a22d50df47ed43cb504dd00bf9328fc85e7946573b0
+          size: 1150000000
+          strip: 0
+        - os: darwin
+          arch: x86_64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_3.44.1-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/macos/flutter_macos_3.44.1-stable.zip
+          sha256: 49800088cb2338583e729e84a598f3fb52f865f952efeebbe3abaf0f5e5c0422
+          size: 1200000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.1-stable.tar.xz
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.1-stable.tar.xz
+          sha256: 5daac7e5718e0437edc9ef432c5f9be1c042166318d09c742253f48576dc48ec
+          size: 850000000
+          strip: 0
+    - version: 3.41.1
+      stable: true
+      release: "2026-02-18"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.41.1-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/windows/flutter_windows_3.41.1-stable.zip
+          sha256: e149043d60101a6438584ac73e129ca38617603f7d4bedd0330540b116569e96
+          size: 1180000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.1-stable.tar.xz
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.1-stable.tar.xz
+          sha256: e3ebe465803293fb54c97e28e98993d184d0230f47069756c088d7a7cb689e4e
+          size: 830000000
+          strip: 0
+    - version: 3.35.7
+      stable: true
+      release: "2025-10-20"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.35.7-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/windows/flutter_windows_3.35.7-stable.zip
+          sha256: b804653bfd2ad27f8d376c62a608ea2c7cbd49ff2b85010af6f8a53aa352fd62
+          size: 1150000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.35.7-stable.tar.xz
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/linux/flutter_linux_3.35.7-stable.tar.xz
+          sha256: 146df531f9ac6a11a918013c1a70faafc053d4811c8cb69a413fd70748d51c3d
+          size: 800000000
+          strip: 0
+remote:
+    type: github
+    url: flutter/flutter
+    path: ""
+    pattern: (\d+\.\d+\.\d+)$
+latest: 3.44.1
+lts: ""
+install_root: ""

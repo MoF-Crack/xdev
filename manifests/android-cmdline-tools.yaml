@@ -1,0 +1,104 @@
+name: android-cmdline-tools
+display_name: Android SDK Command-line Tools
+description: Android SDK command-line tools including sdkmanager and avdmanager.
+homepage: https://developer.android.com/tools
+category: mobile
+shims:
+    - sdkmanager
+    - avdmanager
+env_vars:
+    ANDROID_CMDLINE_TOOLS: '{{install}}'
+    ANDROID_HOME: '{{install}}\..\..'
+versions:
+    - version: "11076708"
+      stable: true
+      release: "2024-09-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-win-11076708_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 150000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-linux-11076708_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 145000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-mac-11076708_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 140000000
+          strip: 0
+    - version: "10406996"
+      stable: true
+      release: "2023-12-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-win-10406996_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-win-10406996_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 145000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-linux-10406996_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 140000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-mac-10406996_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 135000000
+          strip: 0
+    - version: "9477386"
+      stable: true
+      release: "2023-06-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-win-9477386_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-win-9477386_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 140000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-linux-9477386_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 135000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/commandlinetools-mac-9477386_latest.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-mac-9477386_latest.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 130000000
+          strip: 0
+remote:
+    type: html
+    url: https://dl.google.com/android/repository/
+    path: ""
+    pattern: commandlinetools-win-(\d+)_latest
+latest: "11076708"
+lts: "11076708"
+install_root: android-sdk

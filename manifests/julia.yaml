@@ -1,0 +1,126 @@
+name: julia
+display_name: Julia
+description: High-level, high-performance dynamic programming language for technical computing.
+homepage: https://julialang.org/
+category: language
+shims:
+    - julia
+env_vars:
+    JULIA_HOME: '{{install}}'
+versions:
+    - version: 1.11.1
+      stable: true
+      release: "2024-10-09"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://julialang-s3.julialang.org/bin/winnt/x64/1.11/julia-1.11.1-win64.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/winnt/x64/1.11/julia-1.11.1-win64.zip
+          sha256: fe6db1cd3ec65176ed1338d548d0ef6b4ec613995f76a787ca19c81bc60ddcbc
+          size: 230000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/linux/x64/1.11/julia-1.11.1-linux-x86_64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/linux/x64/1.11/julia-1.11.1-linux-x86_64.tar.gz
+          sha256: ce7c1e6d60e36b7d26685ce9eee9cb1f9aa74da51546ba29258d28160b662eaa
+          size: 210000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/aarch64/1.11/julia-1.11.1-macaarch64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/aarch64/1.11/julia-1.11.1-macaarch64.tar.gz
+          sha256: c510966df03a33d50939a1243b91ff128b4f93d34d311b025d108cb00bbfc395
+          size: 190000000
+          strip: 1
+        - os: darwin
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/x64/1.11/julia-1.11.1-mac64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/x64/1.11/julia-1.11.1-mac64.tar.gz
+          sha256: f4bd116e41f3f172e049ec11be33bf123af058ca568d1261bd58a7b27a9a8cc7
+          size: 195000000
+          strip: 1
+    - version: 1.10.5
+      stable: true
+      release: "2024-09-24"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://julialang-s3.julialang.org/bin/winnt/x64/1.10/julia-1.10.5-win64.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/winnt/x64/1.10/julia-1.10.5-win64.zip
+          sha256: 897b2a630b32c96528a08fa9fd82e2afc8432aa4fa3dbb8a0a07722b03ff3992
+          size: 220000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz
+          sha256: 037584051108f7a50fd031a9353f00a16312b4b337004aa2cb0291e54148be29
+          size: 200000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/aarch64/1.10/julia-1.10.5-macaarch64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/aarch64/1.10/julia-1.10.5-macaarch64.tar.gz
+          sha256: 8875690947632ae860f5e3c71b8e1a32a6446ac7775264b7960eaf1a6794c2ff
+          size: 180000000
+          strip: 1
+        - os: darwin
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/x64/1.10/julia-1.10.5-mac64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/x64/1.10/julia-1.10.5-mac64.tar.gz
+          sha256: d7480a7a2d7742a82432f946d106422fc619d25d8a42a792d6644603635f7121
+          size: 185000000
+          strip: 1
+    - version: 1.9.4
+      stable: true
+      release: "2024-03-18"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://julialang-s3.julialang.org/bin/winnt/x64/1.9/julia-1.9.4-win64.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/winnt/x64/1.9/julia-1.9.4-win64.zip
+          sha256: ff006ac02f52b7cf1d0d68f2af42eea1f096003566e5c54e8476760b5e8b36ea
+          size: 210000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/linux/x64/1.9/julia-1.9.4-linux-x86_64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/linux/x64/1.9/julia-1.9.4-linux-x86_64.tar.gz
+          sha256: b521c3840901b3a0503926ad1b0a572b48f8a86ae795564aa3e8abb7e9ac2af1
+          size: 190000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/aarch64/1.9/julia-1.9.4-macaarch64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/aarch64/1.9/julia-1.9.4-macaarch64.tar.gz
+          sha256: 457ef14142d8cb0cf351b588ae9c338716b526553239ba9a849638e0b22e2b3f
+          size: 170000000
+          strip: 1
+        - os: darwin
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/x64/1.9/julia-1.9.4-mac64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/x64/1.9/julia-1.9.4-mac64.tar.gz
+          sha256: 4181bf2eedeb5eebcd01f50ec5c5bcd817e968683b1c08a285e5625d9b03b748
+          size: 175000000
+          strip: 1
+remote:
+    type: github
+    url: ""
+    path: ""
+    pattern: ^v(\d+\.\d+\.\d+)$
+latest: 1.11.1
+lts: 1.10.5
+install_root: ""

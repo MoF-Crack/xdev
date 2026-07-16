@@ -1,0 +1,27 @@
+# Chinese translations
+# Common status
+installed: "已安装"
+activated: "已激活"
+uninstalled: "已卸载"
+error: "错误"
+success: "成功"
+not_installed: "未安装"
+active: "活跃"
+
+# CLI messages
+cli.installed_to: "已安装 %s@%s 到 %s"
+cli.activated: "已激活 %s@%s (current -> %s)"
+cli.removed: "已移除 %s@%s"
+cli.now_active: "%s@%s 已激活"
+cli.no_active_version: "%s 没有活跃版本"
+cli.no_versions: "(未安装 %s 的任何版本)"
+cli.no_tools_activated: "(没有已激活的工具)"
+cli.nothing_installed: "(尚未安装任何工具)"
+cli.unsupported_tool: "不支持的工具 %q"
+cli.no_default_version: "%s 没有默认版本；请指定 @<version>"
+cli.uninstall_requires_version: "卸载需要指定版本 (例如 %s@3.12.0)"
+cli.use_requires_version: "use 需要指定版本，例如 %s@3.12.0"
+cli.not_installed_run: "%s@%s 未安装 (运行 `xdev install %s@%s`)"
+cli.tip_new_terminal: "提示：打开新终端或执行 `source ~/.zshrc` / `~/.bashrc` 以使用新的 shim。"
+cli.no_tool_matches: "没有匹配 %q 的工具"
+cli.warning_load_manifests: "警告：从 %s 加载清单失败：%v"

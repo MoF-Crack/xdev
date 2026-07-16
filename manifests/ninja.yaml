@@ -1,0 +1,93 @@
+name: ninja
+display_name: Ninja Build
+description: Ninja is a small build system with a focus on speed.
+homepage: https://ninja-build.org/
+category: build
+shims:
+    - ninja
+env_vars: {}
+versions:
+    - version: 1.12.1
+      stable: true
+      release: "2024-05-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.12.1/ninja-win.zip
+          sha256: f550fec705b6d6ff58f2db3c374c2277a37691678d6aba463adcbb129108467a
+          size: 300000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.12.1/ninja-linux.zip
+          sha256: 6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255
+          size: 280000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-mac.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.12.1/ninja-mac.zip
+          sha256: 89a287444b5b3e98f88a945afa50ce937b8ffd1dcc59c555ad9b1baf855298c9
+          size: 270000
+          strip: 0
+    - version: 1.11.1
+      stable: true
+      release: "2023-04-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-win.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.11.1/ninja-win.zip
+          sha256: 524b344a1a9a55005eaf868d991e090ab8ce07fa109f1820d40e74642e289abc
+          size: 280000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-linux.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.11.1/ninja-linux.zip
+          sha256: b901ba96e486dce377f9a070ed4ef3f79deb45f4ffe2938f8e7ddc69cfb3df77
+          size: 260000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-mac.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.11.1/ninja-mac.zip
+          sha256: 482ecb23c59ae3d4f158029112de172dd96bb0e97549c4b1ca32d8fad11f873e
+          size: 250000
+          strip: 0
+    - version: 1.10.2
+      stable: true
+      release: "2020-11-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-win.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.10.2/ninja-win.zip
+          sha256: 76e4c61ca3f06ce8eb92deb306cacd90193af1a3ec96709d0506bc643817a59e
+          size: 260000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-linux.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.10.2/ninja-linux.zip
+          sha256: 763464859c7ef2ea3a0a10f4df40d2025d3bb9438fcb1228404640410c0ec22d
+          size: 240000
+          strip: 0
+remote:
+    type: github
+    url: ninja-build/ninja
+    path: ""
+    pattern: v(\d+\.\d+\.\d+)$
+latest: 1.12.1
+lts: ""
+install_root: ""

@@ -1,0 +1,6 @@
+{
+  "tool": "git",
+  "sha256_map": "{\"2.43.0\":{\"darwin/arm64\":\"d79c612f1faab049956ad519a79b2357dbdd2edae3990d22d49187c90d342b77\",\"linux/x86_64\":\"caab4f7bef86de3740e28ccc7bcfcae79cd93254f8c2db5e0ad262703e2193cd\",\"windows/amd64\":\"1905d93068e986258fafc69517df8fddff829bb2a289c1fa4dcc6cdf720ddf36\"},\"2.45.2\":{\"darwin/arm64\":\"72eb1d4a5205ad0f64a66cfe936c837a04bca59946a5c7d887760b9895bc7b76\",\"linux/x86_64\":\"9b6cf16dab204b0795149cab54320551aa81e067bc9ff10c4eb906f465f36c8f\",\"windows/amd64\":\"7ed2a3ce5bbbf8eea976488de5416894ca3e6a0347cee195a7d768ac146d5290\"},\"2.47.0\":{\"darwin/arm64\":\"4e62e9cb5e9fdf25910093aa66060c516ad38a42e05663a02de070cddc2d1b71\",\"linux/x86_64\":\"d9c5ef7b7b977e7809d49c13aa27ed41b4cda7ad78bc65caebc960847c353b82\",\"windows/amd64\":\"6b175d4675bfa7014ba649e3c0976da2a281d89bd9a096f1f41437f9995497a8\"}}",
+  "timestamp": "2026-07-08T12:35:12.0092026Z",
+  "signature": "DeaXWzyDmlEaYsO/ZxAlK+D63sMf9Lw4oU3OPcR2E20QsYJf2rYkoyUQS1q/k5BpPYHtC6zKR/K32qDGjCbkAg=="
+}

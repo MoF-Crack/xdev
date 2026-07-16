@@ -1,0 +1,104 @@
+name: git
+display_name: Git
+description: Git is a free and open source distributed version control system.
+homepage: https://git-scm.com/
+category: build
+shims:
+    - git
+    - gitk
+    - git-gui
+env_vars:
+    GIT_HOME: '{{install}}'
+versions:
+    - version: 2.47.0
+      stable: true
+      release: "2024-10-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/git-for-windows/git/releases/download/v2.47.0.windows.1/MinGit-2.47.0-64-bit.zip
+          mirror_url: https://npmmirror.com/mirrors/git-for-windows/v2.47.0.windows.1/MinGit-2.47.0-64-bit.zip
+          sha256: 6b175d4675bfa7014ba649e3c0976da2a281d89bd9a096f1f41437f9995497a8
+          size: 60000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.47.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.47.0.tar.gz
+          sha256: d9c5ef7b7b977e7809d49c13aa27ed41b4cda7ad78bc65caebc960847c353b82
+          size: 11000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.47.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.47.0.tar.gz
+          sha256: 4e62e9cb5e9fdf25910093aa66060c516ad38a42e05663a02de070cddc2d1b71
+          size: 11000000
+          strip: 1
+    - version: 2.45.2
+      stable: true
+      release: "2024-06-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/MinGit-2.45.2-64-bit.zip
+          mirror_url: https://npmmirror.com/mirrors/git-for-windows/v2.45.2.windows.1/MinGit-2.45.2-64-bit.zip
+          sha256: 7ed2a3ce5bbbf8eea976488de5416894ca3e6a0347cee195a7d768ac146d5290
+          size: 58000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.45.2.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.45.2.tar.gz
+          sha256: 9b6cf16dab204b0795149cab54320551aa81e067bc9ff10c4eb906f465f36c8f
+          size: 10500000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.45.2.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.45.2.tar.gz
+          sha256: 72eb1d4a5205ad0f64a66cfe936c837a04bca59946a5c7d887760b9895bc7b76
+          size: 10500000
+          strip: 1
+    - version: 2.43.0
+      stable: true
+      release: "2023-11-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/MinGit-2.43.0-64-bit.zip
+          mirror_url: https://npmmirror.com/mirrors/git-for-windows/v2.43.0.windows.1/MinGit-2.43.0-64-bit.zip
+          sha256: 1905d93068e986258fafc69517df8fddff829bb2a289c1fa4dcc6cdf720ddf36
+          size: 55000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.43.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.43.0.tar.gz
+          sha256: caab4f7bef86de3740e28ccc7bcfcae79cd93254f8c2db5e0ad262703e2193cd
+          size: 10000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.43.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.43.0.tar.gz
+          sha256: d79c612f1faab049956ad519a79b2357dbdd2edae3990d22d49187c90d342b77
+          size: 10000000
+          strip: 1
+remote:
+    type: github
+    url: git/git
+    path: ""
+    pattern: v(\d+\.\d+\.\d+)$
+latest: 2.47.0
+lts: ""
+install_root: ""

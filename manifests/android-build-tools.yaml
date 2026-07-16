@@ -1,0 +1,82 @@
+name: android-build-tools
+display_name: Android Build Tools
+description: Android SDK build-tools includes aapt2, d8, apksigner and zipalign.
+homepage: https://developer.android.com/tools/releases/build-tools
+category: mobile
+shims:
+    - aapt2
+    - d8
+    - apksigner
+    - zipalign
+env_vars:
+    ANDROID_BUILD_TOOLS: '{{install}}'
+    ANDROID_HOME: '{{install}}\..\..'
+versions:
+    - version: 35.0.0
+      stable: true
+      release: "2024-08-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/build-tools_r35_windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r35_windows.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 60000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/build-tools_r35_linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r35_linux.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 58000000
+          strip: 0
+    - version: 34.0.0
+      stable: true
+      release: "2023-07-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/build-tools_r34-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r34-windows.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 55000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/build-tools_r34-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r34-linux.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 53000000
+          strip: 0
+    - version: 33.0.2
+      stable: true
+      release: "2023-01-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/build-tools_r33.0.2-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r33.0.2-windows.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 52000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r33.0.2-linux.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 50000000
+          strip: 0
+remote:
+    type: html
+    url: https://dl.google.com/android/repository/
+    path: ""
+    pattern: build-tools_r(\d+\.\d+\.\d+)
+latest: 35.0.0
+lts: 34.0.0
+install_root: android-sdk

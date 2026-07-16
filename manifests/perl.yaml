@@ -1,0 +1,79 @@
+name: perl
+display_name: Perl
+description: Highly capable, feature-rich programming language with over 30 years of development.
+homepage: https://www.perl.org/
+category: language
+shims:
+    - perl
+    - cpan
+env_vars:
+    PERL_HOME: '{{install}}'
+versions:
+    - version: 5.40.0
+      stable: true
+      release: "2024-09-20"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54001_64bit_UCRT/strawberry-perl-5.40.0.1-64bit-portable.zip
+          mirror_url: https://mirrors.aliyun.com/CPAN/ports/win32/strawberry/5.40.0.1/strawberry-perl-5.40.0.1-64bit-portable.zip
+          sha256: b0a3a3fa3130ce593e58f1a1689ad0ddc733e157d83c94ee711f66bcdf41c398
+          size: 60000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/CPAN/src/5.0/perl-5.40.0.tar.gz
+          sha256: c740348f357396327a9795d3e8323bafd0fe8a5c7835fc1cbaba0cc8dfe7161f
+          size: 18000000
+          strip: 1
+    - version: 5.38.2
+      stable: true
+      release: "2023-11-25"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_53822_64bit/strawberry-perl-5.38.2.2-64bit-portable.zip
+          mirror_url: https://mirrors.aliyun.com/CPAN/ports/win32/strawberry/5.38.2.2/strawberry-perl-5.38.2.2-64bit-portable.zip
+          sha256: d20952919ed35624a843b98b99dec89bc013fb73625f45fca0871511d46b9fd0
+          size: 58000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.cpan.org/src/5.0/perl-5.38.2.tar.gz
+          mirror_url: https://mirrors.aliyun.com/CPAN/src/5.0/perl-5.38.2.tar.gz
+          sha256: a0a31534451eb7b83c7d6594a497543a54d488bc90ca00f5e34762577f40655e
+          size: 17500000
+          strip: 1
+    - version: 5.36.3
+      stable: true
+      release: "2023-11-25"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_53631_64bit/strawberry-perl-5.36.3.1-64bit-portable.zip
+          mirror_url: https://mirrors.aliyun.com/CPAN/ports/win32/strawberry/5.36.3.1/strawberry-perl-5.36.3.1-64bit-portable.zip
+          sha256: 8eecd6084384ea467c8a7f55e88d87f252e8763b557ab97d495166bd63e54e0a
+          size: 56000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.cpan.org/src/5.0/perl-5.36.3.tar.gz
+          mirror_url: https://mirrors.aliyun.com/CPAN/src/5.0/perl-5.36.3.tar.gz
+          sha256: f2a1ad88116391a176262dd42dfc52ef22afb40f4c0e9810f15d561e6f1c726a
+          size: 17000000
+          strip: 1
+remote:
+    type: github
+    url: ""
+    path: ""
+    pattern: (\d+\.\d+\.\d+)$
+latest: 5.40.0
+lts: 5.38.2
+install_root: ""

@@ -1,0 +1,105 @@
+name: android-ndk
+display_name: Android NDK
+description: Android Native Development Kit for building C/C++ code for Android.
+homepage: https://developer.android.com/ndk
+category: mobile
+shims:
+    - ndk-build
+    - ndk-stack
+    - ndk-gdb
+env_vars:
+    ANDROID_HOME: '{{install}}\..'
+    ANDROID_NDK_HOME: '{{install}}'
+versions:
+    - version: 27.2.12479018
+      stable: true
+      release: "2024-06-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r27c-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r27c-windows.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 1100000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r27c-linux.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 1050000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r27c-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r27c-darwin.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 1000000000
+          strip: 0
+    - version: 26.3.11579264
+      stable: true
+      release: "2024-01-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r26d-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r26d-windows.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 1050000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r26d-linux.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 1000000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r26d-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r26d-darwin.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 950000000
+          strip: 0
+    - version: 25.2.9519653
+      stable: true
+      release: "2023-06-01"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r25c-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r25c-windows.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 980000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r25c-linux.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 950000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r25c-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r25c-darwin.zip
+          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          size: 900000000
+          strip: 0
+remote:
+    type: github
+    url: android/ndk
+    path: ""
+    pattern: ^r(\d+[a-z]?)$
+latest: 27.2.12479018
+lts: 26.3.11579264
+install_root: android-sdk

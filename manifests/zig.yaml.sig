@@ -1,0 +1,6 @@
+{
+  "tool": "zig",
+  "sha256_map": "{\"0.11.0\":{\"darwin/arm64\":\"c6ebf927bb13a707d74267474a9f553274e64906fd21bf1c75a20bde8cadf7b2\",\"darwin/x86_64\":\"1c1c6b9a906b42baae73656e24e108fd8444bb50b6e8fd03e9e7a3f8b5f05686\",\"linux/x86_64\":\"2d00e789fec4f71790a6e7bf83ff91d564943c5ee843c5fd966efc474b423047\",\"windows/amd64\":\"142caa3b804d86b4752556c9b6b039b7517a08afa3af842645c7e2dcd125f652\"},\"0.12.1\":{\"darwin/arm64\":\"6587860dbbc070e1ee069e1a3d18ced83b7ba7a80bf67b2c57caf7c9ce5208b1\",\"darwin/x86_64\":\"68f309c6e431d56eb42648d7fe86e8028a23464d401a467831e27c26f1a8d9c9\",\"linux/x86_64\":\"8860fc9725c2d9297a63008f853e9b11e3c5a2441217f99c1e3104cc6fa4a443\",\"windows/amd64\":\"52459b147c2de4d7c28f6b1a4b3d571c114e96836bf8e31c953a7d2f5e94251c\"},\"0.13.0\":{\"darwin/arm64\":\"46fae219656545dfaf4dce12fb4e8685cec5b51d721beee9389ab4194d43394c\",\"darwin/x86_64\":\"8b06ed1091b2269b700b3b07f8e3be3b833000841bae5aa6a09b1a8b4773effd\",\"linux/x86_64\":\"d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea\",\"windows/amd64\":\"d859994725ef9402381e557c60bb57497215682e355204d754ee3df75ee3c158\"}}",
+  "timestamp": "2026-07-08T12:35:12.0242041Z",
+  "signature": "Cyk/ZZAvjYC+XnxIljFuPJg+SF3cRWm+RLzesgdtVmwxsWKoAbe0ynoRu20WlTs/y5FaxPyVLjVGzUJ5+pBGDQ=="
+}

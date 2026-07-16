@@ -1,0 +1,27 @@
+# English translations
+# Common status
+installed: "installed"
+activated: "activated"
+uninstalled: "uninstalled"
+error: "error"
+success: "success"
+not_installed: "not installed"
+active: "active"
+
+# CLI messages
+cli.installed_to: "installed %s@%s to %s"
+cli.activated: "activated %s@%s (current -> %s)"
+cli.removed: "removed %s@%s"
+cli.now_active: "%s@%s is now active"
+cli.no_active_version: "no active version for %s"
+cli.no_versions: "(no %s versions installed)"
+cli.no_tools_activated: "(no tools activated)"
+cli.nothing_installed: "(nothing installed yet)"
+cli.unsupported_tool: "unsupported tool %q"
+cli.no_default_version: "no default version for %s; specify @<version>"
+cli.uninstall_requires_version: "uninstall requires an explicit version (e.g. %s@3.12.0)"
+cli.use_requires_version: "use requires a version, e.g. %s@3.12.0"
+cli.not_installed_run: "%s@%s is not installed (run `xdev install %s@%s`)"
+cli.tip_new_terminal: "Tip: open a new terminal or `source ~/.zshrc` / `~/.bashrc` to use the new shims."
+cli.no_tool_matches: "no tool matches %q"
+cli.warning_load_manifests: "warning: failed to load manifests from %s: %v"
