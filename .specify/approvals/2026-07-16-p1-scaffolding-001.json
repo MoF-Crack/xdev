@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-16-p1-scaffolding-001",
+  "asset_type": "security-exception",
+  "target_path": "docs/security/exceptions/manifest-signature-verification.md",
+  "decision": "approve-state-transition",
+  "target_version": "0.1.1",
+  "target_state": "Draft",
+  "scope": "Approve creation of manifest signature verification security exception in Draft status as part of P1 governance scaffolding execution",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-16",
+  "authorization_text": "执行P1",
+  "recorded_at": "2026-07-16",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}
