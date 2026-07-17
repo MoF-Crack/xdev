@@ -1,0 +1,4 @@
+#!/bin/sh
+# XDev governance approval gate pre-commit hook.
+# Forwards to PowerShell validator. Works on Git for Windows and POSIX shells.
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(dirname "$0")/pre-commit.ps1"

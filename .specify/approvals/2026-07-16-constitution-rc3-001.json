@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-16-constitution-rc3-001",
+  "asset_type": "constitution",
+  "target_path": ".specify/memory/constitution.md",
+  "decision": "approve-candidate",
+  "target_version": "1.0.0-rc.3",
+  "target_state": "Pending",
+  "scope": "Approve Constitution 1.0.0-rc.3 candidate content as working baseline; does not retroactively authorize 059da20, does not constitute 1.0.0 formal ratification",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-16",
+  "authorization_text": "1. Create errata record. 2. Agree to rc.3. 3. Add approval status hard gate, and every approval must be recorded at write time.",
+  "recorded_at": "2026-07-16",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}
