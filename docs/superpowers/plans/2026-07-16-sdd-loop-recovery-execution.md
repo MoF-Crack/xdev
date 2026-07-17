@@ -168,12 +168,12 @@ P1 完成后可并行：
 
 | 阶段 | 状态 | 证据 |
 |---|---|---|
-| P0-A 修复批准验证器 | In Progress | 当前 5/21 通过；`scripts/docs/` 未提交 |
-| P0-B 本地门禁 | Pending | `scripts/git-hooks/` 不存在，`core.hooksPath` 为空 |
-| P0-C 纠正与批准记录 | Pending | approval JSON、事件记录和 Constitution approval ID 不存在 |
-| P0-D 审查与验收 | Pending | 尚未开始 |
-| P1 治理骨架 | Blocked by P0 | 目标目录不存在 |
-| P2A/P2B/P3 | Blocked by P1 | 尚未实施 |
-| P4A/P4B | Blocked | 尚未实施 |
+| P0-A 修复批准验证器 | Completed | 21/21 通过；提交 `ba5310d` |
+| P0-B 本地门禁 | Completed | `core.hooksPath=scripts/git-hooks`；提交 `ba5310d` |
+| P0-C 纠正与批准记录 | Completed | approval JSON、事件记录和 Constitution approval ID 已写入；提交 `ba5310d` |
+| P0-D 审查与验收 | Completed | 用户批准后提交 `ba5310d governance: enforce recorded approvals` |
+| P1 治理骨架 | Completed | 12 个目录索引 + 1 份安全例外（Draft）；提交 `d0aec02` |
+| P2A/P2B/P3 | Ready for approval | 治理骨架已完成，可并行启动 |
+| P4A/P4B | Blocked by P2A/P2B/P3 | 尚未实施 |
 | P5/P6 | Blocked | 尚未实施 |
 | P7 正式批准 | Blocked | Constitution 仍为 Candidate |
