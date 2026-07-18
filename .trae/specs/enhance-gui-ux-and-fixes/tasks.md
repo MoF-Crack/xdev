@@ -1,3 +1,10 @@
+> **文档类型**：任务（旧）
+> **状态**：Archived（待迁移）
+> **来源**：.trae/specs/enhance-gui-ux-and-fixes/tasks.md
+> **P4B 迁移目标**：specs/archive/2026/000-enhance-gui-ux-and-fixes/tasks.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # Tasks
 
 - [x] Task 1: 修复 `isInsideNodeDir` 兜底误判 bug

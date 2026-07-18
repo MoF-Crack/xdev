@@ -1,3 +1,10 @@
+> **文档类型**：实施计划
+> **状态**：Superseded（待迁移）
+> **来源**：docs/git-initial-import-plan.md
+> **P4B 迁移目标**：docs/history/implementation-plans/git-initial-import-plan.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # Git 初始导入实施方案
 
 ## 目标

@@ -1,3 +1,11 @@
+> **文档类型**：时间点审计
+> **状态**：Snapshot（待迁移）
+> **来源**：docs/security-audit-verification.md
+> **审计日期**：2026-07-08
+> **P4B 迁移目标**：docs/audits/2026-07-08-security-audit-verification.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # xdev 安全审计核实报告
 
 > **审计日期**：2026-07-08  

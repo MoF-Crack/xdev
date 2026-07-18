@@ -1,3 +1,10 @@
+> **文档类型**：安全操作流程
+> **状态**：Deprecated（待迁移）
+> **来源**：docs/download-cache-recovery.md
+> **P4B 迁移目标**：docs/security/procedures/download-cache-recovery.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # 下载缓存空间回收方案
 
 > **创建日期**：2026-07-15

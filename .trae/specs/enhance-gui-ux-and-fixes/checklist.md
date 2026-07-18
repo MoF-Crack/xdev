@@ -1,3 +1,10 @@
+> **文档类型**：Checklist（旧）
+> **状态**：Archived（待迁移）
+> **来源**：.trae/specs/enhance-gui-ux-and-fixes/checklist.md
+> **P4B 迁移目标**：specs/archive/2026/000-enhance-gui-ux-and-fixes/checklist.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 - [x] `isInsideNodeDir` 在路径含 `\node\` 但无 node.exe 时返回 `false`
 - [x] yarn/pnpm 在非 Node.js 安装目录下被正确识别为独立包管理器
 - [x] `getVersion` 能正确获取 cmake、make、gradle 等工具的版本号

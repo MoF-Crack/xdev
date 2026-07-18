@@ -1,3 +1,11 @@
+> **文档类型**：时间点审计
+> **状态**：Snapshot（待迁移）
+> **来源**：docs/security-audit.md
+> **审计日期**：2026-07-04
+> **P4B 迁移目标**：docs/audits/2026-07-04-security-audit.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # xdev 代码安全审计报告
 
 > **审计范围**：`D:\Env\Android\ReverseTools\ReverseEng\xmdevenvmt` 全工程  

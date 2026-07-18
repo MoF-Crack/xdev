@@ -1,3 +1,10 @@
+> **文档类型**：工作计划
+> **状态**：Frozen（待拆分）
+> **来源**：docs/pending-work-plan.md
+> **P4B 迁移目标**：独立事项转为 Feature Spec 后归档至 docs/history/implementation-plans/
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # 后续待处理工作方案
 
 > **创建日期**：2026-07-15

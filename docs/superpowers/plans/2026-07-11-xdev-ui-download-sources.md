@@ -1,3 +1,10 @@
+> **文档类型**：实施计划
+> **状态**：Superseded（待迁移）
+> **来源**：docs/superpowers/plans/2026-07-11-xdev-ui-download-sources.md
+> **P4B 迁移目标**：docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md
+> **替代文档**：无
+> **治理记录**：P4A 元数据治理，2026-07-16
+
 # XDev UI Redesign and Download Source Governance Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
