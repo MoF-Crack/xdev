@@ -1,0 +1,101 @@
+name: Governance
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  governance:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Validate Constitution
+        id: constitution
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          $result = & .\scripts\docs\validate-constitution.ps1 `
+            -ConstitutionPath .\.specify\memory\constitution.md `
+            -Report .\build\governance-constitution-report.json
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Constitution validation found issues (exit=$LASTEXITCODE)"
+          }
+          Write-Host "Constitution validation complete (report mode)"
+
+      - name: Validate Active Specs
+        id: specs
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          $result = & .\scripts\docs\validate-specs.ps1 `
+            -SpecDir .\specs `
+            -Report .\build\governance-specs-report.json
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Spec validation found issues (exit=$LASTEXITCODE)"
+          }
+          Write-Host "Spec validation complete (report mode)"
+
+      - name: Validate Approvals
+        id: approvals
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          $result = & .\scripts\docs\validate-approvals.ps1 `
+            -BaseRef HEAD~1 `
+            -ResultFile .\build\governance-approvals-result.txt
+          if (Test-Path .\build\governance-approvals-result.txt) {
+            $status = Get-Content .\build\governance-approvals-result.txt -Raw
+            if ($status -match 'BLOCK') {
+              Write-Host "::warning::Approval gate blocked: $status"
+            } else {
+              Write-Host "Approval gate passed: $status"
+            }
+          }
+          Write-Host "Approval validation complete (report mode)"
+
+      - name: Validate Documentation Links
+        id: links
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          $result = & .\scripts\docs\validate-links.ps1 `
+            -Path .\docs,.\specs,. `
+            -Report .\build\governance-links-report.json
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Link validation found broken links (exit=$LASTEXITCODE)"
+          }
+          Write-Host "Link validation complete (report mode)"
+
+      - name: Comprehensive Governance Check
+        id: governance
+        continue-on-error: true
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          $result = & .\scripts\docs\validate-governance.ps1 `
+            -RepoRoot . `
+            -Report .\build\governance-report.json
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Governance validation found issues (exit=$LASTEXITCODE)"
+          }
+          Write-Host "Comprehensive governance check complete (report mode)"
+
+      - name: Upload Governance Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: governance-reports
+          path: |
+            build/governance-*.json
+            build/governance-*.txt
+          retention-days: 30

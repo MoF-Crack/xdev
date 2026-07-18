@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-16-p6-001-ci-go-version-consistency-001",
+  "asset_type": "spec",
+  "target_path": "specs/001-ci-go-version-consistency/spec.md",
+  "decision": "approve-state-transition",
+  "target_version": "0.1.0",
+  "target_state": "Draft",
+  "scope": "Create Draft Feature Spec for known execution gap as part of P6",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-16",
+  "authorization_text": "执行P5和P6",
+  "recorded_at": "2026-07-16",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}
