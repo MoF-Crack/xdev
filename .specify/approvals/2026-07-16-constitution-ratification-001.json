@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-16-constitution-ratification-001",
+  "asset_type": "constitution",
+  "target_path": ".specify/memory/constitution.md",
+  "decision": "approve-ratification",
+  "target_version": "1.0.0",
+  "target_state": "Ratified",
+  "scope": "Formal ratification of XDev Constitution from candidate rc.3 to 1.0.0; P0-P6 governance infrastructure verified; P7 approval granted by xinyan",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-16",
+  "authorization_text": "执行P7",
+  "recorded_at": "2026-07-16",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": ["2026-07-16-constitution-rc3-001"]
+}

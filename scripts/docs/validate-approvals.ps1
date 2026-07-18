@@ -162,8 +162,15 @@ function ValidateAll {
         if ($atype -ne 'constitution' -and $dstate -and $dstate -ne $rec.State) {
             Fail "protected change '$path': doc state '$dstate' != approval target_state '$($rec.State)'"
         }
-        if ($atype -eq 'constitution' -and $content -notmatch '\*{0,2}Ratified\*{0,2}\s*:\s*Pending') {
-            Fail "Constitution Ratified field must stay Pending; approval '$($rec.Id)' does not ratify 1.0.0"
+        if ($atype -eq 'constitution') {
+            if ($rec.Decision -eq 'approve-ratification') {
+                # Ratification approval explicitly allows changing Ratified from Pending
+                if ($content -notmatch '\*{0,2}Ratified\*{0,2}\s*:\s*[0-9]{4}-[0-9]{2}-[0-9]{2}') {
+                    Fail "Constitution ratification requires Ratified date; approval '$($rec.Id)'"
+                }
+            } elseif ($content -notmatch '\*{0,2}Ratified\*{0,2}\s*:\s*Pending') {
+                Fail "Constitution Ratified field must stay Pending; approval '$($rec.Id)' does not ratify 1.0.0"
+            }
         }
         if ($content -notmatch [regex]::Escape($rec.Id)) {
             Fail "protected change '$path': doc Approval History missing approval_id '$($rec.Id)'"

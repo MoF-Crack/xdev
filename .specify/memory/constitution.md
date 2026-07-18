@@ -5,10 +5,10 @@
 | 字段 | 值 |
 |---|---|
 | 项目 | XDev |
-| 版本 | `1.0.0-rc.3` |
-| 状态 | 候选版，尚未正式批准 |
+| 版本 | `1.0.0` |
+| 状态 | 正式批准 |
 | 候选日期 | 2026-07-15 |
-| 正式批准日期 | 待定 |
+| 正式批准日期 | 2026-07-16 |
 | 批准者 | `xinyan <zuijiuhjd@foxmail.com>` |
 
 本候选版用于整理现有文档、校验工程事实并建立后续 Spec-Driven Development（SDD）与 LOOP Engineering 的约束基线。升级到 `1.0.0` 前，必须完成文档体系整理、交叉一致性检查和用户最终批准。
@@ -320,6 +320,6 @@ ADR 记录长期架构决策，安全例外记录临时风险偏离。二者都�
 | Constitution 独立复核修订 | Candidate Revised | — | 2026-07-15 | `1.0.0-rc.2` | 补充术语、审查独立性、在途重置、当前执行缺口并纠正过时证据；等待用户审阅 |
 | CI 工具链事实同步 | Candidate Revised | — | 2026-07-16 | `1.0.0-rc.3` | CI Go 版本已与 `go.mod` 统一为 `1.23`；正式批准状态不变 |
 | Constitution `rc.3` 候选内容批准 | Approved Candidate | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `1.0.0-rc.3` | `2026-07-16-constitution-rc3-001` | 批准当前候选内容作为后续治理工作的候选基线；不追溯授权 `059da20`，不构成 `1.0.0` 正式批准 |
-| Constitution 正式批准 | Pending | — | — | `1.0.0` | 待文档体系整理和最终审阅后批准 |
+| Constitution 正式批准 | Ratified | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `1.0.0` | `2026-07-16-constitution-ratification-001` | P0-P6 治理基础设施已验证，P7 批准通过 |
 
-**Version**: `1.0.0-rc.3` | **Candidate Date**: 2026-07-15 | **Ratified**: Pending | **Last Amended**: 2026-07-16
+**Version**: `1.0.0` | **Candidate Date**: 2026-07-15 | **Ratified**: 2026-07-16 | **Last Amended**: 2026-07-16
