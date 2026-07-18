@@ -1,10 +1,11 @@
 > **文档类型**：时间点审计
-> **状态**：Snapshot（待迁移）
+> **状态**：Snapshot
 > **来源**：docs/security-audit.md
 > **审计日期**：2026-07-04
 > **P4B 迁移目标**：docs/audits/2026-07-04-security-audit.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/security-audit.md
 
 # xdev 代码安全审计报告
 

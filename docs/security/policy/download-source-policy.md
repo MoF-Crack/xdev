@@ -1,9 +1,10 @@
 > **文档类型**：安全政策
-> **状态**：Deprecated（待迁移）
+> **状态**：Deprecated
 > **来源**：docs/download-source-policy.md
 > **P4B 迁移目标**：docs/security/policy/download-source-policy.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/download-source-policy.md
 
 # Download Source Policy
 

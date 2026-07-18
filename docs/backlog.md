@@ -1,9 +1,10 @@
 > **文档类型**：Backlog
-> **状态**：Frozen（待转换）
+> **状态**：Frozen
 > **来源**：IMPROVEMENT-PLAN.md
 > **P4B 迁移目标**：docs/backlog.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：IMPROVEMENT-PLAN.md
 
 # XDev 改进建议文档（执行级）
 

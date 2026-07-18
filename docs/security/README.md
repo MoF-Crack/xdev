@@ -22,4 +22,8 @@
 
 ## 当前迁移状态
 
-现有 `docs/download-source-policy.md`、`docs/signing-guide.md`、`docs/download-cache-recovery.md` 和安全审计将在后续迁移计划中处理。本阶段不移动这些文件。
+安全政策、操作流程和审计文档已完成 P4B 迁移：
+- `policy/download-source-policy.md`（已自 `docs/` 迁入）
+- `procedures/signing-guide.md`（已自 `docs/` 迁入）
+- `procedures/download-cache-recovery.md`（已自 `docs/` 迁入）
+- 安全审计文档已迁入 `docs/audits/`。

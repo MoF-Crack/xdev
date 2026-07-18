@@ -1,9 +1,10 @@
-> **文档类型**：实施计划
-> **状态**：Superseded（待迁移）
-> **来源**：docs/git-initial-import-plan.md
+﻿> **文档类型**：实施计划
+> **状态**：Superseded
+> **来源**：docs/history/implementation-plans/git-initial-import-plan.md
 > **P4B 迁移目标**：docs/history/implementation-plans/git-initial-import-plan.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/history/implementation-plans/git-initial-import-plan.md
 
 # Git 初始导入实施方案
 
@@ -361,7 +362,7 @@ git log --oneline -2
 $documentationPaths = @(
     'README.md',
     'docs',
-    'IMPROVEMENT-PLAN.md',
+    'docs/backlog.md',
     'UNI_ENV_开发文档.md',
     '.trae'
 )
@@ -388,8 +389,8 @@ README.md
 docs/architecture.md
 docs/security.md
 docs/pending-work-plan.md
-IMPROVEMENT-PLAN.md
-.trae/specs/enhance-gui-ux-and-fixes/spec.md
+docs/backlog.md
+specs/archive/2026/000-enhance-gui-ux-and-fixes/spec.md
 ```
 
 如果引用的文档不存在，应记录差异，不得新增无关占位文件掩盖问题。

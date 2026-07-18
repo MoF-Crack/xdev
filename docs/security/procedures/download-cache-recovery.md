@@ -1,15 +1,16 @@
-> **文档类型**：安全操作流程
-> **状态**：Deprecated（待迁移）
-> **来源**：docs/download-cache-recovery.md
+﻿> **文档类型**：安全操作流程
+> **状态**：Deprecated
+> **来源**：docs/security/procedures/download-cache-recovery.md
 > **P4B 迁移目标**：docs/security/procedures/download-cache-recovery.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/security/procedures/download-cache-recovery.md
 
 # 下载缓存空间回收方案
 
 > **创建日期**：2026-07-15
 > **状态**：待实施
-> **关联**：`docs/superpowers/plans/2026-07-11-xdev-ui-download-sources.md` Task 17 后续
+> **关联**：`docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md` Task 17 后续
 
 ---
 
@@ -119,7 +120,7 @@ Markdown 报告末尾增加摘要行：
 ### 兜底方案：OS 层面清理
 
 - Windows `%TEMP%` 在磁盘清理时自动清除
-- 在 `docs/download-source-policy.md` 注明缓存位置和手动清理方法
+- 在 `docs/security/policy/download-source-policy.md` 注明缓存位置和手动清理方法
 - 无代码改动
 
 ### 改动文件

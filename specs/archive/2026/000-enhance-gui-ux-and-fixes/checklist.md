@@ -1,9 +1,10 @@
 > **文档类型**：Checklist（旧）
-> **状态**：Archived（待迁移）
+> **状态**：Archived
 > **来源**：.trae/specs/enhance-gui-ux-and-fixes/checklist.md
 > **P4B 迁移目标**：specs/archive/2026/000-enhance-gui-ux-and-fixes/checklist.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：.trae/specs/enhance-gui-ux-and-fixes/checklist.md
 
 - [x] `isInsideNodeDir` 在路径含 `\node\` 但无 node.exe 时返回 `false`
 - [x] yarn/pnpm 在非 Node.js 安装目录下被正确识别为独立包管理器

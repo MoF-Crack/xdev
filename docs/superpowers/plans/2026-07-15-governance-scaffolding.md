@@ -1,4 +1,4 @@
-# XDev 治理骨架实施计划
+﻿# XDev 治理骨架实施计划
 
 > **面向 Agent 执行者：** 必须使用 `subagent-driven-development`（推荐）或 `executing-plans` 逐任务执行。步骤使用复选框（`- [ ]`）跟踪，不能跳过前置门禁、验证或独立审查。
 
@@ -12,7 +12,7 @@
 
 - 关联 Constitution：`.specify/memory/constitution.md` `1.0.0-rc.2`，状态为候选版，尚未正式批准。
 - 关联设计：`docs/superpowers/specs/2026-07-15-spec-documentation-system-design.md` `1.0.0-rc.1`。
-- 本计划必须在 `docs/git-initial-import-plan.md` 定义的 Git 初始导入完成后执行。
+- 本计划必须在 `docs/history/implementation-plans/git-initial-import-plan.md` 定义的 Git 初始导入完成后执行。
 - 当前分支必须为 `main`，必须存在可用 `HEAD`，且不得配置远程仓库或执行推送。
 - 所有新文档使用简体中文；命令、路径、配置键、状态名和代码标识保留英文。
 - 不修改 `.specify/templates/`、`.github/workflows/ci.yaml`、现有安全审计、旧计划和 `.trae/` 文件。
@@ -53,7 +53,7 @@ specs/archive/README.md
 - `.specify/memory/constitution.md`：治理原则、例外失效条件和批准规则。
 - `docs/superpowers/specs/2026-07-15-spec-documentation-system-design.md`：目录架构和文档职责。
 - `docs/superpowers/plans/2026-07-15-spec-documentation-system-roadmap.md`：子项目边界和文件所有权。
-- `docs/security-audit-verification.md`、`internal/signer/verify.go`、`.github/workflows/ci.yaml`：签名验证当前事实。
+- `docs/audits/2026-07-08-security-audit-verification.md`、`internal/signer/verify.go`、`.github/workflows/ci.yaml`：签名验证当前事实。
 
 ### 输出
 
@@ -105,7 +105,7 @@ if ($branch -ne 'main') {
 ```powershell
 $head = git rev-parse --verify HEAD 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $head) {
-    throw '仓库尚无 HEAD。请先执行 docs/git-initial-import-plan.md。'
+    throw '仓库尚无 HEAD。请先执行 docs/history/implementation-plans/git-initial-import-plan.md。'
 }
 
 $commitCount = [int](git rev-list --count HEAD)
@@ -433,7 +433,7 @@ foreach ($file in $files) {
 
 ## 当前迁移状态
 
-现有 `docs/download-source-policy.md`、`docs/signing-guide.md`、`docs/download-cache-recovery.md` 和安全审计将在后续迁移计划中处理。本阶段不移动这些文件。
+现有 `docs/security/policy/download-source-policy.md`、`docs/security/procedures/signing-guide.md`、`docs/security/procedures/download-cache-recovery.md` 和安全审计将在后续迁移计划中处理。本阶段不移动这些文件。
 ```
 
 - [ ] **Step 2：创建 `docs/security/policy/README.md`**

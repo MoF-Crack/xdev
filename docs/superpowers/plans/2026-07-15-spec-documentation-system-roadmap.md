@@ -1,4 +1,4 @@
-# XDev 规范文档体系实施路线图
+﻿# XDev 规范文档体系实施路线图
 
 > **面向 Agent 执行者：** 本路线图只定义子项目边界、依赖关系和阶段门禁。每个子项目必须使用独立实施计划执行，不得将多个子项目合并为一次无审查的大规模迁移。
 
@@ -27,7 +27,7 @@
 
 开始任何子项目实施前，必须满足：
 
-1. `docs/git-initial-import-plan.md` 定义的 Git 初始导入已经完成；
+1. `docs/history/implementation-plans/git-initial-import-plan.md` 定义的 Git 初始导入已经完成；
 2. 当前仓库存在可用 `HEAD`，分支为 `main`；
 3. 工作区没有与目标子项目重叠的未提交修改；
 4. `git` 解析到 `D:\Env\Tools\Git\cmd\git.exe`；

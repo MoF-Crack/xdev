@@ -1,4 +1,4 @@
-# XDev Constitution
+﻿# XDev Constitution
 
 ## 文档状态
 
@@ -24,7 +24,7 @@
 - 正式发布必须启用 manifest 签名验证。任何暂时偏离只能依据已批准且尚未失效的安全例外执行。
 - 安全例外不得被描述为永久修复，也不得用于扩大未签名内容或弱校验路径的适用范围。
 
-**依据**：`docs/download-source-policy.md`、`docs/signing-guide.md`、`docs/security-audit-verification.md`、`internal/downloader/`、`internal/signer/`。
+**依据**：`docs/security/policy/download-source-policy.md`、`docs/security/procedures/signing-guide.md`、`docs/audits/2026-07-08-security-audit-verification.md`、`internal/downloader/`、`internal/signer/`。
 
 ### II. 测试必须隔离宿主状态
 
@@ -238,7 +238,7 @@ docs/security/exceptions/<exception-id>.md
 
 - 完成的历史规格归档到 `specs/archive/<完成年份>/<编号-功能名>/`。
 - 迁移自旧系统且没有原始 Spec Kit 编号的规格使用 `000-` 前缀。
-- `.trae/specs/enhance-gui-ux-and-fixes/` 的目标归档路径为 `specs/archive/2026/000-enhance-gui-ux-and-fixes/`。
+- `specs/archive/2026/000-enhance-gui-ux-and-fixes/` 的目标归档路径为 `specs/archive/2026/000-enhance-gui-ux-and-fixes/`。
 - 归档规格必须记录原始路径、原始工具、创建和完成时间、迁移日期、状态、实现与验证证据及已知遗留问题。
 - `.specify/feature.json` 不得指向 `specs/archive/`。
 
@@ -252,11 +252,11 @@ specs/archive/<年份>/<归档规格>/errata.md
 
 ### 旧计划和 Backlog
 
-- `docs/superpowers/plans/2026-07-11-xdev-ui-download-sources.md` 冻结为历史实施记录；未完成的集成验收和最终验证提炼为新的正式 feature spec。
+- `docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md` 冻结为历史实施记录；未完成的集成验收和最终验证提炼为新的正式 feature spec。
 - `docs/pending-work-plan.md` 中具有独立目标、边界和验收标准的事项分别转换为 feature spec，不整体迁移。
-- `IMPROVEMENT-PLAN.md` 保留为需求 backlog，只负责候选需求、优先级和状态，不能直接驱动实现。
+- `docs/backlog.md` 保留为需求 backlog，只负责候选需求、优先级和状态，不能直接驱动实现。
 - Backlog 条目只有经过 `specify → clarify（按需）→ plan → tasks → analyze` 后，才能进入 OMO 执行和 LOOP。
-- `.trae/documents/xdev-improvement-roadmap.md` 属于路线图，后续迁移为 `docs/roadmap.md`，不作为功能 Spec。
+- `docs/roadmap.md` 属于路线图，后续迁移为 `docs/roadmap.md`，不作为功能 Spec。
 
 ## 治理与修订
 

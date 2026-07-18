@@ -1,9 +1,10 @@
 > **文档类型**：安全操作流程
-> **状态**：Deprecated（待迁移）
+> **状态**：Deprecated
 > **来源**：docs/signing-guide.md
 > **P4B 迁移目标**：docs/security/procedures/signing-guide.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/signing-guide.md
 
 # XDev Manifest 签名指南
 

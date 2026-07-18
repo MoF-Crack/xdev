@@ -1,4 +1,4 @@
-> **文档类型**：工作计划
+﻿> **文档类型**：工作计划
 > **状态**：Frozen（待拆分）
 > **来源**：docs/pending-work-plan.md
 > **P4B 迁移目标**：独立事项转为 Feature Spec 后归档至 docs/history/implementation-plans/
@@ -9,8 +9,8 @@
 
 > **创建日期**：2026-07-15
 > **状态**：待实施
-> **关联**：`docs/superpowers/plans/2026-07-11-xdev-ui-download-sources.md` Task 13-17 后续
-> **缓存回收方案**：`docs/download-cache-recovery.md`
+> **关联**：`docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md` Task 13-17 后续
+> **缓存回收方案**：`docs/security/procedures/download-cache-recovery.md`
 
 ---
 
@@ -150,7 +150,7 @@ xdev UI 重设计与下载源治理已完成 Task 1-18。以下 5 项后续工�
    - `MISSING_CHECKSUM` 和 `HASH_MISMATCH` 设为 warning（不阻断）
    - 仅 `URL_DEAD` 和 `TRANSIENT_ERROR`（official）阻断
 5. **文档**：
-   - 在 `docs/download-source-policy.md` 增加 "SHA verification status" 章节
+   - 在 `docs/security/policy/download-source-policy.md` 增加 "SHA verification status" 章节
    - 标注哪些工具已验证、哪些是占位值
 6. **TOFU 兜底**：
    - 首次下载时 downloader 计算实际 SHA 并写 sidecar
@@ -265,7 +265,7 @@ xdev UI 重设计与下载源治理已完成 Task 1-18。以下 5 项后续工�
 1. **manifest 不设 mirror_url**（当前状态）
 2. **CI gate**：official `URL_DEAD`/`TRANSIENT_ERROR` 阻断；无镜像仅 warning
 3. **安装器行为**：官方 URL 失败时无 fallback，直接报错
-4. **文档**：在 `docs/download-source-policy.md` 标注 "official-only, no mirror available"
+4. **文档**：在 `docs/security/policy/download-source-policy.md` 标注 "official-only, no mirror available"
 
 #### 预期结果
 
@@ -356,7 +356,7 @@ dotnet 有第二微软 CDN（`dotnetcli.azureedge.net`，已在 Task 17 设为 m
 
 ### 兜底方案：标记为 known-transient + CI 豁免
 
-1. **在 `docs/download-source-policy.md` 中维护 known-transient 列表**
+1. **在 `docs/security/policy/download-source-policy.md` 中维护 known-transient 列表**
 2. **CI gate**：known-transient 工具的 TRANSIENT_ERROR 不阻断
 3. **定期重试**：每周自动运行 probe 审计，更新 known-transient 状态
 
@@ -396,7 +396,7 @@ toolsHashFullCheck\main.go:103:3: fmt.Println arg list ends with redundant newli
 
 `go vet ./...` 全量通过，无任何告警。
 
-> 此修复已纳入缓存回收方案 `docs/download-cache-recovery.md` 场景 3。
+> 此修复已纳入缓存回收方案 `docs/security/procedures/download-cache-recovery.md` 场景 3。
 
 ---
 
@@ -423,7 +423,7 @@ toolsHashFullCheck\main.go:103:3: fmt.Println arg list ends with redundant newli
 
 ### 缓存回收
 
-所有 audit 步骤应配合 `-cleanup` flag 使用，确保下载文件在 SHA 验证完成后自动回收。详见 `docs/download-cache-recovery.md`。
+所有 audit 步骤应配合 `-cleanup` flag 使用，确保下载文件在 SHA 验证完成后自动回收。详见 `docs/security/procedures/download-cache-recovery.md`。
 
 ### 磁盘空间预算
 

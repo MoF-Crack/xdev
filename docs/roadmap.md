@@ -1,9 +1,10 @@
 > **文档类型**：Roadmap
-> **状态**：Frozen（待转换）
+> **状态**：Frozen
 > **来源**：.trae/documents/xdev-improvement-roadmap.md
 > **P4B 迁移目标**：docs/roadmap.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：.trae/documents/xdev-improvement-roadmap.md
 
 # XDev 完善方案路线图
 

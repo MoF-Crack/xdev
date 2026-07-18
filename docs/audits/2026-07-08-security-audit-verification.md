@@ -1,16 +1,17 @@
-> **文档类型**：时间点审计
-> **状态**：Snapshot（待迁移）
-> **来源**：docs/security-audit-verification.md
+﻿> **文档类型**：时间点审计
+> **状态**：Snapshot
+> **来源**：docs/audits/2026-07-08-security-audit-verification.md
 > **审计日期**：2026-07-08
 > **P4B 迁移目标**：docs/audits/2026-07-08-security-audit-verification.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/audits/2026-07-08-security-audit-verification.md
 
 # xdev 安全审计核实报告
 
 > **审计日期**：2026-07-08  
 > **审计方法**：静态代码分析（ripgrep/grep/read 工具实际检查代码）  
-> **审计范围**：核实 `docs/security-audit.md`（2026-07-04）的修复声明 + 发现新问题  
+> **审计范围**：核实 `docs/audits/2026-07-04-security-audit.md`（2026-07-04）的修复声明 + 发现新问题  
 > **Go版本**：1.23 | **平台**：Windows 为主，跨平台  
 
 ---

@@ -1,9 +1,10 @@
-> **文档类型**：实施计划
-> **状态**：Superseded（待迁移）
-> **来源**：docs/superpowers/plans/2026-07-11-xdev-ui-download-sources.md
+﻿> **文档类型**：实施计划
+> **状态**：Superseded
+> **来源**：docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md
 > **P4B 迁移目标**：docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md
 
 # XDev UI Redesign and Download Source Governance Implementation Plan
 
@@ -67,7 +68,7 @@ The UI work must not be blocked by live network availability. Live audit failure
 - `internal/linkaudit/audit.go`: URL probing, redirect checks, range requests, downloads, magic-byte detection, and hash verification.
 - `internal/linkaudit/report.go`: deterministic JSON and Markdown report output.
 - `internal/linkaudit/audit_test.go`: local HTTP fixtures for all deterministic network behaviors.
-- `docs/download-source-policy.md`: source precedence, verification rules, and release requirements.
+- `docs/security/policy/download-source-policy.md`: source precedence, verification rules, and release requirements.
 - `build/download-audit-*.json`: generated machine-readable reports, not source-of-truth code.
 - `build/download-audit-*.md`: generated human-readable reports, not source-of-truth code.
 
@@ -777,7 +778,7 @@ git commit -m "refactor: complete accessible frontend redesign"
 - Create: `internal/linkaudit/audit.go`
 - Create: `internal/linkaudit/report.go`
 - Create: `internal/linkaudit/audit_test.go`
-- Create: `docs/download-source-policy.md`
+- Create: `docs/security/policy/download-source-policy.md`
 
 **Interfaces:**
 - Produces: `Audit(ctx context.Context, req Request) ([]Result, error)`.
@@ -866,7 +867,7 @@ go vet ./internal/linkaudit/... ./cmd/linkaudit/...
 - [ ] **Step 10: Commit audit tooling**
 
 ```powershell
-git add cmd/linkaudit internal/linkaudit docs/download-source-policy.md
+git add cmd/linkaudit internal/linkaudit docs/security/policy/download-source-policy.md
 git commit -m "feat: add manifest download auditor"
 ```
 

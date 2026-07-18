@@ -1,4 +1,4 @@
-# XDev 规范文档体系设计
+﻿# XDev 规范文档体系设计
 
 > **文档类型**：治理设计
 > **状态**：Candidate
@@ -451,12 +451,12 @@ governance
 
 | 当前路径 | 目标路径 | 处理方式 |
 |---|---|---|
-| `.trae/specs/enhance-gui-ux-and-fixes/` | `specs/archive/2026/000-enhance-gui-ux-and-fixes/` | 原文迁移并冻结，增加归档元数据和实现证据 |
-| `.trae/documents/xdev-improvement-roadmap.md` | `docs/roadmap.md` | 转为 `Living` 路线图，不作为 Feature Spec |
-| `docs/superpowers/plans/2026-07-11-xdev-ui-download-sources.md` | `docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md` | 标记为历史实施记录，未完成验收另建正式 Spec |
+| `specs/archive/2026/000-enhance-gui-ux-and-fixes/` | `specs/archive/2026/000-enhance-gui-ux-and-fixes/` | 原文迁移并冻结，增加归档元数据和实现证据 |
+| `docs/roadmap.md` | `docs/roadmap.md` | 转为 `Living` 路线图，不作为 Feature Spec |
+| `docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md` | `docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md` | 标记为历史实施记录，未完成验收另建正式 Spec |
 | `docs/pending-work-plan.md` | 暂时保留，随后拆分 | 独立事项转为 Feature Spec，全部转换后冻结并归档 |
-| `IMPROVEMENT-PLAN.md` | `docs/backlog.md` | 转为 `Living` backlog，不直接驱动实现 |
-| `docs/git-initial-import-plan.md` | `docs/history/implementation-plans/git-initial-import-plan.md` | Git 初始导入完成后转为历史记录 |
+| `docs/backlog.md` | `docs/backlog.md` | 转为 `Living` backlog，不直接驱动实现 |
+| `docs/history/implementation-plans/git-initial-import-plan.md` | `docs/history/implementation-plans/git-initial-import-plan.md` | Git 初始导入完成后转为历史记录 |
 
 ### 14.2 安全与审计
 

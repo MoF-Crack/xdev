@@ -1,9 +1,10 @@
 > **文档类型**：Feature Spec（旧）
-> **状态**：Archived（待迁移）
+> **状态**：Archived
 > **来源**：.trae/specs/enhance-gui-ux-and-fixes/spec.md
 > **P4B 迁移目标**：specs/archive/2026/000-enhance-gui-ux-and-fixes/spec.md
 > **替代文档**：无
 > **治理记录**：P4A 元数据治理，2026-07-16
+> **迁移记录**：P4B 迁移完成，2026-07-16，源路径：.trae/specs/enhance-gui-ux-and-fixes/spec.md
 
 # GUI 体验增强与缺陷修复 Spec
 
