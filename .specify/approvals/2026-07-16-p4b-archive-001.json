@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-16-p4b-archive-001",
+  "asset_type": "archive",
+  "target_path": "specs/archive/2026/000-enhance-gui-ux-and-fixes/archive-metadata.md",
+  "decision": "approve-state-transition",
+  "target_version": "1.0.0",
+  "target_state": "Archived",
+  "scope": "Create archive metadata for .trae spec migrated from .trae/specs/enhance-gui-ux-and-fixes/ as part of P4B document migration",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-16",
+  "authorization_text": "执行P4A，完成后验证，无误则开始P4B",
+  "recorded_at": "2026-07-16",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}
