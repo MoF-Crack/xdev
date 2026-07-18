@@ -173,7 +173,8 @@ P1 完成后可并行：
 | P0-C 纠正与批准记录 | Completed | approval JSON、事件记录和 Constitution approval ID 已写入；提交 `ba5310d` |
 | P0-D 审查与验收 | Completed | 用户批准后提交 `ba5310d governance: enforce recorded approvals` |
 | P1 治理骨架 | Completed | 12 个目录索引 + 1 份安全例外（Draft）；提交 `d0aec02` |
-| P2A/P2B/P3 | Ready for approval | 治理骨架已完成，可并行启动 |
-| P4A/P4B | Blocked by P2A/P2B/P3 | 尚未实施 |
+| P2A/P2B/P3 | Completed (violation recorded) | 提交 `2241bdc`；执行未经明确授权，用户接受但记录违规 |
+| P4A 旧文档元数据 | Plan writing approved | 计划编写中；执行需单独批准 |
+| P4B 历史迁移 | Blocked by P4A | 尚未实施 |
 | P5/P6 | Blocked | 尚未实施 |
 | P7 正式批准 | Blocked | Constitution 仍为 Candidate |
