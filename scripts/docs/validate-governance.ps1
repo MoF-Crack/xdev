@@ -33,20 +33,49 @@ function Invoke-ChildValidator {
         $script:hasFailures = $true
         return @{ ExitCode = 2; Output = $msg }
     }
-    $argList = @()
-    foreach ($k in $Arguments.Keys) { $argList += "-$k"; $argList += $Arguments[$k] }
+    $childArguments = @()
+    foreach ($k in $Arguments.Keys) {
+        $value = $Arguments[$k]
+        if ($value -is [System.Array]) {
+            $items = @($value | ForEach-Object { "'$([string]$_ -replace "'", "''")'" }) -join ', '
+            $childArguments += "-$k @($items)"
+        } else {
+            $childArguments += "-$k '$([string]$value -replace "'", "''")'"
+        }
+    }
+    $escapedScriptPath = $ScriptPath -replace "'", "''"
+    $childCommand = "& '$escapedScriptPath' $($childArguments -join ' ')"
     Write-Host "  Running: $Label..." -ForegroundColor DarkGray
-    $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @argList 2>&1
+    $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $childCommand 2>&1
     $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
-    $status = if ($exitCode -eq 0) { 'PASS' } else { 'FAIL' }
-    $script:reportSections[$Label] = @{ Status = $status; ExitCode = $exitCode; Output = ($output | Out-String).Trim() }
-    if ($exitCode -ne 0) {
+    $resultOutput = ($output | Out-String).Trim()
+    $resultBlocked = $false
+    if ($Arguments.ContainsKey('ResultFile')) {
+        $resultFile = [string]$Arguments['ResultFile']
+        if (-not (Test-Path -LiteralPath $resultFile -PathType Leaf)) {
+            $resultBlocked = $true
+            $resultOutput = if ($resultOutput) { "$resultOutput`nVALIDATOR_NO_RESULT: $resultFile" } else { "VALIDATOR_NO_RESULT: $resultFile" }
+        } else {
+            $resultLine = (Get-Content -LiteralPath $resultFile -Raw -Encoding utf8).Trim()
+            if ($resultLine -match '^BLOCK\t') {
+                $resultBlocked = $true
+                $resultOutput = $resultLine
+            } elseif ($resultLine -notmatch '^PASS\t') {
+                $resultBlocked = $true
+                $resultOutput = $resultLine
+            }
+        }
+    }
+    $effectiveExitCode = if ($exitCode -ne 0) { $exitCode } elseif ($resultBlocked) { 1 } else { 0 }
+    $status = if ($effectiveExitCode -eq 0) { 'PASS' } else { 'FAIL' }
+    $script:reportSections[$Label] = @{ Status = $status; ExitCode = $effectiveExitCode; Output = $resultOutput }
+    if ($effectiveExitCode -ne 0) {
         $script:hasFailures = $true
-        Write-Host "  [$Label] FAIL (exit=$exitCode)" -ForegroundColor Red
+        Write-Host "  [$Label] FAIL (exit=$effectiveExitCode)" -ForegroundColor Red
     } else {
         Write-Host "  [$Label] PASS" -ForegroundColor Green
     }
-    return @{ ExitCode = $exitCode; Output = $output }
+    return @{ ExitCode = $effectiveExitCode; Output = $resultOutput }
 }
 
 function Get-VersionFromText {

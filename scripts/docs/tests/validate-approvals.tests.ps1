@@ -7,11 +7,13 @@
 
 [CmdletBinding()]
 param(
-    [string]$Validator = (Join-Path $PSScriptRoot '..\validate-approvals.ps1'),
+    [string]$Validator = '',
     [string]$GitExe = (Get-Command git -ErrorAction Stop).Source
 )
 
 $ErrorActionPreference = 'Stop'
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $Validator) { $Validator = Join-Path $scriptDirectory '..\validate-approvals.ps1' }
 $script:Passed = 0
 $script:Failed = 0
 $script:Repos = @()
@@ -236,6 +238,19 @@ Write-Utf8NoBom "$repo/.specify/approvals/2026-07-16-constitution-rc3-001.json" 
 Invoke-Git $repo @('add', '.')
 $r = Invoke-Validator $repo
 Assert-ExitCode 'constitution-green' $r 0 'APPROVAL_GATE_PASSED' ''
+
+# --- CASE: English table Version change, no approval ---
+Write-Host "`n--- English table Version blocked (no approval) ---"
+$repo = New-TestRepo
+New-Item -ItemType Directory -Path "$repo/specs/001-test" -Force | Out-Null
+$tableSpec = "# Table Spec`n| Field | Value |`n|---|---|`n| Version | ``1.0.0`` |`n| Status | Draft |`n## Approval History`n"
+Write-Utf8NoBom "$repo/specs/001-test/spec.md" $tableSpec
+Invoke-Git $repo @('add', '.')
+Invoke-Git $repo @('commit', '-m', 'baseline')
+Write-Utf8NoBom "$repo/specs/001-test/spec.md" ($tableSpec.Replace('1.0.0', '1.0.1'))
+Invoke-Git $repo @('add', '-u')
+$r = Invoke-Validator $repo
+Assert-ExitCode 'english-table-version-blocked' $r 1 'APPROVAL_GATE_BLOCKED' ''
 
 # --- Per-asset RED/GREEN tests ---
 $assetCases = @(

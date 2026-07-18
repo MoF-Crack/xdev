@@ -51,6 +51,7 @@ $script:FlagWords = @(
 function ProtectedLine { param([string]$L)
     $t = $L.TrimStart('+-').Trim()
     if ($t -match '^\*\*Version\*\*:') { return $true }
+    if ($t -match '^\|\s*\*{0,2}Version\*{0,2}\s*\|') { return $true }
     if ($t -match '\bApproval History\b') { return $true }
     if ($t -match 'Approved Candidate') { return $true }
     # Detect Chinese governance labels: \u7248\u672C = version, \u72B6\u6001 = state

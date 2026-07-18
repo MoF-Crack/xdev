@@ -155,8 +155,9 @@ function Validate-SpecFile {
     }
 
     # Check 5: Approval History exists and has at least one record
-    if ($content -match '## Approval History') {
-        $afterApproval = $content -replace '^[\s\S]*?## Approval History\s*\n', ''
+    # Accept Chinese+English mixed headers like \u6279\u51C6\u8BB0\u5F55 (Approval History)
+    if ($content -match '## (?:Approval History|\u6279\u51C6\u8BB0\u5F55)') {
+        $afterApproval = $content -replace '(?s)^.*?## (?:Approval History|\u6279\u51C6\u8BB0\u5F55)\s*\n', ''
         $rows = 0
         foreach ($line in ($afterApproval -split "`r`n|`n|`r")) {
             if ($line -match '^\| [^-]' -and $line -notmatch '^\|[- ]+\|[- ]+\|') {

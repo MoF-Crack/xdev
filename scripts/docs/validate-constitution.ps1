@@ -120,9 +120,9 @@ function Invoke-ConstitutionChecks {
 
     # Check 4: No unresolved placeholders in body (exclude Approval History section)
     $bodyForPlaceholder = $Content
-    if ($bodyForPlaceholder -match '^(.*?)## Approval History') {
+    if ($bodyForPlaceholder -match '(?s)^(.*?)## Approval History') {
         $bodyForPlaceholder = $Matches[1]
-    } elseif ($bodyForPlaceholder -match '^(.*?)#+\s*Approval History') {
+    } elseif ($bodyForPlaceholder -match '(?s)^(.*?)#+\s*Approval History') {
         $bodyForPlaceholder = $Matches[1]
     }
     $placeholderPattern = '\b(TODO|TBD|PLACEHOLDER)\b'
@@ -155,13 +155,20 @@ function Invoke-ConstitutionChecks {
 
     # Check 6: Approver consistency in Approval History
     if ($Content -match '## Approval History') {
-        $afterApproval = $Content -replace '^[\s\S]*?## Approval History\s*\n', ''
+        $afterApproval = $Content -replace '(?s)^.*?## Approval History\s*\n', ''
         $badApprovers = @()
-        $pastHeader = $false
+        $tableSkipped = 0
         foreach ($line in ($afterApproval -split "`r`n|`n|`r")) {
-            # Skip table header/separator rows
-            if ($line -match '^\|[- ]+\|[- ]+\|') { $pastHeader = $true; continue }
-            if (-not $pastHeader) { continue }
+            # When a new Approval History section starts, reset the table skip counter
+            if ($line -match '^## Approval History') { $tableSkipped = 0; continue }
+            # Detect separator row (|---|---|)
+            if ($line -match '^\|[- ]+\|[- ]+\|') { $tableSkipped++; continue }
+            # Skip the header row (first row before separator in each table)
+            if ($tableSkipped -eq 0 -and $line -match '^\| [^-]') {
+                $tableSkipped++
+                continue
+            }
+            if ($line -match '^## ' -and $badApprovers.Count -gt 0) { break }
             if ($line -match '^\| [^-]') {
                 $cols = $line -split '\|'
                 if ($cols.Count -ge 5) {
@@ -255,6 +262,27 @@ function Invoke-SelfTest {
             Write-Host "  [FAIL] $($t.Name): $($t.ExpectedCheck) check not found in results" -ForegroundColor Red
             $allPassed = $false
         }
+    }
+
+    Write-Host ''
+    Write-Host '--- Approval History Placeholder Exclusion ---' -ForegroundColor Cyan
+    $historyOnlyPlaceholder = @'
+# XDev Constitution
+**Version**: `1.0.0-rc.3`
+**Status**: Candidate
+**Ratified**: Pending
+## Approval History
+| Change | Note |
+|---|---|
+| Example | TODO retained as historical text |
+'@
+    $historyResults = Invoke-ConstitutionChecks -Content $historyOnlyPlaceholder -FilePath 'selftest-history-placeholder.md'
+    $placeholderCheck = @($historyResults | Where-Object { $_.Check -eq 'no-placeholders' })[0]
+    if ($placeholderCheck.Status -ne 'PASS') {
+        Write-Host "  [FAIL] Approval History TODO must be excluded, got $($placeholderCheck.Status)" -ForegroundColor Red
+        $allPassed = $false
+    } else {
+        Write-Host '  [OK]   Approval History placeholder exclusion: PASS' -ForegroundColor Green
     }
 
     Write-Host ''
