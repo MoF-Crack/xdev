@@ -208,9 +208,13 @@ function DocVersion { param([string]$C)
     return ''
 }
 function DocState { param([string]$C)
-    if ($C -match '\u72B6\u6001[^|]*\| ([^|]+) \|') { return ($Matches[1].Trim() -replace '[`*]','') }
+    # Prefer explicit metadata labels; do not let "状态" greedily match later tables
+    # such as "| 边界 | 决定 |" across the rest of the document.
     if ($C -match '\*\*\u72B6\u6001\*\*[：:]\s*([^\n`*]+)') { return ($Matches[1].Trim() -replace '[`*]','') }
+    if ($C -match '(?m)^>\s*\*\*\u72B6\u6001\*\*[：:]\s*([^\n`*]+)') { return ($Matches[1].Trim() -replace '[`*]','') }
     if ($C -match '\*\*Status\*\*:\s*(.+)') { return ($Matches[1].Trim() -replace '[`*]','') }
+    # Table row only: | 状态 | value |
+    if ($C -match '\|\s*\*{0,2}\u72B6\u6001\*{0,2}\s*\|\s*([^|\n]+)\s*\|') { return ($Matches[1].Trim() -replace '[`*]','') }
     return ''
 }
 

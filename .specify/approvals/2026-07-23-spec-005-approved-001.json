@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-23-spec-005-approved-001",
+  "asset_type": "spec",
+  "target_path": "specs/005-test-host-state-snapshot/spec.md",
+  "decision": "approve-state-transition",
+  "target_version": "0.2.0",
+  "target_state": "Approved",
+  "scope": "Approve Spec 005 test-host-state-snapshot Draft to Approved: goals, scope, requirements, acceptance criteria after clarify 0.2.0",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-23",
+  "authorization_text": "统一spec005 approve",
+  "recorded_at": "2026-07-23",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": ["2026-07-16-p6-005-test-host-state-snapshot-001"]
+}
