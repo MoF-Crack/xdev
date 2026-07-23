@@ -24,11 +24,12 @@ state.
 
 ## Git Repository State
 
-At the time of this correction, `HEAD` is `e91310c`. The governance
-stabilization implementation and `docs/superpowers/plans/archive/` are present
-only in the local working tree and are not tracked or committed. Therefore,
-`Archived` describes the document workflow state; it does not prove that the
-archive or a `git mv` is present in `HEAD` or in remote history.
+At the time of this correction, `HEAD` is `640c506` (`ci: stabilize governance
+hard gate`). The governance stabilization implementation and
+`docs/superpowers/plans/archive/` are now tracked in that local commit. The
+archive was created from an untracked working-tree state, so the commit does
+not preserve a historical `git mv` rename from the original path. There is
+still no remote history.
 
 The repository has no configured remote. GitHub Actions Windows runner
 behavior, `actions/checkout`, and `actions/upload-artifact` remain unverified.
@@ -38,11 +39,18 @@ behavior, `actions/checkout`, and `actions/upload-artifact` remain unverified.
 1. Read this errata before using the archived plan as a recovery source.
 2. Run `git status --short --branch` and `git log --oneline -5`.
 3. Re-run the focused governance tests and local CI simulation.
-4. Obtain explicit authorization before staging or committing.
+4. Obtain explicit authorization before any subsequent staging or commit.
 5. Stage only the approved file whitelist and verify the staged diff.
 
 Never use `git add .` or `git add -A`. Never stage or commit
 `keys/priv.key`.
+
+## 2026-07-23 Commit Correction
+
+The implementation, tests, fixtures, workflow, archive files, and progress
+documents covered by the approved whitelist were committed as `640c506`.
+The repository is now locally reproducible at that commit; remote CI remains
+unverified and no push was performed.
 
 ## Correction Policy
 

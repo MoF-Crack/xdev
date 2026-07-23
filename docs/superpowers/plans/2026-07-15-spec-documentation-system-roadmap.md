@@ -21,9 +21,9 @@
 | P5 / P6 | Completed | `9a36126`；P6 只创建 7 份 Draft Spec |
 | P7 | Completed | `e91310c`；Constitution `1.0.0` |
 
-P7 后的治理稳定化 Tasks 1-10 已在本地工作树完成，但尚未提交，当前
-只能视为 local working-tree candidate。下一里程碑是重新验证并在明确授权
-后按白名单固化稳定化成果。之后再逐项澄清和批准 7 份 Draft Spec，优先
+P7 后的治理稳定化 Tasks 1-10 已在本地验证并由提交 `640c506` 固化，当前
+是 locally committed candidate；远端 CI 仍未验证。下一里程碑是逐项澄清
+和批准 7 份 Draft Spec，优先
 处理 `005-test-host-state-snapshot` 及测试隔离问题。远端 CI 验证需要先配置
 remote 并取得明确执行授权。
 

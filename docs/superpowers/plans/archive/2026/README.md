@@ -8,5 +8,5 @@
 
 - [Governance stabilization errata](2026-07-18-governance-stabilization.errata.md)
 
-Repository state: this archive currently exists only in the local working tree
-and has not yet been committed to `HEAD`.
+Repository state: this archive is tracked in local commit `640c506`, but the
+repository has no configured remote and no push has been performed.

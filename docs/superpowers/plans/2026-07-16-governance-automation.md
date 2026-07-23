@@ -6,7 +6,7 @@
 > 完成。P7 已由提交 `e91310c` 完成，Constitution `1.0.0` 和
 > governance blocking mode 已进入 `HEAD`。下文的 `1.0.0-rc.3`、报告模式
 > 和 `continue-on-error` 是设计时基线，不是当前事实。P7 后的治理稳定化
-> 硬门禁增强仍位于未提交工作树；恢复时应读取
+> 硬门禁增强已由本地提交 `640c506` 固化；恢复时应读取
 > `docs/superpowers/plans/archive/2026/2026-07-18-governance-stabilization.errata.md`。
 
 **目标：** 实现三个 PowerShell 5.1 治理验证脚本（`validate-specs.ps1`、`validate-constitution.ps1`、`validate-governance.ps1`）及其测试固件，并创建独立的 `governance.yaml` CI workflow 以报告模式运行。为 P7 Constitution 正式批准后的阻塞模式切换提供可测试的自动化基础。

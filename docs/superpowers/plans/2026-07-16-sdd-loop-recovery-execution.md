@@ -17,8 +17,8 @@
   仍为 Draft，不表示已批准或实现。
 - P7 已由提交 `e91310c` 完成，Constitution `1.0.0` 和 governance CI
   blocking mode 已进入 `HEAD`。
-- 治理稳定化 Tasks 1-10 已在本地工作树完成，但实现、测试、fixtures
-  和计划归档尚未提交。归档勘误是
+- 治理稳定化 Tasks 1-10 已通过本地验证，并由提交 `640c506`
+  固化实现、测试、fixtures 和计划归档。归档勘误是
   `docs/superpowers/plans/archive/2026/2026-07-18-governance-stabilization.errata.md`。
 - 当前第一个未完成事项不是重做 P4B/P5/P7，而是重新验证稳定化工作树，
   取得明确提交授权，并按白名单暂存和提交。
@@ -200,4 +200,4 @@ P1 完成后可并行：
 | P4B 历史迁移 | Completed | 提交 `0c97849` |
 | P5/P6 | Completed | 提交 `9a36126`；P6 仅创建 7 份 Draft Spec |
 | P7 正式批准 | Completed | 提交 `e91310c`；Constitution `1.0.0` |
-| 治理稳定化 Task 1-10 | Local working-tree candidate | 本地验证与归档流程已完成，但尚未提交 |
+| 治理稳定化 Task 1-10 | Locally committed candidate | 本地验证与归档流程已完成；提交 `640c506`，远端 CI 尚未验证 |
