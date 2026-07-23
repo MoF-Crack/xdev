@@ -1,91 +1,72 @@
 name: Governance
-
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main]
-
 jobs:
   governance:
     runs-on: windows-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
-
       - name: Validate Constitution
         id: constitution
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
-          $result = & .\scripts\docs\validate-constitution.ps1 `
-            -ConstitutionPath .\.specify\memory\constitution.md `
-            -Report .\build\governance-constitution-report.json
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::Constitution validation found issues (exit=$LASTEXITCODE)"
-          }
-          Write-Host "Constitution validation complete (report mode)"
-
-      - name: Validate Active Specs
+          & .\scripts\docs\validate-constitution.ps1 -ConstitutionPath .\.specify\memory\constitution.md -Report .\build\governance-constitution-report.json
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { Write-Host "::error::Constitution validation FAILED (exit=$exitCode)"; exit $exitCode }
+          Write-Host 'Constitution validation PASSED'
+      - name: Validate Specs
         id: specs
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
-          $result = & .\scripts\docs\validate-specs.ps1 `
-            -SpecDir .\specs `
-            -Report .\build\governance-specs-report.json
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::Spec validation found issues (exit=$LASTEXITCODE)"
-          }
-          Write-Host "Spec validation complete (report mode)"
-
+          & .\scripts\docs\validate-specs.ps1 -SpecDir .\specs -Report .\build\governance-specs-report.json
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { Write-Host "::error::Specs validation FAILED (exit=$exitCode)"; exit $exitCode }
+          Write-Host 'Specs validation PASSED'
       - name: Validate Approvals
         id: approvals
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
-          $result = & .\scripts\docs\validate-approvals.ps1 `
-            -BaseRef HEAD~1 `
-            -ResultFile .\build\governance-approvals-result.txt
-          if (Test-Path .\build\governance-approvals-result.txt) {
-            $status = Get-Content .\build\governance-approvals-result.txt -Raw
-            if ($status -match 'BLOCK') {
-              Write-Host "::warning::Approval gate blocked: $status"
-            } else {
-              Write-Host "Approval gate passed: $status"
-            }
-          }
-          Write-Host "Approval validation complete (report mode)"
-
-      - name: Validate Documentation Links
+          $resultFile = Join-Path (Get-Location) 'build\governance-approvals-result.txt'
+          & .\scripts\docs\validate-approvals.ps1 -Repo (Get-Location).Path -BaseRef HEAD~1 -ResultFile $resultFile
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { Write-Host "::error::Approvals validation FAILED (exit=$exitCode)"; exit $exitCode }
+          if (-not (Test-Path -LiteralPath $resultFile -PathType Leaf)) { Write-Host '::error::Approval ResultFile missing'; exit 1 }
+          $rawStatus = Get-Content -LiteralPath $resultFile -Raw
+          $status = $rawStatus.Trim()
+          $normalTerminator = ($rawStatus -eq $status) -or ($rawStatus -eq ($status + "`n")) -or ($rawStatus -eq ($status + "`r`n"))
+          $validPass = $normalTerminator -and $status -match '\APASS\tAPPROVAL_GATE_PASSED: .+\z'
+          $validBlock = $normalTerminator -and $status -match '\ABLOCK\tAPPROVAL_GATE_BLOCKED: .+\z'
+          if (-not ($validPass -or $validBlock)) { Write-Host '::error::Approval ResultFile invalid'; exit 1 }
+          if ($validBlock) { Write-Host '::error::Approval gate BLOCKED'; exit 1 }
+          Write-Host 'Approval validation PASSED'
+      - name: Validate Links
         id: links
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
-          $result = & .\scripts\docs\validate-links.ps1 `
-            -Path .\docs,.\specs,. `
-            -Report .\build\governance-links-report.json
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::Link validation found broken links (exit=$LASTEXITCODE)"
-          }
-          Write-Host "Link validation complete (report mode)"
-
-      - name: Comprehensive Governance Check
+          & .\scripts\docs\validate-links.ps1 -Path .\docs, .\specs, . -Report .\build\governance-links-report.json
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { Write-Host "::error::Links validation FAILED (exit=$exitCode)"; exit $exitCode }
+          Write-Host 'Links validation PASSED'
+      - name: Validate Governance
         id: governance
         shell: powershell
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
-          $result = & .\scripts\docs\validate-governance.ps1 `
-            -RepoRoot . `
-            -Report .\build\governance-report.json
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::Governance validation found issues (exit=$LASTEXITCODE)"
-          }
-          Write-Host "Comprehensive governance check complete (report mode)"
-
-      - name: Upload Governance Reports
+          & .\scripts\docs\validate-governance.ps1 -RepoRoot (Get-Location).Path -Report .\build\governance-report.json
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { Write-Host "::error::Governance validation FAILED (exit=$exitCode)"; exit $exitCode }
+          Write-Host 'Governance validation PASSED'
+      - name: Upload Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:

@@ -508,13 +508,13 @@ env:
 ---
 
 > **附录 A：快速入门示例**  
-> 详见 [examples/](./examples/) 目录，包含从简单到复杂的多种场景。
+> 详见 examples/ 目录，包含从简单到复杂的多种场景。
 
 > **附录 B：常见问题 (FAQ)**  
-> 见 [FAQ.md](./FAQ.md)。
+> 见 FAQ.md。
 
 > **附录 C：API 参考（程序化调用）**  
-> uni-env 也提供 Go 库，可供其他工具集成，详见 [pkg/](./pkg/) 目录的 godoc。
+> uni-env 也提供 Go 库，可供其他工具集成，详见 pkg/ 目录的 godoc。
 
 ---
 

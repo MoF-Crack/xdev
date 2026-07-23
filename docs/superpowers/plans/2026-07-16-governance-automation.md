@@ -2,6 +2,13 @@
 
 > **面向 Agent 执行者：** 必须使用 `subagent-driven-development`（推荐）或 `executing-plans` 逐任务执行。步骤使用复选框（`- [ ]`）跟踪，不能跳过前置门禁、验证或独立审查。
 
+> **历史计划状态更新（2026-07-23）：** P5 已由提交 `9a36126`
+> 完成。P7 已由提交 `e91310c` 完成，Constitution `1.0.0` 和
+> governance blocking mode 已进入 `HEAD`。下文的 `1.0.0-rc.3`、报告模式
+> 和 `continue-on-error` 是设计时基线，不是当前事实。P7 后的治理稳定化
+> 硬门禁增强仍位于未提交工作树；恢复时应读取
+> `docs/superpowers/plans/archive/2026/2026-07-18-governance-stabilization.errata.md`。
+
 **目标：** 实现三个 PowerShell 5.1 治理验证脚本（`validate-specs.ps1`、`validate-constitution.ps1`、`validate-governance.ps1`）及其测试固件，并创建独立的 `governance.yaml` CI workflow 以报告模式运行。为 P7 Constitution 正式批准后的阻塞模式切换提供可测试的自动化基础。
 
 **架构：** 采用 TDD 模式，先创建 governance 测试固件目录（含通过和失败两类固件），再依次实现三个验证器并在 CI 中串行编排。三个验证器职责独立、可被本地和 CI 复用。CI workflow 独立于 `.github/workflows/ci.yaml`，当前以报告模式运行（`continue-on-error: true`），P7 之后才切换为阻塞模式。

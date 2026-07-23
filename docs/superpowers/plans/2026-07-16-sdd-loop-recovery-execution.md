@@ -1,10 +1,32 @@
 # XDev SDD/LOOP 恢复执行清单
 
 > **用途**：上下文压缩、会话中断或执行者切换后的唯一恢复入口
-> **状态**：Executing
+> **状态**：Current recovery index（旧执行清单已被当前事实取代）
 > **记录日期**：2026-07-16
 > **执行基线**：`93069f89082bcb685cb833c69bae64e157bf4b20`
-> **当前授权**：用户已要求将建议顺序文档化，并按该顺序开始执行
+> **当前更新**：2026-07-23
+
+## 2026-07-23 当前恢复状态
+
+本节是当前恢复入口。后续第 1-5 节保留为历史执行基线，不能覆盖本节
+或 Git 事实。
+
+- Constitution 已正式批准为 `1.0.0`，Ratified 日期为 `2026-07-16`。
+- P4B 已由提交 `0c97849` 完成。
+- P5/P6 已由提交 `9a36126` 完成到各自计划范围；7 份 Feature Spec
+  仍为 Draft，不表示已批准或实现。
+- P7 已由提交 `e91310c` 完成，Constitution `1.0.0` 和 governance CI
+  blocking mode 已进入 `HEAD`。
+- 治理稳定化 Tasks 1-10 已在本地工作树完成，但实现、测试、fixtures
+  和计划归档尚未提交。归档勘误是
+  `docs/superpowers/plans/archive/2026/2026-07-18-governance-stabilization.errata.md`。
+- 当前第一个未完成事项不是重做 P4B/P5/P7，而是重新验证稳定化工作树，
+  取得明确提交授权，并按白名单暂存和提交。
+- `docs/progress-and-defects-analysis.md`、`docs/pending-work-plan.md` 和
+  `docs/roadmap.md` 的历史正文是 Snapshot/Frozen 材料，不是恢复事实来源。
+
+当前恢复顺序：先读归档勘误，再运行 `git status`/`git log`，然后运行
+fresh 治理验证。未获得明确授权前不得暂存或提交。
 
 ## 1. 当前事实
 
@@ -157,7 +179,7 @@ P1 完成后可并行：
 
 新会话或上下文压缩后：
 
-1. 读取本文件；
+1. 先读取本文件顶部“2026-07-23 当前恢复状态”和治理稳定化归档勘误；
 2. 运行 `git status --short --branch` 和 `git log --oneline -5`；
 3. 运行 approval gate 聚焦测试，记录通过/失败数；
 4. 从第一个未满足退出条件的阶段继续；
@@ -174,7 +196,8 @@ P1 完成后可并行：
 | P0-D 审查与验收 | Completed | 用户批准后提交 `ba5310d governance: enforce recorded approvals` |
 | P1 治理骨架 | Completed | 12 个目录索引 + 1 份安全例外（Draft）；提交 `d0aec02` |
 | P2A/P2B/P3 | Completed (violation recorded) | 提交 `2241bdc`；执行未经明确授权，用户接受但记录违规 |
-| P4A 旧文档元数据 | Plan writing approved | 计划编写中；执行需单独批准 |
-| P4B 历史迁移 | Blocked by P4A | 尚未实施 |
-| P5/P6 | Blocked | 尚未实施 |
-| P7 正式批准 | Blocked | Constitution 仍为 Candidate |
+| P4A 旧文档元数据 | Completed | 已完成并作为 P4B 前置输入 |
+| P4B 历史迁移 | Completed | 提交 `0c97849` |
+| P5/P6 | Completed | 提交 `9a36126`；P6 仅创建 7 份 Draft Spec |
+| P7 正式批准 | Completed | 提交 `e91310c`；Constitution `1.0.0` |
+| 治理稳定化 Task 1-10 | Local working-tree candidate | 本地验证与归档流程已完成，但尚未提交 |

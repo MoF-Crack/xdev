@@ -27,7 +27,7 @@
 - [10. PATH 管理](#10-path-管理)
 - [11. GUI 架构](#11-gui-架构)
   - [11.1 Wails 绑定生成机制](#111-wails-绑定生成机制)
-  - [11.2 App 拆分架构](#112-app-拆分架构)
+  - [11.2 GUI 后端架构](#112-gui-后端架构app-拆分)
   - [11.3 强类型返回值](#113-强类型返回值)
   - [11.4 性能优化](#114-性能优化)
   - [11.5 资源安全](#115-资源安全)
@@ -675,7 +675,7 @@ SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", ...)
         └── Go 后端 runtime.EventsEmit() → 前端回调
 ```
 
-### Wails 绑定生成机制
+### 11.1 Wails 绑定生成机制
 
 Wails v2 使用 `//go:build bindings` / `//go:build !bindings` 构建标签机制生成 TypeScript 绑定：
 
@@ -688,7 +688,7 @@ Wails v2 使用 `//go:build bindings` / `//go:build !bindings` 构建标签机�
 - `main.go` — `//go:build !bindings`，正常 CLI/GUI 入口
 - `main_bindings.go` — `//go:build bindings`，仅用于绑定生成的入口
 
-### GUI 后端架构（App 拆分）
+### 11.2 GUI 后端架构（App 拆分）
 
 原始 `app.go` 是一个 3670 行的 God Object，包含 73 个方法覆盖 7 个职责域。现已按职责拆分为 8 个文件：
 
@@ -706,7 +706,7 @@ internal/gui/
 └── log.go              # 日志系统
 ```
 
-### 强类型返回值
+### 11.3 强类型返回值
 
 所有暴露给前端的 Wails 绑定方法均使用强类型结构体替代 `map[string]interface{}`：
 
@@ -727,7 +727,7 @@ internal/gui/
 - 前端获得完整的类型提示和编译时检查
 - `omitempty` 标签正确控制空值字段的序列化行为
 
-### 性能优化
+### 11.4 性能优化
 
 #### 异步仪表盘统计
 
@@ -794,7 +794,7 @@ waitForLocalCache()
 
 `localReady` channel 通过 `sync.Once` 保证只关闭一次，避免轮询等待。
 
-### 资源安全
+### 11.5 资源安全
 
 #### Goroutine 生命周期管理
 
@@ -808,7 +808,7 @@ waitForLocalCache()
 
 `TestProxy` 中 `resp.Body.Close()` 使用 `defer` 确保异常路径下不泄漏连接。
 
-### util 共享包
+### 11.6 util 共享包
 
 从 3+ 个包中提取的共享工具函数：
 

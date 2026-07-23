@@ -5,11 +5,24 @@ param(
     [string]$Repo = (Get-Location).Path,
     [Parameter(ParameterSetName='Staged')] [switch]$Staged,
     [Parameter(Mandatory=$true, ParameterSetName='BaseRef')] [string]$BaseRef,
-    [string]$ResultFile = ''
+    [string]$ResultFile = '',
+    [string]$GitExe = '',
+    [string[]]$GitPrefixArgs = @(),
+    [int]$GitTimeoutMs = 60000
 )
 
 $ErrorActionPreference = 'Stop'
-$script:git = (Get-Command git -ErrorAction Stop).Source
+if ($GitTimeoutMs -le 0) { throw '-GitTimeoutMs must be greater than zero' }
+if ($GitExe) { $script:git = $GitExe } else { $script:git = (Get-Command git -ErrorAction Stop).Source }
+if ([System.IO.Path]::GetExtension($script:git) -ne '.exe') {
+    throw "-GitExe must refer to an executable .exe file"
+}
+if ($GitPrefixArgs.Count -eq 1 -and $GitPrefixArgs[0] -match '\|') {
+    $GitPrefixArgs = @($GitPrefixArgs[0] -split '\|')
+}
+if ($GitPrefixArgs.Count -eq 0 -and $env:XDEV_APPROVAL_GIT_PREFIX_ARGS) {
+    $GitPrefixArgs = @($env:XDEV_APPROVAL_GIT_PREFIX_ARGS -split '\|')
+}
 $script:ProtectedPaths = @{}
 $script:ApprovalAdds = @()
 $script:ApprovalRecords = @()
@@ -17,9 +30,73 @@ $script:BlockReason = ''
 
 # ---- helpers ----
 function Git { param([string[]]$A)
-    [array]$out = & $script:git -C $Repo @A 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "git $A failed: exit=$LASTEXITCODE" }
-    return $out
+    # Use .NET Process to safely capture stdout/stderr without ErrorActionPreference interference.
+    # Native 2>&1 with $ErrorActionPreference=Stop can treat stderr warnings as errors.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $script:git
+    $argList = @($GitPrefixArgs) + @('-C', $Repo) + $A
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($arg in $argList) {
+        if ($sb.Length -gt 0) { [void]$sb.Append(' ') }
+        if ($arg -match '[\s"]') {
+            [void]$sb.Append('"').Append($arg.Replace('"', '\"')).Append('"')
+        } else {
+            [void]$sb.Append($arg)
+        }
+    }
+    $psi.Arguments = $sb.ToString()
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+
+    $proc = $null
+    $stdoutTask = $null
+    $stderrTask = $null
+    $timedOut = $false
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        # Start both .NET Framework async reads before waiting for the child so
+        # neither redirected pipe can fill and block the process.
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        if (-not $proc.WaitForExit($GitTimeoutMs)) {
+            $timedOut = $true
+            try { $proc.Kill() } catch { }
+            $remaining = [Math]::Max(1, $GitTimeoutMs - [int]$clock.ElapsedMilliseconds)
+            if (-not $proc.WaitForExit($remaining)) { throw "git $A did not exit after timeout termination" }
+        }
+        $remaining = [Math]::Max(1, $GitTimeoutMs - [int]$clock.ElapsedMilliseconds)
+        if (-not $stdoutTask.Wait($remaining)) { throw "git $A stdout read did not complete within timeout budget" }
+        $remaining = [Math]::Max(1, $GitTimeoutMs - [int]$clock.ElapsedMilliseconds)
+        if (-not $stderrTask.Wait($remaining)) { throw "git $A stderr read did not complete within timeout budget" }
+        if ($stdoutTask.Status -ne 'RanToCompletion') { throw "git $A stdout read failed" }
+        if ($stderrTask.Status -ne 'RanToCompletion') { throw "git $A stderr read failed" }
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+        $exitCode = if ($timedOut) { -1 } else { $proc.ExitCode }
+    } finally {
+        if ($proc) { $proc.Dispose() }
+    }
+
+    if ($timedOut) {
+        throw "git $A timed out after $GitTimeoutMs ms"
+    }
+
+    # Judge by exit code, not stderr presence
+    if ($exitCode -ne 0) {
+        $errMsg = if ($stderr.Trim()) { $stderr.Trim() } else { '(no stderr)' }
+        throw "git $A failed: exit=$exitCode, stderr: $errMsg"
+    }
+    # On success (exit 0), stderr is diagnostics/warnings — surface but don't treat as diff data
+    if ($stderr.Trim()) {
+        Write-Warning "git $A stderr (exit 0): $($stderr.Trim())"
+    }
+    if ([string]::IsNullOrEmpty($stdout)) { return @() }
+    return @($stdout -split "`r?`n")
 }
 function GitShow { param([string]$P)
     $out = Git @('show', ":$P")

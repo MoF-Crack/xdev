@@ -40,6 +40,50 @@ function Write-Check {
     }
 }
 
+# Helper: parse Approval History section and check for a Ratified status row
+function Test-ApprovalHistoryHasRatifiedRow {
+    param([string]$Content)
+    # Split on ## Approval History markers; check each section after a heading
+    $parts = $Content -split '## Approval History'
+    if ($parts.Count -lt 2) { return $false }
+    for ($i = 1; $i -lt $parts.Count; $i++) {
+        $section = $parts[$i]
+        # Trim to next ## heading (or end)
+        if ($section -match '\n## ') {
+            $section = $section.Substring(0, $section.IndexOf("`n## "))
+        }
+        $lines = $section -split "\r?\n"
+        $headerFound = $false
+        $statusColIdx = -1
+        foreach ($line in $lines) {
+            if ($line -match '^## ') { break }
+            # Detect header row (contains Status/状态 before separator)
+            if (-not $headerFound -and $line -match '^\|[^|]*\|[^|]*\|') {
+                $cols = $line -split '\|'
+                for ($j = 0; $j -lt $cols.Count; $j++) {
+                    if ($cols[$j] -match '(状态|Status)') {
+                        $statusColIdx = $j
+                        $headerFound = $true
+                        break
+                    }
+                }
+                continue
+            }
+            # Skip separator row (|---|---|)
+            if ($line -match '^\|[- ]+\|[- ]+\|') { continue }
+            # Data row
+            if ($headerFound -and $line -match '^\|') {
+                $cols = $line -split '\|'
+                if ($statusColIdx -ge 0 -and $statusColIdx -lt $cols.Count) {
+                    $clean = ($cols[$statusColIdx].Trim()) -replace '[`*]',''
+                    if ($clean -eq 'Ratified') { return $true }
+                }
+            }
+        }
+    }
+    return $false
+}
+
 function Invoke-ConstitutionChecks {
     param([string]$Content, [string]$FilePath)
 
@@ -106,16 +150,85 @@ function Invoke-ConstitutionChecks {
         $checks += @{Check='state-validity'; Status='FAIL'; Detail='State field missing'}
     }
 
-    # Check 3: Ratified: Pending field
-    if ($Content -match '(?:\*{0,2})Ratified(?:\*{0,2})\s*:\s*Pending') {
-        $checks += @{Check='ratified-pending'; Status='PASS'; Detail='Ratified: Pending'}
-    } else {
-        # Also check for Chinese equivalent
-        if ($Content -match '\u6B63\u5F0F\u6279\u51C6.*?Pending' -or $Content -match 'Ratified.*?\u5F85\u5B9A') {
-            $checks += @{Check='ratified-pending'; Status='PASS'; Detail='Ratified field exists and indicates Pending'}
+    # State classification (used by Check 3 and Check 8)
+    $isRatifiedState = ($cleanState -match '^Ratified$') -or ($cleanState -match '正式批准')
+    $isCandidateState = ($cleanState -match '^Candidate$') -or ($cleanState -match '候选版|候选|尚未正式批准')
+    $isSupersededState = ($cleanState -match '^Superseded$')
+
+    # Check 3: Ratified field — state-aware validation
+    # Extract Ratified field value (supports **Ratified**: <value>, table row, and Chinese labels)
+    $ratifiedValue = ''
+    # Match bold label: **Ratified**: <value> — stop at newline or pipe
+    if ($Content -match '(?:\*\*)?(?:Ratified|\u6B63\u5F0F\u6279\u51C6\u65E5\u671F)(?:\*\*)?\s*[：:]\s*([^|\n]+)') {
+        $ratifiedValue = $Matches[1].Trim()
+    }
+    # Also match table row: | Ratified Date | <value> |
+    if (-not $ratifiedValue -and $Content -match '\|\s*(?:Ratified Date|Ratified|正式批准日期)\s*\|\s*([^|\n]+)\s*\|') {
+        $ratifiedValue = $Matches[1].Trim()
+    }
+    # Strip backticks/asterisks for clean comparison
+    $cleanRatified = $ratifiedValue -replace '[`*]',''
+    $isDate = $cleanRatified -match '^\d{4}-\d{2}-\d{2}$'
+    $isPending = $cleanRatified -eq 'Pending'
+    $isMissing = ($cleanRatified -eq '')
+
+    # State-aware rules
+    $ratifiedPass = $false
+    $ratifiedDetail = ''
+
+    if ($isCandidateState) {
+        if ($isMissing) {
+            # Candidate state with missing Ratified field
+            $ratifiedPass = $false
+            $ratifiedDetail = "Candidate state requires Ratified field (set to Pending or planned date); field is missing"
+        } elseif ($isPending) {
+            $ratifiedPass = $true
+            $ratifiedDetail = "Ratified field: Pending"
         } else {
-            $checks += @{Check='ratified-pending'; Status='FAIL'; Detail='Ratified: Pending field missing or not set to Pending'}
+            # Candidate with non-Pending value (date or arbitrary string) — strict: only Pending allowed
+            $ratifiedPass = $false
+            $ratifiedDetail = "Candidate state requires Ratified field to be 'Pending'; found '$cleanRatified'"
         }
+    } elseif ($isRatifiedState) {
+        if ($isPending) {
+            $ratifiedPass = $false
+            $ratifiedDetail = "Ratified state must have a valid YYYY-MM-DD date; found 'Pending'"
+        } elseif ($isMissing) {
+            $ratifiedPass = $false
+            $ratifiedDetail = "Ratified state requires a valid YYYY-MM-DD date; field is missing"
+        } elseif ($isDate) {
+            # Ratified state with valid date — must also have at least one Ratified row in Approval History
+            $hasRatifiedRow = Test-ApprovalHistoryHasRatifiedRow -Content $Content
+            if ($hasRatifiedRow) {
+                $ratifiedPass = $true
+                $ratifiedDetail = "Ratified date: $cleanRatified"
+            } else {
+                $ratifiedPass = $false
+                $ratifiedDetail = "Ratified state requires at least one Ratified status row in Approval History; none found"
+            }
+        } else {
+            $ratifiedPass = $false
+            $ratifiedDetail = "Ratified state requires a valid YYYY-MM-DD date; found '$cleanRatified'"
+        }
+    } elseif ($isSupersededState) {
+        # Superseded: Ratified field must be a valid YYYY-MM-DD date (the original ratification date)
+        if ($isDate) {
+            $ratifiedPass = $true
+            $ratifiedDetail = "Ratified date: $cleanRatified (superseded)"
+        } else {
+            $ratifiedPass = $false
+            $ratifiedDetail = "Superseded state requires Ratified field to be YYYY-MM-DD date; found '$cleanRatified'"
+        }
+    } else {
+        # Unrecognized/invalid state — always fail-closed
+        $ratifiedPass = $false
+        $ratifiedDetail = "Unrecognized or invalid state '$cleanState'; ratified-pending validation cannot pass"
+    }
+
+    if ($ratifiedPass) {
+        $checks += @{Check='ratified-pending'; Status='PASS'; Detail=$ratifiedDetail}
+    } else {
+        $checks += @{Check='ratified-pending'; Status='FAIL'; Detail=$ratifiedDetail}
     }
 
     # Check 4: No unresolved placeholders in body (exclude Approval History section)
@@ -173,8 +286,13 @@ function Invoke-ConstitutionChecks {
                 $cols = $line -split '\|'
                 if ($cols.Count -ge 5) {
                     $approver = $cols[3].Trim()
-                    if ($approver -and $approver -ne '-' -and $approver -ne '' -and
-                        $approver -ne 'xinyan <zuijiuhjd@foxmail.com>') {
+                    # Strip backticks and asterisks for clean comparison
+                    $cleanApprover = $approver -replace '[`*]',''
+                    # Skip empty, dash-only, em-dash, and horizontal bar markers
+                    if ($cleanApprover -and $cleanApprover -ne '-' -and $cleanApprover -ne '' -and
+                        $cleanApprover -ne $([char]0x2014) -and $cleanApprover -ne $([char]0x2015) -and
+                        $cleanApprover -notmatch '^[-—–]+$' -and
+                        $cleanApprover -ne 'xinyan <zuijiuhjd@foxmail.com>') {
                         $badApprovers += $approver
                     }
                 }
@@ -196,6 +314,30 @@ function Invoke-ConstitutionChecks {
         $checks += @{Check='status-table'; Status='PASS'; Detail='Document status metadata present'}
     } else {
         $checks += @{Check='status-table'; Status='WARN'; Detail='Document status section not found'}
+    }
+
+    # Check 8: Superseded successor validation (only when state is Superseded)
+    if ($isSupersededState) {
+        $supersededBy = ''
+        # Try table row: | Superseded By | <version> |
+        if ($Content -match '\|\s*Superseded By\s*\|\s*([^|\n]+)\s*\|') {
+            $supersededBy = $Matches[1].Trim()
+        }
+        # Try footer: **Superseded By**: <version>
+        if (-not $supersededBy -and $Content -match '\*\*Superseded By\*\*\s*[：:]\s*([^|\n]+)') {
+            $supersededBy = $Matches[1].Trim()
+        }
+        $cleanSupersededBy = $supersededBy -replace '[`*]',''
+
+        if (-not $cleanSupersededBy) {
+            $checks += @{Check='superseded-successor'; Status='FAIL'; Detail='Superseded state requires Superseded By field with valid successor SemVer'}
+        } elseif ($cleanSupersededBy -notmatch '^\d+\.\d+\.\d+$') {
+            $checks += @{Check='superseded-successor'; Status='FAIL'; Detail="Invalid successor version: '$cleanSupersededBy' (expected X.Y.Z SemVer)"}
+        } elseif ($cleanSupersededBy -eq $version) {
+            $checks += @{Check='superseded-successor'; Status='FAIL'; Detail="Superseded successor version '$cleanSupersededBy' must differ from current version '$version'"}
+        } else {
+            $checks += @{Check='superseded-successor'; Status='PASS'; Detail="Superseded by: $cleanSupersededBy"}
+        }
     }
 
     return $checks
@@ -239,7 +381,16 @@ function Invoke-SelfTest {
     $invalidTests = @(
         @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-placeholder.md'); Name = 'constitution-placeholder.md'; ExpectedCheck = 'no-placeholders' },
         @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-missing-version.md'); Name = 'constitution-missing-version.md'; ExpectedCheck = 'version-format' },
-        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-wrong-state.md'); Name = 'constitution-wrong-state.md'; ExpectedCheck = 'state-validity' }
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-wrong-state.md'); Name = 'constitution-wrong-state.md'; ExpectedCheck = @('state-validity', 'ratified-pending') },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-illegal-approver.md'); Name = 'constitution-illegal-approver.md'; ExpectedCheck = 'approver-consistency' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-ratified-pending.md'); Name = 'constitution-ratified-pending.md'; ExpectedCheck = 'ratified-pending' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-ratified-no-history.md'); Name = 'constitution-ratified-no-history.md'; ExpectedCheck = 'ratified-pending' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-candidate-missing-ratified.md'); Name = 'constitution-candidate-missing-ratified.md'; ExpectedCheck = 'ratified-pending' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-candidate-with-date.md'); Name = 'constitution-candidate-with-date.md'; ExpectedCheck = 'ratified-pending' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-superseded-bad-ratified-value.md'); Name = 'constitution-superseded-bad-ratified-value.md'; ExpectedCheck = 'ratified-pending' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-superseded-no-successor.md'); Name = 'constitution-superseded-no-successor.md'; ExpectedCheck = 'superseded-successor' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-superseded-bad-semver.md'); Name = 'constitution-superseded-bad-semver.md'; ExpectedCheck = 'superseded-successor' },
+        @{ Path = (Join-Path $fixtureRoot 'invalid/constitution-superseded-same-version.md'); Name = 'constitution-superseded-same-version.md'; ExpectedCheck = 'superseded-successor' }
     )
 
     foreach ($t in $invalidTests) {
@@ -251,17 +402,103 @@ function Invoke-SelfTest {
         $content = Get-Content -LiteralPath $t.Path -Raw -Encoding utf8
         if (-not $content) { $content = '' }
         $results = Invoke-ConstitutionChecks -Content $content -FilePath $t.Path
-        $targetResult = @($results | Where-Object { $_.Check -eq $t.ExpectedCheck })[0]
 
-        if ($targetResult -and $targetResult.Status -eq 'FAIL') {
-            Write-Host "  [OK]   $($t.Name): $($t.ExpectedCheck) = FAIL (expected)" -ForegroundColor Green
-        } elseif ($targetResult -and $targetResult.Status -ne 'FAIL') {
-            Write-Host "  [FAIL] $($t.Name): $($t.ExpectedCheck) expected FAIL, got $($targetResult.Status)" -ForegroundColor Red
+        $expectedChecks = if ($t.ExpectedCheck -is [array]) { $t.ExpectedCheck } else { @($t.ExpectedCheck) }
+        foreach ($expectedCheck in $expectedChecks) {
+            $targetResult = @($results | Where-Object { $_.Check -eq $expectedCheck })[0]
+
+            if ($targetResult -and $targetResult.Status -eq 'FAIL') {
+                Write-Host "  [OK]   $($t.Name): $expectedCheck = FAIL (expected)" -ForegroundColor Green
+            } elseif ($targetResult -and $targetResult.Status -ne 'FAIL') {
+                Write-Host "  [FAIL] $($t.Name): $expectedCheck expected FAIL, got $($targetResult.Status)" -ForegroundColor Red
+                $allPassed = $false
+            } else {
+                Write-Host "  [FAIL] $($t.Name): $expectedCheck check not found in results" -ForegroundColor Red
+                $allPassed = $false
+            }
+        }
+    }
+
+    Write-Host ''
+    Write-Host '--- Ratified Fixture ---' -ForegroundColor Cyan
+    $ratifiedPath = Join-Path $fixtureRoot 'valid/constitution-ratified.md'
+    if (Test-Path -LiteralPath $ratifiedPath) {
+        $ratifiedContent = Get-Content -LiteralPath $ratifiedPath -Raw -Encoding utf8
+        if (-not $ratifiedContent) { $ratifiedContent = '' }
+        $ratifiedResults = Invoke-ConstitutionChecks -Content $ratifiedContent -FilePath $ratifiedPath
+        $ratifiedFailures = @($ratifiedResults | Where-Object { $_.Status -eq 'FAIL' })
+        if ($ratifiedFailures.Count -gt 0) {
+            Write-Host "  [FAIL] valid/constitution-ratified.md: expected all PASS, got $($ratifiedFailures.Count) FAIL(s)" -ForegroundColor Red
+            foreach ($f in $ratifiedFailures) { Write-Host "         $($f.Check): $($f.Detail)" -ForegroundColor Red }
             $allPassed = $false
         } else {
-            Write-Host "  [FAIL] $($t.Name): $($t.ExpectedCheck) check not found in results" -ForegroundColor Red
+            Write-Host "  [OK]   valid/constitution-ratified.md: all $($ratifiedResults.Count) checks PASS" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  [FAIL] valid/constitution-ratified.md: file not found" -ForegroundColor Red
+        $allPassed = $false
+    }
+
+    Write-Host ''
+    Write-Host '--- Candidate Pending Fixture ---' -ForegroundColor Cyan
+    $candPendingPath = Join-Path $fixtureRoot 'valid/constitution-candidate-pending.md'
+    if (Test-Path -LiteralPath $candPendingPath) {
+        $cpContent = Get-Content -LiteralPath $candPendingPath -Raw -Encoding utf8
+        if (-not $cpContent) { $cpContent = '' }
+        $cpResults = Invoke-ConstitutionChecks -Content $cpContent -FilePath $candPendingPath
+        $cpFailures = @($cpResults | Where-Object { $_.Status -eq 'FAIL' })
+        if ($cpFailures.Count -gt 0) {
+            Write-Host "  [FAIL] valid/constitution-candidate-pending.md: expected all PASS, got $($cpFailures.Count) FAIL(s)" -ForegroundColor Red
+            foreach ($f in $cpFailures) { Write-Host "         $($f.Check): $($f.Detail)" -ForegroundColor Red }
+            $allPassed = $false
+        } else {
+            Write-Host "  [OK]   valid/constitution-candidate-pending.md: all $($cpResults.Count) checks PASS" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  [FAIL] valid/constitution-candidate-pending.md: file not found" -ForegroundColor Red
+        $allPassed = $false
+    }
+
+    Write-Host ''
+    Write-Host '--- Superseded Fixtures ---' -ForegroundColor Cyan
+    $supOkPath = Join-Path $fixtureRoot 'valid/constitution-superseded-ok.md'
+    if (Test-Path -LiteralPath $supOkPath) {
+        $supOkContent = Get-Content -LiteralPath $supOkPath -Raw -Encoding utf8
+        if (-not $supOkContent) { $supOkContent = '' }
+        $supOkResults = Invoke-ConstitutionChecks -Content $supOkContent -FilePath $supOkPath
+
+        $supOkFail = $false
+
+        # MUST assert ALL results have no FAIL — any single FAIL means SelfTest fails
+        $supOkFailures = @($supOkResults | Where-Object { $_.Status -eq 'FAIL' })
+        if ($supOkFailures.Count -gt 0) {
+            Write-Host "  [FAIL] valid/constitution-superseded-ok.md: expected all PASS, got $($supOkFailures.Count) FAIL(s)" -ForegroundColor Red
+            foreach ($f in $supOkFailures) { Write-Host "         $($f.Check): $($f.Detail)" -ForegroundColor Red }
+            $supOkFail = $true
+        }
+
+        # Additionally verify superseded-successor and ratified-pending specifically
+        $supCheck = @($supOkResults | Where-Object { $_.Check -eq 'superseded-successor' })[0]
+        $ratCheck = @($supOkResults | Where-Object { $_.Check -eq 'ratified-pending' })[0]
+
+        if (-not $supCheck -or $supCheck.Status -ne 'PASS') {
+            Write-Host "  [FAIL] valid/constitution-superseded-ok.md: superseded-successor expected PASS, got $($supCheck.Status)" -ForegroundColor Red
+            if ($supCheck) { Write-Host "         $($supCheck.Check): $($supCheck.Detail)" -ForegroundColor Red }
+            $supOkFail = $true
+        }
+        if (-not $ratCheck -or $ratCheck.Status -ne 'PASS') {
+            Write-Host "  [FAIL] valid/constitution-superseded-ok.md: ratified-pending expected PASS, got $($ratCheck.Status)" -ForegroundColor Red
+            if ($ratCheck) { Write-Host "         $($ratCheck.Check): $($ratCheck.Detail)" -ForegroundColor Red }
+            $supOkFail = $true
+        }
+        if (-not $supOkFail) {
+            Write-Host "  [OK]   valid/constitution-superseded-ok.md: all $($supOkResults.Count) checks PASS (superseded-successor PASS, ratified-pending PASS)" -ForegroundColor Green
+        } else {
             $allPassed = $false
         }
+    } else {
+        Write-Host "  [FAIL] valid/constitution-superseded-ok.md: file not found" -ForegroundColor Red
+        $allPassed = $false
     }
 
     Write-Host ''

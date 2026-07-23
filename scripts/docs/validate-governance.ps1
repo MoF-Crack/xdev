@@ -24,6 +24,44 @@ function Write-SectionHeader {
     Write-Host "=== $Title ===" -ForegroundColor Cyan
 }
 
+function Invoke-ProcessCapture {
+    param([string]$FileName, [string]$Arguments, [int]$TimeoutMs = 60000)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FileName
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $proc = $null
+    $exitCode = $null
+    try {
+        try { $proc = [System.Diagnostics.Process]::Start($psi) } catch { throw "process start failed: $_" }
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $remaining = [Math]::Max(1, $TimeoutMs - [int]$clock.ElapsedMilliseconds)
+        if (-not $proc.WaitForExit($remaining)) {
+            try { $proc.Kill() } catch { }
+            $killWait = [Math]::Min(1000, [Math]::Max(1, $TimeoutMs - [int]$clock.ElapsedMilliseconds))
+            if (-not $proc.WaitForExit($killWait)) { throw "process did not exit after timeout termination" }
+            throw "process timed out after $TimeoutMs ms"
+        }
+        $exitCode = $proc.ExitCode
+        $remaining = [Math]::Max(1, $TimeoutMs - [int]$clock.ElapsedMilliseconds)
+        if (-not $stdoutTask.Wait($remaining) -or $stdoutTask.Status -ne 'RanToCompletion') { throw 'stdout read failed or did not complete' }
+        $remaining = [Math]::Max(1, $TimeoutMs - [int]$clock.ElapsedMilliseconds)
+        if (-not $stderrTask.Wait($remaining) -or $stderrTask.Status -ne 'RanToCompletion') { throw 'stderr read failed or did not complete' }
+        try {
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+        } catch { throw "process output read faulted: $_" }
+        return [PSCustomObject]@{ ExitCode = $exitCode; StdOut = $stdout; StdErr = $stderr }
+    } finally {
+        if ($proc) { $proc.Dispose() }
+    }
+}
+
 function Invoke-ChildValidator {
     param([string]$ScriptPath, [hashtable]$Arguments, [string]$Label)
     if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
@@ -46,9 +84,11 @@ function Invoke-ChildValidator {
     $escapedScriptPath = $ScriptPath -replace "'", "''"
     $childCommand = "& '$escapedScriptPath' $($childArguments -join ' ')"
     Write-Host "  Running: $Label..." -ForegroundColor DarkGray
-    $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $childCommand 2>&1
-    $exitCode = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } else { 0 }
-    $resultOutput = ($output | Out-String).Trim()
+    $quotedCommand = '"' + ($childCommand -replace '"', '\"') + '"'
+    $processResult = Invoke-ProcessCapture -FileName ((Get-Command powershell.exe -ErrorAction Stop).Source) `
+        -Arguments "-NoProfile -ExecutionPolicy Bypass -Command $quotedCommand" -TimeoutMs 60000
+    $exitCode = $processResult.ExitCode
+    $resultOutput = (($processResult.StdOut + "`n" + $processResult.StdErr).Trim())
     $resultBlocked = $false
     if ($Arguments.ContainsKey('ResultFile')) {
         $resultFile = [string]$Arguments['ResultFile']
@@ -86,21 +126,140 @@ function Get-VersionFromText {
     return ''
 }
 
+function Test-RatificationChain {
+    param([string]$ConstitutionVer, [string]$SpecRefVer, [string]$TargetPath)
+    $approvalsDir = Join-Path $script:repoRoot '.specify\approvals'
+    if (-not (Test-Path -LiteralPath $approvalsDir -PathType Container)) {
+        return "no approvals directory; ratification chain required for spec ref '$SpecRefVer' vs constitution '$ConstitutionVer'"
+    }
+    $approvalFiles = @(Get-ChildItem -LiteralPath $approvalsDir -Filter '*.json' -File -ErrorAction SilentlyContinue)
+    if ($approvalFiles.Count -eq 0) {
+        return "no approval records; ratification chain required for spec ref '$SpecRefVer' vs constitution '$ConstitutionVer'"
+    }
+    $records = @()
+    $seenIds = @{}
+    foreach ($af in $approvalFiles) {
+        try {
+            $raw = Get-Content -LiteralPath $af.FullName -Raw -Encoding utf8
+            # Check for empty content
+            if (-not $raw.Trim()) {
+                return "approval JSON '$($af.Name)' is empty; malformed"
+            }
+            $obj = $raw | ConvertFrom-Json
+            $id = [string]$obj.approval_id
+            if (-not $id) {
+                return "approval JSON '$($af.Name)': approval_id field missing or empty"
+            }
+            $idTrimmed = $id.Trim()
+            # Check for duplicate approval_id
+            if ($seenIds.ContainsKey($idTrimmed)) {
+                return "duplicate approval_id '$idTrimmed' found in '$($af.Name)' (previously in '$($seenIds[$idTrimmed])')"
+            }
+            $seenIds[$idTrimmed] = $af.Name
+            $records += [PSCustomObject]@{
+                File = $af.Name
+                Id = $idTrimmed
+                Type = ([string]$obj.asset_type).Trim()
+                Path = ([string]$obj.target_path).Trim()
+                Version = ([string]$obj.target_version).Trim()
+                Decision = ([string]$obj.decision).Trim()
+                ApprovedBy = ([string]$obj.approved_by).Trim()
+                Supersedes = @([string[]]$obj.supersedes)
+            }
+        } catch {
+            return "approval JSON '$($af.Name)' is malformed and cannot be parsed: $_"
+        }
+    }
+    # Find ratification record for this constitution version
+    $ratifications = @($records | Where-Object {
+        $_.Type -eq 'constitution' -and
+        $_.Decision -eq 'approve-ratification' -and
+        $_.Version -eq $ConstitutionVer -and
+        $_.Path -eq $TargetPath
+    })
+    if ($ratifications.Count -eq 0) {
+        return "no ratification record found for constitution '$ConstitutionVer' at '$TargetPath'"
+    }
+    if ($ratifications.Count -gt 1) {
+        return "multiple ratification records for '$ConstitutionVer'; expected 1"
+    }
+    $rat = $ratifications[0]
+    if ($rat.ApprovedBy -ne 'xinyan <zuijiuhjd@foxmail.com>') {
+        return "ratification record '$($rat.Id)': approved_by must be 'xinyan <zuijiuhjd@foxmail.com>', got '$($rat.ApprovedBy)'"
+    }
+    # Check supersedes chain: must have at least one superseded ID
+    $supArray = @($rat.Supersedes | Where-Object { $_ -and $_.Trim() })
+    if ($supArray.Count -eq 0) {
+        return "ratification record '$($rat.Id)': supersedes is empty; must reference rc approval(s)"
+    }
+    # At least one superseded record must match SpecRefVer with valid fields
+    $hasMatch = $false
+    $allErrors = @()
+    foreach ($supId in $supArray) {
+        $supIdClean = ($supId -replace '[`"\[\]]','').Trim()
+        if (-not $supIdClean) { continue }
+        $rcMatches = @($records | Where-Object { $_.Id -eq $supIdClean })
+        if ($rcMatches.Count -eq 0) {
+            $allErrors += "superseded record '$supIdClean' not found"
+            continue
+        }
+        if ($rcMatches.Count -gt 1) {
+            $allErrors += "superseded record '$supIdClean': duplicate approval_id found"
+            continue
+        }
+        $rc = $rcMatches[0]
+        $rcOk = $true
+        if ($rc.Type -ne 'constitution') {
+            $allErrors += "superseded record '$supIdClean': asset_type must be 'constitution', got '$($rc.Type)'"
+            $rcOk = $false
+        }
+        if ($rc.Decision -ne 'approve-candidate') {
+            $allErrors += "superseded record '$supIdClean': decision must be 'approve-candidate', got '$($rc.Decision)'"
+            $rcOk = $false
+        }
+        if ($rc.Path -ne $TargetPath) {
+            $allErrors += "superseded record '$supIdClean': target_path '$($rc.Path)' != expected '$TargetPath'"
+            $rcOk = $false
+        }
+        if ($rc.ApprovedBy -ne 'xinyan <zuijiuhjd@foxmail.com>') {
+            $allErrors += "superseded record '$supIdClean': approved_by must be 'xinyan <zuijiuhjd@foxmail.com>', got '$($rc.ApprovedBy)'"
+            $rcOk = $false
+        }
+        # Check if this rc record matches SpecRefVer
+        if ($rcOk -and $rc.Version -eq $SpecRefVer) {
+            $hasMatch = $true
+        }
+    }
+    if (-not $hasMatch) {
+        if ($allErrors.Count -gt 0) {
+            return "no superseded record with version '$SpecRefVer' and all valid fields found. Errors: $($allErrors -join '; ')"
+        } else {
+            return "no superseded record with target_version '$SpecRefVer' found; superseded versions: $($supArray -join ', ')"
+        }
+    }
+    return ''  # No issue = chain valid
+}
+
 function Invoke-CrossDocChecks {
     Write-SectionHeader 'Cross-Document Consistency'
     $issues = @()
 
     $constitutionPath = Join-Path $script:repoRoot '.specify\memory\constitution.md'
-    $constitutionRc = ''
+    $constitutionVer = ''
     if (Test-Path -LiteralPath $constitutionPath) {
         $cc = ''
         try { $cc = Get-Content -LiteralPath $constitutionPath -Raw -Encoding utf8 } catch { $cc = '' }
-        if ($cc -match '\*\*Version\*\*[:\uFF1A]\s*`?([0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+)') {
-            $constitutionRc = $Matches[1]
-        } elseif ($cc -match 'Version.*?`?([0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+)') {
-            $constitutionRc = $Matches[1]
+        # Table format: | Version | `X.Y.Z` | or | \u7248\u672C | `X.Y.Z` |
+        if ($cc -match '\|\s*\*{0,2}(?:\u7248\u672C|Version)\*{0,2}\s*\|\s*`?([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)`?\s*\|') {
+            $constitutionVer = $Matches[1]
+        }
+        # Bold format: **Version**: `X.Y.Z` or **\u7248\u672C**\uFF1A`X.Y.Z`
+        elseif ($cc -match '\*\*(?:\u7248\u672C|Version)\*\*[：:]\s*`?([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)`?') {
+            $constitutionVer = $Matches[1]
         }
     }
+    $isConstitutionFinal = ($constitutionVer -and $constitutionVer -notmatch '-rc\.')
+    $constitutionBase = if ($constitutionVer -match '^(\d+\.\d+\.\d+)') { $Matches[1] } else { '' }
 
     $specDirs = @(Get-ChildItem -LiteralPath (Join-Path $script:repoRoot 'specs') -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^\d' -and $_.Name -notmatch '^archive' })
@@ -116,12 +275,47 @@ function Invoke-CrossDocChecks {
         if (-not $sc) { continue }
 
         $specRefRc = ''
-        if ($sc -match 'Constitution.*?`?([0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+)') {
+        if ($sc -match 'Constitution.*?`?([0-9]+\.[0-9]+\.[0-9]+(?:-rc\.[0-9]+)?)') {
             $specRefRc = $Matches[1]
         }
-        if ($specRefRc -and $constitutionRc -and $specRefRc -ne $constitutionRc) {
-            $dn = Split-Path -Leaf $dir.FullName
-            $issues += "Cross-ref mismatch: spec '$dn' refs Constitution '$specRefRc' but actual is '$constitutionRc'"
+        if ($specRefRc) {
+            if (-not $constitutionVer) {
+                $dn = Split-Path -Leaf $dir.FullName
+                $issues += "Constitution version unparseable; spec '$dn' refs '$specRefRc' cannot be validated"
+            } elseif ($specRefRc -eq $constitutionVer) {
+                # Exact match: PASS
+            } else {
+                $specRefBase = if ($specRefRc -match '^(\d+\.\d+\.\d+)') { $Matches[1] } else { '' }
+                $specIsRc = ($specRefRc -match '-rc\.')
+                if ($specRefBase -ne $constitutionBase) {
+                    $dn = Split-Path -Leaf $dir.FullName
+                    $issues += "Cross-ref mismatch: spec '$dn' refs Constitution '$specRefRc' but actual is '$constitutionVer' (different base version)"
+                } elseif ($isConstitutionFinal -and $specIsRc) {
+                    # Constitution is final, spec refs an rc -> needs ratification chain
+                    $chainIssue = Test-RatificationChain -ConstitutionVer $constitutionVer `
+                        -SpecRefVer $specRefRc -TargetPath '.specify/memory/constitution.md'
+                    if ($chainIssue) {
+                        $dn = Split-Path -Leaf $dir.FullName
+                        $issues += "Ratification chain invalid: spec '$dn' refs rc '$specRefRc' vs constitution '$constitutionVer': $chainIssue"
+                    }
+                } else {
+                    $dn = Split-Path -Leaf $dir.FullName
+                    $issues += "Cross-ref mismatch: spec '$dn' refs Constitution '$specRefRc' but actual is '$constitutionVer'"
+                }
+            }
+        } else {
+            # No valid semver version found. Check if there's a constitution ref at all.
+            if ($sc -match 'Constitution') {
+                $dn = Split-Path -Leaf $dir.FullName
+                if ($sc -match 'Constitution.*?(?:TBD|TBA|TODO)') {
+                    $issues += "Spec '$dn': Constitution ref version is TBD; malformed"
+                } else {
+                    $issues += "Spec '$dn': Constitution ref version missing or malformed"
+                }
+            } else {
+                $dn = Split-Path -Leaf $dir.FullName
+                $issues += "Spec '$dn': missing Constitution reference; cannot validate cross-doc consistency"
+            }
         }
 
         $planFile = Join-Path $dir.FullName 'plan.md'
@@ -185,7 +379,24 @@ function Invoke-CrossDocChecks {
 # ---- SelfTest ----
 function Invoke-SelfTest {
     Write-Host 'Governance SelfTest (in-built checks only)' -ForegroundColor Cyan
-    $td = Join-Path $env:TEMP ('xdev-gov-st-' + [guid]::NewGuid().ToString().Substring(0,6))
+    $selfRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    $govStRoot = Join-Path $selfRepoRoot 'build\test-temp\governance-selftest'
+    # Path escape protection. The run root must be exactly one run-<guid> child.
+    $normalizedGovParent = [System.IO.Path]::GetFullPath($govStRoot).TrimEnd('\')
+    $normalizedSelfRepo = [System.IO.Path]::GetFullPath($selfRepoRoot).TrimEnd('\')
+    if ($normalizedGovParent -eq $normalizedSelfRepo -or
+        -not $normalizedGovParent.StartsWith($normalizedSelfRepo + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "FATAL: Path escape: $normalizedGovParent not under $normalizedSelfRepo" -ForegroundColor Red
+        exit 1
+    }
+    $parentCreated = -not (Test-Path -LiteralPath $normalizedGovParent -PathType Container)
+    if ($parentCreated) { New-Item -ItemType Directory -Path $normalizedGovParent -Force | Out-Null }
+    $td = Join-Path $normalizedGovParent ('run-' + [guid]::NewGuid().ToString('N'))
+    $normalizedTd = [System.IO.Path]::GetFullPath($td).TrimEnd('\')
+    if ([System.IO.Path]::GetDirectoryName($normalizedTd).TrimEnd('\') -ne $normalizedGovParent -or
+        $normalizedTd -notmatch '\\run-[0-9a-f]+$') {
+        throw "Unsafe SelfTest run root: $normalizedTd"
+    }
     try {
         New-Item -ItemType Directory -Path $td -Force | Out-Null
         $sd = Join-Path $td '.specify'
@@ -241,7 +452,13 @@ function Invoke-SelfTest {
         Write-Host ''
         Write-Host 'SelfTest passed' -ForegroundColor Green
     } finally {
-        Remove-Item -Recurse -Force $td -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $normalizedTd) {
+            Remove-Item -Recurse -Force -LiteralPath $normalizedTd -ErrorAction SilentlyContinue
+        }
+        if ($parentCreated -and (Test-Path -LiteralPath $normalizedGovParent -PathType Container) -and
+            @(Get-ChildItem -LiteralPath $normalizedGovParent -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+            Remove-Item -Force -LiteralPath $normalizedGovParent -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -272,9 +489,36 @@ Write-SectionHeader 'Approval Gate Validation'
 if (-not $SkipExternal) {
     $appScript = Join-Path $PSScriptRoot 'validate-approvals.ps1'
     if (Test-Path -LiteralPath $appScript) {
-        $tr = Join-Path $env:TEMP 'gov-approval-result.txt'
-        Invoke-ChildValidator -ScriptPath $appScript -Arguments @{ BaseRef = 'HEAD~1'; ResultFile = $tr } -Label 'approvals'
-        Remove-Item $tr -ErrorAction SilentlyContinue
+        $govRunParent = Join-Path $script:repoRoot 'build\test-temp\governance-run'
+        $govRunParentCreated = -not (Test-Path -LiteralPath $govRunParent -PathType Container)
+        if ($govRunParentCreated) { New-Item -ItemType Directory -Path $govRunParent -Force | Out-Null }
+        $govRunRoot = Join-Path $govRunParent ('run-' + [guid]::NewGuid().ToString('N'))
+        # Path escape protection
+        $normalizedRunParent = [System.IO.Path]::GetFullPath($govRunParent).TrimEnd('\')
+        $normalizedRun = [System.IO.Path]::GetFullPath($govRunRoot).TrimEnd('\')
+        $normalizedRepo = [System.IO.Path]::GetFullPath($script:repoRoot)
+        if ($normalizedRunParent -eq $normalizedRepo -or
+            -not $normalizedRunParent.StartsWith($normalizedRepo.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            [System.IO.Path]::GetDirectoryName($normalizedRun).TrimEnd('\') -ne $normalizedRunParent -or
+            $normalizedRun -notmatch '\\run-[0-9a-f]+$') {
+            Write-Host "  [FAIL] Path escape: $normalizedRun not under $normalizedRepo" -ForegroundColor Red
+            $script:reportSections['approvals'] = @{ Status = 'FAIL'; Output = 'Path escape prevented' }
+            $script:hasFailures = $true
+        } else {
+            New-Item -ItemType Directory -Path $normalizedRun -Force | Out-Null
+            $tr = Join-Path $govRunRoot 'gov-approval-result.txt'
+            try {
+                Invoke-ChildValidator -ScriptPath $appScript -Arguments @{ BaseRef = 'HEAD~1'; ResultFile = $tr } -Label 'approvals'
+            } finally {
+                if (Test-Path -LiteralPath $normalizedRun) {
+                    Remove-Item -Recurse -Force -LiteralPath $normalizedRun -ErrorAction SilentlyContinue
+                }
+                if ($govRunParentCreated -and (Test-Path -LiteralPath $normalizedRunParent -PathType Container) -and
+                    @(Get-ChildItem -LiteralPath $normalizedRunParent -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+                    Remove-Item -Force -LiteralPath $normalizedRunParent -ErrorAction SilentlyContinue
+                }
+            }
+        }
     } else {
         Write-Host "  [WARN] validate-approvals.ps1 not found" -ForegroundColor Yellow
         $script:reportSections['approvals'] = @{ Status = 'WARN'; Output = 'Script not found' }

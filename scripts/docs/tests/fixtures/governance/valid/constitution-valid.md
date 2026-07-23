@@ -5,13 +5,13 @@
 | Field | Value |
 |---|---|
 | Project | XDev |
-| Version | `1.0.0-rc.4` |
-| State | Candidate |
+| Version | `1.0.0` |
+| State | Ratified |
 | Candidate Date | 2026-07-18 |
-| Ratified Date | Pending |
+| Ratified Date | 2026-07-18 |
 | Approver | `xinyan <zuijiuhjd@foxmail.com>` |
 
-This candidate is for testing validate-constitution.ps1 SelfTest mode.
+This ratified constitution is for testing validate-constitution.ps1 SelfTest mode.
 
 ## Non-Negotiable Principles
 
@@ -67,7 +67,7 @@ Test fixture governance amendment.
 
 | Phase | Status | Approved By | Date | Doc Version | Approval Scope |
 |---|---|---|---|---|---|
-| Constitution Structure | Candidate Draft Authorized | xinyan <zuijiuhjd@foxmail.com> | 2026-07-18 | `1.0.0-rc.4` | Test fixture |
-| Constitution Ratification | Pending | - | - | `1.0.0` | Pending |
+| Constitution Structure | Candidate Draft Authorized | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-18 | `1.0.0-rc.4` | Test fixture |
+| Constitution Ratification | Ratified | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-18 | `1.0.0` | Formal ratification |
 
-**Version**: `1.0.0-rc.4` | **Candidate Date**: 2026-07-18 | **Ratified**: Pending | **Last Amended**: 2026-07-18
+**Version**: `1.0.0` | **Candidate Date**: 2026-07-18 | **Ratified**: 2026-07-18 | **Last Amended**: 2026-07-18

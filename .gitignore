@@ -11,6 +11,7 @@ build/bin/
 build/download-audit-*.json
 build/download-audit-*.md
 build/linkaudit-cache/
+build/test-temp/
 
 # IDE
 .idea/
@@ -48,6 +49,15 @@ progress.json
 # Stray junk (Windows nul device encoding artifacts)
 nul
 nul?
+
+# Governance & CI build reports (generated, not tracked)
+build/p7-*
+build/gov-current.json
+build/linkaudit-current.json
+build/specs-current.json
+build/governance-*.json
+build/governance-*.txt
+build/baseline-*
 
 # Signing keys (public key may be committed; private key never)
 keys/priv.key

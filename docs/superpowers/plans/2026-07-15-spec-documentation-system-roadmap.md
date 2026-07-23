@@ -8,6 +8,25 @@
 
 **技术栈：** Markdown、Git、GitHub Spec Kit 0.12.15、Windows PowerShell 5.1、GitHub Actions、OpenCode/OMO。
 
+## 2026-07-23 执行状态更新
+
+本节覆盖下文的设计时状态，不改写历史路线图正文。
+
+| 子项目 | 当前状态 | 证据 |
+|---|---|---|
+| P1 | Completed | 见恢复入口 |
+| P2A / P2B / P3 | Completed | 见恢复入口 |
+| P4A | Completed | 见恢复入口 |
+| P4B | Completed | `0c97849` |
+| P5 / P6 | Completed | `9a36126`；P6 只创建 7 份 Draft Spec |
+| P7 | Completed | `e91310c`；Constitution `1.0.0` |
+
+P7 后的治理稳定化 Tasks 1-10 已在本地工作树完成，但尚未提交，当前
+只能视为 local working-tree candidate。下一里程碑是重新验证并在明确授权
+后按白名单固化稳定化成果。之后再逐项澄清和批准 7 份 Draft Spec，优先
+处理 `005-test-host-state-snapshot` 及测试隔离问题。远端 CI 验证需要先配置
+remote 并取得明确执行授权。
+
 ## 全局约束
 
 - Constitution 候选版为 `.specify/memory/constitution.md` `1.0.0-rc.2`，尚未正式批准。

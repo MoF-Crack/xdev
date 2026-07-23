@@ -15,7 +15,7 @@
 param(
     [string[]]$Path = @('.'),
     [string]$Report,
-    [string[]]$Exclude = @('node_modules', '.git'),
+    [string[]]$Exclude = @('node_modules', '.git', 'vendor', 'scripts\docs\tests\fixtures'),
     [switch]$SelfTest
 )
 
@@ -54,16 +54,14 @@ function Get-HeadingsFromFile {
 function AnchorFromHeading {
     param([string]$HeadingText)
 
-    # Remove code spans (backtick-enclosed text) from heading
-    $text = $HeadingText -replace '`[^`]+`',''
     # Remove Markdown link syntax: [text](url) -> text
-    $text = $text -replace '\[([^\]]*)\]\([^\)]*\)','$1'
+    $text = $HeadingText -replace '\[([^\]]*)\]\([^\)]*\)','$1'
     # Remove image syntax: ![alt](url) -> alt
     $text = $text -replace '!\[([^\]]*)\]\([^\)]*\)','$1'
     # Convert to lowercase
     $text = $text.ToLowerInvariant()
-    # Remove all characters except lowercase letters, digits, spaces, hyphens
-    $text = $text -replace '[^a-z0-9\s-]',''
+    # Remove punctuation and symbols, but preserve Unicode letters (\p{L}), digits (\p{N}), spaces, and hyphens
+    $text = $text -replace '[^\p{L}\p{N}\s-]',''
     # Replace one or more spaces/hyphens with a single hyphen
     $text = $text -replace '[\s-]+','-'
     # Trim leading/trailing hyphens
@@ -91,10 +89,13 @@ function Extract-MarkdownLinks {
         }
         if ($insideCodeBlock) { continue }
 
+        # Strip inline code spans before link extraction: `...` content replaced with placeholder
+        $lineForLinks = $line -replace '`[^`]+`','`__CODE__`'
+
         # Inline links: [text](url) and ![alt](url)
         # Pattern: match [...](...) but not inside code spans
         $pattern = '(!)?\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)'
-        $matches = [regex]::Matches($line, $pattern)
+        $matches = [regex]::Matches($lineForLinks, $pattern)
         foreach ($m in $matches) {
             $isImage = ($m.Groups[1].Value -eq '!')
             $linkText = $m.Groups[2].Value
@@ -110,7 +111,7 @@ function Extract-MarkdownLinks {
 
         # Reference-style definitions: [ref]: url
         $defPattern = '^\s*\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s+"[^"]*")?\s*$'
-        $defMatches = [regex]::Matches($line, $defPattern)
+        $defMatches = [regex]::Matches($lineForLinks, $defPattern)
         foreach ($m in $defMatches) {
             $url = $m.Groups[2].Value
             $links += [PSCustomObject]@{
@@ -238,14 +239,31 @@ function Resolve-RelativePath {
 # --- SelfTest ---
 
 function Invoke-SelfTest {
-    $dir = Join-Path $env:TEMP 'xdev-validate-links-selftest'
-    Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $selfRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    $stRoot = Join-Path $selfRepoRoot 'build\test-temp\links-selftest'
+    # Path escape protection. The run root must be exactly one run-<guid> child.
+    $normalizedStParent = [System.IO.Path]::GetFullPath($stRoot).TrimEnd('\')
+    $normalizedRepo = [System.IO.Path]::GetFullPath($selfRepoRoot).TrimEnd('\')
+    if ($normalizedStParent -eq $normalizedRepo -or
+        -not $normalizedStParent.StartsWith($normalizedRepo + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host "FATAL: Path escape: $normalizedStParent not under $normalizedRepo" -ForegroundColor Red
+        exit 1
+    }
+    $parentCreated = -not (Test-Path -LiteralPath $normalizedStParent -PathType Container)
+    if ($parentCreated) { New-Item -ItemType Directory -Path $normalizedStParent -Force | Out-Null }
+    $stRoot = Join-Path $normalizedStParent ('run-' + [guid]::NewGuid().ToString('N'))
+    $normalizedSt = [System.IO.Path]::GetFullPath($stRoot).TrimEnd('\')
+    if ([System.IO.Path]::GetDirectoryName($normalizedSt).TrimEnd('\') -ne $normalizedStParent -or
+        $normalizedSt -notmatch '\\run-[0-9a-f]+$') {
+        throw "Unsafe links SelfTest run root: $normalizedSt"
+    }
 
-    # Create minimal valid fixture inline
-    $validDir = Join-Path $dir 'valid'
-    New-Item -ItemType Directory -Path $validDir -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $validDir 'index.md') -Value @"
+    $script:selftestFailed = $false
+    try {
+        # Create minimal valid fixture inline
+        $validDir = Join-Path $stRoot 'valid'
+        New-Item -ItemType Directory -Path $validDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $validDir 'index.md') -Value @"
 # Test File
 
 See [other page](./other.md#intro).
@@ -254,7 +272,7 @@ See [other page](./other.md#intro).
 
 End here.
 "@ -Encoding utf8
-    Set-Content -LiteralPath (Join-Path $validDir 'other.md') -Value @"
+        Set-Content -LiteralPath (Join-Path $validDir 'other.md') -Value @"
 # Other Page
 
 ## Intro
@@ -262,98 +280,111 @@ End here.
 Hello.
 "@ -Encoding utf8
 
-    # Create minimal invalid fixture inline
-    $invalidDir = Join-Path $dir 'invalid'
-    New-Item -ItemType Directory -Path $invalidDir -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $invalidDir 'broken.md') -Value @"
+        # Create minimal invalid fixture inline
+        $invalidDir = Join-Path $stRoot 'invalid'
+        New-Item -ItemType Directory -Path $invalidDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $invalidDir 'broken.md') -Value @"
 # Broken
 
 [missing](./nope.md) and [#bad-anchor](#bad-anchor).
 "@ -Encoding utf8
 
-    # Test 1: valid fixture should pass
-    $errors = @()
-    $script:errors = @()
-    $mdFiles = Get-ChildItem -LiteralPath $validDir -Filter '*.md' -Recurse -File
-    foreach ($f in $mdFiles) {
-        $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8
-        if (-not $content) { $content = '' }
-        $links = Extract-MarkdownLinks $content $f.FullName
-        foreach ($link in $links) {
-            Validate-Link -SourceFile $link.File -Line $link.Line -Url $link.Url -RootDir $validDir
+        # Test 1: valid fixture should pass
+        $errors = @()
+        $script:errors = @()
+        $mdFiles = Get-ChildItem -LiteralPath $validDir -Filter '*.md' -Recurse -File
+        foreach ($f in $mdFiles) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8
+            if (-not $content) { $content = '' }
+            $links = Extract-MarkdownLinks $content $f.FullName
+            foreach ($link in $links) {
+                Validate-Link -SourceFile $link.File -Line $link.Line -Url $link.Url -RootDir $validDir
+            }
+        }
+        if ($script:errors.Count -ne 0) {
+            Write-Host "  [FAIL] valid fixture: expected 0 errors, got $($script:errors.Count)" -ForegroundColor Red
+            foreach ($e in $script:errors) { Write-Host "    $($e.File):$($e.Line) $($e.Error)" }
+            $script:selftestFailed = $true; return
+        }
+        Write-Host "  [OK]   valid fixture: no errors" -ForegroundColor Green
+
+        # Test 2: invalid fixture should have errors
+        $script:errors = @()
+        $mdFiles = Get-ChildItem -LiteralPath $invalidDir -Filter '*.md' -Recurse -File
+        foreach ($f in $mdFiles) {
+            $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8
+            if (-not $content) { $content = '' }
+            $links = Extract-MarkdownLinks $content $f.FullName
+            foreach ($link in $links) {
+                Validate-Link -SourceFile $link.File -Line $link.Line -Url $link.Url -RootDir $invalidDir
+            }
+        }
+        if ($script:errors.Count -eq 0) {
+            Write-Host "  [FAIL] invalid fixture: expected some errors, got 0" -ForegroundColor Red
+            $script:selftestFailed = $true; return
+        }
+        Write-Host "  [OK]   invalid fixture: $($script:errors.Count) error(s) found (expected)" -ForegroundColor Green
+
+        # Test 3: anchor generation
+        $testCases = @(
+            @{ Heading = 'My Heading'; Want = 'my-heading' },
+            @{ Heading = 'Hello World 123'; Want = 'hello-world-123' },
+            @{ Heading = '## Special @#$ Chars!'; Want = 'special-chars' },
+            @{ Heading = '  Trim Me  '; Want = 'trim-me' },
+            @{ Heading = '`code` in heading'; Want = 'code-in-heading' },
+            @{ Heading = 'Code `in` Heading'; Want = 'code-in-heading' },
+            @{ Heading = '`env.uni.yaml`'; Want = 'envuniyaml' }
+        )
+        $anchorFailures = 0
+        foreach ($tc in $testCases) {
+            $got = AnchorFromHeading -HeadingText $tc.Heading
+            if ($got -ne $tc.Want) {
+                Write-Host "  [FAIL] AnchorFromHeading('$($tc.Heading)'): got '$got' want '$($tc.Want)'" -ForegroundColor Red
+                $anchorFailures++
+            }
+        }
+        if ($anchorFailures -eq 0) {
+            Write-Host "  [OK]   AnchorFromHeading: all $($testCases.Count) cases pass" -ForegroundColor Green
+        } else {
+            $script:selftestFailed = $true; return
+        }
+
+        # Test 4: external URL skip
+        $skipTests = @(
+            @{ Url = 'https://example.com'; Want = $true },
+            @{ Url = 'http://example.com/page'; Want = $true },
+            @{ Url = 'mailto:a@b.com'; Want = $true },
+            @{ Url = './relative/file.md'; Want = $false },
+            @{ Url = '#anchor'; Want = $false },
+            @{ Url = '../img.png'; Want = $false }
+        )
+        $skipFailures = 0
+        foreach ($tc in $skipTests) {
+            $got = Test-ShouldSkip $tc.Url
+            if ($got -ne $tc.Want) {
+                Write-Host "  [FAIL] Test-ShouldSkip('$($tc.Url)'): got $got want $($tc.Want)" -ForegroundColor Red
+                $skipFailures++
+            }
+        }
+        if ($skipFailures -eq 0) {
+            Write-Host "  [OK]   Test-ShouldSkip: all $($skipTests.Count) cases pass" -ForegroundColor Green
+        } else {
+            $script:selftestFailed = $true; return
+        }
+
+        Write-Host ''
+        Write-Host 'SelfTest passed (4/4)' -ForegroundColor Green
+    } finally {
+        if (Test-Path -LiteralPath $normalizedSt) {
+            Remove-Item -Recurse -Force -LiteralPath $normalizedSt -ErrorAction SilentlyContinue
+        }
+        if ($parentCreated -and (Test-Path -LiteralPath $normalizedStParent -PathType Container) -and
+            @(Get-ChildItem -LiteralPath $normalizedStParent -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+            Remove-Item -Force -LiteralPath $normalizedStParent -ErrorAction SilentlyContinue
         }
     }
-    if ($script:errors.Count -ne 0) {
-        Write-Host "  [FAIL] valid fixture: expected 0 errors, got $($script:errors.Count)" -ForegroundColor Red
-        foreach ($e in $script:errors) { Write-Host "    $($e.File):$($e.Line) $($e.Error)" }
-        exit 1
-    }
-    Write-Host "  [OK]   valid fixture: no errors" -ForegroundColor Green
 
-    # Test 2: invalid fixture should have errors
-    $script:errors = @()
-    $mdFiles = Get-ChildItem -LiteralPath $invalidDir -Filter '*.md' -Recurse -File
-    foreach ($f in $mdFiles) {
-        $content = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8
-        if (-not $content) { $content = '' }
-        $links = Extract-MarkdownLinks $content $f.FullName
-        foreach ($link in $links) {
-            Validate-Link -SourceFile $link.File -Line $link.Line -Url $link.Url -RootDir $invalidDir
-        }
-    }
-    if ($script:errors.Count -eq 0) {
-        Write-Host "  [FAIL] invalid fixture: expected some errors, got 0" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "  [OK]   invalid fixture: $($script:errors.Count) error(s) found (expected)" -ForegroundColor Green
-
-    # Test 3: anchor generation
-    $testCases = @(
-        @{ Heading = 'My Heading'; Want = 'my-heading' },
-        @{ Heading = 'Hello World 123'; Want = 'hello-world-123' },
-        @{ Heading = '## Special @#$ Chars!'; Want = 'special-chars' },
-        @{ Heading = '  Trim Me  '; Want = 'trim-me' },
-        @{ Heading = '`code` in heading'; Want = 'in-heading' }
-    )
-    $anchorFailures = 0
-    foreach ($tc in $testCases) {
-        $got = AnchorFromHeading -HeadingText $tc.Heading
-        if ($got -ne $tc.Want) {
-            Write-Host "  [FAIL] AnchorFromHeading('$($tc.Heading)'): got '$got' want '$($tc.Want)'" -ForegroundColor Red
-            $anchorFailures++
-        }
-    }
-    if ($anchorFailures -eq 0) {
-        Write-Host "  [OK]   AnchorFromHeading: all $($testCases.Count) cases pass" -ForegroundColor Green
-    } else {
-        exit 1
-    }
-
-    # Test 4: external URL skip
-    $skipTests = @(
-        @{ Url = 'https://example.com'; Want = $true },
-        @{ Url = 'http://example.com/page'; Want = $true },
-        @{ Url = 'mailto:a@b.com'; Want = $true },
-        @{ Url = './relative/file.md'; Want = $false },
-        @{ Url = '#anchor'; Want = $false },
-        @{ Url = '../img.png'; Want = $false }
-    )
-    $skipFailures = 0
-    foreach ($tc in $skipTests) {
-        $got = Test-ShouldSkip $tc.Url
-        if ($got -ne $tc.Want) {
-            Write-Host "  [FAIL] Test-ShouldSkip('$($tc.Url)'): got $got want $($tc.Want)" -ForegroundColor Red
-            $skipFailures++
-        }
-    }
-    if ($skipFailures -eq 0) {
-        Write-Host "  [OK]   Test-ShouldSkip: all $($skipTests.Count) cases pass" -ForegroundColor Green
-    } else {
-        exit 1
-    }
-
-    Write-Host ''
-    Write-Host 'SelfTest passed (4/4)' -ForegroundColor Green
+    if ($script:selftestFailed) { exit 1 }
 }
 
 # --- Main ---
@@ -371,8 +402,9 @@ foreach ($p in $Path) {
     }
 }
 
-# Build exclusion patterns
-$excludePattern = $Exclude -join '|'
+# Build exclusion patterns (escape for regex safety)
+$excludePatterns = $Exclude | ForEach-Object { [regex]::Escape($_) }
+$excludePattern = $excludePatterns -join '|'
 
 # Find all Markdown files
 $mdFiles = @(Get-ChildItem -LiteralPath $Path -Filter '*.md' -Recurse -File -ErrorAction SilentlyContinue |
@@ -406,6 +438,16 @@ foreach ($f in $mdFiles) {
         Validate-Link -SourceFile $link.File -Line $link.Line -Url $link.Url -RootDir (Get-Location).Path
     }
 }
+
+# Dedup errors by File+Line+Link to avoid duplicate reports
+$deduped = @{}
+foreach ($e in $script:errors) {
+    $key = "$($e.File)|$($e.Line)|$($e.Link)"
+    if (-not $deduped.ContainsKey($key)) {
+        $deduped[$key] = $e
+    }
+}
+$script:errors = @($deduped.Values)
 
 # Report
 if ($script:errors.Count -gt 0) {
