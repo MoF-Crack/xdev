@@ -203,12 +203,15 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          set +e
           VER="${TAG#v}"
           # Build the GUI variant (Wails bindings)
           go build -tags bindings -ldflags="-s -w" -o xdev-gui .
+          echo "=== go build exit: $? ==="
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
+          rm -rf "$APPDIR"
           mkdir -p "$APPDIR/usr/bin"
           cp xdev-gui "$APPDIR/usr/bin/xdev-gui"
           chmod +x "$APPDIR/usr/bin/xdev-gui"
@@ -227,6 +230,8 @@ jobs:
 
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
+          # Also place a .DirIcon (required by some AppImage tools)
+          cp build/appicon.png "$APPDIR/.DirIcon"
 
           # AppImage entry point (AppRun must be a file, not a directory)
           cat > "$APPDIR/AppRun" <<'APPRUN'
@@ -236,16 +241,32 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          # Download appimagetool and extract it (FUSE is not available on runners)
+          echo "=== AppDir contents ==="
+          find "$APPDIR" -type f
+
+          # Download appimagetool
           wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
-          # Extract the appimagetool AppImage (may warn, continue anyway)
-          ./appimagetool --appimage-extract 2>&1 || true
-          ls -la squashfs-root/ 2>/dev/null || true
-          # Run the extracted appimagetool binary directly
-          squashfs-root/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage" 2>&1 || \
-            python3 squashfs-root/usr/lib/appimagetool/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage" 2>&1
 
+          # Extract appimagetool (FUSE not available on GitHub runners)
+          echo "=== Extracting appimagetool ==="
+          ./appimagetool --appimage-extract
+          echo "=== extract exit: $? ==="
+          ls -la squashfs-root/ || echo "squashfs-root not found"
+
+          echo "=== Running appimagetool ==="
+          export ARCH=x86_64
+          squashfs-root/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
+          APPIMAGE_EXIT=$?
+          echo "=== appimagetool exit: $APPIMAGE_EXIT ==="
+
+          if [ $APPIMAGE_EXIT -ne 0 ]; then
+            echo "=== Trying python fallback ==="
+            python3 squashfs-root/usr/lib/appimagetool/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
+            echo "=== python fallback exit: $? ==="
+          fi
+
+          ls -la dist/ || true
           rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
 
       - name: Create Release
