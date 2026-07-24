@@ -228,8 +228,7 @@ jobs:
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
 
-          # AppImage metadata
-          mkdir -p "$APPDIR/AppRun" 2>/dev/null || true
+          # AppImage entry point (AppRun must be a file, not a directory)
           cat > "$APPDIR/AppRun" <<'APPRUN'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
