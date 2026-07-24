@@ -4,9 +4,9 @@
 > **状态**：Current recovery index（旧执行清单已被当前事实取代）
 > **记录日期**：2026-07-16
 > **执行基线**：`93069f89082bcb685cb833c69bae64e157bf4b20`
-> **当前更新**：2026-07-23
+> **当前更新**：2026-07-25
 
-## 2026-07-23 当前恢复状态
+## 2026-07-25 当前恢复状态
 
 本节是当前恢复入口。后续第 1-5 节保留为历史执行基线，不能覆盖本节
 或 Git 事实。
@@ -20,13 +20,20 @@
 - 治理稳定化 Tasks 1-10 已通过本地验证，并由提交 `640c506`
   固化实现、测试、fixtures 和计划归档。归档勘误是
   `docs/superpowers/plans/archive/2026/2026-07-18-governance-stabilization.errata.md`。
-- 当前第一个未完成事项不是重做 P4B/P5/P7，而是重新验证稳定化工作树，
-  取得明确提交授权，并按白名单暂存和提交。
+- **远端 CI + Governance 已全绿**（commit `99cc4db`，三平台 build+test
+  全部 success）；Spec 005 已 Accepted 并实现（`internal/testkit/hostsnapshot`）。
+- **GitHub Release v0.1.0 已发布**，12 个产物全部由 GitHub Actions 在线构建：
+  - Linux: `xdev-linux-amd64/arm64-v0.1.0.tar.gz`、`.deb`、`.rpm`
+  - Windows: `xdev-windows-amd64-v0.1.0.zip`
+  - macOS: `xdev-darwin-amd64/arm64-v0.1.0.tar.gz`、`xdev-darwin-arm64-v0.1.0.dmg`、`xdev-gui-darwin-arm64-v0.1.0.dmg`
+  - AppImage: `xdev-gui-0.1.0-x86_64.AppImage`
+  - Release 页面: https://github.com/MoF-Crack/xdev/releases/tag/v0.1.0
+- Release workflow 支持增量构建：重新打 tag 时跳过 release 中已有的产物
+  （`Check existing release assets` step + `overwrite_files: false`）。
 - `docs/progress-and-defects-analysis.md`、`docs/pending-work-plan.md` 和
   `docs/roadmap.md` 的历史正文是 Snapshot/Frozen 材料，不是恢复事实来源。
 
-当前恢复顺序：先读归档勘误，再运行 `git status`/`git log`，然后运行
-fresh 治理验证。未获得明确授权前不得暂存或提交。
+当前恢复顺序：本文件已是最新状态。下一步工作见本文件末尾"下一步计划"节。
 
 ## 1. 当前事实
 
@@ -171,7 +178,7 @@ P1 完成后可并行：
 - 不在测试 21/21 通过前安装 approval gate hook。
 - 不把 `rc.3` 候选内容批准描述为 Constitution `1.0.0` 正式批准。
 - 不自行写入用户未明确作出的批准。
-- 不修改 `.github/workflows/ci.yaml`。
+- ~~不修改 `.github/workflows/ci.yaml`。~~（已完成：CI/Release workflow 已稳定）
 - 不执行 `git add .`、`git add -A`、`git reset --hard` 或 `git clean -fd`。
 - `keys/priv.key` 永远不得暂存或提交。
 
@@ -179,7 +186,7 @@ P1 完成后可并行：
 
 新会话或上下文压缩后：
 
-1. 先读取本文件顶部“2026-07-23 当前恢复状态”和治理稳定化归档勘误；
+1. 先读取本文件顶部"2026-07-25 当前恢复状态"和治理稳定化归档勘误；
 2. 运行 `git status --short --branch` 和 `git log --oneline -5`；
 3. 运行 approval gate 聚焦测试，记录通过/失败数；
 4. 从第一个未满足退出条件的阶段继续；
@@ -200,4 +207,41 @@ P1 完成后可并行：
 | P4B 历史迁移 | Completed | 提交 `0c97849` |
 | P5/P6 | Completed | 提交 `9a36126`；P6 仅创建 7 份 Draft Spec |
 | P7 正式批准 | Completed | 提交 `e91310c`；Constitution `1.0.0` |
-| 治理稳定化 Task 1-10 | Locally committed candidate | 本地验证与归档流程已完成；提交 `640c506`，远端 CI 尚未验证 |
+| 治理稳定化 Task 1-10 | Completed | 本地验证 + 归档；提交 `640c506` |
+| 远端 CI 验证 | Completed | commit `99cc4db`，三平台 build+test 全部 success |
+| Spec 005 宿主快照 | Accepted | `internal/testkit/hostsnapshot`；提交 `43193ee` |
+| GitHub Release v0.1.0 | Completed | 12 产物在线构建；tag `v0.1.0` @ commit `a360d7f` |
+| Release 增量构建 | Completed | `Check existing release assets` + `overwrite_files: false`；commit `a360d7f` |
+
+## 6. 下一步计划
+
+### 短期（可选，按优先级）
+
+1. **Dependabot 漏洞处理**：GitHub 报告 25 个漏洞（8 critical, 5 high, 12 moderate）。
+   这是独立议题，不影响 CI/Release，但应在下一个版本前处理。
+
+2. **Node 20 deprecation**：CI 中 `actions/checkout@v4`、`actions/setup-go@v5`、
+   `actions/setup-node@v4`、`actions/upload-artifact@v4` 仍使用 Node 20（当前被
+   forced to Node 24，仅为警告）。升级到使用 Node 24 的 action 版本可消除警告。
+
+3. **Release 签名**：当前 release job 的 `Sign manifests` step 因无
+   `XDEV_SIGNING_PRIVATE_KEY` secret 而跳过。配置签名 secret 后，release 产物
+   将自动嵌入公钥并签名 manifest。
+
+4. **GUI 变体全平台覆盖**：当前 AppImage 仅 x86_64，DMG 仅 arm64。
+   可增加 linux-arm64 AppImage 和 darwin-amd64 DMG 覆盖。
+
+5. **SHA256SUMS 校验文件**：release 中未包含校验和文件。
+   可在 release job 末尾生成 `SHA256SUMS` + `SHA256SUMS.sig` 上传。
+
+### 中期
+
+6. **7 份 Draft Feature Spec 推进**：P6 创建的 7 份 Spec 仍为 Draft，
+   需逐份走澄清→批准→计划→实现→验收流程。
+
+7. **Spec 005 SC-004**：宿主快照 ≤5% 开销验证仍 deferred。
+   全包 TestMain 覆盖受 import cycle 限制，需设计绕行方案。
+
+8. **版本号策略**：当前 `v0.1.0` 是首个 release。后续应建立
+   semver 策略（patch 修 bug / minor 加功能 / major 破坏性变更），
+   并在 release notes 中记录变更类型。
