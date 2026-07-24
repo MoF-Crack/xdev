@@ -151,6 +151,54 @@ jobs:
           tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev
           rm -f xdev
 
+      - name: Build Linux .deb and .rpm packages
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"   # 0.1.0
+          ARCH_DEB_amd64="amd64"
+          ARCH_RPM_amd64="x86_64"
+          ARCH_DEB_arm64="arm64"
+          ARCH_RPM_arm64="aarch64"
+
+          # Install fpm (Ruby gem) — pre-installed Ruby on ubuntu runners
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ruby ruby-dev rpm
+          sudo gem install fpm --no-document
+
+          for GOARCH in amd64 arm64; do
+            # Build the binary for this arch
+            eval "DEB_ARCH=\$ARCH_DEB_${GOARCH}"
+            eval "RPM_ARCH=\$ARCH_RPM_${GOARCH}"
+            GOOS=linux GOARCH="$GOARCH" go build -ldflags="-s -w" -o "xdev-${GOARCH}" .
+
+            # Stage a minimal FHS layout
+            PKGROOT="$(mktemp -d)"
+            mkdir -p "$PKGROOT/usr/bin"
+            cp "xdev-${GOARCH}" "$PKGROOT/usr/bin/xdev"
+            chmod +x "$PKGROOT/usr/bin/xdev"
+
+            # .deb
+            fpm -s dir -t deb \
+              -n xdev -v "$VER" -a "$DEB_ARCH" \
+              --description "Cross-platform development environment manager (CLI/TUI/GUI)" \
+              --url "https://github.com/MoF-Crack/xdev" \
+              --license MIT \
+              -C "$PKGROOT" \
+              -p "dist/xdev-${VER}-linux-${GOARCH}.deb"
+
+            # .rpm
+            fpm -s dir -t rpm \
+              -n xdev -v "$VER" -a "$RPM_ARCH" \
+              --description "Cross-platform development environment manager (CLI/TUI/GUI)" \
+              --url "https://github.com/MoF-Crack/xdev" \
+              --license MIT \
+              -C "$PKGROOT" \
+              -p "dist/xdev-${VER}-linux-${GOARCH}.rpm"
+
+            rm -rf "$PKGROOT" "xdev-${GOARCH}"
+          done
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
