@@ -115,17 +115,41 @@ jobs:
           ./xdev sign-manifests --manifests-dir manifests --priv-key keys/priv.key
 
       - name: Build all platforms
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           mkdir -p dist
           LDFLAGS="-s -w"
           if [ -n "$XDEV_SIGNING_PUBLIC_KEY" ]; then
             LDFLAGS="$LDFLAGS -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
           fi
-          GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/xdev-linux-amd64 .
-          GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/xdev-linux-arm64 .
-          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/xdev-windows-amd64.exe .
-          GOOS=darwin   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/xdev-darwin-amd64 .
-          GOOS=darwin   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/xdev-darwin-arm64 .
+          VER="${TAG#v}"   # strip leading 'v' → 0.1.0
+
+          # linux-amd64
+          GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
+          tar -czf "dist/xdev-linux-amd64-v${VER}.tar.gz" xdev
+          rm -f xdev
+
+          # linux-arm64
+          GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
+          tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
+          rm -f xdev
+
+          # windows-amd64
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev.exe .
+          (cd "$(dirname xdev.exe)" && 7z a -tzip "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe) || \
+            zip -j "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe
+          rm -f xdev.exe
+
+          # darwin-amd64
+          GOOS=darwin   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
+          tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev
+          rm -f xdev
+
+          # darwin-arm64
+          GOOS=darwin   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
+          tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev
+          rm -f xdev
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
