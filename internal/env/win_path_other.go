@@ -132,3 +132,7 @@ func DeleteEnvVar(name, level string) error {
 func EnumEnvVars(level string) ([]EnvPair, error) {
 	return nil, nil
 }
+
+// UpdateShimDirInUserPath is a no-op on non-Windows platforms.
+// PATH updates for shim directories are handled via shell RC injection there.
+func UpdateShimDirInUserPath(oldDir, newDir string) {}
