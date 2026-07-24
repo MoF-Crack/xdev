@@ -87,6 +87,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check existing release assets
+        id: check_assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Query existing assets for this tag; export the list so build
+          # steps can skip artifacts that are already present.
+          EXISTING=""
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets >/dev/null 2>&1; then
+            EXISTING="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tr '\n' ' ')"
+          fi
+          echo "Existing assets: $EXISTING"
+          # Export as env var for step-level conditionals
+          echo "EXISTING_ASSETS=$EXISTING" >> "$GITHUB_ENV"
+          # Also export a per-asset "exists" flag for cleaner if: conditions
+          for name in $EXISTING; do
+            safe="$(echo "$name" | tr '.-' '__')"
+            echo "HAS_${safe}=1" >> "$GITHUB_ENV"
+          done
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -126,30 +147,50 @@ jobs:
           VER="${TAG#v}"   # strip leading 'v' → 0.1.0
 
           # linux-amd64
-          GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
-          tar -czf "dist/xdev-linux-amd64-v${VER}.tar.gz" xdev
-          rm -f xdev
+          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-amd64-v${VER}.tar.gz"; then
+            GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
+            tar -czf "dist/xdev-linux-amd64-v${VER}.tar.gz" xdev
+            rm -f xdev
+          else
+            echo "SKIP: xdev-linux-amd64-v${VER}.tar.gz already exists"
+          fi
 
           # linux-arm64
-          GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
-          tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
-          rm -f xdev
+          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-arm64-v${VER}.tar.gz"; then
+            GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
+            tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
+            rm -f xdev
+          else
+            echo "SKIP: xdev-linux-arm64-v${VER}.tar.gz already exists"
+          fi
 
           # windows-amd64
-          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev.exe .
-          (cd "$(dirname xdev.exe)" && 7z a -tzip "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe) || \
-            zip -j "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe
-          rm -f xdev.exe
+          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-windows-amd64-v${VER}.zip"; then
+            GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev.exe .
+            (cd "$(dirname xdev.exe)" && 7z a -tzip "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe) || \
+              zip -j "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe
+            rm -f xdev.exe
+          else
+            echo "SKIP: xdev-windows-amd64-v${VER}.zip already exists"
+          fi
 
           # darwin-amd64
-          GOOS=darwin   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
-          tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev
-          rm -f xdev
+          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-amd64-v${VER}.tar.gz"; then
+            GOOS=darwin   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
+            tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev
+            rm -f xdev
+          else
+            echo "SKIP: xdev-darwin-amd64-v${VER}.tar.gz already exists"
+          fi
 
           # darwin-arm64
-          GOOS=darwin   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
-          tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev
-          rm -f xdev
+          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-arm64-v${VER}.tar.gz"; then
+            GOOS=darwin   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
+            tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev
+            rm -f xdev
+          else
+            echo "SKIP: xdev-darwin-arm64-v${VER}.tar.gz already exists"
+          fi
 
       - name: Build Linux .deb and .rpm packages
         env:
@@ -161,45 +202,66 @@ jobs:
           ARCH_DEB_arm64="arm64"
           ARCH_RPM_arm64="aarch64"
 
+          # Skip entirely if all 4 packages already exist
+          SKIP_DEB_AMD64=0; SKIP_RPM_AMD64=0; SKIP_DEB_ARM64=0; SKIP_RPM_ARM64=0
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-${VER}-linux-amd64.deb" && SKIP_DEB_AMD64=1
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-${VER}-linux-amd64.rpm" && SKIP_RPM_AMD64=1
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-${VER}-linux-arm64.deb" && SKIP_DEB_ARM64=1
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-${VER}-linux-arm64.rpm" && SKIP_RPM_ARM64=1
+
+          if [ $SKIP_DEB_AMD64 -eq 1 ] && [ $SKIP_RPM_AMD64 -eq 1 ] && [ $SKIP_DEB_ARM64 -eq 1 ] && [ $SKIP_RPM_ARM64 -eq 1 ]; then
+            echo "SKIP: all .deb and .rpm packages already exist"
+            exit 0
+          fi
+
           # Install fpm (Ruby gem) — pre-installed Ruby on ubuntu runners
           sudo apt-get update -qq
           sudo apt-get install -y -qq ruby ruby-dev rpm
           sudo gem install fpm --no-document
 
           for GOARCH in amd64 arm64; do
-            # Build the binary for this arch
             eval "DEB_ARCH=\$ARCH_DEB_${GOARCH}"
             eval "RPM_ARCH=\$ARCH_RPM_${GOARCH}"
+            eval "SKIP_DEB=\$SKIP_DEB_$(echo $GOARCH | tr a-z A-Z)"
+            eval "SKIP_RPM=\$SKIP_RPM_$(echo $GOARCH | tr a-z A-Z)"
+
+            if [ "$SKIP_DEB" -eq 1 ] && [ "$SKIP_RPM" -eq 1 ]; then
+              echo "SKIP: linux-$GOARCH deb and rpm already exist"
+              continue
+            fi
+
             GOOS=linux GOARCH="$GOARCH" go build -ldflags="-s -w" -o "xdev-${GOARCH}" .
 
-            # Stage a minimal FHS layout
             PKGROOT="$(mktemp -d)"
             mkdir -p "$PKGROOT/usr/bin"
             cp "xdev-${GOARCH}" "$PKGROOT/usr/bin/xdev"
             chmod +x "$PKGROOT/usr/bin/xdev"
 
-            # .deb
-            fpm -s dir -t deb \
-              -n xdev -v "$VER" -a "$DEB_ARCH" \
-              --description "Cross-platform development environment manager (CLI/TUI/GUI)" \
-              --url "https://github.com/MoF-Crack/xdev" \
-              --license MIT \
-              -C "$PKGROOT" \
-              -p "dist/xdev-${VER}-linux-${GOARCH}.deb"
+            if [ "$SKIP_DEB" -ne 1 ]; then
+              fpm -s dir -t deb \
+                -n xdev -v "$VER" -a "$DEB_ARCH" \
+                --description "Cross-platform development environment manager (CLI/TUI/GUI)" \
+                --url "https://github.com/MoF-Crack/xdev" \
+                --license MIT \
+                -C "$PKGROOT" \
+                -p "dist/xdev-${VER}-linux-${GOARCH}.deb"
+            fi
 
-            # .rpm
-            fpm -s dir -t rpm \
-              -n xdev -v "$VER" -a "$RPM_ARCH" \
-              --description "Cross-platform development environment manager (CLI/TUI/GUI)" \
-              --url "https://github.com/MoF-Crack/xdev" \
-              --license MIT \
-              -C "$PKGROOT" \
-              -p "dist/xdev-${VER}-linux-${GOARCH}.rpm"
+            if [ "$SKIP_RPM" -ne 1 ]; then
+              fpm -s dir -t rpm \
+                -n xdev -v "$VER" -a "$RPM_ARCH" \
+                --description "Cross-platform development environment manager (CLI/TUI/GUI)" \
+                --url "https://github.com/MoF-Crack/xdev" \
+                --license MIT \
+                -C "$PKGROOT" \
+                -p "dist/xdev-${VER}-linux-${GOARCH}.rpm"
+            fi
 
             rm -rf "$PKGROOT" "xdev-${GOARCH}"
           done
 
       - name: Build Linux AppImage
+        if: ${{ !contains(env.EXISTING_ASSETS, 'AppImage') }}
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -258,6 +320,7 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          overwrite_files: false
 
   release-macos:
     needs: build
@@ -269,6 +332,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check existing release assets
+        id: check_assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          EXISTING=""
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets >/dev/null 2>&1; then
+            EXISTING="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tr '\n' ' ')"
+          fi
+          echo "Existing assets: $EXISTING"
+          echo "EXISTING_ASSETS=$EXISTING" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -299,32 +375,50 @@ jobs:
             LDFLAGS="$LDFLAGS -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
           fi
 
+          SKIP_CLI_DMG=0; SKIP_GUI_DMG=0
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-arm64-v${VER}.dmg" && SKIP_CLI_DMG=1
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-gui-darwin-arm64-v${VER}.dmg" && SKIP_GUI_DMG=1
+
+          if [ $SKIP_CLI_DMG -eq 1 ] && [ $SKIP_GUI_DMG -eq 1 ]; then
+            echo "SKIP: both macOS DMGs already exist"
+            exit 0
+          fi
+
           # Build CLI for both architectures
           GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev-amd64 .
           GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev-arm64 .
 
-          # Build GUI variant (Wails bindings)
-          GOARCH=arm64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
-
           # Create DMG for CLI (arm64 universal-ready)
-          STAGING="xdev-dmg-staging"
-          mkdir -p "$STAGING"
-          cp xdev-arm64 "$STAGING/xdev"
-          chmod +x "$STAGING/xdev"
-          hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
-          rm -rf "$STAGING"
+          if [ $SKIP_CLI_DMG -ne 1 ]; then
+            STAGING="xdev-dmg-staging"
+            mkdir -p "$STAGING"
+            cp xdev-arm64 "$STAGING/xdev"
+            chmod +x "$STAGING/xdev"
+            hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
+            rm -rf "$STAGING"
+          else
+            echo "SKIP: xdev-darwin-arm64-v${VER}.dmg already exists"
+          fi
 
           # Create DMG for GUI (arm64)
-          mkdir -p "$STAGING"
-          cp xdev-gui-arm64 "$STAGING/xdev-gui"
-          chmod +x "$STAGING/xdev-gui"
-          hdiutil create -volname "XDev GUI" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-gui-darwin-arm64-v${VER}.dmg"
-          rm -rf "$STAGING"
+          if [ $SKIP_GUI_DMG -ne 1 ]; then
+            GOARCH=arm64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
+            STAGING="xdev-dmg-staging"
+            mkdir -p "$STAGING"
+            cp xdev-gui-arm64 "$STAGING/xdev-gui"
+            chmod +x "$STAGING/xdev-gui"
+            hdiutil create -volname "XDev GUI" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-gui-darwin-arm64-v${VER}.dmg"
+            rm -rf "$STAGING"
+            rm -f xdev-gui-arm64
+          else
+            echo "SKIP: xdev-gui-darwin-arm64-v${VER}.dmg already exists"
+          fi
 
-          rm -f xdev-amd64 xdev-arm64 xdev-gui-arm64
+          rm -f xdev-amd64 xdev-arm64
 
       - name: Upload macOS DMG to Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.dmg
           generate_release_notes: true
+          overwrite_files: false
