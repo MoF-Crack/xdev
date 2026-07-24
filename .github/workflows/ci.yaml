@@ -236,12 +236,11 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          # Download appimagetool
+          # Download appimagetool and extract it (FUSE is not available on runners)
           wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
-
-          ARCHITECTURE=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage" || \
-            ARCH=x86_64 ./appimagetool "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
+          ./appimagetool --appimage-extract >/dev/null 2>&1 || true
+          squashfs-root/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
 
           rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
 
