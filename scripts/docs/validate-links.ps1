@@ -1,8 +1,8 @@
-# scripts/docs/validate-links.ps1
+﻿# scripts/docs/validate-links.ps1
 #
 # Markdown document link validator.
 # Checks relative file paths and heading anchors in Markdown files.
-# Does NOT check external URLs (http/https) — those are out of scope.
+# Does NOT check external URLs (http/https) - those are out of scope.
 #
 # Usage:
 #   ./scripts/docs/validate-links.ps1 -Path ./docs
@@ -463,7 +463,7 @@ if ($script:errors.Count -gt 0) {
         }
         Write-Host "  $displayPath" -ForegroundColor Yellow
         foreach ($e in $g.Group) {
-            Write-Host "    line $($e.Line): $($e.Error) — $($e.Link)" -ForegroundColor Red
+            Write-Host ("    line {0}: {1} - {2}" -f $e.Line, $e.Error, $e.Link) -ForegroundColor Red
         }
         Write-Host ''
     }
