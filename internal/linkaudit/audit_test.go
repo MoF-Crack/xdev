@@ -391,7 +391,6 @@ func TestAuditFullCacheAndPerRowChecksums(t *testing.T) {
 }
 
 func TestProbeRangeLengthLimitAndHEADFallback(t *testing.T) {
-	var written atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead {
 			w.Header().Set("Content-Length", "999999")
@@ -412,22 +411,22 @@ func TestProbeRangeLengthLimitAndHEADFallback(t *testing.T) {
 			w.WriteHeader(405)
 			return
 		}
-		w.WriteHeader(200)
-		for i := 0; i < 200000; i++ {
-			if _, err := w.Write([]byte{'P'}); err != nil {
-				return
-			}
-			written.Add(1)
-		}
+		// Respond 206 with a valid zip payload so archive detection passes.
+		// The total length (200000) is advertised via Content-Range; the
+		// client must report it without downloading the full body.
+		w.Header().Set("Content-Range", "bytes 0-65535/200000")
+		w.WriteHeader(206)
+		_, _ = w.Write(zipPayload)
 	}))
 	defer large.Close()
-	_ = auditOne(t, large.URL+"/large.zip", linkaudit.ModeProbe, "")
-	// ModeProbe caps client reads at ~64KiB via io.LimitReader, but the server
-	// may successfully flush somewhat more (64KiB + transport buffers) before
-	// the client close propagates. We assert only that it did NOT download the
-	// full 200000 bytes.
-	if got := written.Load(); got > 130000 {
-		t.Fatalf("probe server wrote %d bytes (mode probe should cap reads)", got)
+	res := auditOne(t, large.URL+"/large.zip", linkaudit.ModeProbe, "")
+	// Probe must pass and report the total length from Content-Range without
+	// downloading the full body.
+	if res.FailureReason != linkaudit.StatusPass || res.ContentLength != 200000 {
+		t.Fatalf("large probe result = %+v", res)
+	}
+	if !res.SupportsRange {
+		t.Fatalf("large probe should report SupportsRange=true: %+v", res)
 	}
 	for _, headStatus := range []int{403, 500} {
 		t.Run(fmt.Sprint(headStatus), func(t *testing.T) {
