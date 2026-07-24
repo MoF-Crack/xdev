@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-23-spec-005-accepted-001",
+  "asset_type": "spec",
+  "target_path": "specs/005-test-host-state-snapshot/spec.md",
+  "decision": "approve-state-transition",
+  "target_version": "0.2.0",
+  "target_state": "Accepted",
+  "scope": "Accept Spec 005 implementation evidence: hostsnapshot kit, dual reviews, CI FR-004 note, suite TestMain wiring",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-23",
+  "authorization_text": "同意，按顺序给出方案后执行",
+  "recorded_at": "2026-07-23",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": ["2026-07-23-spec-005-approved-001"]
+}

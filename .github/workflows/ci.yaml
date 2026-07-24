@@ -47,6 +47,8 @@ jobs:
       - name: Build CLI
         run: go build -ldflags="-s -w" -o xdev${{ matrix.ext }} .
 
+      # Spec 005 FR-004: host state snapshot is enabled by package TestMain
+      # (internal/testkit/hostsnapshot). Do not set XDEV_HOST_SNAPSHOT=0 here.
       - name: Test
         run: go test ./... -v -count=1
 

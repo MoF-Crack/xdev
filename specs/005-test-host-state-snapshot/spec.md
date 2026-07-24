@@ -1,7 +1,7 @@
 # Feature Specification: 测试宿主状态快照
 
 > **文档类型**：Feature Spec
-> **状态**：Approved
+> **状态**：Accepted
 > **文档版本**：0.2.0
 > **创建日期**：2026-07-16
 > **最后更新**：2026-07-23
@@ -11,7 +11,7 @@
 
 **Feature Branch**: `005-test-host-state-snapshot`
 **Created**: 2026-07-16
-**Status**: Approved
+**Status**: Accepted
 **Version**: `0.2.0`
 **Input**: Constitution `1.0.0` 原则 II；P6 已知缺口 `005-test-host-state-snapshot`
 
@@ -235,7 +235,9 @@ CI 测试 job 启用宿主状态快照检测；检测失败时 job 失败。
 |---|---|---|---|---|---|
 | P6 Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `0.1.0` | `2026-07-16-p6-005-test-host-state-snapshot-001` |
 | Spec 澄清 | Draft | — | 2026-07-23 | `0.2.0` | Constitution 1.0.0 对齐与边界澄清 |
-| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.2.0` | `2026-07-23-spec-005-approved-001`；用户原文「统一spec005 approve」；批准目标、范围、需求与验收标准 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.2.0` | `2026-07-23-spec-005-approved-001` |
+| 实现验证 | Verified | — | 2026-07-23 | `0.2.0` | 实现 `cac1be9` + 双重审查 + 扩大 TestMain；中间状态记录 |
+| 最终验收 | Accepted | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.2.0` | `2026-07-23-spec-005-accepted-001`；用户原文「同意，按顺序给出方案后执行」 |
 
 ---
 
@@ -244,4 +246,4 @@ CI 测试 job 启用宿主状态快照检测；检测失败时 job 失败。
 | 版本 | 日期 | 变更类型 | 说明 | 批准者 |
 |---|---|---|---|---|
 | 0.1.0 | 2026-07-16 | Initial Draft | 依据 Constitution rc.3 缺口与原则 II 创建 Spec 初稿 | — |
-| 0.2.0 | 2026-07-23 | Clarify + Approve | 关联 Constitution 升级为 `1.0.0`；澄清边界；补充 FR-006/FR-007；Draft→Approved | `xinyan <zuijiuhjd@foxmail.com>` |
+| 0.2.0 | 2026-07-23 | Clarify + Approve + Accept | Constitution 1.0.0；边界澄清；Draft→Approved→Verified→Accepted | `xinyan <zuijiuhjd@foxmail.com>` |
