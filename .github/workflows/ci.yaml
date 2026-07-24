@@ -199,8 +199,125 @@ jobs:
             rm -rf "$PKGROOT" "xdev-${GOARCH}"
           done
 
+      - name: Build Linux AppImage
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          # Build the GUI variant (Wails bindings)
+          go build -tags bindings -ldflags="-s -w" -o xdev-gui .
+
+          # Assemble AppDir
+          APPDIR="XDev.AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          cp xdev-gui "$APPDIR/usr/bin/xdev-gui"
+          chmod +x "$APPDIR/usr/bin/xdev-gui"
+
+          mkdir -p "$APPDIR/usr/share/applications"
+          cat > "$APPDIR/usr/share/applications/xdev-gui.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Name=XDev
+          Comment=Cross-platform development environment manager
+          Exec=xdev-gui
+          Icon=xdev
+          Terminal=false
+          Type=Application
+          Categories=Development;
+          DESKTOP
+
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
+
+          # AppImage metadata
+          mkdir -p "$APPDIR/AppRun" 2>/dev/null || true
+          cat > "$APPDIR/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/xdev-gui" "$@"
+          APPRUN
+          chmod +x "$APPDIR/AppRun"
+
+          # Download appimagetool
+          wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+
+          ARCHITECTURE=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage" || \
+            ARCH=x86_64 ./appimagetool "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
+
+          rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          generate_release_notes: true
+
+  release-macos:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    env:
+      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
+      XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend assets
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build macOS DMG
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          mkdir -p dist
+          LDFLAGS="-s -w"
+          if [ -n "$XDEV_SIGNING_PUBLIC_KEY" ]; then
+            LDFLAGS="$LDFLAGS -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
+          fi
+
+          # Build CLI for both architectures
+          GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev-amd64 .
+          GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev-arm64 .
+
+          # Build GUI variant (Wails bindings)
+          GOARCH=arm64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
+
+          # Create DMG for CLI (arm64 universal-ready)
+          STAGING="xdev-dmg-staging"
+          mkdir -p "$STAGING"
+          cp xdev-arm64 "$STAGING/xdev"
+          chmod +x "$STAGING/xdev"
+          hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
+          rm -rf "$STAGING"
+
+          # Create DMG for GUI (arm64)
+          mkdir -p "$STAGING"
+          cp xdev-gui-arm64 "$STAGING/xdev-gui"
+          chmod +x "$STAGING/xdev-gui"
+          hdiutil create -volname "XDev GUI" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-gui-darwin-arm64-v${VER}.dmg"
+          rm -rf "$STAGING"
+
+          rm -f xdev-amd64 xdev-arm64 xdev-gui-arm64
+
+      - name: Upload macOS DMG to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
           generate_release_notes: true
