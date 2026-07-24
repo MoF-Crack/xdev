@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-23-plan-005-ready-001",
+  "asset_type": "plan",
+  "target_path": "specs/005-test-host-state-snapshot/plan.md",
+  "decision": "approve-state-transition",
+  "target_version": "0.1.0",
+  "target_state": "Ready",
+  "scope": "Approve Plan 005 Planned to Ready and authorize TDD implementation of host state snapshot per agreed plan",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-23",
+  "authorization_text": "同意方案并且实施",
+  "recorded_at": "2026-07-23",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": ["2026-07-23-plan-005-planned-001"]
+}

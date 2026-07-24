@@ -12,11 +12,10 @@
 
 - Spec 权威：`specs/005-test-host-state-snapshot/spec.md` `0.2.0`（**Approved**，`2026-07-23-spec-005-approved-001`）
 - Constitution：`.specify/memory/constitution.md` `1.0.0` 原则 II
-- 正式 Plan：`specs/005-test-host-state-snapshot/plan.md` `0.1.0`（**Planned**，尚未 Ready）
-- 不修改 `.github/workflows/ci.yaml` 直至实现授权明确包含 CI 变更
+- 正式 Plan：`specs/005-test-host-state-snapshot/plan.md` `0.1.0`（**Ready**，`2026-07-23-plan-005-ready-001`）
+- 不修改 `.github/workflows/ci.yaml` 直至实现授权明确包含 CI 变更（本轮可先以测试包默认启用满足 FR-004 本地证据）
 - 不提交 `keys/priv.key`；禁止 `git add .` / `git add -A`
 - Windows 主平台强制；Linux/macOS 分层证据
-- 本文件在 Plan Ready 与实现授权前**不得实施代码**
 - 本文件与 `specs/005-.../plan.md` 保持任务清单同源；以 Spec 目录 `plan.md` 为 Plan 状态权威
 
 ---
@@ -25,9 +24,9 @@
 
 - [x] **Clarify：** Spec 已澄清为 `0.2.0`（Constitution `1.0.0` 对齐、边界条件收敛）
 - [x] **Gate S：** 用户原文「统一spec005 approve」→ Spec `Draft → Approved`（`2026-07-23-spec-005-approved-001`，commit `425cd23`）
-- [x] **Plan 起草：** 正式 `plan.md` 已写入 Planned（`2026-07-23-plan-005-planned-001`）；**不是** Ready
-- [ ] **Gate P：** 用户明确批准 Plan `Planned → Ready`（当前未批准）
-- [ ] 仅在 Gate P + 明确实现授权后进入下列实现任务
+- [x] **Plan 起草：** 正式 `plan.md` Planned（`2026-07-23-plan-005-planned-001`）
+- [x] **Gate P：** 用户原文「同意方案并且实施」→ Plan `Planned → Ready`（`2026-07-23-plan-005-ready-001`）；授权 TDD 实现
+- [x] 进入实现任务
 
 ---
 
@@ -180,7 +179,6 @@ func RunWithHostSnapshot(m *testing.M, opts Options) int {
 
 ## Current Status (2026-07-23)
 
-- Spec `0.2.0` **Approved** (`2026-07-23-spec-005-approved-001`; auth text: 统一spec005 approve)
-- Formal `specs/005-test-host-state-snapshot/plan.md` `0.1.0` **Planned** (not Ready)
-- Implementation **blocked** until user approves Plan `Planned → Ready` and authorizes implementation
-- No product/test code changes in this approval session beyond documentation and approval records
+- Spec `0.2.0` **Approved** (`2026-07-23-spec-005-approved-001`)
+- Plan `0.1.0` **Ready** (`2026-07-23-plan-005-ready-001`; auth text: 同意方案并且实施)
+- Implementation **in progress** (TDD `internal/testkit/hostsnapshot`)

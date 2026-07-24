@@ -1,7 +1,7 @@
 # Implementation Plan: 测试宿主状态快照
 
 > **文档类型**：Implementation Plan
-> **状态**：Planned
+> **状态**：Ready
 > **文档版本**：0.1.0
 > **创建日期**：2026-07-23
 > **最后更新**：2026-07-23
@@ -226,8 +226,8 @@ internal/integration/
 
 | Stage | Status | Approver | Date | Version | Scope |
 |---|---|---|---|---|---|
-| Plan 起草 | Planned | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-planned-001`；澄清/计划授权后写入正式 plan.md；未批准 Planned→Ready |
-| Plan 批准 | Pending | — | — | — | 技术方案 Ready；实现仍需单独授权 |
+| Plan 起草 | Planned | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-planned-001` |
+| Plan 批准 | Ready | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-ready-001`；用户原文「同意方案并且实施」；批准技术方案并授权 TDD 实现 |
 
 ---
 
@@ -236,3 +236,4 @@ internal/integration/
 | 版本 | 日期 | 变更类型 | 说明 | 批准者 |
 |---|---|---|---|---|
 | 0.1.0 | 2026-07-23 | Initial Draft | 依据 Approved spec.md 0.2.0 生成正式 plan.md | — |
+| 0.1.0 | 2026-07-23 | Ready | Planned→Ready；授权实施 | `xinyan <zuijiuhjd@foxmail.com>` |
