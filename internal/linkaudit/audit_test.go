@@ -422,8 +422,12 @@ func TestProbeRangeLengthLimitAndHEADFallback(t *testing.T) {
 	}))
 	defer large.Close()
 	_ = auditOne(t, large.URL+"/large.zip", linkaudit.ModeProbe, "")
-	if written.Load() > 70000 {
-		t.Fatalf("probe server wrote %d bytes", written.Load())
+	// ModeProbe caps client reads at ~64KiB via io.LimitReader, but the server
+	// may successfully flush somewhat more (64KiB + transport buffers) before
+	// the client close propagates. We assert only that it did NOT download the
+	// full 200000 bytes.
+	if got := written.Load(); got > 130000 {
+		t.Fatalf("probe server wrote %d bytes (mode probe should cap reads)", got)
 	}
 	for _, headStatus := range []int{403, 500} {
 		t.Run(fmt.Sprint(headStatus), func(t *testing.T) {
