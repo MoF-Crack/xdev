@@ -26,6 +26,14 @@ type ShellInfo struct {
 	XMDevTag string // sentinel comment marking our injection
 }
 
+// EnvPair represents a name=value environment variable pair.
+// Defined in a portable file so Windows and non-Windows registry helpers
+// share the same type under go vet ./... on all CI platforms.
+type EnvPair struct {
+	Name  string
+	Value string
+}
+
 const marker = "# >>> xdev init >>>"
 const endMarker = "# <<< xdev init <<<"
 

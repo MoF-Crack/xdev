@@ -759,12 +759,6 @@ func DeleteEnvVar(name, level string) error {
 	return nil
 }
 
-// EnvPair represents a name=value environment variable pair.
-type EnvPair struct {
-	Name  string
-	Value string
-}
-
 // EnumEnvVars lists all environment variable values at the given registry level
 // ("user" or "machine"), filtering to development-related names (those in the
 // util.AllowedEnvVarNames whitelist).
