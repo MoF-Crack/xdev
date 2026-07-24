@@ -157,9 +157,11 @@ func TestFindAsset_ExactMatch(t *testing.T) {
 }
 
 func TestFindAsset_NoMatch(t *testing.T) {
+	// Asset must not contain runtime.GOOS+GOARCH substrings, otherwise the
+	// partial-match fallback in findAsset would accept it on Linux/Darwin CI.
 	release := &ReleaseInfo{
 		Assets: []Asset{
-			{Name: "other-tool-linux-amd64", BrowserDownloadURL: "http://example.com/other"},
+			{Name: "other-tool-solaris-sparc", BrowserDownloadURL: "http://example.com/other"},
 		},
 	}
 	_, ok := findAsset(release, "xdev-linux-amd64")
