@@ -237,9 +237,11 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          # Download appimagetool
-          wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
+          # Download appimagetool (use continuous build, more reliable on CI)
+          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
+          file appimagetool
+          ls -la appimagetool
 
           # --appimage-extract-and-run avoids FUSE requirement on CI runners
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
