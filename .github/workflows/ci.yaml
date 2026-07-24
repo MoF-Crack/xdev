@@ -239,8 +239,12 @@ jobs:
           # Download appimagetool and extract it (FUSE is not available on runners)
           wget -q -O appimagetool "https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
-          ./appimagetool --appimage-extract >/dev/null 2>&1 || true
-          squashfs-root/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
+          # Extract the appimagetool AppImage (may warn, continue anyway)
+          ./appimagetool --appimage-extract 2>&1 || true
+          ls -la squashfs-root/ 2>/dev/null || true
+          # Run the extracted appimagetool binary directly
+          squashfs-root/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage" 2>&1 || \
+            python3 squashfs-root/usr/lib/appimagetool/AppRun --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage" 2>&1
 
           rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
 
