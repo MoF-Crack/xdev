@@ -222,16 +222,23 @@ func TestHostOS(t *testing.T) {
 
 func TestHostArch(t *testing.T) {
 	got := plugin.HostArch()
-	expected := runtime.GOARCH
-	switch expected {
-	case "amd64", "arm64", "386":
-		if got != expected {
-			t.Errorf("HostArch() = %q, want %q", got, expected)
+	// HostArch remaps amd64 → x86_64 on Linux/Darwin to match upstream
+	// archive naming; keep Windows amd64 as "amd64".
+	var want string
+	switch runtime.GOARCH {
+	case "amd64":
+		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+			want = "x86_64"
+		} else {
+			want = "amd64"
 		}
+	case "arm64", "386":
+		want = runtime.GOARCH
 	default:
-		if got != expected {
-			t.Errorf("HostArch() = %q, want %q for unknown arch", got, expected)
-		}
+		want = runtime.GOARCH
+	}
+	if got != want {
+		t.Errorf("HostArch() = %q, want %q", got, want)
 	}
 }
 

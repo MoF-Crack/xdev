@@ -1,6 +1,9 @@
 package gui
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestExtractVersion_Semver(t *testing.T) {
 	got := extractVersion("3.12.7")
@@ -105,13 +108,19 @@ func TestIsInsideNodeDir_NonNodePath(t *testing.T) {
 }
 
 func TestIsInsideDir_Subdirectory(t *testing.T) {
-	if !isInsideDir("C:\\XDev\\shims\\node.exe", "C:\\XDev\\shims") {
-		t.Errorf("isInsideDir(%q, %q) = false, want true", "C:\\XDev\\shims\\node.exe", "C:\\XDev\\shims")
+	// Use platform-native separators so filepath.Clean behaves consistently
+	// on Windows and Unix CI runners.
+	file := filepath.Join("XDev", "shims", "node.exe")
+	dir := filepath.Join("XDev", "shims")
+	if !isInsideDir(file, dir) {
+		t.Errorf("isInsideDir(%q, %q) = false, want true", file, dir)
 	}
 }
 
 func TestIsInsideDir_NotSubdirectory(t *testing.T) {
-	if isInsideDir("C:\\Tools\\node.exe", "C:\\XDev\\shims") {
-		t.Errorf("isInsideDir(%q, %q) = true, want false", "C:\\Tools\\node.exe", "C:\\XDev\\shims")
+	file := filepath.Join("Tools", "node.exe")
+	dir := filepath.Join("XDev", "shims")
+	if isInsideDir(file, dir) {
+		t.Errorf("isInsideDir(%q, %q) = true, want false", file, dir)
 	}
 }

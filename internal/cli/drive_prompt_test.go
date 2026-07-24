@@ -1,3 +1,7 @@
+//go:build windows
+
+// Drive-letter install prompts are a Windows-only UX. Keep these tests off
+// Linux/macOS CI where path separators and volume roots differ.
 package cli
 
 import (
