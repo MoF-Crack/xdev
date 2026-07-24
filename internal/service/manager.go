@@ -288,10 +288,9 @@ func (m *Manager) Start(name string) error {
 	cmd.Stdout = stdoutLog
 	cmd.Stderr = stderrLog
 
-	// On Windows, CREATE_NEW_CONSOLE creates a new console for the service process
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr.CreationFlags = 0x00000010 // CREATE_NEW_CONSOLE
-	}
+	// On Windows, CREATE_NEW_CONSOLE creates a new console for the service process.
+	// Must use a build-tagged helper: syscall.SysProcAttr.CreationFlags is Windows-only.
+	util.DetachConsole(cmd)
 
 	if err := cmd.Start(); err != nil {
 		stdoutLog.Close()
