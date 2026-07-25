@@ -314,6 +314,7 @@ jobs:
           rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
 
       - name: Build Linux AppImage (arm64)
+        continue-on-error: true
         if: ${{ !contains(env.EXISTING_ASSETS, 'aarch64.AppImage') }}
         env:
           TAG: ${{ github.ref_name }}
@@ -372,9 +373,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd dist
-          sha256sum * > SHA256SUMS
-          echo "=== SHA256SUMS ==="
-          cat SHA256SUMS
+          # Only generate if there are files (may be nearly empty with incremental)
+          if ls * 1>/dev/null 2>&1; then
+            sha256sum * > SHA256SUMS
+            echo "=== SHA256SUMS ==="
+            cat SHA256SUMS
+          else
+            echo "No files to checksum"
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -497,9 +503,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd dist
-          sha256sum *.dmg > SHA256SUMS-darwin
-          echo "=== SHA256SUMS-darwin ==="
-          cat SHA256SUMS-darwin
+          # Only generate if there are DMG files (may be empty with incremental)
+          if ls *.dmg 1>/dev/null 2>&1; then
+            sha256sum *.dmg > SHA256SUMS-darwin
+            echo "=== SHA256SUMS-darwin ==="
+            cat SHA256SUMS-darwin
+          else
+            echo "No DMG files to checksum"
+          fi
 
       - name: Upload macOS DMG to Release
         uses: softprops/action-gh-release@v2
