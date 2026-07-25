@@ -260,14 +260,14 @@ jobs:
             rm -rf "$PKGROOT" "xdev-${GOARCH}"
           done
 
-      - name: Build Linux AppImage
-        if: ${{ !contains(env.EXISTING_ASSETS, 'AppImage') }}
+      - name: Build Linux AppImage (amd64)
+        if: ${{ !contains(env.EXISTING_ASSETS, 'x86_64.AppImage') }}
         env:
           TAG: ${{ github.ref_name }}
         run: |
           VER="${TAG#v}"
-          # Build the GUI variant (Wails bindings)
-          go build -tags bindings -ldflags="-s -w" -o xdev-gui .
+          # Build the GUI variant (Wails bindings) for amd64
+          GOARCH=amd64 go build -tags bindings -ldflags="-s -w" -o xdev-gui .
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
@@ -307,13 +307,69 @@ jobs:
           # Download appimagetool (use continuous build, more reliable on CI)
           wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
           chmod +x appimagetool
-          file appimagetool
-          ls -la appimagetool
 
           # --appimage-extract-and-run avoids FUSE requirement on CI runners
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
 
           rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
+
+      - name: Build Linux AppImage (arm64)
+        if: ${{ !contains(env.EXISTING_ASSETS, 'aarch64.AppImage') }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          # Cross-compile GUI variant for arm64
+          GOARCH=arm64 go build -tags bindings -ldflags="-s -w" -o xdev-gui-arm64 .
+
+          # Assemble AppDir
+          APPDIR="XDev-arm64.AppDir"
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin"
+          cp xdev-gui-arm64 "$APPDIR/usr/bin/xdev-gui"
+          chmod +x "$APPDIR/usr/bin/xdev-gui"
+
+          mkdir -p "$APPDIR/usr/share/applications"
+          cat > "$APPDIR/usr/share/applications/xdev-gui.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Name=XDev
+          Comment=Cross-platform development environment manager
+          Exec=xdev-gui
+          Icon=xdev
+          Terminal=false
+          Type=Application
+          Categories=Development;
+          DESKTOP
+          cp "$APPDIR/usr/share/applications/xdev-gui.desktop" "$APPDIR/xdev-gui.desktop"
+
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
+          cp build/appicon.png "$APPDIR/xdev.png"
+          cp build/appicon.png "$APPDIR/.DirIcon"
+
+          cat > "$APPDIR/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/xdev-gui" "$@"
+          APPRUN
+          chmod +x "$APPDIR/AppRun"
+
+          # Download arm64 appimagetool
+          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+          chmod +x appimagetool
+
+          ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-aarch64.AppImage"
+
+          rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui-arm64
+
+      - name: Generate SHA256SUMS
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -375,12 +431,13 @@ jobs:
             LDFLAGS="$LDFLAGS -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
           fi
 
-          SKIP_CLI_DMG=0; SKIP_GUI_DMG=0
+          SKIP_CLI_DMG=0; SKIP_GUI_ARM64_DMG=0; SKIP_GUI_AMD64_DMG=0
           echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-arm64-v${VER}.dmg" && SKIP_CLI_DMG=1
-          echo "$EXISTING_ASSETS" | grep -qw "xdev-gui-darwin-arm64-v${VER}.dmg" && SKIP_GUI_DMG=1
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-gui-darwin-arm64-v${VER}.dmg" && SKIP_GUI_ARM64_DMG=1
+          echo "$EXISTING_ASSETS" | grep -qw "xdev-gui-darwin-amd64-v${VER}.dmg" && SKIP_GUI_AMD64_DMG=1
 
-          if [ $SKIP_CLI_DMG -eq 1 ] && [ $SKIP_GUI_DMG -eq 1 ]; then
-            echo "SKIP: both macOS DMGs already exist"
+          if [ $SKIP_CLI_DMG -eq 1 ] && [ $SKIP_GUI_ARM64_DMG -eq 1 ] && [ $SKIP_GUI_AMD64_DMG -eq 1 ]; then
+            echo "SKIP: all macOS DMGs already exist"
             exit 0
           fi
 
@@ -401,7 +458,7 @@ jobs:
           fi
 
           # Create DMG for GUI (arm64)
-          if [ $SKIP_GUI_DMG -ne 1 ]; then
+          if [ $SKIP_GUI_ARM64_DMG -ne 1 ]; then
             GOARCH=arm64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
             STAGING="xdev-dmg-staging"
             mkdir -p "$STAGING"
@@ -414,11 +471,36 @@ jobs:
             echo "SKIP: xdev-gui-darwin-arm64-v${VER}.dmg already exists"
           fi
 
+          # Create DMG for GUI (amd64)
+          if [ $SKIP_GUI_AMD64_DMG -ne 1 ]; then
+            GOARCH=amd64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-amd64 .
+            STAGING="xdev-dmg-staging"
+            mkdir -p "$STAGING"
+            cp xdev-gui-amd64 "$STAGING/xdev-gui"
+            chmod +x "$STAGING/xdev-gui"
+            hdiutil create -volname "XDev GUI" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-gui-darwin-amd64-v${VER}.dmg"
+            rm -rf "$STAGING"
+            rm -f xdev-gui-amd64
+          else
+            echo "SKIP: xdev-gui-darwin-amd64-v${VER}.dmg already exists"
+          fi
+
           rm -f xdev-amd64 xdev-arm64
+
+      - name: Generate macOS SHA256SUMS
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          sha256sum *.dmg > SHA256SUMS-darwin
+          echo "=== SHA256SUMS-darwin ==="
+          cat SHA256SUMS-darwin
 
       - name: Upload macOS DMG to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.dmg
+          files: |
+            dist/*.dmg
+            dist/SHA256SUMS-darwin
           generate_release_notes: true
           overwrite_files: false
