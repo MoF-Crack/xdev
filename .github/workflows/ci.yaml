@@ -421,7 +421,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd dist
-          # Only generate if there are files (may be nearly empty with incremental)
           if ls * 1>/dev/null 2>&1; then
             sha256sum * > SHA256SUMS
             echo "=== SHA256SUMS ==="
@@ -430,10 +429,26 @@ jobs:
             echo "No files to checksum"
           fi
 
+      - name: Generate structured changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Generate changelog from commits since last tag using git-cliff
+          cargo install git-cliff 2>/dev/null || true
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            git-cliff --tag "$TAG" --range "$PREV_TAG..HEAD" -o CHANGELOG-fragment.md 2>/dev/null || \
+              echo "git-cliff not available, using GitHub auto-generated notes"
+          else
+            echo "No previous tag, using GitHub auto-generated notes"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*
+            CHANGELOG-fragment.md
           generate_release_notes: true
           overwrite_files: false
 
