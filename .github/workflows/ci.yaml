@@ -354,11 +354,16 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
+          # Install qemu-user-static for arm64 emulation on x86_64 runner
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+
           # Download arm64 appimagetool
           wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
           chmod +x appimagetool
 
-          ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-aarch64.AppImage"
+          # Run arm64 appimagetool via qemu-user-static emulation
+          ARCH=arm64 qemu-aarch64-static ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-aarch64.AppImage"
 
           rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui-arm64
 
