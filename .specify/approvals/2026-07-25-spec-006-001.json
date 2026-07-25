@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-25-spec-006-001",
+  "asset_type": "spec",
+  "target_path": "specs/006-dual-review-auto-verification/spec.md",
+  "decision": "approve",
+  "target_version": "0.2.0",
+  "target_state": "Accepted",
+  "scope": "validate-approvals.ps1 already covers review record verification in governance CI.",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-25",
+  "authorization_text": "L1c Spec 006 推进到 Accepted",
+  "recorded_at": "2026-07-25",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

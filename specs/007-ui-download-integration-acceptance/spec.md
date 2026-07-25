@@ -1,17 +1,17 @@
 # Feature Specification: UI/下载源计划剩余集成验收
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
-> **文档版本**：0.1.0
+> **状态**：Accepted
+> **文档版本**：0.2.0
 > **创建日期**：2026-07-16
-> **最后更新**：2026-07-16
+> **最后更新**：2026-07-25
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义 UI/下载源历史计划剩余集成验收事项的目标、范围、需求和验收标准
 > **替代文档**：`docs/history/implementation-plans/2026-07-11-xdev-ui-download-sources.md`（历史冻结）、`docs/pending-work-plan.md`（待拆分）
 
 **Feature Branch**: `007-ui-download-integration-acceptance`
 **Created**: 2026-07-16
-**Status**: Draft
+**Status**: Accepted
 **Input**: Constitution `1.0.0-rc.3` 第 255 行；`docs/pending-work-plan.md`
 
 ---
@@ -254,7 +254,7 @@ SHA audit 完成后，所有修改了 sha256 值的 manifest YAML 文件的 `.ya
 | 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
 |---|---|---|---|---|---|
 | P6 Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `0.1.0` | `2026-07-16-p6-007-ui-download-integration-acceptance-001` |
-| Spec 批准 | Pending | — | — | — | 整体 Spec 的目标、范围、需求和验收标准 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-25 | `0.2.0` | `2026-07-25-spec-007-001` search 命令无匹配退出码修复已完成；其余 4 项技术债(SHA audit/重签/不可修复工具文档/TRANSIENT 重试)实现 deferred |
 
 ---
 

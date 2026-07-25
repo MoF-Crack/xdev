@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-25-spec-007-001",
+  "asset_type": "spec",
+  "target_path": "specs/007-ui-download-integration-acceptance/spec.md",
+  "decision": "approve",
+  "target_version": "0.2.0",
+  "target_state": "Accepted",
+  "scope": "Search command no-match exit code fixed. Remaining 4 items (SHA audit, re-sign, unfixable tools docs, TRANSIENT retry) deferred to separate implementation tasks.",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-25",
+  "authorization_text": "L1d Spec 007 推进到 Accepted",
+  "recorded_at": "2026-07-25",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

@@ -32,7 +32,8 @@ func newSearchCmd() *cobra.Command {
 			_, reg := loadCatalogAndRegistry()
 			matches := reg.Search(args[0])
 			if len(matches) == 0 {
-				return fmt.Errorf("no tool matches %q", args[0])
+				fmt.Printf("no tool matches %q\n", args[0])
+				return nil
 			}
 			printToolTable(matches, false)
 			return nil

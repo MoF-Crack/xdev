@@ -1,17 +1,17 @@
 # Feature Specification: CI Go 工具链版本一致性
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
-> **文档版本**：0.1.0
+> **状态**：Accepted
+> **文档版本**：0.2.0
 > **创建日期**：2026-07-16
-> **最后更新**：2026-07-16
+> **最后更新**：2026-07-25
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义 CI Go 工具链版本一致性检查的目标、范围、需求和验收标准
 > **替代文档**：无
 
 **Feature Branch**: `001-ci-go-version-consistency`
 **Created**: 2026-07-16
-**Status**: Draft
+**Status**: Accepted
 **Input**: Constitution `1.0.0-rc.3` 原则 VII，第 92 行：CI Go 工具链版本必须与 `go.mod` 的 `go` 指令一致
 
 ---
@@ -212,7 +212,7 @@ Constitution `1.0.0-rc.3` 原则 VII 明确规定：
 
 | 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
 |---|---|---|---|---|---|
-| Spec 批准 | Pending | — | — | — | 整体 Spec 的目标、范围、需求和验收标准 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-25 | `0.2.0` | `2026-07-25-spec-001-001` CI Go 版本一致性检查脚本和 CI step 已实现 |
 | P6 Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `0.1.0` | `2026-07-16-p6-001-ci-go-version-consistency-001` |
 
 ---
