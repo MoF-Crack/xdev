@@ -90,6 +90,34 @@ func Audit(ctx context.Context, req Request) ([]Result, error) {
 		}(i, entry)
 	}
 	wg.Wait()
+
+	// Retry TRANSIENT_ERROR results up to 3 times with short backoff
+	// (Spec 007 #4: transient network errors should not permanently block).
+	// Only retries if there are TRANSIENT errors; backoff is 2s to keep tests fast.
+	maxRetries := 3
+	for retry := 0; retry < maxRetries; retry++ {
+		transientIdx := []int{}
+		for i, r := range results {
+			if r.FailureReason == StatusTransientError {
+				transientIdx = append(transientIdx, i)
+			}
+		}
+		if len(transientIdx) == 0 {
+			break
+		}
+		if retry > 0 {
+			select {
+			case <-time.After(2 * time.Second):
+			case <-ctx.Done():
+				break
+			}
+		}
+		for _, i := range transientIdx {
+			ev := inspect(ctx, req, client, entries[i])
+			results[i] = resultFrom(entries[i], ev, req.Mode, req.Clock())
+		}
+	}
+
 	sortResults(results)
 	return results, nil
 }
