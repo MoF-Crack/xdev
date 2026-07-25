@@ -1,17 +1,17 @@
 # Feature Specification: 发布签名硬门禁
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
-> **文档版本**：0.1.0
+> **状态**：Accepted
+> **文档版本**：0.2.0
 > **创建日期**：2026-07-16
-> **最后更新**：2026-07-16
+> **最后更新**：2026-07-25
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义发布签名硬门禁的目标、范围、需求和验收标准
 > **替代文档**：无
 
 **Feature Branch**: `003-release-signing-hard-gate`
 **Created**: 2026-07-16
-**Status**: Draft
+**Status**: Accepted
 **Input**: Constitution `1.0.0-rc.3` 当前已知执行缺口第 298 行；安全例外 `docs/security/exceptions/manifest-signature-verification.md`
 
 ---
@@ -219,7 +219,7 @@ Constitution 原则 I 要求"正式发布必须启用 manifest 签名验证"，�
 | 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
 |---|---|---|---|---|---|
 | P6 Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `0.1.0` | `2026-07-16-p6-003-release-signing-hard-gate-001` |
-| Spec 批准 | Pending | — | — | — | 整体 Spec 的目标、范围、需求和验收标准 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-25 | `0.2.0` | `2026-07-25-spec-003-001` 整体 Spec 的目标、范围、需求和验收标准；实现已在 release job 中加入 "Verify signing secrets" 硬门禁 step |
 
 ---
 

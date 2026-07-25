@@ -1,17 +1,17 @@
 # Feature Specification: 三平台发布产物同源
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
-> **文档版本**：0.1.0
+> **状态**：Accepted
+> **文档版本**：0.2.0
 > **创建日期**：2026-07-16
-> **最后更新**：2026-07-16
+> **最后更新**：2026-07-25
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义三平台发布产物同源验证的目标、范围、需求和验收标准
 > **替代文档**：无
 
 **Feature Branch**: `004-triple-platform-release`
 **Created**: 2026-07-16
-**Status**: Draft
+**Status**: Accepted
 **Input**: Constitution `1.0.0-rc.3` 原则 V，第 65-73 行
 
 ---
@@ -213,7 +213,7 @@ Constitution `1.0.0-rc.3` 原则 V 要求：
 | 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
 |---|---|---|---|---|---|
 | P6 Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-16 | `0.1.0` | `2026-07-16-p6-004-triple-platform-release-001` |
-| Spec 批准 | Pending | — | — | — | 整体 Spec 的目标、范围、需求和验收标准 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-25 | `0.2.0` | `2026-07-25-spec-004-001` 整体 Spec 的目标、范围、需求和验收标准；实现已在 ldflags 中注入 GitCommit 和 BuildDate |
 
 ---
 

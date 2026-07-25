@@ -8,6 +8,9 @@ const Version = "1.2.2-alpha"
 // BuildDate is set via -ldflags at build time.
 var BuildDate = ""
 
+// GitCommit is set via -ldflags at build time (Spec 004: provenance).
+var GitCommit = ""
+
 // Get returns the version string.
 func Get() string {
 	return Version

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-25-spec-004-001",
+  "asset_type": "spec",
+  "target_path": "specs/004-triple-platform-release/spec.md",
+  "decision": "approve",
+  "target_version": "0.2.0",
+  "target_state": "Accepted",
+  "scope": "Approve Spec 004 triple-platform release provenance: inject GitCommit and BuildDate via ldflags for build traceability.",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-25",
+  "authorization_text": "M4 Spec 004 推进到 Accepted",
+  "recorded_at": "2026-07-25",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}
