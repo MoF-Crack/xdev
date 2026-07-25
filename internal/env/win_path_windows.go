@@ -476,60 +476,25 @@ func SetUserEnvVar(name, value string) error {
 		if !util.IsAllowedEnvVarName(name) {
 			return "", fmt.Errorf("env var %q is not in the allowed whitelist — refusing to read from registry", name)
 		}
-		var key uintptr
-		envName, err := syscall.UTF16PtrFromString(`Environment`)
-		if err != nil {
-			return "", err
-		}
-
-		ret, _, _ := procRegOpenKeyExW.Call(
-			_HKEY_CURRENT_USER,
-			uintptr(unsafe.Pointer(envName)),
-			0,
-			_KEY_QUERY_VALUE,
-			uintptr(unsafe.Pointer(&key)),
-		)
-		if ret != 0 {
-			return "", fmt.Errorf("RegOpenKeyExW (get env var) failed: error %d", ret)
-		}
-		defer procRegCloseKey.Call(key)
-
-		valueName, err := syscall.UTF16PtrFromString(name)
-		if err != nil {
-			return "", err
-		}
-
-		// First call: determine buffer size
-		var bufSize uint32 = 0
-		var regType uint32 = 0
-		procRegQueryValueExW.Call(
-			key,
-			uintptr(unsafe.Pointer(valueName)),
-			0,
-			uintptr(unsafe.Pointer(&regType)),
-			0,
-			uintptr(unsafe.Pointer(&bufSize)),
-		)
-
-		if bufSize == 0 {
+		all := GetAllUserEnvVars()
+		v, ok := all[name]
+		if !ok {
 			return "", fmt.Errorf("env var %q not found", name)
 		}
+		return v, nil
+	}
 
-		// Second call: read the value
-		buf := make([]uint16, bufSize/2+1)
-		ret, _, _ = procRegQueryValueExW.Call(
-			key,
-			uintptr(unsafe.Pointer(valueName)),
-			0,
-			uintptr(unsafe.Pointer(&regType)),
-			uintptr(unsafe.Pointer(&buf[0])),
-			uintptr(unsafe.Pointer(&bufSize)),
-		)
-		if ret != 0 {
-			return "", fmt.Errorf("RegQueryValueExW (env var %s) failed: error %d", name, ret)
+	// GetUserEnvVarsBatch reads a subset of user environment variables in a
+	// single registry open/close cycle (SC-004 optimization for hostsnapshot).
+	func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
+		all := GetAllUserEnvVars()
+		result := make(map[string]string, len(names))
+		for _, n := range names {
+			if util.IsAllowedEnvVarName(n) {
+				result[n] = all[n]
+			}
 		}
-
-		return syscall.UTF16ToString(buf), nil
+		return result, nil
 	}
 
 	// DeleteUserEnvVar deletes a user-level environment variable from HKCU\Environment.

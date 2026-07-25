@@ -41,15 +41,12 @@ func Capture(opts Options) (Snapshot, error) {
 		Env:   make(map[string]string, len(opts.EnvKeys)),
 		Files: make(map[string]FileMeta, len(opts.Paths)),
 	}
-	for _, k := range opts.EnvKeys {
-		if k == "" {
-			continue
-		}
-		v, err := env.GetUserEnvVar(k)
-		if err != nil {
-			// Missing key is represented as empty string.
-			v = ""
-		}
+	// Batch-read all env vars in a single registry cycle (SC-004 optimization).
+	envMap, err := env.GetUserEnvVarsBatch(opts.EnvKeys)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("hostsnapshot: batch env read: %w", err)
+	}
+	for k, v := range envMap {
 		s.Env[k] = v
 	}
 	for _, p := range opts.Paths {

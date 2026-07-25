@@ -73,6 +73,16 @@ func GetUserEnvVar(name string) (string, error) {
 	return os.Getenv(name), nil
 }
 
+// GetUserEnvVarsBatch reads multiple env vars at once. On non-Windows this
+// simply reads from the process environment (already fast, no syscall overhead).
+func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
+	result := make(map[string]string, len(names))
+	for _, n := range names {
+		result[n] = os.Getenv(n)
+	}
+	return result, nil
+}
+
 // DeleteUserEnvVar is not supported on non-Windows platforms.
 func DeleteUserEnvVar(name string) error {
 	return fmt.Errorf("persistent environment variable deletion is not supported on this platform (Windows registry only)")
