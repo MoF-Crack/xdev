@@ -126,8 +126,20 @@ jobs:
           npm ci
           npm run build
 
+      - name: Verify signing secrets (hard gate)
+        run: |
+          # Spec 003 FR-001/FR-002: Release must fail if signing keys are missing
+          if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Missing required secret: XDEV_SIGNING_PRIVATE_KEY"
+            exit 1
+          fi
+          if [ -z "$XDEV_SIGNING_PUBLIC_KEY" ]; then
+            echo "::error::Missing required secret: XDEV_SIGNING_PUBLIC_KEY"
+            exit 1
+          fi
+          echo "Signing secrets verified"
+
       - name: Sign manifests
-        if: env.XDEV_SIGNING_PRIVATE_KEY != ''
         run: |
           mkdir -p keys
           echo "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
@@ -430,6 +442,19 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Verify signing secrets (hard gate)
+        run: |
+          # Spec 003 FR-001/FR-002: Release must fail if signing keys are missing
+          if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Missing required secret: XDEV_SIGNING_PRIVATE_KEY"
+            exit 1
+          fi
+          if [ -z "$XDEV_SIGNING_PUBLIC_KEY" ]; then
+            echo "::error::Missing required secret: XDEV_SIGNING_PUBLIC_KEY"
+            exit 1
+          fi
+          echo "Signing secrets verified"
 
       - name: Build macOS DMG
         env:
