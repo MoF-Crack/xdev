@@ -4,36 +4,27 @@
 > **状态**：Current recovery index（旧执行清单已被当前事实取代）
 > **记录日期**：2026-07-16
 > **执行基线**：`93069f89082bcb685cb833c69bae64e157bf4b20`
-> **当前更新**：2026-07-25
+> **当前更新**：2026-07-25 (Phase 2)
 
-## 2026-07-25 当前恢复状态
+## 2026-07-25 当前恢复状态（Phase 2）
 
 本节是当前恢复入口。后续第 1-5 节保留为历史执行基线，不能覆盖本节
 或 Git 事实。
 
 - Constitution 已正式批准为 `1.0.0`，Ratified 日期为 `2026-07-16`。
-- P4B 已由提交 `0c97849` 完成。
-- P5/P6 已由提交 `9a36126` 完成到各自计划范围；7 份 Feature Spec
-  仍为 Draft，不表示已批准或实现。
-- P7 已由提交 `e91310c` 完成，Constitution `1.0.0` 和 governance CI
-  blocking mode 已进入 `HEAD`。
-- 治理稳定化 Tasks 1-10 已通过本地验证，并由提交 `640c506`
-  固化实现、测试、fixtures 和计划归档。归档勘误是
-  `docs/superpowers/plans/archive/2026/2026-07-18-governance-stabilization.errata.md`。
-- **远端 CI + Governance 已全绿**（commit `99cc4db`，三平台 build+test
-  全部 success）；Spec 005 已 Accepted 并实现（`internal/testkit/hostsnapshot`）。
-- **GitHub Release v0.1.0 已发布**，12 个产物全部由 GitHub Actions 在线构建：
-  - Linux: `xdev-linux-amd64/arm64-v0.1.0.tar.gz`、`.deb`、`.rpm`
-  - Windows: `xdev-windows-amd64-v0.1.0.zip`
-  - macOS: `xdev-darwin-amd64/arm64-v0.1.0.tar.gz`、`xdev-darwin-arm64-v0.1.0.dmg`、`xdev-gui-darwin-arm64-v0.1.0.dmg`
-  - AppImage: `xdev-gui-0.1.0-x86_64.AppImage`
-  - Release 页面: https://github.com/MoF-Crack/xdev/releases/tag/v0.1.0
-- Release workflow 支持增量构建：重新打 tag 时跳过 release 中已有的产物
-  （`Check existing release assets` step + `overwrite_files: false`）。
+- **所有 7 份 Spec 已 Accepted**（001-007），Spec 005 SC-004 deferred。
+- **远端 CI + Governance 全绿**，integration tests 三平台通过。
+- **GitHub Release v0.1.0 + v0.2.0 已发布**。
+  - v0.2.0：15 个产物（含签名 + SHA256SUMS + integration tests gate）。
+  - Release 页面: https://github.com/MoF-Crack/xdev/releases/tag/v0.2.0
+- Release workflow 支持增量构建 + 签名硬门禁 + SHA256SUMS。
+- Dependabot 漏洞从 26 个降到 0 个（全部修复）。
+- C 盘缓存已迁移到 E 盘（npm cache + go-build + .agents via symlink）。
+- 版本号已对齐到 `0.2.0`（`internal/version/version.go` + `frontend/package.json`）。
 - `docs/progress-and-defects-analysis.md`、`docs/pending-work-plan.md` 和
   `docs/roadmap.md` 的历史正文是 Snapshot/Frozen 材料，不是恢复事实来源。
 
-当前恢复顺序：本文件已是最新状态。下一步工作见本文件末尾"下一步计划"节。
+本文件已是最新状态。下一步工作见末尾"下一步计划"节。
 
 ## 1. 当前事实
 
