@@ -581,3 +581,109 @@ jobs:
             dist/SHA256SUMS-darwin
           generate_release_notes: true
           overwrite_files: false
+
+  release-arm64:
+    needs: [build, integration-tests]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04-arm
+    env:
+      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
+      XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check existing release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          EXISTING=""
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets >/dev/null 2>&1; then
+            EXISTING="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tr '\n' ' ')"
+          fi
+          echo "Existing assets: $EXISTING"
+          echo "EXISTING_ASSETS=$EXISTING" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend assets
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify signing secrets (hard gate)
+        run: |
+          if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Missing required secret: XDEV_SIGNING_PRIVATE_KEY"
+            exit 1
+          fi
+          if [ -z "$XDEV_SIGNING_PUBLIC_KEY" ]; then
+            echo "::error::Missing required secret: XDEV_SIGNING_PUBLIC_KEY"
+            exit 1
+          fi
+          echo "Signing secrets verified"
+
+      - name: Build Linux arm64 AppImage
+        if: ${{ !contains(env.EXISTING_ASSETS, 'aarch64.AppImage') }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          go build -tags bindings -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev-gui .
+
+          APPDIR="XDev.AppDir"
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin"
+          cp xdev-gui "$APPDIR/usr/bin/xdev-gui"
+          chmod +x "$APPDIR/usr/bin/xdev-gui"
+
+          mkdir -p "$APPDIR/usr/share/applications"
+          cat > "$APPDIR/usr/share/applications/xdev-gui.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Name=XDev
+          Comment=Cross-platform development environment manager
+          Exec=xdev-gui
+          Icon=xdev
+          Terminal=false
+          Type=Application
+          Categories=Development;
+          DESKTOP
+          cp "$APPDIR/usr/share/applications/xdev-gui.desktop" "$APPDIR/xdev-gui.desktop"
+
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+          cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
+          cp build/appicon.png "$APPDIR/xdev.png"
+          cp build/appicon.png "$APPDIR/.DirIcon"
+
+          cat > "$APPDIR/AppRun" <<'APPRUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/xdev-gui" "$@"
+          APPRUN
+          chmod +x "$APPDIR/AppRun"
+
+          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+          chmod +x appimagetool
+
+          ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-aarch64.AppImage"
+
+          rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
+
+      - name: Upload arm64 AppImage to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.AppImage
+          generate_release_notes: true
+          overwrite_files: false
