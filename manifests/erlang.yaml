@@ -22,6 +22,7 @@ versions:
           sha256: fd70fef67fd458f826f02c097c56792f14e5d9e54234f0e2ff6b9d2fa2c95252
           size: 120000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -29,6 +30,7 @@ versions:
           sha256: c884d64ebeab719bd179a298fe85203a7150db257ae442c31b9a3579a6357dbe
           size: 100000000
           strip: 1
+          requires_proxy: true
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -36,6 +38,7 @@ versions:
           sha256: 97f2a3b1942d513649c47e67de82d5a6ec5f39b423d5cc97e69be0879a033076
           size: 100000000
           strip: 1
+          requires_proxy: true
     - version: 26.2.5
       stable: true
       release: "2024-07-01"
@@ -48,6 +51,7 @@ versions:
           sha256: 8174beedb18223b7e787fd2fbf1b9e2f40005b61be0ac3094c863984d9756a39
           size: 115000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -55,6 +59,7 @@ versions:
           sha256: 3604ced510d26b19153ced69c50ea7e9a5acc15cf0464cd79d183a5bdc6e47ae
           size: 95000000
           strip: 1
+          requires_proxy: true
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -62,6 +67,7 @@ versions:
           sha256: bbd5069967b18c2492b1c12120bca831e30c230b339513b09008fd43452df7dc
           size: 95000000
           strip: 1
+          requires_proxy: true
     - version: 25.3.2
       stable: true
       release: "2023-09-06"
@@ -74,6 +80,7 @@ versions:
           sha256: 0654bd8ff1329c0384daee098d1d1ece6009c4c64c4cdf127076446cd3ceab58
           size: 110000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -81,6 +88,7 @@ versions:
           sha256: 9702a897cd8f5e8efca964e22f4a817949e5fc0f3fe3ea0dc7af901a57c0db98
           size: 90000000
           strip: 1
+          requires_proxy: true
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -88,6 +96,7 @@ versions:
           sha256: 6bc522185dd9dee556c7eb2360546b298263dbe92051a48116869b3669bc36b0
           size: 90000000
           strip: 1
+          requires_proxy: true
 remote:
     type: github
     url: ""

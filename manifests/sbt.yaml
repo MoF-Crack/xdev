@@ -22,6 +22,7 @@ versions:
         sha256: e27d40d5faef41f6768792b21b3fd403669beee709a3c4cc907edf473fa5f077
         size: 7000000
         strip: 0
+        requires_proxy: true
       - os: linux
         arch: x86_64
         format: tar.gz
@@ -30,6 +31,7 @@ versions:
         sha256: a716dd018bd68bc7a95a2dd10337663aa76f443ad6c99deabe5eadd1adfc7639
         size: 6000000
         strip: 0
+        requires_proxy: true
       - os: darwin
         arch: arm64
         format: tar.gz
@@ -38,6 +40,7 @@ versions:
         sha256: a716dd018bd68bc7a95a2dd10337663aa76f443ad6c99deabe5eadd1adfc7639
         size: 6000000
         strip: 0
+        requires_proxy: true
   - version: "1.9.9"
     stable: true
     release: "2024-03-07"
@@ -50,6 +53,7 @@ versions:
         sha256: e296035788dff678c4416f85c6030b51ec2b5f2b6b72e940c80b7763b34bc5d9
         size: 7000000
         strip: 0
+        requires_proxy: true
       - os: linux
         arch: x86_64
         format: tar.gz
@@ -58,6 +62,7 @@ versions:
         sha256: c57cae60c2122ca1bba77184dfb4d0d25fc6c18805394ab36ab6208b0c0f262f
         size: 6000000
         strip: 0
+        requires_proxy: true
 remote:
   type: github
   owner: sbt

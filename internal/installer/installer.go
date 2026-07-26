@@ -450,6 +450,22 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		}
 	}
 
+	// Proxy warning: if the archive explicitly requires a proxy but none
+	// is configured (either via env vars or xdev config), warn the user.
+	if a.RequiresProxy {
+		proxyURL := i.cfg.GetProxyURL("https")
+		envHTTP := os.Getenv("HTTP_PROXY")
+		envHTTPS := os.Getenv("HTTPS_PROXY")
+		envhttp := os.Getenv("http_proxy")
+		envhttps := os.Getenv("https_proxy")
+		if proxyURL == "" && envHTTP == "" && envHTTPS == "" && envhttp == "" && envhttps == "" {
+			log.Printf("[install] WARNING: %s@%s requires a proxy but none is configured", tool, ver)
+			fmt.Fprintf(os.Stderr,
+				"⚠ WARNING: This download requires a proxy to access (GitHub releases may be unreachable in mainland China).\n"+
+					"  Set HTTP_PROXY/HTTPS_PROXY environment variables or configure a proxy in xdev config.\n")
+		}
+	}
+
 	return downloader.Download(ctx, downloader.Options{
 		URL:               url,
 		Dest:              dest,

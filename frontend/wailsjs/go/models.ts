@@ -373,6 +373,7 @@ export namespace gui {
 	    toolName: string;
 	    isValid: boolean;
 	    invalidReason: string;
+	    validationStatus: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EnvVarInfo(source);
@@ -387,6 +388,7 @@ export namespace gui {
 	        this.toolName = source["toolName"];
 	        this.isValid = source["isValid"];
 	        this.invalidReason = source["invalidReason"];
+	        this.validationStatus = source["validationStatus"];
 	    }
 	}
 	export class FavoriteInfo {
@@ -609,6 +611,7 @@ export namespace gui {
 	    category: string;
 	    path: string;
 	    isLua: boolean;
+	    type: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new PluginInfo(source);
@@ -621,6 +624,7 @@ export namespace gui {
 	        this.category = source["category"];
 	        this.path = source["path"];
 	        this.isLua = source["isLua"];
+	        this.type = source["type"];
 	    }
 	}
 	export class TaskInfo {

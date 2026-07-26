@@ -24,6 +24,7 @@ versions:
           sha256: 0d744ad7c08dba213625b73889df1fda281ebd176125b49ad94d3d397fa1b105
           size: 70000000
           strip: 0
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: 7z
@@ -32,6 +33,7 @@ versions:
           sha256: f494e77bf59b0afb998a84fe170bee57a3c85100a3297ad754fac6c7725292ec
           size: 70000000
           strip: 0
+          requires_proxy: true
     - version: 11.2.0
       stable: true
       release: "2022-01-20"
@@ -44,6 +46,7 @@ versions:
           sha256: 6808e313195b8aeda269a2e91dcb0c0e4408ebf8bf66e89077840ae9148c033d
           size: 60000000
           strip: 0
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: 7z
@@ -52,6 +55,7 @@ versions:
           sha256: 39350937bdf7d3a5fb1c9234f6f1a7d955499f90a13dc25fa712878623091786
           size: 60000000
           strip: 0
+          requires_proxy: true
 remote:
     type: github
     url: ""

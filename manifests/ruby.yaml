@@ -23,6 +23,7 @@ versions:
           sha256: d48dbf86b300f0055ab44b0bfc275a40f1957233c5ccfd4590910a3cf8394132
           size: 50000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -43,6 +44,7 @@ versions:
           sha256: 9e1ec977e29a1dc8c24426055c2f19898397bca41d34ef035ad25294673fb940
           size: 48000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -63,6 +65,7 @@ versions:
           sha256: f78295f34ef40345283984a975757b1c05b8ed4321039b7a2c5156f619300fd0
           size: 46000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz

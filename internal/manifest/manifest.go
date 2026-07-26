@@ -119,8 +119,9 @@ type Archive struct {
 	MirrorSHA256 string `yaml:"mirror_sha256,omitempty"` // SHA-256 for mirror_url (if different from official)
 	Size        int64    `yaml:"size"`
 	Strip       int      `yaml:"strip"`
-	InstallArgs []string `yaml:"install_args"`
-	InstallKind string  `yaml:"install_kind,omitempty"` // archive|executable|script; empty => archive
+	InstallArgs    []string `yaml:"install_args"`
+	InstallKind   string  `yaml:"install_kind,omitempty"` // archive|executable|script; empty => archive
+	RequiresProxy bool    `yaml:"requires_proxy,omitempty"` // true if the download URL is unreachable without a proxy (e.g. GitHub releases in mainland China)
 }
 
 // EffectiveKind returns the resolved install kind, defaulting to

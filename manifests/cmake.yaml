@@ -22,6 +22,7 @@ versions:
           sha256: 0cced013661a02eb9af2bd0c327954bf3276fff78efca22c3a6e794a54994ca5
           size: 50000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -30,6 +31,7 @@ versions:
           sha256: 8494b23c206f0b437d0a6d14b30aa2cb0c0294b9edddf4dfd7c8489f1089f444
           size: 48000000
           strip: 1
+          requires_proxy: true
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -38,6 +40,7 @@ versions:
           sha256: 33559f2392e66efc5f8770234b7578ddcf7c1db3e5223d8832b0c0bc72299571
           size: 46000000
           strip: 1
+          requires_proxy: true
     - version: 3.30.5
       stable: true
       release: "2024-09-01"
@@ -50,6 +53,7 @@ versions:
           sha256: 9282a69e0144eccb1c7bed9c5a90474a337ef57a9f67dc6ae7608a05e5155259
           size: 48000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -58,6 +62,7 @@ versions:
           sha256: 58283cf07f495edffcbf0f64383c2524161c6e88acc5a7abec2b8528b3a7d009
           size: 46000000
           strip: 1
+          requires_proxy: true
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -66,6 +71,7 @@ versions:
           sha256: c9906f61518c5fce25bbf6bae6f44d42a5411e76e604d74dcd837b2692958fc6
           size: 44000000
           strip: 1
+          requires_proxy: true
     - version: 3.28.6
       stable: true
       release: "2024-05-01"
@@ -78,6 +84,7 @@ versions:
           sha256: fdcd65ca7ac2011374734ffd4181c44f7d0ccb6dadcba2171e37a5ab28548dda
           size: 45000000
           strip: 1
+          requires_proxy: true
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -86,6 +93,7 @@ versions:
           sha256: 728ff37353de9833c5ecf96986be3adf0345ed248535bc68eea72a26d18e48fe
           size: 43000000
           strip: 1
+          requires_proxy: true
 remote:
     type: github
     url: Kitware/CMake
