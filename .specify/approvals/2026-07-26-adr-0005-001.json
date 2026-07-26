@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-26-adr-0005-001",
+  "asset_type": "adr",
+  "target_path": "docs/adr/0005-hostsnapshot-suite-level-isolation.md",
+  "decision": "approve",
+  "target_version": "1.0",
+  "target_state": "Accepted",
+  "scope": "Record hostsnapshot suite-level test isolation architecture decision",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-26",
+  "authorization_text": "创建 ADR 决策记录",
+  "recorded_at": "2026-07-26",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

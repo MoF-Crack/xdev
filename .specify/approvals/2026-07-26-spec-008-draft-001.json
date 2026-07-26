@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-26-spec-008-draft-001",
+  "asset_type": "spec",
+  "target_path": "specs/008-install-progress-bar/spec.md",
+  "decision": "approve-state-transition",
+  "target_version": "0.1.0",
+  "target_state": "Draft",
+  "scope": "Create Draft Feature Spec for install progress bar optimization",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-26",
+  "authorization_text": "新增工具安装进度条优化 Spec",
+  "recorded_at": "2026-07-26",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

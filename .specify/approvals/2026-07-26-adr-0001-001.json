@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-26-adr-0001-001",
+  "asset_type": "adr",
+  "target_path": "docs/adr/0001-ed25519-manifest-signing.md",
+  "decision": "approve",
+  "target_version": "1.0",
+  "target_state": "Accepted",
+  "scope": "Record Ed25519 manifest signing architecture decision",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-26",
+  "authorization_text": "创建 ADR 决策记录",
+  "recorded_at": "2026-07-26",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

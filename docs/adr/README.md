@@ -45,12 +45,12 @@ docs/adr/NNNN-short-title.md
 [正面和负面影响]
 ```
 
-## 已有决策（待补充 ADR）
+## 已有决策
 
 | # | 决策 | 状态 |
 |---|---|---|
-| 0001 | Ed25519 manifest 签名验证 | 待创建 |
-| 0002 | Wails v2 作为 GUI 框架 | 待创建 |
-| 0003 | Windows 主平台 + 跨平台分层验证 | 待创建 |
-| 0004 | Go cobra CLI 框架 | 待创建 |
-| 0005 | hostsnapshot 套件级测试隔离 | 待创建 |
+| 0001 | Ed25519 manifest 签名验证 | ✅ 已创建 |
+| 0002 | Wails v2 作为 GUI 框架 | ✅ 已创建 |
+| 0003 | Windows 主平台 + 跨平台分层验证 | ✅ 已创建 |
+| 0004 | Go cobra CLI 框架 | ✅ 已创建 |
+| 0005 | hostsnapshot 套件级测试隔离 | ✅ 已创建 |
