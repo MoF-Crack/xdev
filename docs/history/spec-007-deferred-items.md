@@ -25,13 +25,11 @@
 - **结论**：签名文件已存在且完整
 
 ### #3 不可修复工具文档化
-- **状态**：Deferred — 待实施
-- **描述**：Haskell、Kotlin、Ninja、UV 无可用镜像，需创建文档记录
-- **依赖**：无
-- **后续方案**：在 `docs/history/` 下创建 `unfixable-tools.md` 记录每个工具的不可修复原因和替代方案
+- **状态**：✅ Completed (commit `16d81e6`)
+- **描述**：为 Haskell、Kotlin、Ninja、UV 创建文档记录 `docs/history/unfixable-tools.md`
+- **内容**：记录各工具镜像状态（USTC/BFSU/SJTUG 404）、已采取的措施（manifest fallback、CI gate warning、安装器自动 fallback）
 
 ### #4 TRANSIENT 错误重试
-- **状态**：Deferred — 待实施
-- **描述**：16 条 TRANSIENT 下载错误需重试验证或建立 CI 豁免机制
-- **依赖**：无
-- **后续方案**：在 `internal/linkaudit/ci_gate.go` 中增加 `knownTransient` 豁免列表，CI gate 对已记录的 TRANSIENT URL 降级为 warn 而非 block
+- **状态**：✅ Completed (commit `16d81e6`)
+- **描述**：在 `internal/linkaudit/audit.go` 中实现 3 次重试 + 2s backoff
+- **实现**：第一轮 audit 完成后，对 TRANSIENT_ERROR 结果重试最多 3 次，每次间隔 2 秒，使用 context 感知的 backoff
