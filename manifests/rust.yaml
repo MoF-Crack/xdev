@@ -1,4 +1,4 @@
-name: rust
+﻿name: rust
 display_name: Rust (rustup)
 description: The Rust language toolchain installer (rustup). Brings rustc, cargo and rustup under one umbrella.
 homepage: https://rustup.rs/
@@ -20,7 +20,7 @@ versions:
           arch: amd64
           format: exe
           url: https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
-          mirror_url: https://mirrors.ustc.edu.cn/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
+          mirror_url: ""
           sha256: 0cba64265de913f00b50271ac312c97bb20246cf8c19dd034c7a0c9612bfbe39
           size: 12000000
           strip: 0
@@ -60,7 +60,7 @@ versions:
           arch: amd64
           format: exe
           url: https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
-          mirror_url: https://mirrors.ustc.edu.cn/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
+          mirror_url: ""
           sha256: 337cf093d81079e57c93ae86d04525e1e93d5ffd12376b26ab2a0da56db7a3bb
           size: 12000000
           strip: 0
@@ -82,7 +82,7 @@ versions:
           arch: amd64
           format: exe
           url: https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
-          mirror_url: https://mirrors.ustc.edu.cn/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe
+          mirror_url: ""
           sha256: f8b691b95edf7cfeba5562233704a7e5b5a433864686bd4d03431517c65eb7d4
           size: 12000000
           strip: 0

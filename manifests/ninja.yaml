@@ -1,4 +1,4 @@
-name: ninja
+﻿name: ninja
 display_name: Ninja Build
 description: Ninja is a small build system with a focus on speed.
 homepage: https://ninja-build.org/
@@ -15,7 +15,7 @@ versions:
           arch: amd64
           format: zip
           url: https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.12.1/ninja-win.zip
+          mirror_url: ""
           sha256: f550fec705b6d6ff58f2db3c374c2277a37691678d6aba463adcbb129108467a
           size: 300000
           strip: 0

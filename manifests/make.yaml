@@ -1,4 +1,4 @@
-name: make
+﻿name: make
 display_name: GNU Make
 description: GNU Make is a tool which controls the generation of executables and other non-source files of a program.
 homepage: https://www.gnu.org/software/make/
@@ -15,7 +15,7 @@ versions:
           arch: amd64
           format: zip
           url: https://github.com/xpack-dev-tools/windows-build-tools-xpack/releases/download/v4.4.1-3/xpack-windows-build-tools-4.4.1-3-win32-x64.zip
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/xpack-dev-tools/windows-build-tools-xpack/v4.4.1-3/xpack-windows-build-tools-4.4.1-3-win32-x64.zip
+          mirror_url: ""
           sha256: 4eaaef6d3cae6b40897d6191936a98803f328dca57edd0a8520fa1bf9bc106d3
           size: 2600000
           strip: 1

@@ -1,4 +1,4 @@
-name: kotlin
+﻿name: kotlin
 display_name: Kotlin
 description: Modern programming language that makes developers happier.
 homepage: https://kotlinlang.org/
@@ -17,7 +17,7 @@ versions:
           arch: amd64
           format: zip
           url: https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v2.0.21/kotlin-compiler-2.0.21.zip
+          mirror_url: ""
           sha256: 9c9493ef06913a37485ffd7ce8be41b9f4b5acdad036d677634b15232b0506ce
           size: 85000000
           strip: 1
@@ -25,7 +25,7 @@ versions:
           arch: x86_64
           format: zip
           url: https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v2.0.21/kotlin-compiler-2.0.21.zip
+          mirror_url: ""
           sha256: fa6d8fd7834d1e29c6ac4ddd0af4330451afe72ba7f69e5536426b2995a73957
           size: 85000000
           strip: 1
@@ -33,7 +33,7 @@ versions:
           arch: arm64
           format: zip
           url: https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/jetbrains/kotlin/v2.0.21/kotlin-compiler-2.0.21.zip
+          mirror_url: ""
           sha256: fd69cfbbf0684834ec72732611020453945e9be2ecc636ccd250e49a93554559
           size: 85000000
           strip: 1

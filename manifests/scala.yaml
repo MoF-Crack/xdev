@@ -1,4 +1,4 @@
-name: scala
+﻿name: scala
 display_name: Scala
 description: A modern multi-paradigm programming language designed to express common programming patterns in a concise, elegant, and type-safe way.
 homepage: https://www.scala-lang.org/
@@ -21,7 +21,7 @@ versions:
         arch: amd64
         format: zip
         url: https://github.com/scala/scala3/releases/download/3.5.2/scala3-3.5.2.zip
-        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/scala/3.5.2/scala3-3.5.2.zip
+        mirror_url: ""
         sha256: 126ac1885a059cbcbe473e6e3280f8ba29c0f703a41e3e7c74032489f03a4751
         size: 30000000
         strip: 1

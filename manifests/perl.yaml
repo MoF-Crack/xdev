@@ -1,4 +1,4 @@
-name: perl
+﻿name: perl
 display_name: Perl
 description: Highly capable, feature-rich programming language with over 30 years of development.
 homepage: https://www.perl.org/
@@ -17,7 +17,7 @@ versions:
           arch: amd64
           format: zip
           url: https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54001_64bit_UCRT/strawberry-perl-5.40.0.1-64bit-portable.zip
-          mirror_url: https://mirrors.aliyun.com/CPAN/ports/win32/strawberry/5.40.0.1/strawberry-perl-5.40.0.1-64bit-portable.zip
+          mirror_url: ""
           sha256: b0a3a3fa3130ce593e58f1a1689ad0ddc733e157d83c94ee711f66bcdf41c398
           size: 60000000
           strip: 1

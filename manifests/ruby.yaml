@@ -1,4 +1,4 @@
-name: ruby
+﻿name: ruby
 display_name: Ruby
 description: Dynamic, open source programming language with a focus on simplicity and productivity.
 homepage: https://www.ruby-lang.org/
@@ -19,7 +19,7 @@ versions:
           arch: amd64
           format: 7z
           url: https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-3.3.5-1/rubyinstaller-3.3.5-1-x64.7z
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/ruby/3.3.5/rubyinstaller-3.3.5-1-x64.7z
+          mirror_url: ""
           sha256: d48dbf86b300f0055ab44b0bfc275a40f1957233c5ccfd4590910a3cf8394132
           size: 50000000
           strip: 1

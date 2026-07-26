@@ -1,4 +1,4 @@
-name: lua
+﻿name: lua
 display_name: Lua
 description: Lightweight, high-level, multi-paradigm programming language designed for embedded use.
 homepage: https://www.lua.org/
@@ -17,7 +17,7 @@ versions:
           arch: amd64
           format: zip
           url: https://sourceforge.net/projects/luabinaries/files/5.5.0/Tools%20Executables/lua-5.5.0_Win64_bin.zip/download
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/joedf/LuaBuilds/v5.5.0/lua-5.5.0_Win64_bin.zip
+          mirror_url: ""
           sha256: 7825cb261d0dc61cb0e1511d451ceaf10bf72d2bba1855bfd3350add190e0024
           size: 1500000
           strip: 0

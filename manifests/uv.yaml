@@ -1,4 +1,4 @@
-name: uv
+﻿name: uv
 display_name: UV
 description: An extremely fast Python package manager and installer, built by Astral (creators of ruff).
 homepage: https://github.com/astral-sh/uv
@@ -19,7 +19,7 @@ versions:
         arch: amd64
         format: zip
         url: https://github.com/astral-sh/uv/releases/download/0.7.6/uv-x86_64-pc-windows-msvc.zip
-        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/uv/uv-x86_64-pc-windows-msvc-0.7.6.zip
+        mirror_url: ""
         sha256: 4c81818cc89d75ca54762e2641deebad69c0af6594212a9fb24b9849df8ac413
         size: 16000000
         strip: 1

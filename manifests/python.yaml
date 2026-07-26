@@ -1,4 +1,4 @@
-name: python
+﻿name: python
 display_name: Python (CPython)
 description: The Python programming language interpreter.
 homepage: https://www.python.org/
@@ -19,7 +19,7 @@ versions:
           arch: amd64
           format: tar.gz
           url: https://github.com/astral-sh/python-build-standalone/releases/download/20241002/cpython-3.12.7%2B20241002-x86_64-pc-windows-msvc-install_only.tar.gz
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone/cpython-3.12.7%2B20241002-x86_64-pc-windows-msvc-install_only.tar.gz
+          mirror_url: ""
           sha256: b2430b7dedd56b06afe988b98596ce9d6ceb9577d4cddb6b4ee70e6f4cf7182d
           size: 35000000
           strip: 1

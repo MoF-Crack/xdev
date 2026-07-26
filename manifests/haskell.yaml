@@ -1,4 +1,4 @@
-name: haskell
+﻿name: haskell
 display_name: Haskell (GHC)
 description: An advanced, purely functional programming language with a state-of-the-art compiler (GHC).
 homepage: https://www.haskell.org/
@@ -19,7 +19,7 @@ versions:
           arch: amd64
           format: tar.xz
           url: https://downloads.haskell.org/~ghc/9.10.1/ghc-9.10.1-x86_64-unknown-mingw32.tar.xz
-          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/haskell/ghc/9.10.1/ghc-9.10.1-x86_64-unknown-mingw32.tar.xz
+          mirror_url: ""
           sha256: 002aa68594b60be91a1f77585ec00d4dfdd9f908554449d74b0ad08fcb9459c1
           size: 280000000
           strip: 1

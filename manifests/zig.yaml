@@ -1,4 +1,4 @@
-name: zig
+﻿name: zig
 display_name: Zig
 description: Systems programming language designed to be robust, optimal, and reusable.
 homepage: https://ziglang.org/
@@ -18,7 +18,7 @@ versions:
         arch: amd64
         format: zip
         url: https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip
-        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-windows-x86_64-0.13.0.zip
+        mirror_url: ""
         sha256: d859994725ef9402381e557c60bb57497215682e355204d754ee3df75ee3c158
         size: 75000000
         strip: 1

@@ -1,4 +1,4 @@
-name: go
+﻿name: go
 display_name: Go
 description: The Go programming language toolchain.
 homepage: https://go.dev/
@@ -19,7 +19,7 @@ versions:
           arch: amd64
           format: zip
           url: https://go.dev/dl/go1.23.2.windows-amd64.zip
-          mirror_url: https://mirrors.aliyun.com/golang/go1.23.2.windows-amd64.zip
+          mirror_url: ""
           sha256: bc28fe3002cd65cec65d0e4f6000584dacb8c71bfaff8801dfb532855ca42513
           size: 70000000
           strip: 0

@@ -1,4 +1,4 @@
-name: sbt
+﻿name: sbt
 display_name: sbt (Scala Build Tool)
 description: The interactive build tool for Scala and Java projects. Used by the Scala ecosystem as the primary build system.
 homepage: https://www.scala-sbt.org/
@@ -18,7 +18,7 @@ versions:
         arch: amd64
         format: zip
         url: https://github.com/sbt/sbt/releases/download/v1.10.2/sbt-1.10.2.zip
-        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/sbt/sbt/v1.10.2/sbt-1.10.2.zip
+        mirror_url: ""
         sha256: e27d40d5faef41f6768792b21b3fd403669beee709a3c4cc907edf473fa5f077
         size: 7000000
         strip: 0
