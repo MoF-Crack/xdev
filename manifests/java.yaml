@@ -1,4 +1,4 @@
-name: java
+﻿name: java
 display_name: Java (Oracle JDK)
 description: Oracle JDK official distributions. Java 26 (STS), 25/21 (LTS) from Oracle; 17/11 (LTS) from Eclipse Temurin (Oracle requires login for older versions). All builds with pinned SHA-256.
 homepage: https://www.oracle.com/java/
@@ -21,35 +21,30 @@ versions:
         arch: amd64
         format: zip
         url: "https://download.oracle.com/java/26/latest/jdk-26_windows-x64_bin.zip"
-        mirror_url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_x64_windows_hotspot_26.0.1_8.zip"
         sha256: 530c20885a96d97c5f982a96e2d9e6aa41956c414b4a7398c49df7fe3192e62d
         strip: 1
       - os: linux
         arch: x86_64
         format: tar.gz
         url: "https://download.oracle.com/java/26/latest/jdk-26_linux-x64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_x64_linux_hotspot_26.0.1_8.tar.gz"
         sha256: 11de2bce72e7f07b9e80afa9bdd950b42f3a5c69cf4969e44389d50f466959e2
         strip: 1
       - os: linux
         arch: arm64
         format: tar.gz
         url: "https://download.oracle.com/java/26/latest/jdk-26_linux-aarch64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_aarch64_linux_hotspot_26.0.1_8.tar.gz"
         sha256: 937e69ca8edc96e8f272675a43078628b0d25e70b1430b3b6993745c2c4a1e8e
         strip: 1
       - os: darwin
         arch: x86_64
         format: tar.gz
         url: "https://download.oracle.com/java/26/latest/jdk-26_macos-x64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_x64_mac_hotspot_26.0.1_8.tar.gz"
         sha256: f169e6e49c0386ab540c2db645d8a4420d4a83c14d6f5c9533b12cd0255b4735
         strip: 1
       - os: darwin
         arch: arm64
         format: tar.gz
         url: "https://download.oracle.com/java/26/latest/jdk-26_macos-aarch64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin26-binaries/releases/download/jdk-26.0.1%2B8/OpenJDK26U-jdk_aarch64_mac_hotspot_26.0.1_8.tar.gz"
         sha256: 067a024d52f1e1f22b1ad72fb592051961818de098ad56cd4146e03254e9f520
         strip: 1
   - version: "25"
@@ -60,35 +55,30 @@ versions:
         arch: amd64
         format: zip
         url: "https://download.oracle.com/java/25/latest/jdk-25_windows-x64_bin.zip"
-        mirror_url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_x64_windows_hotspot_25.0.3_9.zip"
         sha256: d55f89b8ca9dc84cf9776a29b64165e278bed7fda207ce8ccb0124b59cefff6e
         strip: 1
       - os: linux
         arch: x86_64
         format: tar.gz
         url: "https://download.oracle.com/java/25/latest/jdk-25_linux-x64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_x64_linux_hotspot_25.0.3_9.tar.gz"
         sha256: 0d3e87de2516557a170e2df4f6a4872b1749ea3174dd7c9e555cb5170e618301
         strip: 1
       - os: linux
         arch: arm64
         format: tar.gz
         url: "https://download.oracle.com/java/25/latest/jdk-25_linux-aarch64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.3_9.tar.gz"
         sha256: cf0b7091e72e9f59e9741db0b047d2b93376c7ca984a5a0f7ca86b9070f30b35
         strip: 1
       - os: darwin
         arch: x86_64
         format: tar.gz
         url: "https://download.oracle.com/java/25/latest/jdk-25_macos-x64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_x64_mac_hotspot_25.0.3_9.tar.gz"
         sha256: 55f4764b00e3422c07eab8721da5f175ee7e3f0d0e4fb63fd1d15bee09ec9774
         strip: 1
       - os: darwin
         arch: arm64
         format: tar.gz
         url: "https://download.oracle.com/java/25/latest/jdk-25_macos-aarch64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.3%2B9/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.3_9.tar.gz"
         sha256: 1e4f84d6af2f465ad87db05af22a92d3a7fba5dbe51632955a96bcae77b3319e
         strip: 1
   - version: "21"
@@ -99,35 +89,30 @@ versions:
         arch: amd64
         format: zip
         url: "https://download.oracle.com/java/21/latest/jdk-21_windows-x64_bin.zip"
-        mirror_url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_windows_hotspot_21.0.11_10.zip"
         sha256: 167af6612931baf82d1e55dd81444b94fcae68dffa73055946843c11cd2a37e5
         strip: 1
       - os: linux
         arch: x86_64
         format: tar.gz
         url: "https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz"
         sha256: 33cc8a4ba4163b003bbf3516824861ee49e7295e6a2879ec91316c2aead78b80
         strip: 1
       - os: linux
         arch: arm64
         format: tar.gz
         url: "https://download.oracle.com/java/21/latest/jdk-21_linux-aarch64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.11_10.tar.gz"
         sha256: a666a601e229215642e8dbd060d866d4925b58b68c0f7f1bd475765bab94e193
         strip: 1
       - os: darwin
         arch: x86_64
         format: tar.gz
         url: "https://download.oracle.com/java/21/latest/jdk-21_macos-x64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_x64_mac_hotspot_21.0.11_10.tar.gz"
         sha256: 73943c130e0e064a7d4674f81e397b097f1a6bf2f35b5db6a4123d6d1f17b703
         strip: 1
       - os: darwin
         arch: arm64
         format: tar.gz
         url: "https://download.oracle.com/java/21/latest/jdk-21_macos-aarch64_bin.tar.gz"
-        mirror_url: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.11_10.tar.gz"
         sha256: 64377c2dab9b5df4be5648d84ba54174b46add6ca2bec86aa2716e5b3bddac62
         strip: 1
   - version: "17"

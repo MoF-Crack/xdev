@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -148,7 +149,11 @@ func (c *MirrorHealthCache) isExpiredLocked(e MirrorHealth) bool {
 
 // probeURL sends a HEAD request to the given URL and returns the latency
 // in milliseconds. Returns -1 and an error if the request fails.
+// Only HTTPS URLs are accepted (security: prevent plaintext probe leaks).
 func probeURL(ctx context.Context, url string) (int64, error) {
+	if !strings.HasPrefix(url, "https://") {
+		return -1, fmt.Errorf("probe URL must be HTTPS, got %s", url)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return -1, fmt.Errorf("create request: %w", err)
