@@ -1,4 +1,4 @@
-# Implementation Plan: 测试宿主状态快照
+﻿# Implementation Plan: 测试宿主状态快照
 
 > **文档类型**：Implementation Plan
 > **状态**：Ready
@@ -228,6 +228,7 @@ internal/integration/
 |---|---|---|---|---|---|
 | Plan 起草 | Planned | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-planned-001` |
 | Plan 批准 | Ready | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-ready-001`；用户原文「同意方案并且实施」；批准技术方案并授权 TDD 实现 |
+| Plan 批准 | Ready | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-25 | `0.1.0` | `2026-07-25-plan-005-001`；SDD Loop 补全 |
 
 ---
 

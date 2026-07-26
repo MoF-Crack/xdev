@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "workflows": [
+    {
+      "name": "spec-driven-development",
+      "description": "Complete SDD Loop: Draft → Clarify → Approved → Plan → Tasks → Implement → Dual Review → Verified → Accepted",
+      "steps": [
+        {
+          "name": "draft",
+          "description": "Create spec.md from template with requirements",
+          "required_files": ["spec.md"],
+          "validation": "validate-specs.ps1"
+        },
+        {
+          "name": "clarify",
+          "description": "User clarifies requirements, spec updated",
+          "required_files": ["spec.md"],
+          "validation": "validate-specs.ps1"
+        },
+        {
+          "name": "approve",
+          "description": "User approves spec content, state → Approved",
+          "required_files": ["spec.md", ".specify/approvals/*.json"],
+          "validation": "validate-approvals.ps1"
+        },
+        {
+          "name": "plan",
+          "description": "Create plan.md with technical approach and task breakdown",
+          "required_files": ["spec.md", "plan.md"],
+          "validation": "validate-specs.ps1"
+        },
+        {
+          "name": "tasks",
+          "description": "Create tasks.md with actionable task list",
+          "required_files": ["spec.md", "plan.md", "tasks.md"],
+          "validation": "validate-specs.ps1"
+        },
+        {
+          "name": "implement",
+          "description": "Execute tasks, code changes committed",
+          "required_files": ["spec.md", "plan.md", "tasks.md"],
+          "validation": "go test + go vet"
+        },
+        {
+          "name": "review",
+          "description": "Dual independent review: spec compliance + engineering quality",
+          "required_files": ["reviews/T001-spec-review.md", "reviews/T001-quality-review.md"],
+          "validation": "validate-approvals.ps1"
+        },
+        {
+          "name": "verify",
+          "description": "All reviews pass, state → Verified",
+          "required_files": ["spec.md", "plan.md", "tasks.md", "reviews/"],
+          "validation": "validate-specs.ps1"
+        },
+        {
+          "name": "accept",
+          "description": "User accepts final delivery, state → Accepted",
+          "required_files": ["spec.md", "plan.md", "tasks.md", "reviews/", ".specify/approvals/*.json"],
+          "validation": "validate-approvals.ps1 + validate-specs.ps1"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-25-plan-002-001",
+  "asset_type": "plan",
+  "target_path": "specs/002-integration-tests-ci-gate/plan.md",
+  "decision": "approve",
+  "target_version": "0.1.0",
+  "target_state": "Ready",
+  "scope": "Approve implementation plan for 002-integration-tests-ci-gate",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-25",
+  "authorization_text": "SDD Loop plan ready for 002-integration-tests-ci-gate",
+  "recorded_at": "2026-07-25",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

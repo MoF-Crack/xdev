@@ -99,8 +99,21 @@ function Git { param([string[]]$A)
     return @($stdout -split "`r?`n")
 }
 function GitShow { param([string]$P)
-    $out = Git @('show', ":$P")
-    return ($out -join "`n")
+    # For staged files, read directly from disk to avoid PowerShell 5.1
+    # pipeline encoding issues (GBK codepage mangling UTF-8 git output).
+    # Staged files always exist on disk, so this is safe for -Staged mode.
+    $diskPath = $P -replace '/', ([System.IO.Path]::DirectorySeparatorChar)
+    if (Test-Path -LiteralPath $diskPath -PathType Leaf) {
+        return [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $diskPath).Path, [System.Text.Encoding]::UTF8)
+    }
+    # Fallback: read from HEAD via temp file (for non-staged validation)
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        Start-Process -FilePath "git" -ArgumentList "show","HEAD:$P" -NoNewWindow -Wait -RedirectStandardOutput $tempFile -PassThru | Out-Null
+        return [System.IO.File]::ReadAllText($tempFile, [System.Text.Encoding]::UTF8)
+    } finally {
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    }
 }
 function Fail { param([string]$R)
     $script:BlockReason = $R
@@ -208,13 +221,15 @@ function DocVersion { param([string]$C)
     return ''
 }
 function DocState { param([string]$C)
-    # Prefer explicit metadata labels; do not let "状态" greedily match later tables
-    # such as "| 边界 | 决定 |" across the rest of the document.
-    if ($C -match '\*\*\u72B6\u6001\*\*[：:]\s*([^\n`*]+)') { return ($Matches[1].Trim() -replace '[`*]','') }
-    if ($C -match '(?m)^>\s*\*\*\u72B6\u6001\*\*[：:]\s*([^\n`*]+)') { return ($Matches[1].Trim() -replace '[`*]','') }
-    if ($C -match '\*\*Status\*\*:\s*(.+)') { return ($Matches[1].Trim() -replace '[`*]','') }
-    # Table row only: | 状态 | value |
-    if ($C -match '\|\s*\*{0,2}\u72B6\u6001\*{0,2}\s*\|\s*([^|\n]+)\s*\|') { return ($Matches[1].Trim() -replace '[`*]','') }
+    # Only search the first 10 lines (metadata block) to avoid greedy matching
+    # into Approval History tables deeper in the document.
+    $header = (($C -split "`n")[0..9]) -join "`n"
+    # Prefer explicit metadata labels in the header block
+    if ($header -match '\*\*\u72B6\u6001\*\*[：:]\s*([^\n`*]+)') { return ($Matches[1].Trim() -replace '[`*]','') }
+    if ($header -match '(?m)^>\s*\*\*\u72B6\u6001\*\*[：:]\s*([^\n`*]+)') { return ($Matches[1].Trim() -replace '[`*]','') }
+    if ($header -match '\*\*Status\*\*:\s*(.+)') { return ($Matches[1].Trim() -replace '[`*]','') }
+    # Table row only (for specs without blockquote metadata): | 状态 | value |
+    if ($header -match '\|\s*\*{0,2}\u72B6\u6001\*{0,2}\s*\|\s*([^|\n]+)\s*\|') { return ($Matches[1].Trim() -replace '[`*]','') }
     return ''
 }
 

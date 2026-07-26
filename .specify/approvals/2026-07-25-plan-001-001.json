@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-25-plan-001-001",
+  "asset_type": "plan",
+  "target_path": "specs/001-ci-go-version-consistency/plan.md",
+  "decision": "approve",
+  "target_version": "0.1.0",
+  "target_state": "Ready",
+  "scope": "Approve implementation plan for 001-ci-go-version-consistency",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-25",
+  "authorization_text": "SDD Loop plan ready for 001-ci-go-version-consistency",
+  "recorded_at": "2026-07-25",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

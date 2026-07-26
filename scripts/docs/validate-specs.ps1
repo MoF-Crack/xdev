@@ -190,6 +190,30 @@ function Validate-SpecFile {
         }
     }
 
+    # Check 8: SDD Loop completeness for Accepted/Verified specs
+    # Accepted or Verified specs must have plan.md, tasks.md, and reviews/ directory
+    if ($SpecDir -and ($meta.State -eq 'Accepted' -or $meta.State -eq 'Verified')) {
+        $planPath = Join-Path $SpecDir 'plan.md'
+        $tasksPath = Join-Path $SpecDir 'tasks.md'
+        $reviewsPath = Join-Path $SpecDir 'reviews'
+
+        if (-not (Test-Path -LiteralPath $planPath -PathType Leaf)) {
+            $issues += "SDD Loop: Spec is $($meta.State) but plan.md is missing"
+        }
+        if (-not (Test-Path -LiteralPath $tasksPath -PathType Leaf)) {
+            $issues += "SDD Loop: Spec is $($meta.State) but tasks.md is missing"
+        }
+        if (-not (Test-Path -LiteralPath $reviewsPath -PathType Container)) {
+            $issues += "SDD Loop: Spec is $($meta.State) but reviews/ directory is missing"
+        } else {
+            # Check for at least 2 review files (spec review + quality review)
+            $reviewFiles = @(Get-ChildItem -LiteralPath $reviewsPath -Filter '*.md' -ErrorAction SilentlyContinue)
+            if ($reviewFiles.Count -lt 2) {
+                $issues += "SDD Loop: reviews/ has $($reviewFiles.Count) file(s), expected at least 2 (spec review + quality review)"
+            }
+        }
+    }
+
     $status = if ($issues.Count -eq 0) { 'PASS' } else { 'FAIL' }
     Write-Result -SpecPath $SpecPath -Status $status -Issues $issues
 
