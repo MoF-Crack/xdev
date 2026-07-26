@@ -172,6 +172,13 @@ P1 完成后可并行：
 - ~~不修改 `.github/workflows/ci.yaml`。~~（已完成：CI/Release workflow 已稳定）
 - 不执行 `git add .`、`git add -A`、`git reset --hard` 或 `git clean -fd`。
 - `keys/priv.key` 永远不得暂存或提交。
+- **未经用户明确同意，不得 `git push` 到 GitHub。** 代码变更可在本地提交（`git commit`），
+  但推送（`git push origin main`）必须先获得用户批准。唯一例外：跟踪 GitHub Actions
+  运行进度时发现 CI 失败，且修复属于本次已批准工作范围内的直接关联问题，可自行提交
+  并推送修复（不需再次审批），但必须在推送前说明修复内容。
+- **未经用户明确同意，不得打 tag 触发发版构建。** 每次 `git push origin v*` 会触发
+  GitHub Actions release job（多平台编译 + 签名 + 上传），消耗大量免费额度。
+  只有用户明确说"发布新版本"或"打 tag"时才能执行。Agent 不得自行决定发版。
 
 ## 4. 恢复协议
 

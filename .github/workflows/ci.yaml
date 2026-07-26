@@ -1,11 +1,21 @@
 name: CI
 
+# CI 触发策略（免费额度保护）：
+# - tag push (v*)：触发全部 job（build + integration-tests + release）
+# - pull_request：触发 build + integration-tests（不触发 release）
+# - branch push：不自动触发（需手动 dispatch 或由用户同意后 push tag）
+# 详见 docs/versioning-policy.md "提交规则" 和 "免费额度保护"。
 on:
   push:
-    branches: [main, develop]
     tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Manual trigger reason'
+        required: false
+        default: 'manual'
 
 jobs:
   build:
