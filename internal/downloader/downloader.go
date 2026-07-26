@@ -98,6 +98,12 @@ type Options struct {
 	// URL fails with HTTP 404 or other non-retryable errors. Each URL
 	// is tried in order with the same retry logic.
 	FallbackURLs []string
+
+	// URLShaMap maps individual download URLs to their expected SHA-256.
+	// When a URL is found in this map, its SHA is used instead of ExpectedSHA.
+	// This allows mirror URLs that serve different binaries (e.g. Temurin JDK
+	// vs Oracle JDK) to have different expected hashes than the official URL.
+	URLShaMap map[string]string
 }
 
 // Download fetches opts.URL to opts.Dest.
@@ -409,8 +415,19 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	//   3. First-use downloads print a prominent stderr WARNING.
 	//   4. The audit log records Verified=false for all TOFU-based checks.
 	gotHash := hex.EncodeToString(hasher.Sum(nil))
-	if opts.ExpectedSHA != "" {
-		if util.IsAllZeroHash(opts.ExpectedSHA) {
+
+	// Determine which SHA to use for verification:
+	// 1. If URLShaMap contains the current URL, use that URL-specific SHA
+	// 2. Otherwise fall back to the global ExpectedSHA
+	expectedSHA := opts.ExpectedSHA
+	if opts.URLShaMap != nil {
+		if urlSHA, ok := opts.URLShaMap[opts.URL]; ok {
+			expectedSHA = urlSHA
+		}
+	}
+
+	if expectedSHA != "" {
+		if util.IsAllZeroHash(expectedSHA) {
 			// Security (L-10): When signature verification is enabled, refuse
 			// to accept all-zero placeholder hashes on built-in manifests —
 			// they must be real. Third-party manifests use TOFU fallback.
@@ -425,10 +442,10 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			sidecarPath := opts.Dest + ".sha256"
 			writeSidecarHash(sidecarPath, gotHash, opts.Dest)
 		} else {
-			if !strings.EqualFold(gotHash, opts.ExpectedSHA) {
-				log.Printf("[download] ERROR: sha256 mismatch! expected=%s got=%s", opts.ExpectedSHA, gotHash)
+			if !strings.EqualFold(gotHash, expectedSHA) {
+				log.Printf("[download] ERROR: sha256 mismatch! expected=%s got=%s", expectedSHA, gotHash)
 				_ = os.Remove(partPath)
-				return fmt.Errorf("sha256 mismatch: expected %s, got %s", opts.ExpectedSHA, gotHash)
+				return fmt.Errorf("sha256 mismatch: expected %s, got %s", expectedSHA, gotHash)
 			}
 			log.Printf("[download] SHA-256 verification passed: %s", gotHash[:16]+"...")
 		}
@@ -478,7 +495,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		URL:      opts.URL,
 		SHA256:   gotHash,
 		Source:   sourceType(fromBytes),
-		Verified: opts.ExpectedSHA != "" && !util.IsAllZeroHash(opts.ExpectedSHA),
+		Verified: expectedSHA != "" && !util.IsAllZeroHash(expectedSHA),
 		Size:     written + fromBytes,
 	})
 

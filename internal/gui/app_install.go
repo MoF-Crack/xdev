@@ -58,7 +58,7 @@ func (a *App) InstallTool(toolName, version string) error {
 	}
 
 	// 构造下载选项 — use shared installer.BuildDownloadOptions
-	url, fallbackURLs, dest := ins.BuildDownloadOptions(toolName, ver, arch)
+	url, fallbackURLs, dest, urlShaMap := ins.BuildDownloadOptions(toolName, ver, arch)
 
 	// Check if this is a third-party manifest for layered trust model
 	isThirdParty := false
@@ -70,6 +70,7 @@ func (a *App) InstallTool(toolName, version string) error {
 		URL:          url,
 		Dest:         dest,
 		ExpectedSHA:  arch.SHA256,
+		URLShaMap:    urlShaMap,
 		ProgressDesc: fmt.Sprintf("%s@%s", toolName, ver),
 		Cookie:       util.CookieFromInstallArgs(arch.InstallArgs),
 		IsThirdParty: isThirdParty,

@@ -366,7 +366,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 //     primary (mirrored) URL fails
 //   - Progress reporting via the onProgress callback
 func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, batchIndex, batchTotal int) error {
-	url, fallbackURLs, dest := i.BuildDownloadOptions(tool, ver, a)
+	url, fallbackURLs, dest, urlShaMap := i.BuildDownloadOptions(tool, ver, a)
 	log.Printf("[install] Cache destination: %s", dest)
 
 	progressDesc := fmt.Sprintf("%s@%s", tool, ver)
@@ -454,6 +454,7 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		URL:               url,
 		Dest:              dest,
 		ExpectedSHA:       a.SHA256,
+		URLShaMap:         urlShaMap,
 		ProgressDesc:      progressDesc,
 		Cookie:            util.CookieFromInstallArgs(a.InstallArgs),
 		ManifestSignature: manifestSig,
@@ -484,8 +485,8 @@ func (i *Installer) getMirrorHealthCache() *MirrorHealthCache {
 // destination path for a tool archive. It applies mirror rewriting and
 // smart mirror selection (concurrent HEAD probe, health cache, user preference).
 //
-// Returns (primaryURL, fallbackURLs, cacheDestPath).
-func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string) {
+// Returns (primaryURL, fallbackURLs, cacheDestPath, urlShaMap).
+func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string) {
 	// 1. Build candidate list from multiple sources.
 	candidates := i.buildMirrorCandidates(tool, a)
 
@@ -546,7 +547,33 @@ func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) 
 	}
 
 	dest := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", tool, ver, a.Format))
-	return primary, fallbackURLs, dest
+
+	// 6. Build URL→SHA256 map so the downloader can verify each URL
+	// against the correct hash (official URL uses a.SHA256, mirror URLs
+	// use a.MirrorSHA256 when set, falling back to a.SHA256).
+	shaMap := map[string]string{
+		a.URL: a.SHA256,
+	}
+	// Mirror rewrite URL (same file, same SHA as official)
+	if util.ShouldApplyMirror(a.URL) {
+		if alt := i.mir.Apply(tool, a.URL); alt != a.URL {
+			shaMap[alt] = a.SHA256
+		}
+	}
+	// Manifest-declared mirror URLs
+	for _, mu := range a.EffectiveMirrorURLs() {
+		if a.MirrorSHA256 != "" {
+			shaMap[mu] = a.MirrorSHA256
+		} else {
+			shaMap[mu] = a.SHA256
+		}
+	}
+	// User-configured mirror preference URLs (same file, same SHA)
+	for _, u := range i.cfg.Core.MirrorPreference {
+		shaMap[u] = a.SHA256
+	}
+
+	return primary, fallbackURLs, dest, shaMap
 }
 
 // buildMirrorCandidates assembles the ordered list of candidate mirror URLs

@@ -116,6 +116,7 @@ type Archive struct {
 	MirrorURL   string   `yaml:"mirror_url"`  // optional preferred mirror (singular, legacy)
 	MirrorURLs  []string `yaml:"mirror_urls"` // optional multiple mirror candidates (plural, preferred)
 	SHA256      string   `yaml:"sha256"`
+	MirrorSHA256 string `yaml:"mirror_sha256,omitempty"` // SHA-256 for mirror_url (if different from official)
 	Size        int64    `yaml:"size"`
 	Strip       int      `yaml:"strip"`
 	InstallArgs []string `yaml:"install_args"`
