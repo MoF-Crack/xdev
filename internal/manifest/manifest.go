@@ -113,7 +113,8 @@ type Archive struct {
 	Arch        string   `yaml:"arch"`   // amd64 | arm64 | 386 | any
 	Format      string   `yaml:"format"` // zip | tar.xz | tar.gz | msi | pkg | dmg | exe | deb
 	URL         string   `yaml:"url"`
-	MirrorURL   string   `yaml:"mirror_url"` // optional preferred mirror
+	MirrorURL   string   `yaml:"mirror_url"`  // optional preferred mirror (singular, legacy)
+	MirrorURLs  []string `yaml:"mirror_urls"` // optional multiple mirror candidates (plural, preferred)
 	SHA256      string   `yaml:"sha256"`
 	Size        int64    `yaml:"size"`
 	Strip       int      `yaml:"strip"`
@@ -133,6 +134,26 @@ func (a Archive) EffectiveKind() string {
 	default:
 		return InstallKindArchive
 	}
+}
+
+// EffectiveMirrorURLs returns the list of candidate mirror URLs for this
+// archive.
+//
+// Priority:
+//  1. mirror_urls (plural) — the new preferred field
+//  2. mirror_url (singular) — legacy field, wrapped in a single-element slice
+//  3. nil — no mirror configured
+//
+// This ensures backward compatibility: manifests that only set mirror_url
+// (singular) continue to work without modification.
+func (a Archive) EffectiveMirrorURLs() []string {
+	if len(a.MirrorURLs) > 0 {
+		return a.MirrorURLs
+	}
+	if a.MirrorURL != "" {
+		return []string{a.MirrorURL}
+	}
+	return nil
 }
 
 // RemoteSource describes how to discover new versions dynamically.

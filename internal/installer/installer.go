@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -65,6 +66,9 @@ type Installer struct {
 	reg        *plugin.Registry // Plugin registry for tool lookup
 	noEnvWrite bool             // When true, skip registry env-var writes (set by --no-path-fix)
 	runner     execRunner       // Runs installer binaries/scripts (mockable in tests)
+
+	mirrorCacheOnce sync.Once          // Ensures mirror health cache is loaded once
+	mirrorCache     *MirrorHealthCache // Lazy-loaded mirror health cache
 }
 
 // New constructs an Installer with the given config and plugin registry.
@@ -147,6 +151,13 @@ type InstallOptions struct {
 	// tool is downloaded and extracted but not wired into the shim
 	// farm or the "current" symlink. Useful for pre-fetching versions.
 	NoActivate bool
+
+	// BatchIndex is the 1-based index of this tool in a batch install.
+	// When > 0, the progress display will show "[N/M]" prefix.
+	BatchIndex int
+
+	// BatchTotal is the total number of tools in a batch install.
+	BatchTotal int
 }
 
 // Install performs the full install workflow for p at the given
@@ -211,7 +222,10 @@ func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) [
 		}
 
 		// Install
-		res, err := i.InstallWithProgress(ctx, p, ver, nil, InstallOptions{})
+		res, err := i.InstallWithProgress(ctx, p, ver, nil, InstallOptions{
+			BatchIndex: idx + 1,
+			BatchTotal: len(items),
+		})
 		if err != nil {
 			results[idx] = BatchInstallResult{
 				Tool:    item.ToolName,
@@ -303,7 +317,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	}
 
 	log.Printf("[install] Starting download phase")
-	if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress); err != nil {
+	if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts.BatchIndex, opts.BatchTotal); err != nil {
 		log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
 		return nil, err
 	}
@@ -351,9 +365,14 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 //   - Fallback URLs: the original upstream URL and mirror_url are tried if the
 //     primary (mirrored) URL fails
 //   - Progress reporting via the onProgress callback
-func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback) error {
+func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, batchIndex, batchTotal int) error {
 	url, fallbackURLs, dest := i.BuildDownloadOptions(tool, ver, a)
 	log.Printf("[install] Cache destination: %s", dest)
+
+	progressDesc := fmt.Sprintf("%s@%s", tool, ver)
+	if batchTotal > 0 {
+		progressDesc = fmt.Sprintf("[%d/%d] %s", batchIndex, batchTotal, progressDesc)
+	}
 	if _, err := os.Stat(dest); err == nil {
 		// Cache hit — verify SHA-256 if available
 		if a.SHA256 != "" && !util.IsAllZeroHash(a.SHA256) {
@@ -435,7 +454,7 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		URL:               url,
 		Dest:              dest,
 		ExpectedSHA:       a.SHA256,
-		ProgressDesc:      fmt.Sprintf("%s@%s", tool, ver),
+		ProgressDesc:      progressDesc,
 		Cookie:            util.CookieFromInstallArgs(a.InstallArgs),
 		ManifestSignature: manifestSig,
 		IsThirdParty:      isThirdParty,
@@ -452,33 +471,123 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 	})
 }
 
+// getMirrorHealthCache returns the mirror health cache, loading it from
+// disk on first call. Subsequent calls return the cached instance.
+func (i *Installer) getMirrorHealthCache() *MirrorHealthCache {
+	i.mirrorCacheOnce.Do(func() {
+		i.mirrorCache = LoadMirrorHealthCache(i.cfg.Core.CacheDir)
+	})
+	return i.mirrorCache
+}
+
 // buildDownloadOptions constructs the download URL, fallback URLs, and cache
-// destination path for a tool archive. It applies mirror rewriting and adds
-// the archive's mirror_url as a fallback. This is shared between the CLI
-// installer and the GUI's InstallTool to eliminate duplicate logic.
+// destination path for a tool archive. It applies mirror rewriting and
+// smart mirror selection (concurrent HEAD probe, health cache, user preference).
 //
 // Returns (primaryURL, fallbackURLs, cacheDestPath).
 func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string) {
-	url := a.MirrorURL
-	var fallbackURLs []string
-	if url == "" {
-		url = a.URL
+	// 1. Build candidate list from multiple sources.
+	candidates := i.buildMirrorCandidates(tool, a)
+
+	// 2. Filter out known-unavailable mirrors via health cache.
+	cache := i.getMirrorHealthCache()
+	filtered := make([]string, 0, len(candidates))
+	skipped := 0
+	for _, u := range candidates {
+		if cache.IsAvailable(u) {
+			filtered = append(filtered, u)
+		} else {
+			skipped++
+		}
+	}
+	if skipped > 0 {
+		log.Printf("[install] Skipped %d known-unavailable mirror(s) (health cache)", skipped)
 	}
 
-	if util.ShouldApplyMirror(a.URL) {
-		if alt := i.mir.Apply(tool, a.URL); alt != a.URL {
-			if alt != url {
-				fallbackURLs = append(fallbackURLs, alt)
-			}
+	// 3. Select best mirror via concurrent probe, or use the only candidate.
+	var primary string
+	if len(filtered) == 0 {
+		// All candidates filtered out — fall back to official URL.
+		primary = a.URL
+		log.Printf("[install] WARNING: all mirrors unavailable for %s@%s, falling back to official URL", tool, ver)
+	} else if len(filtered) == 1 {
+		primary = filtered[0]
+	} else {
+		// Multiple candidates — probe concurrently and pick the best.
+		best, err := SelectBestMirror(filtered, cache, defaultProbeTimeout)
+		if err != nil {
+			// All probes failed — use first filtered candidate as fallback.
+			primary = filtered[0]
+		} else {
+			primary = best
 		}
 	}
 
-	if a.URL != url {
+	// 4. Persist cache (best-effort).
+	cache.Save()
+
+	// 5. Build fallback list: remaining candidates (excluding selected primary).
+	fallbackURLs := make([]string, 0, len(filtered))
+	for _, u := range filtered {
+		if u != primary {
+			fallbackURLs = append(fallbackURLs, u)
+		}
+	}
+	// Always ensure official URL is the last fallback (if not already in list).
+	officialInFallback := false
+	for _, u := range fallbackURLs {
+		if u == a.URL {
+			officialInFallback = true
+			break
+		}
+	}
+	if !officialInFallback && a.URL != "" && a.URL != primary {
 		fallbackURLs = append(fallbackURLs, a.URL)
 	}
 
 	dest := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", tool, ver, a.Format))
-	return url, fallbackURLs, dest
+	return primary, fallbackURLs, dest
+}
+
+// buildMirrorCandidates assembles the ordered list of candidate mirror URLs
+// for the given archive. The order reflects priority:
+//  1. User-configured mirror_preference (from config.yaml)
+//  2. Manifest mirror_urls / mirror_url (via EffectiveMirrorURLs)
+//  3. Mirror table rewrite (for GitHub/upstream URLs)
+//  4. Official URL (always last)
+func (i *Installer) buildMirrorCandidates(tool string, a *manifest.Archive) []string {
+	seen := make(map[string]bool)
+	candidates := make([]string, 0, 8)
+
+	addUnique := func(url string) {
+		if url == "" || seen[url] {
+			return
+		}
+		seen[url] = true
+		candidates = append(candidates, url)
+	}
+
+	// 1. User mirror_preference (highest priority)
+	for _, u := range i.cfg.Core.MirrorPreference {
+		addUnique(u)
+	}
+
+	// 2. Manifest mirror URLs
+	for _, u := range a.EffectiveMirrorURLs() {
+		addUnique(u)
+	}
+
+	// 3. Mirror table rewrite (for GitHub/upstream URLs eligible for mirroring)
+	if util.ShouldApplyMirror(a.URL) {
+		if alt := i.mir.Apply(tool, a.URL); alt != a.URL {
+			addUnique(alt)
+		}
+	}
+
+	// 4. Official URL (always last resort)
+	addUnique(a.URL)
+
+	return candidates
 }
 
 // extract unpacks a cached archive to the destination directory.

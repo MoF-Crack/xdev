@@ -53,6 +53,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/xmdemt/xdev/internal/signer"
 	"github.com/xmdemt/xdev/internal/util"
 )
@@ -68,6 +69,7 @@ type Options struct {
 	Timeout      time.Duration
 	Quiet        bool
 	OnProgress   func(downloaded, total int64, elapsed time.Duration) // optional progress callback
+	OnProgressEx func(downloaded, total int64, speed int64, eta time.Duration) // optional extended progress callback with speed/eta
 	Cookie       string                                               // optional cookie header (e.g. "oraclelicense=accept-securebackup-cookie")
 
 	// ManifestSignature is the Ed25519 signature for the manifest that
@@ -371,13 +373,16 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	}
 
 	writer := &progressWriter{
-		desc:       opts.ProgressDesc,
-		total:      resp.ContentLength + fromBytes,
-		quiet:      opts.Quiet,
-		inner:      io.MultiWriter(f, hasher),
-		current:    fromBytes,
-		startTime:  time.Now(),
-		onProgress: opts.OnProgress,
+		desc:         opts.ProgressDesc,
+		total:        resp.ContentLength + fromBytes,
+		quiet:        opts.Quiet,
+		inner:        io.MultiWriter(f, hasher),
+		current:      fromBytes,
+		startTime:    time.Now(),
+		onProgress:   opts.OnProgress,
+		onProgressEx: opts.OnProgressEx,
+		isTTY:        term.IsTerminal(os.Stderr.Fd()),
+		lastBytes:    fromBytes,
 	}
 	log.Printf("[download] Writing to %s (total expected: %d bytes)", partPath, writer.total)
 	written, err := io.Copy(writer, resp.Body)
@@ -606,47 +611,122 @@ func proxyFromOptions(opts Options) func(*http.Request) (*url.URL, error) {
 
 // progressWriter prints the download progress to stderr on a
 // fixed cadence so users can see what's happening without flooding
-// the terminal.
+// the terminal. It supports:
+//   - Progress bar with speed/ETA (TTY mode)
+//   - Plain text percentage (pipe/non-TTY mode)
+//   - OnProgress and OnProgressEx callbacks
+//   - Moving average speed calculation (last 5 samples @ 200ms)
+//   - ETA estimation based on remaining bytes / speed
 type progressWriter struct {
-	desc       string
-	total      int64
-	current    int64
-	quiet      bool
-	inner      io.Writer
-	last       time.Time
-	startTime  time.Time
-	onProgress func(downloaded, total int64, elapsed time.Duration)
+	desc         string
+	total        int64
+	current      int64
+	quiet        bool
+	inner        io.Writer
+	last         time.Time
+	startTime    time.Time
+	onProgress   func(downloaded, total int64, elapsed time.Duration)
+	onProgressEx func(downloaded, total int64, speed int64, eta time.Duration)
+	speed        int64         // bytes/sec moving average
+	eta          time.Duration // estimated time remaining
+	samples      []int64       // recent byte counts for moving average (last 5)
+	lastBytes    int64         // bytes at last sample
+	isTTY        bool          // whether stderr is a terminal
 }
 
 func (p *progressWriter) Write(b []byte) (int, error) {
 	n, err := p.inner.Write(b)
 	p.current += int64(n)
+	now := time.Now()
 
-	// Call OnProgress callback if set
-	if p.onProgress != nil && p.total > 0 {
-		if time.Since(p.last) >= 200*time.Millisecond {
-			p.last = time.Now()
-			p.onProgress(p.current, p.total, time.Since(p.startTime))
+	// Throttle progress updates to ~5 per second.
+	if now.Sub(p.last) >= 200*time.Millisecond {
+		p.last = now
+		elapsed := now.Sub(p.startTime)
+
+		// Update speed/ETA with moving average (only when total is known)
+		if p.total > 0 {
+			// Record sample: delta bytes since last sample
+			delta := p.current - p.lastBytes
+			p.samples = append(p.samples, delta)
+			if len(p.samples) > 5 {
+				p.samples = p.samples[1:]
+			}
+			p.lastBytes = p.current
+
+			// Moving average speed (bytes/sec).
+			// Each sample covers ~200ms, so multiply by 5 for per-second rate.
+			if len(p.samples) > 0 {
+				var sum int64
+				for _, s := range p.samples {
+					sum += s
+				}
+				avg := sum / int64(len(p.samples))
+				p.speed = avg * 5
+			}
+
+			// ETA = remaining bytes / speed
+			if p.speed > 0 {
+				remaining := p.total - p.current
+				etaSeconds := remaining / p.speed
+				p.eta = time.Duration(etaSeconds) * time.Second
+			}
+		}
+
+		// Call OnProgress callback if set
+		if p.onProgress != nil && p.total > 0 {
+			p.onProgress(p.current, p.total, elapsed)
+		}
+
+		// Call OnProgressEx callback if set (provides speed/eta)
+		if p.onProgressEx != nil && p.total > 0 {
+			p.onProgressEx(p.current, p.total, p.speed, p.eta)
+		}
+
+		// Print to stderr if not quiet
+		if !p.quiet {
+			if p.total > 0 {
+				pct := p.current * 100 / p.total
+				if pct > 100 {
+					pct = 100
+				}
+				if p.isTTY {
+					// Progress bar format: [====>    ] 45% 12.3 MB/s ETA 8s
+					const barWidth = 20
+					filled := int(pct * barWidth / 100)
+					if filled > barWidth {
+						filled = barWidth
+					}
+					var bar string
+					if filled >= barWidth {
+						bar = strings.Repeat("=", barWidth)
+					} else {
+						bar = strings.Repeat("=", filled) + ">" + strings.Repeat(" ", barWidth-filled-1)
+					}
+
+					speedStr := ""
+					if p.speed > 0 {
+						speedStr = util.HumanBytesStr(p.speed) + "/s "
+					}
+					etaStr := ""
+					if p.eta > 0 {
+						etaStr = "ETA " + util.FormatDurationStr(p.eta)
+					}
+
+					fmt.Fprintf(os.Stderr, "\r  [%s] %3d%% %s%s", bar, pct, speedStr, etaStr)
+				} else {
+					fmt.Fprintf(os.Stderr, "\r  %s  %s / %s  (%d%%)",
+						p.desc,
+						util.HumanBytesStr(p.current),
+						util.HumanBytesStr(p.total),
+						pct,
+					)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "\r  %s  %s", p.desc, util.HumanBytesStr(p.current))
+			}
 		}
 	}
 
-	if p.quiet {
-		return n, err
-	}
-	// Throttle output to ~5 updates per second.
-	if time.Since(p.last) < 200*time.Millisecond {
-		return n, err
-	}
-	p.last = time.Now()
-	if p.total > 0 {
-		fmt.Fprintf(os.Stderr, "\r  %s  %s / %s  (%d%%)",
-			p.desc,
-			util.HumanBytesStr(p.current),
-			util.HumanBytesStr(p.total),
-			p.current*100/p.total,
-		)
-	} else {
-		fmt.Fprintf(os.Stderr, "\r  %s  %s", p.desc, util.HumanBytesStr(p.current))
-	}
 	return n, err
 }

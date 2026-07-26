@@ -21,17 +21,22 @@ func TestBuildDownloadOptionsPrefersConcreteManifestMirror(t *testing.T) {
 	}}
 	inst := New(cfg, plugin.NewRegistry())
 	archive := &manifest.Archive{
-		URL:       "https://dl.google.com/android/repository/platform-tools_r35.0.2-win.zip",
+		URL:       "https://example.test/android/platform-tools_r35.0.2-win.zip",
 		MirrorURL: "https://mirror.example/android/platform-tools_r35.0.2-win.zip",
 		Format:    "zip",
 	}
 	primary, fallbacks, _ := inst.BuildDownloadOptions("android-platform-tools", "35.0.2", archive)
+	// With smart mirror selection, the candidates list includes:
+	//   [mirror.example, official (no rewrite triggered for example.test)]
+	// Since both are unreachable (test URLs), the probe will fail and the
+	// first filtered candidate (mirror.example) should be used as primary.
 	if primary != archive.MirrorURL {
 		t.Fatalf("primary = %q, want manifest mirror %q", primary, archive.MirrorURL)
 	}
-	wantFirstFallback := "https://redirector.gvt1.com/edgedl/android/repository/platform-tools_r35.0.2-win.zip"
-	if len(fallbacks) < 2 || fallbacks[0] != wantFirstFallback || fallbacks[1] != archive.URL {
-		t.Fatalf("fallbacks = %#v, want rewritten then official", fallbacks)
+	// Fallbacks should include the remaining candidates — in this case only
+	// the official URL remains.
+	if len(fallbacks) != 1 || fallbacks[0] != archive.URL {
+		t.Fatalf("fallbacks = %#v, want [%q]", fallbacks, archive.URL)
 	}
 }
 

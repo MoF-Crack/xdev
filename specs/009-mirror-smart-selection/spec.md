@@ -1,8 +1,8 @@
 ﻿# Feature Specification: 下载源 Mirror 智能选择
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
-> **文档版本**：0.1.0
+> **状态**：Approved
+> **文档版本**：0.2.0
 > **创建日期**：2026-07-26
 > **最后更新**：2026-07-26
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
@@ -11,7 +11,7 @@
 
 **Feature Branch**: `009-mirror-smart-selection`
 **Created**: 2026-07-26
-**Status**: Draft
+**Status**: Approved
 **Input**: 用户需求"可用下载源 mirror 智能选择"
 
 ---
@@ -136,7 +136,8 @@ xdev 记住已知不可用的 mirror，后续安装不再尝试。
 
 | 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
 |---|---|---|---|---|---|
-$12026-07-26-spec-009-draft-001 |
+| Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.1.0` | `2026-07-26-spec-009-draft-001` 创建初稿 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.2.0` | `2026-07-26-spec-009-approved-001` 用户批准 Spec 内容 |
 
 ---
 

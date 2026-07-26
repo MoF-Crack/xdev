@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-07-26-plan-008-001",
+  "asset_type": "plan",
+  "target_path": "specs/008-install-progress-bar/plan.md",
+  "decision": "approve",
+  "target_version": "0.1.0",
+  "target_state": "Ready",
+  "scope": "Approve implementation plan for 008-install-progress-bar",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-07-26",
+  "authorization_text": "同意spec008 开始按流程进行",
+  "recorded_at": "2026-07-26",
+  "recorded_by": "OpenCode Orchestrator",
+  "supersedes": []
+}

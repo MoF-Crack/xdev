@@ -37,6 +37,8 @@ type Task struct {
 	Downloaded   int64          `json:"downloaded"`
 	Total        int64          `json:"total"`
 	ErrorMessage string         `json:"errorMessage,omitempty"`
+	BatchIndex   int            `json:"batchIndex,omitempty"`
+	BatchTotal   int            `json:"batchTotal,omitempty"`
 
 	// 内部字段
 	ctx      context.Context
@@ -115,6 +117,11 @@ func (m *Manager) StartDownload(id, tool, ver string, opts Options) error {
 
 // runDownload 执行下载
 func (m *Manager) runDownload(task *Task) {
+	// 如果批量下载，在 ProgressDesc 前加 [N/M] 前缀
+	if task.BatchTotal > 0 {
+		task.opts.ProgressDesc = fmt.Sprintf("[%d/%d] %s", task.BatchIndex, task.BatchTotal, task.opts.ProgressDesc)
+	}
+
 	// 包装 OnProgress 回调以更新任务状态
 	originalProgress := task.opts.OnProgress
 	task.opts.OnProgress = func(downloaded, total int64, elapsed time.Duration) {
@@ -130,6 +137,28 @@ func (m *Manager) runDownload(task *Task) {
 
 		if originalProgress != nil {
 			originalProgress(downloaded, total, elapsed)
+		}
+	}
+
+	// 包装 OnProgressEx 回调以更新任务状态（含 speed/eta）
+	originalProgressEx := task.opts.OnProgressEx
+	task.opts.OnProgressEx = func(downloaded, total int64, speed int64, eta time.Duration) {
+		task.mu.Lock()
+		task.Downloaded = downloaded
+		task.Total = total
+		if total > 0 {
+			task.Progress = float64(downloaded) / float64(total) * 100
+		}
+		if speed > 0 {
+			task.Speed = util.HumanBytesStr(speed) + "/s"
+		}
+		if eta > 0 {
+			task.ETA = util.FormatDurationStr(eta)
+		}
+		task.mu.Unlock()
+
+		if originalProgressEx != nil {
+			originalProgressEx(downloaded, total, speed, eta)
 		}
 	}
 

@@ -104,16 +104,17 @@ type Config struct {
 // (resolved by ResolvePaths). LogLevel defaults to "info", SelfUpdate
 // defaults to true, and ManifestTTL defaults to "24h".
 type CoreConfig struct {
-	XMDevDir    string `yaml:"xmdevenv_dir"` // Root xdev home directory
-	DownloadDir string `yaml:"download_dir"` // Where archives are cached
-	InstallDir  string `yaml:"install_dir"`  // Where tools are extracted to
-	ShimDir     string `yaml:"shim_dir"`     // Where shim binaries live
-	CacheDir    string `yaml:"cache_dir"`    // Manifest cache directory
-	EnvDir      string `yaml:"env_dir"`      // Environment variable fragment directory
-	ManifestDir string `yaml:"manifest_dir"` // Tool manifest YAML directory
-	LogLevel    string `yaml:"log_level"`    // Logging verbosity: "debug"|"info"|"warn"|"error"
-	SelfUpdate  bool   `yaml:"self_update"`  // Whether to auto-check for xdev updates
-	ManifestTTL string `yaml:"manifest_ttl"` // Cache TTL for remote version lists (Go duration)
+	XMDevDir    string   `yaml:"xmdevenv_dir"` // Root xdev home directory
+	DownloadDir string   `yaml:"download_dir"` // Where archives are cached
+	InstallDir  string   `yaml:"install_dir"`  // Where tools are extracted to
+	ShimDir     string   `yaml:"shim_dir"`     // Where shim binaries live
+	CacheDir    string   `yaml:"cache_dir"`    // Manifest cache directory
+	EnvDir      string   `yaml:"env_dir"`      // Environment variable fragment directory
+	ManifestDir string   `yaml:"manifest_dir"` // Tool manifest YAML directory
+	LogLevel    string   `yaml:"log_level"`    // Logging verbosity: "debug"|"info"|"warn"|"error"
+	SelfUpdate  bool     `yaml:"self_update"`  // Whether to auto-check for xdev updates
+	ManifestTTL string   `yaml:"manifest_ttl"` // Cache TTL for remote version lists (Go duration)
+	MirrorPreference []string `yaml:"mirror_preference"` // User-preferred mirror URLs, highest priority
 }
 
 // PathConfig controls how the tool interacts with the user's PATH.
