@@ -19,7 +19,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-win-11076708_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "4d6931209eebb1bfb7c7e8b240a6a3cb3ab24479ea294f3539429574b1eec862"
           size: 150000000
           strip: 0
         - os: linux
@@ -27,7 +27,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-linux-11076708_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 145000000
           strip: 0
         - os: darwin
@@ -35,7 +35,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-mac-11076708_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 140000000
           strip: 0
     - version: "10406996"
@@ -47,7 +47,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-win-10406996_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-win-10406996_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "9b782a54d246ba5d207110fddd1a35a91087a8aaf4057e9df697b1cbc0ef60fc"
           size: 145000000
           strip: 0
         - os: linux
@@ -55,7 +55,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-linux-10406996_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 140000000
           strip: 0
         - os: darwin
@@ -63,7 +63,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-mac-10406996_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-mac-10406996_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 135000000
           strip: 0
     - version: "9477386"
@@ -75,7 +75,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-win-9477386_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-win-9477386_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "696431978daadd33a28841320659835ba8db8080a535b8f35e9e60701ab8b491"
           size: 140000000
           strip: 0
         - os: linux
@@ -83,7 +83,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-linux-9477386_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 135000000
           strip: 0
         - os: darwin
@@ -91,12 +91,12 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/commandlinetools-mac-9477386_latest.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/commandlinetools-mac-9477386_latest.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 130000000
           strip: 0
 remote:
     type: html
-    url: https://dl.google.com/android/repository/
+    url: https://dl.google.com/android/repository/repository2-3.xml
     path: ""
     pattern: commandlinetools-win-(\d+)_latest
 latest: "11076708"

@@ -47,15 +47,40 @@ func NewSSHAdapter(target SSHTarget) (*SSHAdapter, error) {
 
 func (s *SSHAdapter) Name() string { return "ssh" }
 
-func (s *SSHAdapter) Create(ctx context.Context, spec *EnvironmentSpec) (*Instance, error) {
-	// For SSH, "create" means verify the connection works
-	args := s.sshArgs("echo", "ok")
+// runSSH executes the ssh client. When a password is configured it routes
+// through sshpass (must be installed); otherwise it uses the system ssh
+// directly. Returns an error if sshpass is required but unavailable.
+func (s *SSHAdapter) runSSH(ctx context.Context, args ...string) ([]byte, error) {
+	if s.target.Password != "" {
+		if _, err := exec.LookPath("sshpass"); err != nil {
+			return nil, fmt.Errorf("密码登录需要 sshpass（未在 PATH 中找到）。请安装 sshpass 或改用密钥登录")
+		}
+		full := append([]string{"-p", s.target.Password, sshBinary()}, args...)
+		cmd := exec.CommandContext(ctx, "sshpass", full...)
+		util.HideWindow(cmd)
+		return cmd.Output()
+	}
 	cmd := exec.CommandContext(ctx, sshBinary(), args...)
 	util.HideWindow(cmd)
-	if out, err := cmd.Output(); err != nil {
-		return nil, fmt.Errorf("ssh connect test failed: %w", err)
-	} else if strings.TrimSpace(string(out)) != "ok" {
-		return nil, fmt.Errorf("ssh connect test returned unexpected output: %s", strings.TrimSpace(string(out)))
+	return cmd.Output()
+}
+
+// TestConnection verifies the SSH connection by running `echo ok`.
+func (s *SSHAdapter) TestConnection(ctx context.Context) error {
+	out, err := s.runSSH(ctx, s.sshArgs("echo", "ok")...)
+	if err != nil {
+		return fmt.Errorf("ssh connect test failed: %w", err)
+	}
+	if strings.TrimSpace(string(out)) != "ok" {
+		return fmt.Errorf("ssh connect test returned unexpected output: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (s *SSHAdapter) Create(ctx context.Context, spec *EnvironmentSpec) (*Instance, error) {
+	// For SSH, "create" means verify the connection works
+	if err := s.TestConnection(ctx); err != nil {
+		return nil, err
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.target.Host, s.target.Port)
@@ -72,13 +97,7 @@ func (s *SSHAdapter) Create(ctx context.Context, spec *EnvironmentSpec) (*Instan
 
 func (s *SSHAdapter) Start(ctx context.Context, id string) error {
 	// For SSH, "start" means verify the connection
-	args := s.sshArgs("echo", "ok")
-	cmd := exec.CommandContext(ctx, sshBinary(), args...)
-	util.HideWindow(cmd)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ssh start: %w", err)
-	}
-	return nil
+	return s.TestConnection(ctx)
 }
 
 func (s *SSHAdapter) Stop(ctx context.Context, id string) error {
@@ -97,6 +116,11 @@ func (s *SSHAdapter) Exec(ctx context.Context, id string, cmd []string) (*ExecRe
 	}
 
 	sshArgs := s.sshArgs(cmd...)
+	// Password path: run through sshpass via runSSH.
+	if s.target.Password != "" {
+		out, err := s.runSSH(ctx, sshArgs...)
+		return &ExecResult{Stdout: string(out), Stderr: "", ExitCode: 0}, err
+	}
 	result, _ := util.RunCommand(ctx, sshBinary(), sshArgs...)
 	return &result, nil
 }

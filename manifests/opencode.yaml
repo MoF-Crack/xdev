@@ -1,0 +1,137 @@
+﻿# T-D5 opencode (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
+# 瀹夎绛栫暐锛歺dev 浣跨敤 npm 骞冲彴鍖咃紙optionalDependencies 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃紝
+# 濡?opencode-windows-x64@1.18.11锛夛紝闈?universal 钖勫３ tgz銆?# 骞冲彴 tgz 鏍逛负 package/锛宻trip 1 鍚?bin/opencode.exe 钀戒簬 install/bin锛坕ntegrity 鍛戒腑锛夈€?# npm 鍏?Node锛氬钩鍙板寘鑷甫鍘熺敓浜岃繘鍒讹紝鏃犻渶 node 杩愯鏃讹紝鏁呬笉澹版槑 depends銆?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?opencode-ai锛堢増鏈覆涓€鑷达級锛歳emote 杩斿洖 universal
+# 鐗堟湰锛?.18.11锛夛紝褰掓。涓哄钩鍙板寘鐗堟湰锛?.18.11锛夛紝浜岃€呭榻愩€?# GUI锛歄penCode 鍚屾椂鎻愪緵 Desktop App锛坓ui 褰㈡€侊級锛涙闈㈠簲鐢ㄥ畨瑁呭竷灞€寰呭疄鏂芥湡鏍稿疄锛?# 鏁呬笉璁剧疆 gui_binary锛寈dev 涓昏绠＄悊 CLI/TUI銆?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: opencode
+display_name: OpenCode
+description: OpenCode is an open-source AI coding agent that runs in the terminal, IDE, and desktop app, helping you write code across your whole workspace.
+homepage: https://opencode.ai
+category: development_tools
+shims:
+  - opencode
+form_factor:
+  - gui
+  - cli
+  - tui
+latest: "1.18.11"
+lts: ""
+versions:
+  - version: "1.18.11"
+    stable: true
+    release: "2026-08-01"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-windows-x64/-/opencode-windows-x64-1.18.11.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-windows-x64/-/opencode-windows-x64-1.18.11.tgz
+        sha256: "7ded0e81ad1504b1ddff13b40affabcecc8ea34a752324b0fd62601dffa2d7d2"
+        size: 58905374
+        strip: 1
+        form: cli
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-windows-arm64/-/opencode-windows-arm64-1.18.11.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-windows-arm64/-/opencode-windows-arm64-1.18.11.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-linux-x64/-/opencode-linux-x64-1.18.11.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-linux-x64/-/opencode-linux-x64-1.18.11.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.18.11.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-linux-arm64/-/opencode-linux-arm64-1.18.11.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-darwin-x64/-/opencode-darwin-x64-1.18.11.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-darwin-x64/-/opencode-darwin-x64-1.18.11.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-darwin-arm64/-/opencode-darwin-arm64-1.18.11.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-darwin-arm64/-/opencode-darwin-arm64-1.18.11.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+  - version: "1.18.10"
+    stable: true
+    release: "2026-07-30"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-windows-x64/-/opencode-windows-x64-1.18.10.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-windows-x64/-/opencode-windows-x64-1.18.10.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-windows-arm64/-/opencode-windows-arm64-1.18.10.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-windows-arm64/-/opencode-windows-arm64-1.18.10.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-linux-x64/-/opencode-linux-x64-1.18.10.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-linux-x64/-/opencode-linux-x64-1.18.10.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.18.10.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-linux-arm64/-/opencode-linux-arm64-1.18.10.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-darwin-x64/-/opencode-darwin-x64-1.18.10.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-darwin-x64/-/opencode-darwin-x64-1.18.10.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/opencode-darwin-arm64/-/opencode-darwin-arm64-1.18.10.tgz
+        mirror_url: https://registry.npmmirror.com/opencode-darwin-arm64/-/opencode-darwin-arm64-1.18.10.tgz
+        sha256: ""
+        size: 58000000
+        strip: 1
+        form: cli
+remote:
+  type: npm
+  package: opencode-ai
+  pattern: "^(\\d+\\.\\d+\\.\\d+)$"

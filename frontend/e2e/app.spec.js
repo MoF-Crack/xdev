@@ -26,6 +26,12 @@ async function openApp(page, testInfo, options, initialized = true) {
   ` });
 }
 
+// Default view is the dashboard; tests that need the tool catalog must navigate to it explicitly.
+async function openToolCatalog(page) {
+  await page.locator('[data-view="language"]').click();
+  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+}
+
 async function expectDocumentContained(page) {
   expect(await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
@@ -81,7 +87,7 @@ test('setup wizard visual baseline', async ({ page }, testInfo) => {
 
 test('dashboard visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.dashboard);
-  await page.getByText('仪表盘', { exact: true }).click();
+  await page.locator('[data-view="dashboard"]').click();
   await expect(page.getByText('已安装工具', { exact: true })).toBeVisible();
   await expectDocumentContained(page);
   await expectInViewport(page.locator('.app-shell__content'), cases.dashboard.viewport);
@@ -97,6 +103,7 @@ test('dashboard visual baseline', async ({ page }, testInfo) => {
 
 test('tool catalog visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.catalog);
+  await openToolCatalog(page);
   await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
   await expectDocumentContained(page);
   await expectInViewport(page.locator('.app-shell__content'), cases.catalog.viewport);
@@ -117,12 +124,14 @@ test('tool catalog visual baseline', async ({ page }, testInfo) => {
 
 test('package manager and favorite actions reach the correct Wails APIs', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.catalog);
-  await page.getByText('Package Managers', { exact: true }).click();
+  await page.locator('[data-view="package-manager"]').click();
   await page.locator('[data-testid="hide-unavailable"]').uncheck();
   await expect(page.getByText('Install from vendor site', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Install' }).first().click();
+  await expectVisibleDialogAccessible(page);
+  await page.getByRole('dialog').last().getByRole('button', { name: 'Install', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__wailsCalls.InstallPackageManager)).toBe(1);
-  await page.getByRole('button', { name: 'Update' }).click();
+  await page.getByRole('button', { name: 'Update', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__wailsCalls.UpdatePackageManager)).toBe(1);
   await page.getByRole('row').filter({ has: page.getByText('npm', { exact: true }) }).getByRole('button', { name: 'Favorite', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__wailsCalls.AddFavorite)).toBe(1);
@@ -143,7 +152,7 @@ test('settings visual baseline', async ({ page }, testInfo) => {
 test('settings actions reach Wails APIs and destructive cache requires confirmation', async ({ page }, testInfo) => {
   await openApp(page, testInfo, { viewport: { width: 1440, height: 900 }, theme: 'light', locale: 'en' });
   await page.getByText('Settings', { exact: true }).last().click();
-  await page.locator('[data-action="theme"]').uncheck();
+  await page.locator('[data-action="theme-dark"]').check();
   await page.locator('[data-action="locale"]').selectOption('zh');
   await page.locator('[data-action="path-mode"]').selectOption('direct');
   await page.locator('[data-action="mirror-test"]').first().click();
@@ -164,56 +173,41 @@ test('environment actions and migration reach Wails APIs', async ({ page }, test
   await openApp(page, testInfo, { viewport: { width: 1024, height: 720 }, theme: 'dark', locale: 'en' });
   await page.getByText('Env Vars', { exact: true }).last().click();
   await page.setViewportSize({ width: 640, height: 720 });
-  await page.locator('[data-action="scope-all"]').click();
+  await page.locator('[data-action="all-level"]').selectOption('user');
   await page.locator('[data-action="validate"]').click();
-  await page.getByLabel('Tool name').fill('java'); await page.getByLabel('Variable name').fill('JAVA_HOME'); await page.getByLabel('Variable value').fill('C:\\Java');
-  await page.locator('[data-action="save-env"]').click();
-  await page.locator('[data-action="scope-dev"]').click();
-  await page.locator('.env-card[data-row="JAVA_HOME"] [data-action="edit-env"]').click();
-  await page.locator('.env-card[data-row="JAVA_HOME"] [data-action="delete-env"]').click();
+  // The validation dialog appears when invalid variables exist; close it before continuing.
+  await page.locator('[role="dialog"] .n-dialog__action').getByRole('button', { name: 'Close' }).click();
+  await page.locator('[data-action="new-env"]').click();
+  await page.getByLabel('Variable Name').fill('JAVA_HOME');
+  await page.getByLabel('Variable Value 1').fill('C:\\Java');
+  await page.getByRole('button', { name: 'Save' }).click();
+  await page.locator('.env-card[data-row="OLD_HOME"] [data-action="edit-env"]').click();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.locator('.env-card[data-row="OLD_HOME"] [data-action="delete-env"]').click();
   await page.locator('[role="dialog"] [data-action="confirm"]').click();
   await page.locator('[data-action="migration-scan"]').click();
   await page.locator('[data-action="migration-single"]').click();
   await page.locator('[data-action="migration-scan"]').click();
   await page.locator('[data-action="migration-all"]').click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetEnvVar: [['java', 'JAVA_HOME', 'C:\\Java', 'user']], DeleteEnvVar: [['java', 'JAVA_HOME', 'user']], ScanMigration: 2, MigrateSingle: expect.any(Array) });
+  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetEnvVar: [['', 'JAVA_HOME', 'C:\\Java', 'user']], DeleteEnvVarEntry: [['OLD_HOME', 'user']], ScanMigration: 2, MigrateSingle: expect.any(Array) });
   expect((await new AxeBuilder({ page }).include('.env-page').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
 });
 
-test('project, task, plugin, and service pages preserve API contracts and confirmations', async ({ page }, testInfo) => {
-  await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
-  await page.locator('[data-view="project"]').click();
-  await expectVisibleStateAccessible(page);
-  await page.getByLabel('tool name').fill('go'); await page.getByLabel('version').fill('1.24'); await page.locator('[data-action="set-project-tool"]').click();
-  await page.locator('[data-action="unset-project-tool"]').click(); expect(await page.evaluate(() => window.__wailsCalls.UnsetProjectTool)).toEqual([]);
-  await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
-  await expect(page.locator('[data-action="install-lockfile"]')).toBeVisible();
-  expect(await page.evaluate(() => window.__wailsCalls.GetLockfile)).toBe(1);
-  await page.locator('[data-action="run-project-task"]').dblclick(); await page.locator('[data-action="install-lockfile"]').click();
-  await page.locator('[data-view="tasks"]').click(); await expectVisibleStateAccessible(page);
-  await page.locator('[data-view="plugins"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-action="open-create-plugin"]').click(); await expectVisibleDialogAccessible(page); await page.locator('[data-field="plugin-name"]').fill('demo'); await page.locator('[data-action="create-plugin"]').click();
-  await page.locator('[data-view="services"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-service="redis"] [data-action="start-service"]').click(); await page.locator('[data-service="postgres"] [data-action="stop-service"]').click(); expect(await page.evaluate(() => window.__wailsCalls.StopService)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
-  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetProjectTool: [['go', '1.24']], UnsetProjectTool: [['node']], RunProjectTask: [['build']], InstallFromLockfile: [[]], CreatePlugin: [['demo']], StartService: [['redis']], StopService: [['postgres']] });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect((await new AxeBuilder({ page }).include('main').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
-});
-
-test('AI, isolation, remote, custom tools, and about pages preserve API contracts', async ({ page }, testInfo) => {
+test('isolation, remote, and about pages preserve API contracts', async ({ page }, testInfo) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
-  await page.locator('[data-view="ai"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-field="suggest-tool"]').fill('node'); await page.locator('[data-action="suggest"]').click(); await page.locator('[data-field="diagnose-problem"]').fill('path'); await page.locator('[data-action="diagnose"]').click(); await page.locator('[data-field="chat-message"]').fill('hello'); await page.keyboard.press('Control+Enter');
   await page.locator('[data-view="isolate"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-action="setup"]').click(); await page.locator('[data-field="isolate-command"]').fill('node --version'); await page.locator('[data-action="exec"]').click(); await page.locator('[data-action="teardown"]').click(); expect(await page.evaluate(() => window.__wailsCalls.IsolateTeardown)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
   await page.locator('[data-view="remote"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-field="remote-image"]').fill('ubuntu:22.04'); await page.locator('[data-action="create-remote"]').click(); await page.locator('[data-action="copy-address"]').click(); expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('C:\\remote'); await page.locator('[data-field="remote-command"]').fill('pwd'); await page.locator('[data-action="exec-remote"]').click(); await page.locator('[data-action="destroy-remote"]').click(); expect(await page.evaluate(() => window.__wailsCalls.DestroyRemoteInstance)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
-  await page.locator('[data-view="custom-tools"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-action="open-add-tool"]').click(); await expectVisibleDialogAccessible(page); await page.locator('[data-field="tool-name"]').fill('new'); await page.locator('[data-field="tool-display-name"]').fill('New'); await page.locator('[data-field="tool-url"]').fill('https://example.test/new.zip'); const addButton = page.locator('[data-action="submit-tool"]').getByRole('button', { name: 'Add' }); await addButton.click(); await expect.poll(() => page.evaluate(() => window.__wailsCalls.AddCustomTool.length)).toBe(1); await expect(addButton).toBeEnabled(); await page.locator('[data-action="submit-tool"]').getByRole('button', { name: 'Cancel' }).click(); await page.locator('[data-action="install-tool"]').click(); await page.locator('[data-action="remove-tool"]').click(); expect(await page.evaluate(() => window.__wailsCalls.RemoveCustomTool)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
   await page.locator('[data-view="about"]').click(); await expect(page.getByText('1.0.0', { exact: true })).toBeVisible(); await expectVisibleStateAccessible(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect((await new AxeBuilder({ page }).include('main').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
-  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ AISuggest: [['node']], AIDiagnose: [['path']], AIChat: [['hello']], IsolateSetup: [['container']], IsolateExec: [[['node', '--version']]], IsolateTeardown: [[]], CreateRemoteInstance: [['docker', 'ubuntu:22.04', '', 22, 'root', '']], ExecRemoteInstance: [['docker', 'remote-1', ['pwd']]], DestroyRemoteInstance: [['docker', 'remote-1']], InstallCustomTool: [['demo']], RemoveCustomTool: [['demo']] });
+  expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ IsolateSetup: [['container']], IsolateExec: [[['node', '--version']]], IsolateTeardown: [[]], CreateRemoteInstance: [['docker', 'ubuntu:22.04', '', 22, 'root', '', '']], ExecRemoteInstance: [['docker', 'remote-1', ['pwd']]], DestroyRemoteInstance: [['docker', 'remote-1']] });
 });
 
 test('tool detail drawer visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.drawer);
+  await openToolCatalog(page);
   await page.getByText('Node.js', { exact: true }).click();
   await expect(page.locator('.n-drawer')).toBeVisible();
   await expectDocumentContained(page);
@@ -224,8 +218,37 @@ test('tool detail drawer visual baseline', async ({ page }, testInfo) => {
   await expect(page).toHaveScreenshot('tool-drawer-1440-dark-en.png', { animations: 'disabled' });
 });
 
+test('spec-023 form badges, dependencies, launch and copy-command actions', async ({ page }, testInfo) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await openApp(page, testInfo, cases.drawer);
+  await openToolCatalog(page);
+  // form-factor badges on the catalog table row
+  const nodeRow = page.getByRole('row').filter({ has: page.getByText('Node.js', { exact: true }) });
+  await expect(nodeRow.locator('[data-form="gui"]')).toHaveText('GUI');
+  await expect(nodeRow.locator('[data-form="cli"]')).toHaveText('CLI');
+  // open the drawer: dependency row + launch/copy actions
+  await nodeRow.locator('[data-action="detail"]').click();
+  await expect(page.locator('[data-action="tool-deps"]')).toBeVisible();
+  await expect(page.locator('[data-dep="npm"]')).toContainText('Satisfied');
+  await expect(page.getByRole('button', { name: 'Launch' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy command' })).toBeVisible();
+  // copy-command writes the CLI shim to the clipboard
+  await page.getByRole('button', { name: 'Copy command' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.ToolCommand)).toEqual([['node']]);
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('node');
+  // launch reaches the Wails API
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.LaunchTool)).toEqual([['node']]);
+  // CLI-only tool: no launch button
+  await page.keyboard.press('Escape');
+  await page.getByRole('row').filter({ has: page.getByText('Go', { exact: true }) }).locator('[data-action="detail"]').click();
+  await expect(page.getByRole('button', { name: 'Launch' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Copy command' })).toBeVisible();
+});
+
 test('tool detail drawer returns focus to its detail trigger', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.drawer);
+  await openToolCatalog(page);
   const trigger = page.locator('[data-action="detail"]').first();
   await trigger.focus();
   await trigger.click();
@@ -256,6 +279,7 @@ test('command palette supports keyboard navigation and restores trigger focus', 
 
 test('installation progress visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
+  await openToolCatalog(page);
   await page.getByText('Node.js', { exact: true }).click();
   await page.getByRole('button', { name: '安装' }).locator(':not([disabled])').first().click();
   await page.evaluate(() => window.__wailsEmit('installProgress', {
@@ -279,6 +303,7 @@ test('installation progress visual baseline', async ({ page }, testInfo) => {
 
 test('installation pause resume and cancel use the active task and protect the dialog', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
+  await openToolCatalog(page);
   await expectVisibleStateAccessible(page, '.tool-catalog');
   const detailTrigger = page.locator('[data-action="detail"]').first();
   await detailTrigger.click();

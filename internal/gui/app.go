@@ -29,7 +29,6 @@
 //   - app_env_vars.go: GetEnvVars, SetEnvVar, DeleteEnvVar, etc.
 //   - app_project.go: GetProjectConfig, SetProjectTool, RunProjectTask, etc.
 //   - app_favorites.go: GetFavorites, AddFavorite, RemoveFavorite
-//   - app_custom_tools.go: GetCustomTools, AddCustomTool, etc.
 //   - app_profile.go: ExportProfile, ImportProfile
 //
 // # Concurrency
@@ -57,6 +56,7 @@ import (
 	"github.com/xmdemt/xdev/internal/isolator"
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
 )
@@ -76,6 +76,27 @@ type ToolInfo struct {
 	ToolName     string `json:"toolName"`     // xdev tool name for install (package-manager)
 	InstallHint  string `json:"installHint"`  // hint for how to install (package-manager)
 	Source       string `json:"source"`       // "xdev" 或 "local"
+	// HasUpdate mirrors PackageManagerInfo.HasUpdate for the package-manager
+	// category: true only when a strictly newer version is available.
+	HasUpdate bool `json:"hasUpdate"`
+	// FormFactor 工具形态（gui/cli/tui），来自 manifest（Spec 023）。
+	FormFactor []string `json:"formFactor,omitempty"`
+	// GUIBinary GUI 主二进制相对路径（form_factor 含 gui 时）。
+	GUIBinary string `json:"guiBinary,omitempty"`
+	// HasFormSpecificArchives 报告该工具是否有按形态区分的独立 archive
+	// （Spec 025）。true 时前端安装流程显示形态选择器，让用户选择下载
+	// 哪个形态对应的 archive（如 OpenCode 的 Desktop App vs CLI）。
+	// false 时（单包多形态工具如 VS Code）直接安装，不显示选择器。
+	HasFormSpecificArchives bool `json:"hasFormSpecificArchives,omitempty"`
+	// RequiresAdmin 报告该包管理器安装是否需要管理员权限（Spec 025）。
+	// 仅对 script-installable 包管理器（choco）有意义；前端按钮文案
+	// 改为「以管理员安装」并附 tooltip。
+	RequiresAdmin bool `json:"requiresAdmin,omitempty"`
+	// Spec 026: 附属工具动态安装支持（与 PackageManagerInfo 对齐）。
+	EnableCommand    string              `json:"enableCommand,omitempty"`
+	InstallMethods   []InstallMethodInfo `json:"installMethods,omitempty"`
+	// Spec 027: 多实例检测（与 PackageManagerInfo 对齐）。
+	Instances []PMInstanceInfo `json:"instances,omitempty"`
 }
 
 // VersionInfo represents a version entry for the frontend.
@@ -83,6 +104,23 @@ type VersionInfo struct {
 	Version   string `json:"version"`
 	Installed bool   `json:"installed"`
 	Active    bool   `json:"active"`
+	// Intact is true when an installed version passes the integrity
+	// check (non-empty dir, all shim binaries present). It is false for
+	// incomplete installations. Always true for non-installed versions.
+	Intact bool `json:"intact"`
+	// Integrity is a human-readable reason when Intact is false.
+	Integrity string `json:"integrity,omitempty"`
+}
+
+// IntegrityInfo is the result of CheckInstallIntegrity for a single
+// installed version.
+type IntegrityInfo struct {
+	Tool    string   `json:"tool"`
+	Version string   `json:"version"`
+	Path    string   `json:"path"`
+	OK      bool     `json:"ok"`
+	Reason  string   `json:"reason"`
+	Missing []string `json:"missing"`
 }
 
 // CategoryInfo represents a tool category.
@@ -189,6 +227,15 @@ type ProxyTestResult struct {
 	Latency int64  `json:"latency"`
 }
 
+// ProxyProbeResult is the outcome of probing a candidate local proxy port.
+type ProxyProbeResult struct {
+	URL       string `json:"url"`       // candidate proxy URL, e.g. http://127.0.0.1:7897
+	Port      int    `json:"port"`      // probed port
+	OK        bool   `json:"ok"`        // true when the port proxies HTTPS successfully
+	LatencyMs int64  `json:"latencyMs"` // HEAD latency through the proxy (0 when port closed)
+	Message   string `json:"message"`   // human-readable outcome
+}
+
 // ImportResult contains the result of importing a profile.
 type ImportResult struct {
 	Success   bool     `json:"success"`
@@ -231,6 +278,37 @@ type PackageManagerInfo struct {
 	CanInstall  bool   `json:"canInstall"`  // true if xdev can install this
 	ToolName    string `json:"toolName"`    // xdev tool name for install (e.g. "uv")
 	InstallHint string `json:"installHint"` // hint for how to install (e.g. "Install Node.js")
+	// Spec 025: script install 支持。RequiresAdmin 为 true 时，前端按钮文案
+	// 改为「以管理员安装」并提示用户。
+	RequiresAdmin bool `json:"requiresAdmin"`
+	// Spec 026: 附属工具动态安装支持。
+	// EnableCommand 非空时，该工具是"可启用附属工具"（如 yarn/pnpm 通过
+	// corepack enable 启用）。前端显示「启用」按钮，点击后调 InstallSubTool。
+	EnableCommand string `json:"enableCommand,omitempty"`
+	// InstallMethods 列出可用的安装方式（如 pipx 可通过 pip 或 uv 安装）。
+	// 长度 > 1 时前端点「安装」弹选项对话框；长度 == 1 时直接用唯一方法。
+	InstallMethods []InstallMethodInfo `json:"installMethods,omitempty"`
+	// HasUpdate is true only when an installed, xdev-managed package
+	// manager has a strictly newer version available (semver compare).
+	// The frontend shows the "Update" button only when this is true.
+	HasUpdate bool `json:"hasUpdate"`
+	// Spec 027: 多实例检测——列出所有检测到的实例（xdev 管理的 + 系统安装的）。
+	// 前端详情抽屉显示为多版本列表，非 xdev 管理实例旁显示「迁移」按钮。
+	Instances []PMInstanceInfo `json:"instances,omitempty"`
+}
+
+// PMInstanceInfo 描述包管理器的一个检测实例（Spec 027）。
+type PMInstanceInfo struct {
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	Managed bool   `json:"managed"` // true = xdev 管理的，false = 系统安装的
+	Source  string `json:"source"`  // "xdev" 或 "local" 或 "system"
+}
+
+// InstallMethodInfo 描述附属工具的一种安装方式（Spec 026），供前端展示。
+type InstallMethodInfo struct {
+	Name    string `json:"name"`    // 方法标识（如 "pip" / "uv"）
+	Command string `json:"command"` // 执行命令（如 "pip install pipx"）
 }
 
 // DownloadTaskInfo 前端展示用的下载任务信息
@@ -285,11 +363,27 @@ type App struct {
 	localMap map[string]localInfo // cached local tool detection results
 	dlMgr    *downloader.Manager  // 下载管理器
 
+	// rootCtx 是应用级根上下文（F-20 / D18）：在 startup 创建、shutdown
+	// 取消。所有后台任务（安装轮询、延迟刷新等）应派生自它，以便应用
+	// 退出时立即停止，而不是继续空转（如 1 小时的安装轮询）。
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+
 	// Dashboard stats cache
 	dashMu         sync.RWMutex
 	dashCache      *DashboardStats
 	dashExpire     time.Time
 	dashRefreshing int32 // atomic: 1 = refresh in progress, prevents concurrent storms
+
+	// Size breakdown caches (Spec 019) — TTL'd so repeated drawer opens
+	// don't rescan the (potentially multi-GB) install/cache trees on
+	// every call. Cleared via InvalidateSizeBreakdown after
+	// install/uninstall/use/cache-clean operations.
+	sizeBreakdownMu  sync.Mutex
+	installSizeCache []DiskUsageEntry
+	installSizeExp   time.Time
+	cacheSizeCache   []DiskUsageEntry
+	cacheSizeExp     time.Time
 
 	// Channel for signaling that refreshLocalCache has completed
 	localReady     chan struct{}
@@ -302,14 +396,33 @@ type App struct {
 	favMu     sync.RWMutex
 	favorites []FavoriteInfo
 
-	// Custom tools
-	customMu    sync.RWMutex
-	customTools []CustomTool
+	// Ignored tools
+	ignored   []IgnoredToolInfo
+	ignoredMu sync.RWMutex
+
+	// Tool list cache (per category, TTL) — avoids re-spawning subprocesses
+	// for version detection on every category switch (编程语言/包管理器).
+	// Cleared via InvalidateToolsCache after install/uninstall/use.
+	toolsCacheMu   sync.Mutex
+	toolsCache     map[string]toolsCacheEntry
+	toolsCacheOnce sync.Once
 
 	// Isolation
 	isoMu       sync.Mutex
 	isoMode     isolator.IsolationMode
 	isoInstance isolator.Isolator
+
+	// Spec 025: pendingFormFilter 用于 InstallToolWithForm 传递形态筛选
+	// 到 InstallToolWithOptions 的 archive 选择点。非空时 ArchiveForWithForm
+	// 优先匹配该形态的 archive。每次安装完成后清空（一次性使用）。
+	pendingFormFilter   string
+	pendingFormFilterMu sync.Mutex
+}
+
+// toolsCacheEntry 缓存某分类的工具列表结果。
+type toolsCacheEntry struct {
+	Entries []ToolInfo
+	Expire  time.Time
 }
 
 // toolScanCacheFile 返回工具扫描缓存文件路径
@@ -321,21 +434,46 @@ func toolScanCacheFile() string {
 // NewApp creates a new App instance.
 func NewApp(cfg *config.Config, cat *manifest.Catalog, reg *plugin.Registry) *App {
 	return &App{
-		cfg:         cfg,
-		cat:         cat,
-		registry:    reg,
-		localMap:    make(map[string]localInfo),
-		dlMgr:       downloader.NewManager(),
-		localReady:  make(chan struct{}),
-		favorites:   []FavoriteInfo{},
-		customTools: []CustomTool{},
+		cfg:        cfg,
+		cat:        cat,
+		registry:   reg,
+		localMap:   make(map[string]localInfo),
+		dlMgr:      downloader.NewManager(),
+		localReady: make(chan struct{}),
+		favorites:  []FavoriteInfo{},
 	}
 }
 
 // startup is called when the app starts.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// 创建应用级根上下文（F-20 / D18）：shutdown 时取消，所有后台任务
+	// 由此派生以便退出时立即停止。
+	a.rootCtx, a.rootCancel = context.WithCancel(context.Background())
 	logInfo("[startup] Wails OnStartup callback fired")
+
+	// Configure HTTP client proxy from config (fixes sniff failing behind proxy).
+	cfg := a.getCfg()
+	if cfg != nil {
+		remote.ConfigureHTTPClient(cfg.GetProxyURL("https"))
+		// Configure GitHub API token from config file (env GITHUB_TOKEN/GH_TOKEN
+		// is read by effectiveGitHubToken() automatically each request).
+		if cfg.Sniff.GitHubToken != "" {
+			remote.ConfigureGitHubToken(cfg.Sniff.GitHubToken)
+		}
+	}
+
+	// Log token status (without exposing the token value).
+	if remote.GitHubTokenConfigured() {
+		logInfo("[startup] GitHub API token: configured")
+	} else {
+		logInfo("[startup] GitHub API token: not configured — rate limit ~60 req/h")
+	}
+
+	// Spec 020: 启动兜底清理过期归档（7d/30d 保留策略）。
+	if removed := a.CleanupExpiredArchives(); removed > 0 {
+		logInfo("[startup] cleaned up %d expired archive file(s)", removed)
+	}
 }
 
 // domReady is called when the DOM is ready.
@@ -347,19 +485,25 @@ func (a *App) domReady(ctx context.Context) {
 	// 先尝试从缓存加载
 	a.loadLocalCache()
 	a.loadFavorites()
-	a.loadCustomTools()
+	a.loadIgnored()
 
 	// 自动检测并修复主目录下缺失的 xdev/xdev-gui 二进制
 	go func() {
-		time.Sleep(1 * time.Second)
-		a.EnsureSelfInstalled()
+		select {
+		case <-time.After(1 * time.Second):
+			a.EnsureSelfInstalled()
+		case <-a.rootContext().Done():
+		}
 	}()
 
 	// 自动修复版本号为 "local" 的已迁移工具
 	go func() {
-		time.Sleep(2 * time.Second)
-		if fixed := a.FixLocalVersions(); len(fixed) > 0 {
-			logInfo("[domReady] fixed %d local version(s)", len(fixed))
+		select {
+		case <-time.After(2 * time.Second):
+			if fixed := a.FixLocalVersions(); len(fixed) > 0 {
+				logInfo("[domReady] fixed %d local version(s)", len(fixed))
+			}
+		case <-a.rootContext().Done():
 		}
 	}()
 
@@ -381,6 +525,10 @@ func (a *App) domReady(ctx context.Context) {
 
 // shutdown 在应用退出时清理资源
 func (a *App) shutdown(ctx context.Context) {
+	logInfo("[shutdown] 取消应用根上下文（停止所有后台任务）...")
+	if a.rootCancel != nil {
+		a.rootCancel()
+	}
 	logInfo("[shutdown] 取消延迟刷新任务...")
 	if a.cancelRefresh != nil {
 		a.cancelRefresh()
@@ -475,7 +623,13 @@ func (a *App) refreshLocalCache() {
 }
 
 // waitForLocalCache waits until the local cache has been populated
-// (at least once) or the timeout expires.
+// (at least once) or a short timeout expires.
+//
+// 优化（工具列表加载提速）：原实现最长阻塞 5 秒，而 domReady 延迟
+// 15 秒才触发 refreshLocalCache——用户在这期间打开「编程语言/包管理器」
+// 页面会白等 5 秒。改为快速路径：localMap 未填充时最多等 500ms，
+// 未就绪则直接返回（localVersion/localPath 暂缺，由后台刷新补充，
+// 前端 refreshTools 可手动刷新）。
 func (a *App) waitForLocalCache() {
 	// Quick check: already populated?
 	a.localMu.RLock()
@@ -484,11 +638,11 @@ func (a *App) waitForLocalCache() {
 	if populated {
 		return
 	}
-	// Wait for refreshLocalCache to complete, up to 5 seconds.
+	// Wait for refreshLocalCache to complete, up to 500ms.
 	select {
 	case <-a.localReady:
 		return
-	case <-time.After(5 * time.Second):
+	case <-time.After(500 * time.Millisecond):
 		return
 	}
 }
@@ -546,11 +700,27 @@ func (a *App) getRegistry() *plugin.Registry {
 	return a.registry
 }
 
-// getCfg returns the config with read lock protection.
+// getCfg 返回当前配置的深拷贝快照（F-19 / D17）。
+//
+// 访问模型（已评审确定）：
+//   - 读取方：一律使用 getCfg() 获得快照，读锁在快照复制完成即释放，
+//     之后对嵌套字段（Proxy/Sniff/Mirror/CustomTools 等）的读取不再
+//     受其他协程并发修改影响（不存在锁外读可变指针的竞态）。
+//   - 写入方：必须在 cfgMu 写锁内操作实时配置 —— 使用 mutateCfg，
+//     或（如 InitConfig / SetMirrorConfig）直接在 a.cfgMu.Lock 段内
+//     修改 a.cfg。禁止通过 getCfg() 的结果修改配置（快照修改无效）。
 func (a *App) getCfg() *config.Config {
 	a.cfgMu.RLock()
 	defer a.cfgMu.RUnlock()
-	return a.cfg
+	return a.cfg.Clone()
+}
+
+// mutateCfg 在 cfgMu 写锁内对实时配置执行 fn，用于需要调用 Config
+// 修改方法或直接改字段后保存的写入方（F-19 / D17）。
+func (a *App) mutateCfg(fn func(cfg *config.Config) error) error {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	return fn(a.cfg)
 }
 
 // setCfg updates the config with write lock protection.
@@ -558,6 +728,15 @@ func (a *App) setCfg(cfg *config.Config) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	a.cfg = cfg
+}
+
+// rootContext 返回应用根上下文（F-20 / D18）；未初始化（如单元测试或
+// 未走 startup 的调用）时退回 context.Background()，保证可安全调用。
+func (a *App) rootContext() context.Context {
+	if a.rootCtx != nil {
+		return a.rootCtx
+	}
+	return context.Background()
 }
 
 // getLocalCached returns cached local info for a tool.

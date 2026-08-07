@@ -720,7 +720,7 @@ internal/gui/
 | `GetProxyConfig()` | `ProxyInfo` | 代理配置 |
 | `TestProxy()` | `ProxyTestResult` | 代理测试结果 |
 | `ImportProfile()` | `ImportResult` | 导入结果 |
-| `MigrateAllLocalTools()` | `[]MigrationResult` | 迁移结果列表 |
+| `MigrateAllLocalTools(mode string)` | `[]MigrationResult` | 迁移结果列表（mode: "junction" \| "move"） |
 
 强类型确保：
 - Wails 绑定生成正确的 TypeScript 类型定义

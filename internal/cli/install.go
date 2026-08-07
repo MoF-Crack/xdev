@@ -3,14 +3,11 @@
 //
 // # install
 //
-// The install command supports three modes:
+// The install command supports:
 //   - `xdev install go@1.22.0` — install a specific tool and version
-//   - `xdev install --from-local` — install all tools from .xdev.toml
-//   - `xdev install --locked` — install exact versions from .xdev.lock
 //
-// After installation, the tool is activated (unless --no-activate is set)
-// and the lockfile is updated. When --no-path-fix is set, registry writes
-// are skipped for test isolation.
+// After installation, the tool is activated (unless --no-activate is set).
+// When --no-path-fix is set, registry writes are skipped for test isolation.
 //
 // # use
 //
@@ -27,6 +24,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,17 +33,17 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
-	"github.com/xmdemt/xdev/internal/lockfile"
-	"github.com/xmdemt/xdev/internal/project"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 // newInstallCmd handles `xdev install <tool>[@<ver>]`.
 func newInstallCmd() *cobra.Command {
 	var flagNoActivate bool
-	var flagFromLocal bool
-	var flagLocked bool
+	var flagYes bool
+	var flagForce bool
 	cmd := &cobra.Command{
 		Use:   "install <tool>[@<version>]",
 		Short: "Download and install a tool version",
@@ -54,18 +52,15 @@ func newInstallCmd() *cobra.Command {
 <install_dir>/<tool>/<version> and activates it by creating a
 symlink at <xmdevenv_dir>/current/<tool>.
 
-Use --from-local to install all tools listed in .xdev.toml.
-Use --locked to install only from .xdev.lock (exact versions).`,
+If the version is already installed and complete, install only
+re-activates it. If it is installed but incomplete (e.g. an
+interrupted extraction), install fails with an "incomplete install"
+error unless --force is passed, which removes the existing
+directory and reinstalls from scratch.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if flagLocked {
-				return installLocked(cmd)
-			}
-			if flagFromLocal {
-				return installFromLocal(cmd)
-			}
 			if len(args) == 0 {
-				return fmt.Errorf("requires a tool name, --from-local, or --locked flag")
+				return fmt.Errorf("requires a tool name")
 			}
 			name, ver := splitToolVer(args[0])
 			_, reg := loadCatalogAndRegistry()
@@ -79,9 +74,15 @@ Use --locked to install only from .xdev.lock (exact versions).`,
 					return fmt.Errorf("no default version for %s; specify @<version>", name)
 				}
 			}
+
+			// Check if the version is unverified (sniff-discovered) and prompt user.
+			if err := checkUnverifiedVersion(cmd, name, ver, flagYes); err != nil {
+				return err
+			}
+
 			ins := installer.New(Cfg(), reg)
 			ins.SetNoEnvWrite(NoPathFix())
-			res, err := ins.InstallWithProgress(cmd.Context(), p, ver, nil, installer.InstallOptions{NoActivate: flagNoActivate})
+			res, err := ins.InstallWithProgress(cmd.Context(), p, ver, nil, installer.InstallOptions{NoActivate: flagNoActivate, Force: flagForce})
 			if err != nil {
 				return err
 			}
@@ -89,56 +90,15 @@ Use --locked to install only from .xdev.lock (exact versions).`,
 			if res.Activated {
 				fmt.Printf("✔ activated %s@%s (current -> %s)\n", res.Tool, res.Version, res.InstallPath)
 			}
-			// Update lockfile
-			updateLockfile(name, res)
 			fmt.Println("Tip: open a new terminal or `source ~/.zshrc` / `~/.bashrc` to use the new shims.")
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&flagNoActivate, "no-activate", false, "install but do not change the active version")
-	cmd.Flags().BoolVar(&flagFromLocal, "from-local", false, "install all tools from .xdev.toml in the current directory")
-	cmd.Flags().BoolVar(&flagLocked, "locked", false, "install only from .xdev.lock (exact pinned versions)")
+	cmd.Flags().BoolVar(&flagYes, "yes", false, "skip confirmation prompts (e.g. for unverified versions)")
+	cmd.Flags().BoolVar(&flagForce, "force", false, "remove the existing install directory (if any) and reinstall from scratch")
+	cmd.Flags().BoolVar(&flagForce, "reinstall", false, "alias for --force")
 	return cmd
-}
-
-// installFromLocal installs all tools listed in the nearest .xdev.toml.
-func installFromLocal(cmd *cobra.Command) error {
-	_, proj := project.FindConfig(".")
-	if proj == nil || len(proj.Tools) == 0 {
-		return fmt.Errorf("no .xdev.toml found or no tools configured")
-	}
-	_, reg := loadCatalogAndRegistry()
-	ins := installer.New(Cfg(), reg)
-	ins.SetNoEnvWrite(NoPathFix())
-
-	var items []installer.BatchInstallItem
-	for toolName, versionSpec := range proj.Tools {
-		items = append(items, installer.BatchInstallItem{
-			ToolName: toolName,
-			Version:  versionSpec,
-		})
-	}
-
-	var skipped, failed int
-	results := ins.InstallMany(cmd.Context(), items)
-	for _, r := range results {
-		switch r.Status {
-		case "unsupported":
-			fmt.Printf("⚠ unsupported tool %q, skipping\n", r.Tool)
-			skipped++
-		case "already_installed":
-			fmt.Printf("✔ %s@%s already installed\n", r.Tool, r.Version)
-		case "failed":
-			fmt.Printf("⚠ failed to install %s@%s: %v\n", r.Tool, r.Version, r.Error)
-			failed++
-		case "installed":
-			fmt.Printf("✔ installed %s@%s\n", r.Tool, r.Version)
-		}
-	}
-	if skipped > 0 || failed > 0 {
-		return fmt.Errorf("install completed with %d skipped, %d failed", skipped, failed)
-	}
-	return nil
 }
 
 func newUninstallCmd() *cobra.Command {
@@ -161,19 +121,6 @@ func newUninstallCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("✔ removed %s@%s\n", name, ver)
-			// Clean up lockfile entry if present
-			if configDir := lockfile.FindConfigDir("."); configDir != "" {
-				if lf, err := lockfile.Load(configDir); err == nil && lf != nil {
-					if _, exists := lf.Tools[name]; exists {
-						lf.RemoveTool(name)
-						if err := lockfile.Save(configDir, lf); err != nil {
-							fmt.Fprintf(os.Stderr, "⚠ failed to update lockfile: %v\n", err)
-						} else {
-							fmt.Printf("✔ removed %s from lockfile\n", name)
-						}
-					}
-				}
-			}
 			fmt.Println("Tip: open a new terminal to reflect the uninstalled tool in your PATH.")
 			return nil
 		},
@@ -201,17 +148,17 @@ func newUseCmd() *cobra.Command {
 					name, ver, name, ver)
 			}
 			ins := installer.New(Cfg(), reg)
-				ins.SetNoEnvWrite(NoPathFix())
-				if err := ins.Activate(p, installPath, ver); err != nil {
+			ins.SetNoEnvWrite(NoPathFix())
+			if err := ins.Activate(p, installPath, ver); err != nil {
 				return err
 			}
 			// 清理用户 PATH 中残留的 xdev install 目录条目
-				if !NoPathFix() {
-					shimDir := filepath.Join(Cfg().Core.XMDevDir, "shims")
-					if changed, _ := env.CleanupUserPath(shimDir, Cfg().GetPathMode()); changed {
-						fmt.Println("  (cleaned up stale PATH entries)")
-					}
+			if !NoPathFix() {
+				shimDir := filepath.Join(Cfg().Core.XMDevDir, "shims")
+				if changed, _ := env.CleanupUserPath(shimDir, Cfg().GetPathMode()); changed {
+					fmt.Println("  (cleaned up stale PATH entries)")
 				}
+			}
 			fmt.Printf("✔ %s@%s is now active\n", name, ver)
 			fmt.Println("Tip: open a new terminal or `source ~/.zshrc` / `~/.bashrc` to use the updated environment.")
 			return nil
@@ -252,6 +199,9 @@ func newListCmd() *cobra.Command {
 			installRoot := cfg.Core.InstallDir
 			currentRoot := filepath.Join(cfg.Core.XMDevDir, "current")
 
+			// Load sniff cache for upgrade indicators.
+			sniffCache := loadSniffCache(cfg.Core.CacheDir)
+
 			if len(args) == 1 {
 				tool := args[0]
 				return listTool(tool, installRoot, currentRoot, flagRemote)
@@ -288,7 +238,14 @@ func newListCmd() *cobra.Command {
 						}
 					}
 				}
-				rows = append(rows, []string{tool, strings.Join(vs, ", "), active})
+
+				// Append upgrade indicator if a newer version was sniffed.
+				upgradeStr := upgradeIndicator(tool, active, sniffCache)
+				row := []string{tool, strings.Join(vs, ", "), active}
+				if upgradeStr != "" {
+					row[1] = row[1] + " " + upgradeStr
+				}
+				rows = append(rows, row)
 			}
 			renderTable(headers, rows)
 			return nil
@@ -396,71 +353,71 @@ func splitToolVer(s string) (string, string) {
 	return s, ""
 }
 
-// installLocked installs tools from .xdev.lock with exact pinned versions.
-func installLocked(cmd *cobra.Command) error {
-	lf, err := lockfile.Load(".")
+// loadSniffCache reads the sniff cache JSON from the cache directory.
+// Returns nil if the cache file doesn't exist or is malformed.
+func loadSniffCache(cacheDir string) *discovery.SniffCache {
+	path := filepath.Join(cacheDir, "sniff-cache.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("failed to read .xdev.lock: %w", err)
+		return nil
 	}
-	if lf == nil || len(lf.Tools) == 0 {
-		return fmt.Errorf("no .xdev.lock found or no tools locked")
+	var c discovery.SniffCache
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil
 	}
-	_, reg := loadCatalogAndRegistry()
-	ins := installer.New(Cfg(), reg)
-	ins.SetNoEnvWrite(NoPathFix())
-
-	var items []installer.BatchInstallItem
-	for toolName, locked := range lf.Tools {
-		items = append(items, installer.BatchInstallItem{
-			ToolName: toolName,
-			Version:  locked.Resolved,
-		})
+	if c.Tools == nil {
+		return nil
 	}
-
-	var skipped, failed int
-	results := ins.InstallMany(cmd.Context(), items)
-	for _, r := range results {
-		switch r.Status {
-		case "unsupported":
-			fmt.Printf("⚠ unsupported tool %q in lockfile, skipping\n", r.Tool)
-			skipped++
-		case "already_installed":
-			fmt.Printf("✔ %s@%s already installed\n", r.Tool, r.Version)
-		case "failed":
-			fmt.Printf("⚠ failed to install %s@%s: %v\n", r.Tool, r.Version, r.Error)
-			failed++
-		case "installed":
-			fmt.Printf("✔ installed %s@%s\n", r.Tool, r.Version)
-		}
-	}
-	if skipped > 0 || failed > 0 {
-		return fmt.Errorf("install --locked completed with %d skipped, %d failed", skipped, failed)
-	}
-	return nil
+	return &c
 }
 
-// updateLockfile updates or creates .xdev.lock after an install.
-// It pins the resolved version, archive URL and SHA-256 (when known)
-// so that `xdev install --locked` reproduces the exact environment.
-// res.Spec is recorded as Version (the original intent) and res.Version
-// as Resolved (the concrete version that was installed).
-func updateLockfile(toolName string, res *installer.InstallResult) {
-	dir := lockfile.FindConfigDir(".")
-	if dir == "" {
-		return // No project config, skip lockfile
+// upgradeIndicator returns a string like "(↑3.13.0 available)" if a newer
+// version was discovered for the tool, or "" if the tool is up to date.
+func upgradeIndicator(tool, activeVersion string, cache *discovery.SniffCache) string {
+	if cache == nil || activeVersion == "" {
+		return ""
 	}
-	lf, err := lockfile.Load(dir)
-	if err != nil || lf == nil {
-		lf = lockfile.New()
+	result, ok := cache.Tools[tool]
+	if !ok || result.Unsupported || result.Error != "" || len(result.Versions) == 0 {
+		return ""
 	}
-	lf.AddTool(toolName, lockfile.LockedTool{
-		Version:     res.Spec,
-		Resolved:    res.Version,
-		SHA256:      res.SHA256,
-		URL:         res.URL,
-		InstallPath: res.InstallPath,
-	})
-	if err := lockfile.Save(dir, lf); err != nil {
-		fmt.Printf("⚠ failed to update .xdev.lock: %v\n", err)
+	// Find the latest version in the sniff results.
+	latest := result.Versions[0]
+	for _, v := range result.Versions[1:] {
+		if util.CompareSemver(v, latest) > 0 {
+			latest = v
+		}
 	}
+	if util.CompareSemver(latest, activeVersion) > 0 {
+		return fmt.Sprintf("(↑%s available)", latest)
+	}
+	return ""
+}
+
+// checkUnverifiedVersion checks if the specified version of a tool is
+// marked as unverified (sniff-discovered).  If so, it prompts the user
+// for confirmation unless --yes was passed.
+func checkUnverifiedVersion(cmd *cobra.Command, tool, ver string, skipConfirm bool) error {
+	cat := loadCatalog()
+	t, ok := cat.Tool(tool)
+	if !ok {
+		return nil // Not in manifest — let the installer handle it.
+	}
+	v, found := t.FindVersion(ver)
+	if !found || !v.Unverified {
+		return nil
+	}
+	fmt.Printf("⚠ This version (%s@%s) was discovered by sniffing.\n", tool, ver)
+	fmt.Printf("  The archive URL has not been verified — downloads may fail.\n")
+	fmt.Printf("  If the download fails, update the manifest manually or wait for the next xdev release.\n")
+	if !skipConfirm {
+		fmt.Printf("Continue with installation? [y/N]: ")
+		var response string
+		fmt.Scanln(&response)
+		response = strings.TrimSpace(strings.ToLower(response))
+		if response != "y" && response != "yes" {
+			return fmt.Errorf("installation cancelled by user")
+		}
+	}
+	return nil
 }

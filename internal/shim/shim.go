@@ -45,7 +45,6 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
-	"github.com/xmdemt/xdev/internal/project"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -105,19 +104,6 @@ func MaybeExec(selfName string) (bool, error) {
 func Lookup(alias string, args []string) (string, string, []string, error) {
 	xmdeHome := config.ResolveHomeDir()
 
-	// Project-level version takes priority when cd hook is active.
-	// Check if there's a .xdev.toml that specifies this tool.
-	if projDir, proj := project.FindConfig("."); proj != nil {
-		if versionSpec, ok := proj.Tools[alias]; ok {
-			// Try to find the installed version for this tool
-			if target, toolName, ok := lookupProjectTool(xmdeHome, alias, versionSpec); ok {
-				return target, toolName, args, nil
-			}
-			// Fall through to global lookup
-			_ = projDir
-		}
-	}
-
 	cur := filepath.Join(xmdeHome, "current", alias)
 	// First, look for a dedicated "<alias>/" sub-directory under
 	// current/.  Most tools live in their own dedicated directory.
@@ -139,7 +125,12 @@ func Lookup(alias string, args []string) (string, string, []string, error) {
 
 // FindInDir 在指定目录中查找与 alias 匹配的可执行文件
 // 查找顺序：bin/<alias> → bin/<alias>.exe → bin/<alias>.cmd → bin/<alias>.bat →
-// <alias> → <alias>.exe → <alias>.cmd → <alias>.bat
+// <alias> → <alias>.exe → <alias>.cmd → <alias>.bat →
+// 然后扫描一层子目录：每个子目录的 bin/<alias>, bin/<alias>.exe, bin/<alias>.cmd, bin/<alias>.bat,
+// 以及 <alias>, <alias>.exe, <alias>.cmd, <alias>.bat
+//
+// 最后一层兜底处理 strip:0 导致的嵌套布局，例如 archive 解压后多出一层
+// toolname/ 目录（cangjie/ 或 go/），此时原始文件位于 dir/<toolname>/bin/<alias>。
 func FindInDir(dir, alias string) (string, bool) {
 	// Try the most common locations first.
 	//
@@ -165,13 +156,42 @@ func FindInDir(dir, alias string) (string, bool) {
 			}
 		}
 	}
+	// Nested subdirectory scan: handle strip:0 layouts where the
+	// archive extracts to dir/<toolname>/bin/<alias> instead of
+	// dir/bin/<alias>.  Scan one level of subdirectories.
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			sub := filepath.Join(dir, e.Name())
+			// Check sub/bin/<alias> variants first, then sub/<alias>.
+			for _, c := range []string{
+				filepath.Join(sub, "bin", alias),
+				filepath.Join(sub, "bin", alias+exeSuffix()),
+				filepath.Join(sub, "bin", alias+".cmd"),
+				filepath.Join(sub, "bin", alias+".bat"),
+				filepath.Join(sub, alias),
+				filepath.Join(sub, alias+exeSuffix()),
+				filepath.Join(sub, alias+".cmd"),
+				filepath.Join(sub, alias+".bat"),
+			} {
+				if fi, err := os.Stat(c); err == nil {
+					if !fi.IsDir() {
+						return c, true
+					}
+				}
+			}
+		}
+	}
 	return "", false
 }
 
 // shimIndex maps shimName -> shimEntry with resolved path and tool name.
 var (
-	shimIndex   map[string]shimEntry
-	shimIndexMu sync.RWMutex
+	shimIndex     map[string]shimEntry
+	shimIndexMu   sync.RWMutex
 	shimIndexOnce sync.Once
 )
 
@@ -227,6 +247,22 @@ func scanDirForIndex(idx map[string]shimEntry, dir, toolName string) {
 	}
 	// Then the tool root itself.
 	addExecutables(idx, dir, toolName)
+	// Finally, scan one-level subdirectories for their bin/ folders.
+	// This handles strip:0 archive layouts where files are nested
+	// under dir/<toolname>/bin/ instead of dir/bin/.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		subBin := filepath.Join(dir, e.Name(), "bin")
+		if info, err := os.Stat(subBin); err == nil && info.IsDir() {
+			addExecutables(idx, subBin, toolName)
+		}
+	}
 }
 
 // addExecutables lists files in dir and adds them to the index.
@@ -288,13 +324,13 @@ func run(target string, args []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-		// Security (M-14): Inherit process env vars AND inject registry-level
-		// env vars that may have been set by xdev but not yet picked up by the
-		// current shell (e.g., JAVA_HOME set via Activate but current terminal
-		// hasn't received WM_SETTINGCHANGE). This ensures shims always run with
-		// the correct tool environment regardless of when the shell was started.
-		cmd.Env = os.Environ()
-		cmd.Env = env.EnrichFromRegistry(cmd.Env)
+	// Security (M-14): Inherit process env vars AND inject registry-level
+	// env vars that may have been set by xdev but not yet picked up by the
+	// current shell (e.g., JAVA_HOME set via Activate but current terminal
+	// hasn't received WM_SETTINGCHANGE). This ensures shims always run with
+	// the correct tool environment regardless of when the shell was started.
+	cmd.Env = os.Environ()
+	cmd.Env = env.EnrichFromRegistry(cmd.Env)
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -312,86 +348,91 @@ func exeSuffix() string {
 	return ""
 }
 
-// lookupProjectTool tries to find the executable for a tool alias
-// based on the project-level version specification.  It resolves
-// the version spec and looks in the install directory.
-func lookupProjectTool(xmdeHome, alias, versionSpec string) (string, string, bool) {
-	// For project-level lookup, we need to find the installed version.
-	// We look in install/<alias>/ for directories matching the spec.
-	installDir := filepath.Join(xmdeHome, "install", alias)
-	entries, err := os.ReadDir(installDir)
-	if err != nil {
-		return "", "", false
-	}
-
-	// Try exact match first, then prefix match
-	var candidates []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		v := e.Name()
-		// Exact match
-		if v == versionSpec {
-			dir := filepath.Join(installDir, v)
-			if target, ok := FindInDir(dir, alias); ok {
-				return target, alias, true
-			}
-		}
-		// Prefix match (e.g. "20" matches "20.18.0")
-		if strings.HasPrefix(v, versionSpec) {
-			candidates = append(candidates, v)
-		}
-	}
-
-	// Sort candidates and try the latest one
-	if len(candidates) > 0 {
-		// Simple sort: last element is typically the highest version
-		v := candidates[len(candidates)-1]
-		dir := filepath.Join(installDir, v)
-		if target, ok := FindInDir(dir, alias); ok {
-			return target, alias, true
-		}
-	}
-
-	return "", "", false
-}
-
 // InstallShim creates a shim entry in shimDir pointing at selfPath.
 //
 // The behaviour depends on the OS:
 //   - Unix  : we create a symlink (one byte in size).
-//   - Windows: we copy the binary (a hard copy is the only reliable
-//     mechanism when developer mode is off, and we keep the surface
-//     simple by always copying).  On Windows we ALSO create a copy
-//     with a `.exe` suffix so that the standard
-//     CreateProcess/Cmd API can find the shim via PATH lookups
-//     without prompting the user to pick an associated app.
+//   - Windows: we copy the xdev binary. On Windows we ALSO create a copy
+//     with a `.exe` suffix so that the standard CreateProcess/Cmd API
+//     can find the shim via PATH lookups.
+//
+// Windows file-lock handling: a running process locks its .exe against
+// overwrite/deletion, but Windows allows **renaming** a file that is
+// open. So when the shim needs updating we rename the old one to
+// <name>.old (the OS will reclaim it when the process exits), then copy
+// the new one into place. When the shim already matches (same size as
+// the source — shims are identical copies of xdev.exe), we skip the
+// copy entirely, avoiding the lock issue in the common case where xdev
+// hasn't changed.
+//
+// Security (F-08): the name is validated before any filesystem write —
+// a malicious manifest must not be able to write outside shimDir via
+// `..\outside` or absolute shim names.
 func InstallShim(shimDir, name, selfPath string) error {
+	if err := util.ValidateShimName(name); err != nil {
+		return fmt.Errorf("invalid shim name %q: %w", name, err)
+	}
+	// Containment check: shimDir/<name> must stay inside shimDir.
+	target := filepath.Join(shimDir, name)
+	if err := util.ValidateSubPath(shimDir, target); err != nil {
+		return fmt.Errorf("shim path %q escapes shim dir %q: %w", target, shimDir, err)
+	}
+
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {
 		return err
 	}
-	// On Windows, copying is the most reliable approach.
 	if os.PathSeparator == '\\' {
-		// Copy both "<name>" (for callers that add the extension
-		// themselves) and "<name>.exe" (for callers that don't).
-		// Most Windows shells (PowerShell, pwsh, cmd) auto-append
-		// .exe when looking up PATH entries, so the .exe variant
-		// is the one actually used in practice.
-		if err := util.CopyFile(selfPath, filepath.Join(shimDir, name)); err != nil {
+		if err := installShimWindows(selfPath, filepath.Join(shimDir, name)); err != nil {
 			return err
 		}
-		// Avoid double-copying when name already ends in .exe.
 		if !strings.HasSuffix(strings.ToLower(name), ".exe") {
-			if err := util.CopyFile(selfPath, filepath.Join(shimDir, name+".exe")); err != nil {
+			if err := installShimWindows(selfPath, filepath.Join(shimDir, name+".exe")); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	// On Unix a single symlink is enough; the shell does not
-	// auto-append extensions.
 	return os.Symlink(selfPath, filepath.Join(shimDir, name))
+}
+
+// installShimWindows copies selfPath to dst on Windows with lock-safe
+// semantics:
+//  1. If dst doesn't exist → copy directly.
+//  2. If dst exists and has the same size as selfPath → skip (shim is
+//     already up-to-date; avoids touching a locked file).
+//  3. If dst exists and differs → rename dst to dst+".old" (Windows
+//     allows renaming open files), then copy the new file. The .old
+//     file is left behind and will be reclaimed by the OS when the
+//     process using it exits; we also try a best-effort Remove.
+func installShimWindows(selfPath, dst string) error {
+	srcInfo, err := os.Stat(selfPath)
+	if err != nil {
+		return fmt.Errorf("shim source %s: %w", selfPath, err)
+	}
+
+	// Case 1 & 2: check existing destination.
+	if dstInfo, statErr := os.Stat(dst); statErr == nil {
+		if dstInfo.Size() == srcInfo.Size() && !dstInfo.IsDir() {
+			// Same size → assume identical (shims are copies of the same
+			// binary). Skip to avoid touching a potentially-locked file.
+			return nil
+		}
+		// Case 3: content differs — rename old out of the way.
+		// Windows allows renaming a file even while it's open/running.
+		oldPath := dst + ".old"
+		_ = os.Remove(oldPath) // clean up a previous .old if present
+		if renameErr := os.Rename(dst, oldPath); renameErr != nil {
+			// Rename failed (extremely rare) — fall back to direct copy
+			// which will surface the sharing-violation error.
+			return util.CopyFile(selfPath, dst)
+		}
+		// Best-effort: try to remove the renamed old file. If it's still
+		// locked by a running process, leave it — the OS reclaims it on
+		// process exit. Never fail because of this.
+		_ = os.Remove(oldPath)
+	}
+
+	return util.CopyFile(selfPath, dst)
 }
 
 // PathPrepend returns a new PATH string with shimDir inserted at the

@@ -53,6 +53,10 @@ func LogAudit(entry AuditEntry) {
 		entry.Timestamp = time.Now().UTC()
 	}
 
+	// Security (F-15): 审计日志中的 URL 必须去除 userinfo/query/fragment，
+	// 防止凭据（如 ?token=）或敏感参数落盘。
+	entry.URL = sanitizedURL(entry.URL)
+
 	data, err := json.Marshal(entry)
 	if err != nil {
 		log.Printf("[audit] ERROR: failed to marshal audit entry: %v", err)

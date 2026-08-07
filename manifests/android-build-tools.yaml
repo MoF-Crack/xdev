@@ -21,7 +21,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/build-tools_r35_windows.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r35_windows.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: 5753c679a1b90bcf6fbc9945a2ce39dfb9e74f1df0831a1e1866ae5b594326f0
           size: 60000000
           strip: 0
         - os: linux
@@ -29,7 +29,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/build-tools_r35_linux.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r35_linux.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: 5753c679a1b90bcf6fbc9945a2ce39dfb9e74f1df0831a1e1866ae5b594326f0
           size: 58000000
           strip: 0
     - version: 34.0.0
@@ -41,7 +41,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/build-tools_r34-windows.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r34-windows.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "9be665ad74ef22bf0e489b37db465074484df79b95f26d759945d5c25a47b326"
           size: 55000000
           strip: 0
         - os: linux
@@ -49,7 +49,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/build-tools_r34-linux.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r34-linux.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 53000000
           strip: 0
     - version: 33.0.2
@@ -61,7 +61,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/build-tools_r33.0.2-windows.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r33.0.2-windows.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "a6e4251410755e64e4668461190ae30bc2d076dfa68ba703353476088bec8c00"
           size: 52000000
           strip: 0
         - os: linux
@@ -69,12 +69,12 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/build-tools_r33.0.2-linux.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 50000000
           strip: 0
 remote:
     type: html
-    url: https://dl.google.com/android/repository/
+    url: https://dl.google.com/android/repository/repository2-3.xml
     path: ""
     pattern: build-tools_r(\d+\.\d+\.\d+)
 latest: 35.0.0

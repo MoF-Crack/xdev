@@ -1,4 +1,4 @@
-﻿name: make
+name: make
 display_name: GNU Make
 description: GNU Make is a tool which controls the generation of executables and other non-source files of a program.
 homepage: https://www.gnu.org/software/make/
@@ -20,14 +20,6 @@ versions:
           size: 2600000
           strip: 1
           requires_proxy: true
-        - os: linux
-          arch: x86_64
-          format: tar.gz
-          url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
-          mirror_url: https://mirrors.aliyun.com/gnu/make/make-4.4.1.tar.gz
-          sha256: dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
-          size: 2300000
-          strip: 0
     - version: "4.3"
       stable: true
       release: "2020-01-01"
@@ -41,19 +33,11 @@ versions:
           size: 2400000
           strip: 1
           requires_proxy: true
-        - os: linux
-          arch: x86_64
-          format: tar.gz
-          url: https://ftp.gnu.org/gnu/make/make-4.3.tar.gz
-          mirror_url: https://mirrors.aliyun.com/gnu/make/make-4.3.tar.gz
-          sha256: e05fdde47c5f7ca45cb697e973894ff4f5d79e13b750ed57d7b66d8defc78e19
-          size: 2200000
-          strip: 0
 remote:
     type: github
-    url: ezwinports/make
+    url: xpack-dev-tools/windows-build-tools-xpack
     path: ""
-    pattern: ^v?(\d+\.\d+\.\d+)$
+    pattern: ^v?(\d+\.\d+\.\d+)
 latest: 4.4.1
 lts: "4.3"
 install_root: ""

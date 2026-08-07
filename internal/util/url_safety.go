@@ -94,6 +94,25 @@ func isPrivateOrReservedIP(ip net.IP) bool {
 	return IsPrivateOrReservedIP(ip)
 }
 
+// SanitizeURL strips userinfo, query and fragment from a URL string for
+// safe inclusion in logs, audit entries, and error messages (F-15).
+// Returns the input unchanged when it cannot be parsed or has no scheme
+// (avoids re-encoding arbitrary non-URL text). Functional URLs used for
+// actual requests must NOT go through this function.
+func SanitizeURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if parsed.Scheme == "" {
+		return raw
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
 // IsProtectedSystemEnvVar reports whether name is a Windows system
 // environment variable that must never be modified or deleted by xdev.
 // This is the single source of truth used by the GUI env-var operations

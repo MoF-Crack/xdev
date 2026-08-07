@@ -57,6 +57,7 @@ type SSHTarget struct {
 	Port       int    `json:"port"`
 	User       string `json:"user"`
 	KeyPath    string `json:"keyPath"`
+	Password   string `json:"password,omitempty"`
 	KnownHosts string `json:"knownHosts"`
 }
 

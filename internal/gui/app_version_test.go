@@ -68,6 +68,20 @@ func TestExtractVersion_NoVersion(t *testing.T) {
 	}
 }
 
+func TestExtractVersion_CjcOutput(t *testing.T) {
+	got := extractVersion("Cangjie Compiler: 1.1.3 (cjnative)")
+	if got != "1.1.3" {
+		t.Errorf("extractVersion(%q) = %q, want %q", "Cangjie Compiler: 1.1.3 (cjnative)", got, "1.1.3")
+	}
+}
+
+func TestExtractVersion_CjcOutput_Old(t *testing.T) {
+	got := extractVersion("Cangjie Compiler: 0.53.4")
+	if got != "0.53.4" {
+		t.Errorf("extractVersion(%q) = %q, want %q", "Cangjie Compiler: 0.53.4", got, "0.53.4")
+	}
+}
+
 func TestIsVersionLike_TwoDots(t *testing.T) {
 	if !isVersionLike("1.22.0") {
 		t.Errorf("isVersionLike(%q) = false, want true", "1.22.0")

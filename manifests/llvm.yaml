@@ -16,6 +16,34 @@ shims:
 env_vars:
     LLVM_HOME: '{{install}}'
 versions:
+    - version: 22.1.8
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-pc-windows-msvc.tar.xz
+          mirror_url: ""
+          sha256: "d96c2cc1736f4eb7fa43cb9bbdf56d93551a9ae0a9aadb9c99c3c3b2b712a234"
+          size: 950000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          mirror_url: ""
+          sha256: ""
+          size: 1050000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-arm64-apple-macos11.tar.xz
+          mirror_url: ""
+          sha256: ""
+          size: 850000000
+          strip: 1
     - version: 18.1.8
       stable: true
       release: "2024-06-18"
@@ -50,12 +78,13 @@ versions:
       archives:
         - os: windows
           arch: amd64
-          format: zip
+          format: exe
           url: https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.exe
           mirror_url: ""
           sha256: 24b61544dc40c27aab2618472bf63142eb98d6c8bbbbbc16f67e6cfc66747af3
           size: 900000000
           strip: 1
+          install_kind: executable
         - os: linux
           arch: x86_64
           format: tar.xz
@@ -74,9 +103,9 @@ versions:
           strip: 1
 remote:
     type: github
-    url: ""
+    url: "llvm/llvm-project"
     path: ""
     pattern: ^llvmorg-(\d+\.\d+\.\d+)$
-latest: 18.1.8
+latest: 22.1.8
 lts: ""
 install_root: ""

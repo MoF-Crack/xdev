@@ -86,6 +86,54 @@ func SafeName(s string) (string, error) {
 	return s, nil
 }
 
+// ValidateShimName validates a shim/alias name before it is used as a
+// path component under the shims directory (Spec 021 D11 / F-08).
+// It reuses SafeName semantics: rejects empty names, path separators,
+// directory traversal (.. / .), NUL bytes, drive letters, Windows
+// reserved device names, and trailing dots/spaces.
+func ValidateShimName(name string) error {
+	_, err := SafeName(name)
+	return err
+}
+
+// ValidateEnvVarName validates an environment variable name for
+// user/custom-tool writes (Spec 021 D12 / F-09, F-16): the name must be
+// syntactically valid (IsValidEnvVarName) and must not be a protected
+// system variable (IsProtectedSystemEnvVar, case-insensitive — PATH,
+// Path, SystemRoot, windir, TEMP, TMP, COMSPEC, USERPROFILE, etc.).
+func ValidateEnvVarName(name string) error {
+	if !IsValidEnvVarName(name) {
+		return fmt.Errorf("invalid environment variable name %q (must start with a letter or underscore and contain only letters, digits, and underscores)", name)
+	}
+	if IsProtectedSystemEnvVar(name) {
+		return fmt.Errorf("environment variable %q is a protected system variable", name)
+	}
+	return nil
+}
+
+// ValidateAbsPathUnder ensures target is an absolute path strictly inside
+// base (lexical containment via filepath.Rel). Used to confine migration
+// sources/destinations and profile paths to xdev-owned directories
+// (Spec 021 D13 / F-10, F-11).
+func ValidateAbsPathUnder(base, target string) error {
+	absBase, err := filepath.Abs(filepath.Clean(base))
+	if err != nil {
+		return fmt.Errorf("resolve base path: %w", err)
+	}
+	absTarget, err := filepath.Abs(filepath.Clean(target))
+	if err != nil {
+		return fmt.Errorf("resolve target path: %w", err)
+	}
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return fmt.Errorf("path %q is not relative to %q: %w", target, base, err)
+	}
+	if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return fmt.Errorf("path %q escapes directory %q", target, base)
+	}
+	return nil
+}
+
 // ValidateSubPath ensures that child is strictly under parent.
 // It resolves both paths to absolute form, optionally follows symlinks,
 // and checks that the relative path from parent to child does not
@@ -170,38 +218,62 @@ func IsValidEnvVarName(name string) bool {
 // This map is the single source of truth used by both the CLI
 // (win_path_windows.go) and the GUI (app_env_vars.go).
 var AllowedEnvVarNames = map[string]bool{
-	"JAVA_HOME":        true,
-	"GOROOT":           true,
-	"GOPATH":           true,
-	"NODE_HOME":        true,
-	"PYTHONHOME":       true,
-	"UV_HOME":          true,
-	"LLVM_HOME":        true,
-	"MINGW_HOME":       true,
-	"LUA_HOME":         true,
-	"DART_HOME":        true,
-	"FLUTTER_HOME":     true,
-	"FLUTTER_ROOT":     true,
-	"DOTNET_HOME":      true,
-	"RUST_HOME":        true,
-	"RUBY_HOME":        true,
-	"PHP_HOME":         true,
-	"PERL_HOME":        true,
-	"KOTLIN_HOME":      true,
-	"SCALA_HOME":       true,
-	"HASKELL_HOME":     true,
-	"JULIA_HOME":       true,
-	"ZIG_HOME":         true,
-	"BUN_HOME":         true,
-	"DENO_HOME":        true,
-	"GRADLE_HOME":      true,
-	"MAVEN_HOME":       true,
-	"CMAKE_HOME":       true,
-	"NINJA_HOME":       true,
-	"ANDROID_HOME":     true,
-	"ANDROID_SDK_ROOT": true,
-	"SBT_HOME":         true,
-	"ERLANG_HOME":      true,
+	"JAVA_HOME":              true,
+	"GOROOT":                 true,
+	"GOPATH":                 true,
+	"NODE_HOME":              true,
+	"PYTHONHOME":             true,
+	"UV_HOME":                true,
+	"LLVM_HOME":              true,
+	"MINGW_HOME":             true,
+	"LUA_HOME":               true,
+	"DART_HOME":              true,
+	"FLUTTER_HOME":           true,
+	"FLUTTER_ROOT":           true,
+	"DOTNET_HOME":            true,
+	"DOTNET_ROOT":            true,
+	"RUST_HOME":              true,
+	"RUBY_HOME":              true,
+	"PHP_HOME":               true,
+	"PERL_HOME":              true,
+	"KOTLIN_HOME":            true,
+	"SCALA_HOME":             true,
+	"HASKELL_HOME":           true,
+	"GHC_HOME":               true,
+	"JULIA_HOME":             true,
+	"ZIG_HOME":               true,
+	"BUN_HOME":               true,
+	"DENO_HOME":              true,
+	"GRADLE_HOME":            true,
+	"MAVEN_HOME":             true,
+	"CMAKE_HOME":             true,
+	"NINJA_HOME":             true,
+	"ANDROID_HOME":           true,
+	"ANDROID_SDK_ROOT":       true,
+	"ANDROID_NDK_HOME":       true,
+	"ANDROID_BUILD_TOOLS":    true,
+	"ANDROID_CMDLINE_TOOLS":  true,
+	"ANDROID_PLATFORM":       true,
+	"ANDROID_PLATFORM_TOOLS": true,
+	"SBT_HOME":               true,
+	"ERLANG_HOME":            true,
+	"GIT_HOME":               true,
+	"TYPESCRIPT_HOME":        true,
+	"RUSTUP_HOME":            true,
+	"CARGO_HOME":             true,
+	"CANGJIE_HOME":           true,
+	"PUB_CACHE":              true,
+	// Spec 022 官方变量名（D1-D7 清单同步）：
+	"PHPRC":                 true,
+	"JULIA_DEPOT_PATH":      true,
+	"DENO_INSTALL":          true,
+	"BUN_INSTALL":           true,
+	"UV_INSTALL_DIR":        true,
+	"UV_CACHE_DIR":          true,
+	"UV_TOOL_BIN_DIR":       true,
+	"UV_TOOL_DIR":           true,
+	"UV_PYTHON_INSTALL_DIR": true,
+	"npm_config_prefix":     true,
 }
 
 // IsAllowedEnvVarName checks whether the given name is in the

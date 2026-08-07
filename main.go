@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/cli"
 	"github.com/xmdemt/xdev/internal/config"
@@ -48,9 +49,19 @@ func main() {
 	root := cli.NewRootCommand(toolName, toolDesc)
 
 	if err := root.Execute(); err != nil {
+		// Even on error, attempt to flush the discovery scheduler so
+		// startup-strategy background sniffing persists partial results.
+		// Shutdown is best-effort and must not mask the real error.
+		cli.ShutdownSniffScheduler()
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+
+	// Process exiting normally — shut down the discovery scheduler so
+	// startup-strategy background sniffing can persist partial results
+	// (SC-002).
+	cli.ShutdownSniffScheduler()
+	time.Sleep(100 * time.Millisecond) // brief flush for logger
 }
 
 // runGUI launches the Wails GUI application directly.

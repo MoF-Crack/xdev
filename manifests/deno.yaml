@@ -6,8 +6,39 @@ category: language
 shims:
     - deno
 env_vars:
-    DENO_HOME: '{{install}}'
+    DENO_INSTALL: '{{install}}'
 versions:
+    - version: 2.9.4
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/denoland/deno/releases/download/v2.9.4/deno-x86_64-pc-windows-msvc.zip
+          mirror_url: https://npmmirror.com/mirrors/deno/v2.9.4/deno-x86_64-pc-windows-msvc.zip
+          sha256: "68ed08b05c56cf887e9aa509947dc3f468f7e12f47a13e5c1abd51d46d1453ef"
+          size: 35000000
+          strip: 0
+          requires_proxy: true
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/denoland/deno/releases/download/v2.9.4/deno-x86_64-unknown-linux-gnu.zip
+          mirror_url: https://npmmirror.com/mirrors/deno/v2.9.4/deno-x86_64-unknown-linux-gnu.zip
+          sha256: ""
+          size: 33000000
+          strip: 0
+          requires_proxy: true
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/denoland/deno/releases/download/v2.9.4/deno-aarch64-apple-darwin.zip
+          mirror_url: https://npmmirror.com/mirrors/deno/v2.9.4/deno-aarch64-apple-darwin.zip
+          sha256: ""
+          size: 30000000
+          strip: 0
+          requires_proxy: true
     - version: 1.46.3
       stable: true
       release: "2024-09-25"
@@ -133,6 +164,6 @@ remote:
     url: denoland/deno
     path: ""
     pattern: v(\d+\.\d+\.\d+)$
-latest: 1.46.3
+latest: 2.9.4
 lts: ""
 install_root: ""

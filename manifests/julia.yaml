@@ -6,8 +6,36 @@ category: language
 shims:
     - julia
 env_vars:
-    JULIA_HOME: '{{install}}'
+    JULIA_DEPOT_PATH: '{{install}}\.julia'
 versions:
+    - version: 1.12.6
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://julialang-s3.julialang.org/bin/winnt/x64/1.12/julia-1.12.6-win64.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/winnt/x64/1.12/julia-1.12.6-win64.zip
+          sha256: "a63d991976e6893f508c512e3dc7bca1836c1a1f6ad1f3e4aedec159b6733e89"
+          size: 240000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.6-linux-x86_64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/linux/x64/1.12/julia-1.12.6-linux-x86_64.tar.gz
+          sha256: ""
+          size: 220000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://julialang-s3.julialang.org/bin/mac/aarch64/1.12/julia-1.12.6-macaarch64.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/julia-releases/bin/mac/aarch64/1.12/julia-1.12.6-macaarch64.tar.gz
+          sha256: ""
+          size: 200000000
+          strip: 1
     - version: 1.11.1
       stable: true
       release: "2024-10-09"
@@ -118,9 +146,9 @@ versions:
           strip: 1
 remote:
     type: github
-    url: ""
+    url: "JuliaLang/julia"
     path: ""
     pattern: ^v(\d+\.\d+\.\d+)$
-latest: 1.11.1
+latest: 1.12.6
 lts: 1.10.5
 install_root: ""

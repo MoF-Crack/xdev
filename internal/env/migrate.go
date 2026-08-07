@@ -74,6 +74,15 @@ func ScanLegacyDir() []LegacyDirInfo {
 //
 // 迁移完成后删除旧目录，并清理 PATH 中的旧条目。
 func MigrateLegacyDir(legacyDir, newDir string) error {
+	// Security (F-10): legacyDir 迁移后会被 RemoveAll —— 校验绝对路径
+	// 且不等于目标目录，避免误删。
+	if legacyDir == "" || !filepath.IsAbs(legacyDir) {
+		return fmt.Errorf("legacy dir must be absolute: %q", legacyDir)
+	}
+	if filepath.Clean(legacyDir) == filepath.Clean(newDir) {
+		return fmt.Errorf("legacy dir must differ from target dir: %q", legacyDir)
+	}
+
 	// 确保新目录存在
 	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create new directory: %w", err)

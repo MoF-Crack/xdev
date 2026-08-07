@@ -1,0 +1,68 @@
+﻿# VS Code锛圫pec 023 T-D1锛?#   - Win: 瀹樻柟 update 绔偣 zip銆傚疄娴嬶紙1.131.0锛墇ip 椤跺眰涓?appx/銆乥in/銆丆ode.exe 鈥斺€?#     鏃犵粺涓€鏍圭洰褰曪紝蹇呴』 strip: 0锛坰trip 1 浼氫涪 Code.exe锛夈€侰LI 鍦?bin/code銆乥in/code.cmd銆?#   - mac: darwin-arm64-dmg 绔偣锛堟敞鎰?darwin-arm64/stable 杩斿洖鐨勬槸 zip锛?#     鏈?manifest 鐢?dmg 鍙樹綋锛宔xtractor 鐨?dmg case 浼氭寕杞藉苟澶嶅埗 .app锛?#   - linux: tar.gz锛堝惈 VSCode-linux-x64/ 鏍?鈫?strip 1锛?#   - 鏃?depends锛堣嚜甯﹀畬鏁磋繍琛屾椂锛?#   - sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛?name: vscode
+display_name: Visual Studio Code
+description: Visual Studio Code is a lightweight but powerful source code editor that runs on your desktop.
+homepage: https://code.visualstudio.com/
+category: development_tools
+shims:
+  - code
+form_factor: [gui, cli]
+# Windows GUI 涓荤▼搴忓湪瀹夎鏍圭洰褰曪紙Code.exe锛夛紝CLI 鍦?bin/ 涓嬶紙shim code 鐢?bin/code 瑙ｆ瀽锛夈€?gui_binary: Code.exe
+latest: "1.131.0"
+lts: ""
+versions:
+  - version: "1.131.0"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://update.code.visualstudio.com/1.131.0/win32-x64-archive/stable
+        mirror_url: ""
+        sha256: afcb7f2963cb69b8a251ee275b60da0b74bca70277c103deb029ca73c3a5381e
+        size: 335483698
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://update.code.visualstudio.com/1.131.0/darwin-arm64-dmg/stable
+        mirror_url: ""
+        sha256: ""
+        size: 282701877
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://update.code.visualstudio.com/1.131.0/linux-x64/stable
+        mirror_url: ""
+        sha256: ""
+        size: 339183283
+        strip: 1
+  - version: "1.130.0"
+    stable: true
+    release: "2026-07-22"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://update.code.visualstudio.com/1.130.0/win32-x64-archive/stable
+        mirror_url: ""
+        sha256: ""
+        size: 367830695
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://update.code.visualstudio.com/1.130.0/darwin-arm64-dmg/stable
+        mirror_url: ""
+        sha256: ""
+        size: 294529570
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://update.code.visualstudio.com/1.130.0/linux-x64/stable
+        mirror_url: ""
+        sha256: ""
+        size: 356926919
+        strip: 1

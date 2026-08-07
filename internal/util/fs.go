@@ -44,7 +44,21 @@ func CopyFile(src, dst string) error {
 
 // CopyDir recursively copies a directory tree from src to dst.
 // It uses concurrent file copying for improved throughput.
+// Symlinks/junctions are skipped.
 func CopyDir(src, dst string) error {
+	return copyDir(src, dst, nil)
+}
+
+// CopyDirProgress recursively copies a directory tree and reports progress.
+// onProgress is called with (copiedFiles, totalFiles) after each file is
+// copied; a nil onProgress skips progress reporting.
+func CopyDirProgress(src, dst string, onProgress func(copied, total int)) error {
+	return copyDir(src, dst, onProgress)
+}
+
+// copyDir is the single implementation behind CopyDir and CopyDirProgress.
+// When onProgress is non-nil it is invoked after every copied file.
+func copyDir(src, dst string, onProgress func(copied, total int)) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -90,6 +104,10 @@ func CopyDir(src, dst string) error {
 		}
 	}
 
+	total := len(tasks)
+	copied := 0
+	var copiedMu sync.Mutex
+
 	// Copy files concurrently (IO-bound, use limited parallelism)
 	limiter := make(chan struct{}, 8) // 8 concurrent file copies
 	var wg sync.WaitGroup
@@ -108,6 +126,13 @@ func CopyDir(src, dst string) error {
 					firstErr = err
 				}
 				errMu.Unlock()
+			}
+			if onProgress != nil {
+				copiedMu.Lock()
+				copied++
+				c := copied
+				copiedMu.Unlock()
+				onProgress(c, total)
 			}
 		}(task)
 	}
@@ -161,86 +186,6 @@ func CreateJunction(link, target string) error {
 		return fmt.Errorf("create junction %s -> %s: %v: %s", link, target, err, out)
 	}
 	return nil
-}
-
-// CopyDirProgress recursively copies a directory tree and reports progress.
-// onProgress is called with (copiedFiles, totalFiles) after each file is copied.
-func CopyDirProgress(src, dst string, onProgress func(copied, total int)) error {
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-
-	type copyTask struct {
-		src string
-		dst string
-	}
-	var tasks []copyTask
-	var dirs []string
-
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-
-		if info.IsDir() {
-			dirs = append(dirs, target)
-		} else {
-			if info.Mode()&os.ModeSymlink != 0 {
-				return nil
-			}
-			tasks = append(tasks, copyTask{src: path, dst: target})
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
-	}
-
-	total := len(tasks)
-	copied := 0
-	var copiedMu sync.Mutex
-
-	limiter := make(chan struct{}, 8)
-	var wg sync.WaitGroup
-	var firstErr error
-	var errMu sync.Mutex
-
-	for _, task := range tasks {
-		wg.Add(1)
-		limiter <- struct{}{}
-		go func(t copyTask) {
-			defer wg.Done()
-			defer func() { <-limiter }()
-			if err := CopyFile(t.src, t.dst); err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				errMu.Unlock()
-			}
-			if onProgress != nil {
-				copiedMu.Lock()
-				copied++
-				c := copied
-				copiedMu.Unlock()
-				onProgress(c, total)
-			}
-		}(task)
-	}
-	wg.Wait()
-
-	return firstErr
 }
 
 // AtomicWriteFile atomically writes data to a file by first writing to a

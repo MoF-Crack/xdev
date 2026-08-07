@@ -82,6 +82,12 @@ xdev-gui.exe
 | `xdev self update` | 自更新 |
 | `xdev tui` | 启动 TUI 终端界面 |
 | `xdev gui` | 启动 GUI 图形界面 |
+| `xdev refresh [<tool>]` | 刷新工具版本列表（自动嗅探发现新模式） |
+| `xdev sniff [--all] [--tool <name>] [--headless]` | 远程嗅探新版本（4 种内置嗅探器） |
+| `xdev updates` | 列出已安装工具中可用的版本升级 |
+| `xdev sniff service install [--schedule <cron>]` | 安装系统定时嗅探任务（Win/Linux/macOS） |
+| `xdev sniff service status` | 查看定时嗅探任务状态 |
+| `xdev sniff service uninstall` | 移除系统定时嗅探任务 |
 
 ### 项目级与扩展命令
 
@@ -112,6 +118,26 @@ xdev-gui.exe
 | `xdev plugin list/install/create` | 插件管理 |
 | `xdev ai suggest/diagnose/status` | AI 助手 |
 | `xdev manifest list/add/remove/update` | Manifest 仓库管理 |
+| `xdev ai run migrate` | 本地已安装工具扫描与迁移（复用 `internal/env/scan_local.go`，非 sniff 功能） |
+
+### 嗅探触发策略（配置在 config.yaml 的 sniff: 段）
+
+| 策略 | 说明 |
+|------|------|
+| `interval`（默认） | 到设定周期后，下一次启动 xdev 时触发嗅探（惰性，无常驻进程） |
+| `startup` | 每次启动 xdev 时后台异步嗅探（不阻塞主命令） |
+| `service` | 安装系统定时任务（schtasks / cron / launchd），由系统服务定期调用 |
+| `manual` | 纯手动，仅 `xdev sniff` 触发，无任何自动行为 |
+
+配置文件示例：
+```yaml
+sniff:
+  strategy: interval          # interval | startup | service | manual
+  interval: 24h               # 嗅探间隔（仅 interval 策略）
+  concurrency: 3              # 并发嗅探数
+  rate_limit_per_hour: 60     # 每小时最大 API 请求数
+  auto_archive_fill: true     # 自动为发现的版本生成占位 archive 条目
+```
 
 ## 版本规范
 

@@ -1,0 +1,131 @@
+﻿# T-D6 codex (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
+# 瀹夎绛栫暐锛歺dev 浣跨敤 @openai/codex 骞冲彴鐗堟湰 tgz锛坥ptionalDependencies 鍒悕
+# npm:@openai/codex@0.146.0-win32-x64 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃級锛岄潪 universal JS 钖勫３銆?# 骞冲彴 tgz 甯冨眬锛歱ackage/vendor/<triple>/bin/codex.exe锛堝疄娴?win32-x64 涓?# package/vendor/x86_64-pc-windows-msvc/bin/codex.exe锛夈€俿trip 2 鍚?# <triple>/bin/codex.exe 钀戒簬 install 鏍逛笅涓€灞傦紙integrity/shim 鍗曞眰宓屽鍛戒腑锛夛紱
+# strip 1 浼氬鑷翠袱灞傚祵濂楋紙vendor/<triple>/bin/锛塱ntegrity 澶辫触锛屽嬁鏀广€?# 鍏朵綑骞冲彴甯冨眬鍋囪涓€鑷达紙鍚屼竴鏋勫缓绯荤粺锛沴inux=<vendor>/<triple>/bin/codex锛夈€?# gui 褰㈡€佺敱 ChatGPT 妗岄潰搴旂敤鎻愪緵锛堜笉鍦ㄦ湰 manifest 绠＄悊鑼冨洿锛夛紝鏁呬笉璁剧疆 gui_binary锛?# xdev 浠呯鐞?CLI/TUI銆?# 閲嶈锛堟湰鍦版壂鎻忥級锛欳hatGPT 妗岄潰搴旂敤銆愪笉鎻愪緵 codex CLI銆戔€斺€斿叾闆嗘垚鍦ㄥ簲鐢ㄥ唴锛?# 涓嶄骇鐢熷悕涓?codex 鐨勫彲鎵ц鏂囦欢锛屼篃涓嶄細鍐欏叆 PATH銆傚洜姝ゆ湰鍦版壂鎻忥紙鎸?shim
+# 鍚嶇О鍦?PATH / npm 鍏ㄥ眬 bin 鏌ユ壘锛夊彧鍙兘鍙戠幇鐙珛瀹夎鐨?codex CLI锛?#   - npm 鍏ㄥ眬瀹夎锛歯pm install -g @openai/codex锛圵indows 涓嬬敓鎴?#     %APPDATA%\npm\codex.cmd锛宯pm 榛樿灏嗗叏灞€ bin 鍔犲叆 PATH锛?#   - 鍘熺敓瀹夎锛歩nstaller.codex.com 鑴氭湰 / winget
+# 浠呭畨瑁?ChatGPT 妗岄潰搴旂敤鏃舵壂鎻忎笉鏄剧ず codex 灞為鏈熻涓猴紝骞堕潪鎵弿鏁呴殰锛?# 涔熶笉搴斿皢 ChatGPT 妗岄潰搴旂敤璇垽涓?codex锛堝畠鏃?CLI 鍙縼绉?婵€娲伙級銆?# depends 澹版槑 node>=16锛坕nstall_path: npm锛屽寘 engines 瑕佹眰锛夈€?# native 瀹夎锛坕nstaller.codex.com 鑴氭湰 / winget锛変綔涓哄閫夋柟妗堝瓨鍦ㄣ€?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?@openai/codex锛坉ist-tags.latest=0.146.0锛夛紱
+# remote 杩斿洖 universal 鐗堟湰锛屽綊妗ｄ负骞冲彴鐗堟湰锛?.146.0-<platform>锛夛紝鍓嶇紑瀵归綈銆?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: codex
+display_name: Codex (OpenAI)
+description: Codex is OpenAI's coding agent that runs in the terminal, helping you build and ship software with AI assistance.
+homepage: https://developers.openai.com/codex/
+category: development_tools
+shims:
+  - codex
+form_factor:
+  - cli
+  - tui
+depends:
+  - tool: node
+    min_version: "16.0.0"
+    install_path: npm
+latest: "0.146.0"
+lts: ""
+versions:
+  - version: "0.146.0"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-win32-x64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.146.0-win32-x64.tgz
+        sha256: "a7b0c568c1ee6ba6de7c419ae5ccf1473f229871caafed0205432654a2b8ec6f"
+        size: 151682891
+        strip: 2
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-win32-arm64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.146.0-win32-arm64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-linux-x64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.146.0-linux-x64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-linux-arm64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.146.0-linux-arm64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-darwin-x64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.146.0-darwin-x64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.146.0-darwin-arm64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.146.0-darwin-arm64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+  - version: "0.145.0"
+    stable: true
+    release: "2026-07-21"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.145.0-win32-x64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.145.0-win32-x64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.145.0-win32-arm64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.145.0-win32-arm64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.145.0-linux-x64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.145.0-linux-x64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.145.0-linux-arm64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.145.0-linux-arm64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.145.0-darwin-x64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.145.0-darwin-x64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@openai/codex/-/codex-0.145.0-darwin-arm64.tgz
+        mirror_url: https://registry.npmmirror.com/@openai/codex/-/codex-0.145.0-darwin-arm64.tgz
+        sha256: ""
+        size: 150000000
+        strip: 2
+remote:
+  type: npm
+  package: "@openai/codex"
+  pattern: "^(\\d+\\.\\d+\\.\\d+)$"

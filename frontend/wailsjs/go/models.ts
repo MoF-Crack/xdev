@@ -39,22 +39,6 @@ export namespace env {
 
 export namespace gui {
 	
-	export class AIStatus {
-	    available: boolean;
-	    url: string;
-	    model: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AIStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.available = source["available"];
-	        this.url = source["url"];
-	        this.model = source["model"];
-	    }
-	}
 	export class AboutInfo {
 	    appName: string;
 	    version: string;
@@ -119,6 +103,22 @@ export namespace gui {
 	        this.count = source["count"];
 	    }
 	}
+	export class CleanResult {
+	    name: string;
+	    action: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.action = source["action"];
+	        this.detail = source["detail"];
+	    }
+	}
 	export class ProxyInfo {
 	    http: string;
 	    https: string;
@@ -179,32 +179,38 @@ export namespace gui {
 		    return a;
 		}
 	}
-	export class CustomTool {
+	export class CustomToolInfo {
 	    name: string;
 	    displayName: string;
-	    category: string;
-	    version: string;
-	    downloadUrl: string;
-	    installPath: string;
-	    shims: string;
-	    envVars: string;
-	    addedAt: string;
+	    sourceUrl: string;
+	    sourceType: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new CustomTool(source);
+	        return new CustomToolInfo(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.displayName = source["displayName"];
-	        this.category = source["category"];
-	        this.version = source["version"];
-	        this.downloadUrl = source["downloadUrl"];
-	        this.installPath = source["installPath"];
-	        this.shims = source["shims"];
-	        this.envVars = source["envVars"];
-	        this.addedAt = source["addedAt"];
+	        this.sourceUrl = source["sourceUrl"];
+	        this.sourceType = source["sourceType"];
+	    }
+	}
+	export class CustomToolResult {
+	    success: boolean;
+	    message: string;
+	    versions?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomToolResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.versions = source["versions"];
 	    }
 	}
 	export class InstalledToolInfo {
@@ -299,6 +305,34 @@ export namespace gui {
 	        this.catalogNames = source["catalogNames"];
 	    }
 	}
+	export class DependencyStatus {
+	    tool: string;
+	    requiredVersion: string;
+	    currentVersion: string;
+	    platform: string;
+	    installPath: string;
+	    satisfied: boolean;
+	    reason: string;
+	    reasonCode: string;
+	    reasonParams: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new DependencyStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = source["tool"];
+	        this.requiredVersion = source["requiredVersion"];
+	        this.currentVersion = source["currentVersion"];
+	        this.platform = source["platform"];
+	        this.installPath = source["installPath"];
+	        this.satisfied = source["satisfied"];
+	        this.reason = source["reason"];
+	        this.reasonCode = source["reasonCode"];
+	        this.reasonParams = source["reasonParams"];
+	    }
+	}
 	export class DiagnosticResult {
 	    check: string;
 	    path: string;
@@ -315,6 +349,28 @@ export namespace gui {
 	        this.path = source["path"];
 	        this.ok = source["ok"];
 	        this.error = source["error"];
+	    }
+	}
+	export class DiskUsageEntry {
+	    tool: string;
+	    version: string;
+	    path: string;
+	    size: number;
+	    isStale?: boolean;
+	    category?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiskUsageEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = source["tool"];
+	        this.version = source["version"];
+	        this.path = source["path"];
+	        this.size = source["size"];
+	        this.isStale = source["isStale"];
+	        this.category = source["category"];
 	    }
 	}
 	export class DownloadTaskInfo {
@@ -365,6 +421,20 @@ export namespace gui {
 	        this.total = source["total"];
 	    }
 	}
+	export class PathEntry {
+	    path: string;
+	    exists: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PathEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.exists = source["exists"];
+	    }
+	}
 	export class EnvVarInfo {
 	    name: string;
 	    value: string;
@@ -374,6 +444,7 @@ export namespace gui {
 	    isValid: boolean;
 	    invalidReason: string;
 	    validationStatus: string;
+	    pathEntries?: PathEntry[];
 	
 	    static createFrom(source: any = {}) {
 	        return new EnvVarInfo(source);
@@ -389,7 +460,26 @@ export namespace gui {
 	        this.isValid = source["isValid"];
 	        this.invalidReason = source["invalidReason"];
 	        this.validationStatus = source["validationStatus"];
+	        this.pathEntries = this.convertValues(source["pathEntries"], PathEntry);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class FavoriteInfo {
 	    name: string;
@@ -401,6 +491,7 @@ export namespace gui {
 	    localVersion: string;
 	    localPath: string;
 	    source: string;
+	    formFactor?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FavoriteInfo(source);
@@ -417,6 +508,7 @@ export namespace gui {
 	        this.localVersion = source["localVersion"];
 	        this.localPath = source["localPath"];
 	        this.source = source["source"];
+	        this.formFactor = source["formFactor"];
 	    }
 	}
 	export class FixedVersion {
@@ -433,6 +525,24 @@ export namespace gui {
 	        this.tool = source["tool"];
 	        this.oldVer = source["oldVer"];
 	        this.newVer = source["newVer"];
+	    }
+	}
+	export class IgnoredToolInfo {
+	    name: string;
+	    kind: string;
+	    path?: string;
+	    ignoredAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new IgnoredToolInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.path = source["path"];
+	        this.ignoredAt = source["ignoredAt"];
 	    }
 	}
 	export class ImportResult {
@@ -455,7 +565,43 @@ export namespace gui {
 	        this.errors = source["errors"];
 	    }
 	}
+	export class InstallMethodInfo {
+	    name: string;
+	    command: string;
 	
+	    static createFrom(source: any = {}) {
+	        return new InstallMethodInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.command = source["command"];
+	    }
+	}
+	
+	export class IntegrityInfo {
+	    tool: string;
+	    version: string;
+	    path: string;
+	    ok: boolean;
+	    reason: string;
+	    missing: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new IntegrityInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = source["tool"];
+	        this.version = source["version"];
+	        this.path = source["path"];
+	        this.ok = source["ok"];
+	        this.reason = source["reason"];
+	        this.missing = source["missing"];
+	    }
+	}
 	export class IsolateStatus {
 	    availableModes: string[];
 	    activeMode: string;
@@ -498,61 +644,6 @@ export namespace gui {
 	        this.activeVersion = source["activeVersion"];
 	    }
 	}
-	export class LockfileToolInfo {
-	    version: string;
-	    resolved: string;
-	    sha256: string;
-	    url: string;
-	    installPath: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new LockfileToolInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.version = source["version"];
-	        this.resolved = source["resolved"];
-	        this.sha256 = source["sha256"];
-	        this.url = source["url"];
-	        this.installPath = source["installPath"];
-	    }
-	}
-	export class LockfileInfo {
-	    dir: string;
-	    found: boolean;
-	    tools: Record<string, LockfileToolInfo>;
-	
-	    static createFrom(source: any = {}) {
-	        return new LockfileInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.dir = source["dir"];
-	        this.found = source["found"];
-	        this.tools = this.convertValues(source["tools"], LockfileToolInfo, true);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
 	export class MigrationResult {
 	    name: string;
 	    status: string;
@@ -575,6 +666,24 @@ export namespace gui {
 	        this.reason = source["reason"];
 	    }
 	}
+	export class PMInstanceInfo {
+	    version: string;
+	    path: string;
+	    managed: boolean;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PMInstanceInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.path = source["path"];
+	        this.managed = source["managed"];
+	        this.source = source["source"];
+	    }
+	}
 	export class PackageManagerInfo {
 	    name: string;
 	    displayName: string;
@@ -586,6 +695,11 @@ export namespace gui {
 	    canInstall: boolean;
 	    toolName: string;
 	    installHint: string;
+	    requiresAdmin: boolean;
+	    enableCommand?: string;
+	    installMethods?: InstallMethodInfo[];
+	    hasUpdate: boolean;
+	    instances?: PMInstanceInfo[];
 	
 	    static createFrom(source: any = {}) {
 	        return new PackageManagerInfo(source);
@@ -603,64 +717,11 @@ export namespace gui {
 	        this.canInstall = source["canInstall"];
 	        this.toolName = source["toolName"];
 	        this.installHint = source["installHint"];
-	    }
-	}
-	export class PluginInfo {
-	    name: string;
-	    displayName: string;
-	    category: string;
-	    path: string;
-	    isLua: boolean;
-	    type: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PluginInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.displayName = source["displayName"];
-	        this.category = source["category"];
-	        this.path = source["path"];
-	        this.isLua = source["isLua"];
-	        this.type = source["type"];
-	    }
-	}
-	export class TaskInfo {
-	    run: string;
-	    desc: string;
-	    dir: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TaskInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.run = source["run"];
-	        this.desc = source["desc"];
-	        this.dir = source["dir"];
-	    }
-	}
-	export class ProjectConfigInfo {
-	    dir: string;
-	    tools: Record<string, string>;
-	    env: Record<string, string>;
-	    tasks: Record<string, TaskInfo>;
-	    hasConfig: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProjectConfigInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.dir = source["dir"];
-	        this.tools = source["tools"];
-	        this.env = source["env"];
-	        this.tasks = this.convertValues(source["tasks"], TaskInfo, true);
-	        this.hasConfig = source["hasConfig"];
+	        this.requiresAdmin = source["requiresAdmin"];
+	        this.enableCommand = source["enableCommand"];
+	        this.installMethods = this.convertValues(source["installMethods"], InstallMethodInfo);
+	        this.hasUpdate = source["hasUpdate"];
+	        this.instances = this.convertValues(source["instances"], PMInstanceInfo);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -682,6 +743,27 @@ export namespace gui {
 		}
 	}
 	
+	
+	export class ProxyProbeResult {
+	    url: string;
+	    port: number;
+	    ok: boolean;
+	    latencyMs: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyProbeResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.port = source["port"];
+	        this.ok = source["ok"];
+	        this.latencyMs = source["latencyMs"];
+	        this.message = source["message"];
+	    }
+	}
 	export class ProxyTestResult {
 	    success: boolean;
 	    message: string;
@@ -730,27 +812,64 @@ export namespace gui {
 	        this.adapter = source["adapter"];
 	    }
 	}
-	export class ServiceInfo {
-	    name: string;
-	    type: string;
-	    version: string;
-	    status: string;
-	    port: number;
+	export class SSHTestResult {
+	    success: boolean;
+	    message: string;
+	    latencyMs: number;
 	
 	    static createFrom(source: any = {}) {
-	        return new ServiceInfo(source);
+	        return new SSHTestResult(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.type = source["type"];
-	        this.version = source["version"];
-	        this.status = source["status"];
-	        this.port = source["port"];
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.latencyMs = source["latencyMs"];
 	    }
 	}
+	export class ServiceStatusInfo {
+	    installed: boolean;
+	    schedule: string;
+	    lastRun: string;
+	    nextRun: string;
+	    error?: string;
 	
+	    static createFrom(source: any = {}) {
+	        return new ServiceStatusInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.installed = source["installed"];
+	        this.schedule = source["schedule"];
+	        this.lastRun = source["lastRun"];
+	        this.nextRun = source["nextRun"];
+	        this.error = source["error"];
+	    }
+	}
+	export class SniffConfigInfo {
+	    strategy: string;
+	    interval: string;
+	    concurrency: number;
+	    rateLimitPerHr: number;
+	    autoArchiveFill: boolean;
+	    lastSniffAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SniffConfigInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.strategy = source["strategy"];
+	        this.interval = source["interval"];
+	        this.concurrency = source["concurrency"];
+	        this.rateLimitPerHr = source["rateLimitPerHr"];
+	        this.autoArchiveFill = source["autoArchiveFill"];
+	        this.lastSniffAt = source["lastSniffAt"];
+	    }
+	}
 	export class ToolInfo {
 	    name: string;
 	    displayName: string;
@@ -765,6 +884,14 @@ export namespace gui {
 	    toolName: string;
 	    installHint: string;
 	    source: string;
+	    hasUpdate: boolean;
+	    formFactor?: string[];
+	    guiBinary?: string;
+	    hasFormSpecificArchives?: boolean;
+	    requiresAdmin?: boolean;
+	    enableCommand?: string;
+	    installMethods?: InstallMethodInfo[];
+	    instances?: PMInstanceInfo[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ToolInfo(source);
@@ -785,7 +912,33 @@ export namespace gui {
 	        this.toolName = source["toolName"];
 	        this.installHint = source["installHint"];
 	        this.source = source["source"];
+	        this.hasUpdate = source["hasUpdate"];
+	        this.formFactor = source["formFactor"];
+	        this.guiBinary = source["guiBinary"];
+	        this.hasFormSpecificArchives = source["hasFormSpecificArchives"];
+	        this.requiresAdmin = source["requiresAdmin"];
+	        this.enableCommand = source["enableCommand"];
+	        this.installMethods = this.convertValues(source["installMethods"], InstallMethodInfo);
+	        this.instances = this.convertValues(source["instances"], PMInstanceInfo);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class UpdateCheckResult {
 	    hasUpdate: boolean;
@@ -805,10 +958,30 @@ export namespace gui {
 	        this.error = source["error"];
 	    }
 	}
+	export class UpdateInfo {
+	    tool: string;
+	    currentVersion: string;
+	    latestVersion: string;
+	    command: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = source["tool"];
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.command = source["command"];
+	    }
+	}
 	export class VersionInfo {
 	    version: string;
 	    installed: boolean;
 	    active: boolean;
+	    intact: boolean;
+	    integrity?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new VersionInfo(source);
@@ -819,6 +992,8 @@ export namespace gui {
 	        this.version = source["version"];
 	        this.installed = source["installed"];
 	        this.active = source["active"];
+	        this.intact = source["intact"];
+	        this.integrity = source["integrity"];
 	    }
 	}
 

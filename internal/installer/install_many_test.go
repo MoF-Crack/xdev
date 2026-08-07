@@ -2,8 +2,10 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -97,16 +99,31 @@ func TestInstallMany_Unsupported(t *testing.T) {
 	}
 }
 
+// makeIntactInstall creates an install dir that passes VerifyInstallIntegrity
+// (non-empty + at least one shim binary present).
+func makeIntactInstall(t *testing.T, installPath, tool string) {
+	t.Helper()
+	bin := tool
+	if runtime.GOOS == "windows" {
+		bin = tool + ".exe"
+	}
+	if err := os.MkdirAll(filepath.Join(installPath, "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir installPath: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installPath, "bin", bin), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write shim binary: %v", err)
+	}
+}
+
 func TestInstallMany_AlreadyInstalled(t *testing.T) {
 	reg := makeSimpleRegistry(t, "go")
 	ins := newSimpleInstaller(t, reg)
 
-	// Pre-create the install directory to simulate already-installed
+	// Pre-create an INTACT install dir to simulate already-installed
+	// (Spec 021 D8: an incomplete dir is no longer treated as installed).
 	p, _ := reg.Get("go")
 	installPath := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
-	if err := os.MkdirAll(installPath, 0o755); err != nil {
-		t.Fatalf("mkdir installPath: %v", err)
-	}
+	makeIntactInstall(t, installPath, "go")
 
 	items := []BatchInstallItem{{ToolName: "go", Version: "1.0.0"}}
 	results := ins.InstallMany(nil, items)
@@ -121,16 +138,40 @@ func TestInstallMany_AlreadyInstalled(t *testing.T) {
 	}
 }
 
+// TestInstallMany_IncompleteFails verifies batch mode no longer reports an
+// incomplete install as "already_installed" — it fails with
+// ErrIncompleteInstall, matching InstallWithProgress (Spec 021 D8).
+func TestInstallMany_IncompleteFails(t *testing.T) {
+	reg := makeSimpleRegistry(t, "go")
+	ins := newSimpleInstaller(t, reg)
+
+	p, _ := reg.Get("go")
+	installPath := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	if err := os.MkdirAll(installPath, 0o755); err != nil {
+		t.Fatalf("mkdir installPath: %v", err)
+	}
+
+	items := []BatchInstallItem{{ToolName: "go", Version: "1.0.0"}}
+	results := ins.InstallMany(nil, items)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != "failed" {
+		t.Errorf("Status = %q, want failed (incomplete install must not be treated as installed)", results[0].Status)
+	}
+	if results[0].Error == nil || !errors.Is(results[0].Error, ErrIncompleteInstall) {
+		t.Errorf("Error = %v, want ErrIncompleteInstall", results[0].Error)
+	}
+}
+
 func TestInstallMany_MixedResults(t *testing.T) {
 	reg := makeSimpleRegistry(t, "go")
 	ins := newSimpleInstaller(t, reg)
 
-	// Pre-create install dir for "go" (already installed)
+	// Pre-create an INTACT install dir for "go" (already installed)
 	p, _ := reg.Get("go")
 	installPath := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
-	if err := os.MkdirAll(installPath, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	makeIntactInstall(t, installPath, "go")
 
 	items := []BatchInstallItem{
 		{ToolName: "go", Version: "1.0.0"},  // already installed

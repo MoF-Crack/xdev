@@ -80,17 +80,19 @@ describe('EnvironmentVariablesPage', () => {
     expect(wrapper.findAll('table [data-action="clean-env"]')).toHaveLength(1);
   });
 
-  it('preserves migration scan, modes, single/all actions and textual results', async () => {
+  it('preserves migration mode display, scan, single/all actions and textual results', async () => {
     const wrapper = mount(EnvironmentVariablesPage, { props });
-    await wrapper.get('[data-action="migration-mode-move"]').trigger('click');
+    // Mode comes from the persisted config (settings page) — shown as text, no local toggle.
+    expect(wrapper.get('[data-action="migration-mode"]').text()).toContain('migration.junction');
     await wrapper.setProps({ migrationMode: 'move' });
+    expect(wrapper.get('[data-action="migration-mode"]').text()).toContain('migration.move');
     await wrapper.get('[data-action="migration-scan"]').trigger('click');
     await wrapper.get('[data-action="migration-single"]').trigger('click');
     await wrapper.get('[data-action="migration-all"]').trigger('click');
-    expect(wrapper.emitted('update:migration-mode')).toEqual([['move']]);
+    expect(wrapper.emitted('update:migration-mode')).toBeUndefined();
     expect(wrapper.emitted('migration-scan')).toBeTruthy();
     expect(wrapper.emitted('migration-single')).toEqual([[props.migrationTools[0]]]);
-    expect(wrapper.emitted('migration-all')).toEqual([['move']]);
+    expect(wrapper.emitted('migration-all')).toHaveLength(1);
     expect(wrapper.text()).toContain('migration.status_success');
   });
 });

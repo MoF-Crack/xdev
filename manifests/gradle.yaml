@@ -8,6 +8,34 @@ shims:
 env_vars:
     GRADLE_HOME: '{{install}}'
 versions:
+    - version: 9.6.1
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-9.6.1-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-9.6.1-bin.zip
+          sha256: "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14"
+          size: 130000000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-9.6.1-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-9.6.1-bin.zip
+          sha256: ""
+          size: 130000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://services.gradle.org/distributions/gradle-9.6.1-bin.zip
+          mirror_url: https://repo.huaweicloud.com/gradle/gradle-9.6.1-bin.zip
+          sha256: ""
+          size: 130000000
+          strip: 1
     - version: 8.10.2
       stable: true
       release: "2024-10-01"
@@ -89,6 +117,6 @@ remote:
     url: gradle/gradle
     path: ""
     pattern: v(\d+\.\d+\.\d+)$
-latest: 8.10.2
+latest: 9.6.1
 lts: "8.5"
 install_root: ""

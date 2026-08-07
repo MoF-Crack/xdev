@@ -213,3 +213,7 @@ versions:
         url: "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.31%2B11/OpenJDK11U-jdk_aarch64_mac_hotspot_11.0.31_11.tar.gz"
         sha256: e3377bbe07f4396ba03adcfc5f3d71d151d6a7b858abdf1d0dd20ac4d8d709b0
         strip: 1
+remote:
+  type: github
+  url: "openjdk/jdk"
+  pattern: "^jdk-(\\d+)$"

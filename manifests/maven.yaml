@@ -7,9 +7,37 @@ shims:
   - mvn
 env_vars:
   MAVEN_HOME: "{{install}}"
-latest: "3.9.9"
+latest: "3.9.16"
 lts: "3.9.6"
 versions:
+  - version: "3.9.16"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.zip
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.zip
+        sha256: "5af3b743dd8b876b5c45da33b676251e5f1687712644abb4ee519ca56e1d89ce"
+        size: 10000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz
+        sha256: ""
+        size: 9500000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz
+        mirror_url: https://repo.huaweicloud.com/apache/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz
+        sha256: ""
+        size: 9500000
+        strip: 1
   - version: "3.9.9"
     stable: true
     release: "2024-09-01"

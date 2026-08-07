@@ -15,7 +15,7 @@
           <p v-if="loading" role="status">{{ t('setup.loading_drives') }}</p>
           <div v-else-if="loadError">
             <p id="setup-load-error" ref="loadErrorElement" role="alert" tabindex="-1" class="setup-error">{{ loadError }}</p>
-            <button type="button" class="button secondary" data-action="retry-drives" aria-describedby="setup-load-error" @click="loadDrives({ restoreFocus: true })">{{ t('btn.retry') }}</button>
+            <button type="button" class="xdev-btn xdev-btn--secondary button secondary" data-action="retry-drives" aria-describedby="setup-load-error" @click="loadDrives({ restoreFocus: true })">{{ t('btn.retry') }}</button>
           </div>
           <p v-else-if="!drives.length" ref="emptyDrivesElement" role="status" tabindex="-1" class="setup-empty">{{ t('setup.no_drives') }}</p>
           <div v-else class="drive-list">
@@ -34,7 +34,7 @@
             <strong>{{ t('setup.custom_path') }}</strong>
             <p v-if="customPath" data-testid="selected-path" class="path" :title="customPath">{{ customPath }}</p>
           </div>
-          <button type="button" class="button secondary" data-action="browse" :aria-describedby="actionErrorSource === 'browse' ? 'setup-action-error' : undefined" @click="browseDirectory">{{ t('setup.browse_path') }}</button>
+          <button type="button" class="xdev-btn xdev-btn--secondary button secondary" data-action="browse" :aria-describedby="actionErrorSource === 'browse' ? 'setup-action-error' : undefined" @click="browseDirectory">{{ t('setup.browse_path') }}</button>
         </div>
       </div>
 
@@ -55,11 +55,11 @@
 
       <p v-if="actionError" id="setup-action-error" ref="actionErrorElement" role="alert" tabindex="-1" class="setup-error">{{ actionError }}</p>
       <footer class="setup-nav">
-        <button v-if="step === 2" type="button" class="button secondary" data-action="back" @click="goToStep(1)">{{ t('btn.back') }}</button>
+        <button v-if="step === 2" type="button" class="xdev-btn xdev-btn--secondary button secondary" data-action="back" @click="goToStep(1)">{{ t('btn.back') }}</button>
         <span class="setup-nav__spacer" />
-        <button v-if="step === 1" type="button" class="button primary" data-action="next" :disabled="!installBase" @click="goToStep(2)">{{ t('btn.next') }}</button>
-        <button v-else-if="step === 2" type="button" class="button primary" data-action="save" :aria-describedby="actionErrorSource === 'save' ? 'setup-action-error' : undefined" :disabled="saving" @click="saveConfig">{{ saving ? t('setup.saving') : t('btn.confirm_save') }}</button>
-        <button v-else type="button" class="button primary" data-action="done" @click="emit('done')">{{ t('btn.start_using') }}</button>
+        <button v-if="step === 1" type="button" class="xdev-btn xdev-btn--primary button primary" data-action="next" :disabled="!installBase" @click="goToStep(2)">{{ t('btn.next') }}</button>
+        <button v-else-if="step === 2" type="button" class="xdev-btn xdev-btn--primary button primary" data-action="save" :aria-describedby="actionErrorSource === 'save' ? 'setup-action-error' : undefined" :disabled="saving" @click="saveConfig">{{ saving ? t('setup.saving') : t('btn.confirm_save') }}</button>
+        <button v-else type="button" class="xdev-btn xdev-btn--primary button primary" data-action="done" @click="emit('done')">{{ t('btn.start_using') }}</button>
       </footer>
     </section>
   </main>
@@ -71,6 +71,7 @@ import { CheckmarkCircleOutline } from '@vicons/ionicons5';
 import DriveOption from './components/setup/DriveOption.vue';
 import SetupProgress from './components/setup/SetupProgress.vue';
 import { useI18n } from './i18n/index';
+import { formatBytes } from './utils/format.js';
 
 const { t } = useI18n();
 const emit = defineEmits(['done']);
@@ -87,12 +88,6 @@ const directories = computed(() => [
   [t('setup.cache'), `${installBase.value}\\cache`],
 ].map(([label, path]) => ({ label, path })));
 
-function formatBytes(bytes) {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const index = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${parseFloat((bytes / 1024 ** index).toFixed(1))} ${units[index]}`;
-}
 function isRecommended(drive) { return drive.letter !== 'C:' && drive.free > 50 * 1024 ** 3; }
 function driveSpace(drive) { return `${formatBytes(drive.free)} ${t('setup.free')} / ${formatBytes(drive.total)}`; }
 async function goToStep(nextStep) {
@@ -188,7 +183,8 @@ onMounted(async () => {
 .setup-nav { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
 .setup-nav__spacer { flex: 1; }
 .button { min-height: 36px; padding: 7px 14px; border: 1px solid transparent; border-radius: var(--xdev-radius-md); font: inherit; font-weight: 600; cursor: pointer; }
-.button.primary { color: var(--xdev-text-on-accent); background: #5753d9; }
+.button.primary { color: var(--xdev-text-on-accent); background: var(--xdev-accent); }
+[data-theme="dark"] .button.primary { background: #1f6feb; }
 .button.secondary { color: var(--xdev-text-primary); background: transparent; border-color: var(--xdev-border-strong); }
 .button:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 480px) { .custom-path { align-items: stretch; flex-direction: column; } .path-summary { grid-template-columns: 1fr; } .path-summary dt { padding-bottom: 2px; border-bottom: 0; } .path-summary dd { padding-top: 2px; } }

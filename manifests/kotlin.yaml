@@ -9,6 +9,37 @@ shims:
 env_vars:
     KOTLIN_HOME: '{{install}}'
 versions:
+    - version: 2.4.10
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v2.4.10/kotlin-compiler-2.4.10.zip
+          mirror_url: ""
+          sha256: "473dd66c7a3ef4b182065b3da670466c1bf2773a9dbb0ed8b33a39fe9d4f876d"
+          size: 85000000
+          strip: 1
+          requires_proxy: true
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v2.4.10/kotlin-compiler-2.4.10.zip
+          mirror_url: ""
+          sha256: ""
+          size: 85000000
+          strip: 1
+          requires_proxy: true
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/JetBrains/kotlin/releases/download/v2.4.10/kotlin-compiler-2.4.10.zip
+          mirror_url: ""
+          sha256: ""
+          size: 85000000
+          strip: 1
+          requires_proxy: true
     - version: 2.0.21
       stable: true
       release: "2024-10-23"
@@ -107,6 +138,6 @@ remote:
     url: JetBrains/kotlin
     path: ""
     pattern: v(\d+\.\d+\.\d+)$
-latest: 2.0.21
+latest: 2.4.10
 lts: ""
 install_root: ""

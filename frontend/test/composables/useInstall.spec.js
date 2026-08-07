@@ -9,7 +9,7 @@ afterEach(cleanupWailsMocks);
 function setup(overrides = {}) {
   const listeners = {};
   const app = {
-    InstallTool: vi.fn(async () => null), PauseDownload: vi.fn(async () => null),
+    InstallTool: vi.fn(async () => null), InstallToolWithForm: vi.fn(async () => null), PauseDownload: vi.fn(async () => null),
     ResumeDownload: vi.fn(async () => null), CancelDownload: vi.fn(async () => null), ...overrides,
   };
   const runtime = {
@@ -65,6 +65,14 @@ describe('useInstall', () => {
     expect(app.InstallTool).toHaveBeenCalledTimes(2);
   });
 
+  it('uses the form-specific install API when a form filter is supplied', async () => {
+    const { app } = setup();
+    const state = useInstall();
+    await expect(state.install('opencode', '1.2.3', 'gui')).resolves.toBe(true);
+    expect(app.InstallToolWithForm).toHaveBeenCalledWith('opencode', '1.2.3', 'gui');
+    expect(app.InstallTool).not.toHaveBeenCalled();
+  });
+
   it('reports completion, event errors, and cancellation with the current task payload', async () => {
     const { listeners } = setup();
     const onComplete = vi.fn();
@@ -92,5 +100,37 @@ describe('useInstall', () => {
     expect(second.progress.value.percent).toBe(55);
     listeners.installProgress.forEach((fn) => fn({ tool: 'node', version: '22', percent: 99 }));
     expect(second.progress.value.percent).toBe(55);
+  });
+
+  it('resets the bar to 0 on a new attempt or fallback status, keeps phase text', async () => {
+    const { listeners } = setup();
+    const state = useInstall();
+    await state.install('node', '22');
+    const emit = (data) => listeners.installProgress.forEach((fn) => fn(data));
+    emit({ taskId: 'node@22', percent: 97, phase: 'Downloading...', speed: '1.2 MB/s' });
+    expect(state.progress.value.percent).toBe(97);
+    // First attempt of a new URL → hard reset to 0 (backend emits percent 0).
+    emit({ taskId: 'node@22', percent: 0, phase: 'Attempt 1/3 for github.com' });
+    expect(state.progress.value.percent).toBe(0);
+    expect(state.phase.value).toBe('Attempt 1/3 for github.com');
+    // Byte progress resumes afterwards.
+    emit({ taskId: 'node@22', percent: 10, phase: 'Downloading...' });
+    expect(state.progress.value.percent).toBe(10);
+  });
+
+  it('preserves the bar on in-URL retries (percent < 0 sentinel)', async () => {
+    const { listeners } = setup();
+    const state = useInstall();
+    await state.install('node', '22');
+    const emit = (data) => listeners.installProgress.forEach((fn) => fn(data));
+    emit({ taskId: 'node@22', percent: 97, phase: 'Downloading...', speed: '1.2 MB/s', eta: '5s' });
+    expect(state.progress.value.percent).toBe(97);
+    // Status-only update (Attempt 2/3…): the whole progress is preserved,
+    // only the phase changes.
+    emit({ taskId: 'node@22', percent: -1, phase: 'Attempt 2/3 for github.com' });
+    expect(state.progress.value.percent).toBe(97);
+    expect(state.progress.value.speed).toBe('1.2 MB/s');
+    expect(state.progress.value.eta).toBe('5s');
+    expect(state.phase.value).toBe('Attempt 2/3 for github.com');
   });
 });

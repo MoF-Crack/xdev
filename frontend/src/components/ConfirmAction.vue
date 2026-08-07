@@ -6,8 +6,8 @@
         <strong :id="titleId">{{ title }}</strong>
         <span v-if="description" :id="descriptionId" class="confirm-action__description">{{ description }}</span>
         <span class="confirm-action__actions">
-          <button ref="cancelButton" type="button" data-action="cancel" :disabled="cancelDisabled" @click="cancel">{{ cancelLabel }}</button>
-          <button ref="confirmButton" type="button" class="confirm-action__danger" data-action="confirm" :disabled="pending || submitted" @click="confirm">{{ confirmLabel }}</button>
+          <button ref="cancelButton" type="button" class="xdev-btn xdev-btn--secondary" data-action="cancel" :disabled="cancelDisabled" @click="cancel">{{ cancelLabel }}</button>
+          <button ref="confirmButton" type="button" class="xdev-btn xdev-btn--danger confirm-action__danger" data-action="confirm" :disabled="pending || submitted" @click="confirm">{{ confirmLabel }}</button>
         </span>
       </span>
     </span>
@@ -53,7 +53,7 @@ watch(() => [props.pending, props.cancelDisabled], () => { if (visible.value) fo
 
 <style scoped>
 .confirm-action, .confirm-action__trigger { display: inline-flex; }
-.confirm-action__backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: var(--xdev-space-4); background: rgba(0, 0, 0, 0.56); }
+.confirm-action__backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: var(--xdev-space-4); background: var(--xdev-overlay); }
 .confirm-action__dialog { display: grid; width: min(420px, 100%); gap: var(--xdev-space-3); padding: var(--xdev-space-6); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-lg); background: var(--xdev-bg-panel); box-shadow: var(--xdev-shadow-lg); color: var(--xdev-text-primary); }
 .confirm-action__description { color: var(--xdev-text-muted); line-height: 1.5; }
 .confirm-action__actions { display: flex; justify-content: flex-end; gap: var(--xdev-space-2); margin-top: var(--xdev-space-2); }

@@ -32,22 +32,17 @@ expect(app.includes("import './styles/theme.css'"), 'App.vue should import theme
 expect(existsSync(join(root, 'src/components/CommandPalette.vue')), 'CommandPalette component should exist');
 expect(appContent.includes('<CommandPalette'), 'AppContent.vue should render CommandPalette');
 expect(appContent.includes('<AppShell'), 'AppContent.vue should compose AppShell');
-for (const page of ['ProjectPage', 'TasksPage', 'PluginsPage', 'ServicesPage']) {
-  expect(appContent.includes(`import ${page} from './pages/${page}.vue'`), `AppContent should import ${page}`);
-  expect(appContent.includes(`<${page} v-else-if=`), `AppContent should render ${page} in the view chain`);
-}
 expect(!/v-(?:else-)?if\s*=\s*["']false["']/.test(appContent), 'AppContent should not retain disabled false template branches');
-for (const marker of ['newProjectTool', 'newProjectVersion', 'newPluginName', 'showCreatePlugin']) {
-  expect(!appContent.includes(marker), `AppContent should not retain legacy ${marker} markup or state`);
-}
 const fallbackIndex = appContent.indexOf('<ToolCatalogPage v-else');
-expect(fallbackIndex > appContent.indexOf('<ServicesPage v-else-if='), 'ToolCatalog fallback should follow the four extracted pages');
+expect(fallbackIndex > appContent.indexOf('<EnvironmentVariablesPage v-else-if='), 'ToolCatalog fallback should follow the extracted pages');
 expect(toolCatalogPage.includes('v-model') || toolCatalogPage.includes('update:searchQuery'), 'tool catalog should own its search model');
 expect(!appContent.includes('data-testid="tool-search"'), 'AppContent should not duplicate tool catalog search markup');
 expect(navigation.includes("key: 'tools-group'"), 'registry should include a tools group');
 expect(navigation.includes("key: 'environment-group'"), 'registry should include an environment group');
 expect(navigation.includes("key: 'development-group'"), 'registry should include a development group');
 expect(navigation.includes("key: 'settings-group'"), 'registry should include a settings group');
+const knownNavKeys = [...navigation.matchAll(/key:\s*'([^']+)'/g)].map(m => m[1]);
+expect(!knownNavKeys.some(k => k === 'custom-tools' || k === 'plugins'), 'navigation registry should not contain custom-tools or plugins');
 expect(appShell.includes("window.addEventListener('keydown'"), 'AppShell should register global keyboard shortcuts');
 expect(appContent.includes('await WindowIsMaximised()'), 'maximize should immediately refresh Wails window state');
 expect(appContent.includes('.catch('), 'Wails maximize polling should handle rejected state checks');

@@ -403,15 +403,35 @@ func WriteUserPath(path string) error {
 // allowedEnvVarNames is kept as a local alias for util.AllowedEnvVarNames
 // for backward compatibility with any code that references it directly.
 // The canonical whitelist is maintained in internal/util/sanitize.go.
+// Note: EnumEnvVars, SetEnvVar, and DeleteEnvVar no longer enforce this
+// whitelist — only IsProtectedSystemEnvVar is enforced.
 var allowedEnvVarNames = util.AllowedEnvVarNames
 
 // SetUserEnvVar sets a user-level environment variable in HKCU\Environment.
 // The value is stored as REG_EXPAND_SZ so that %USERPROFILE% etc. are expanded at runtime.
 // Only variable names in the util.AllowedEnvVarNames whitelist are accepted; others
 // are rejected to prevent overwriting critical system variables.
+// Use SetUserEnvVarTrusted for installer-managed vars from manifests.
 func SetUserEnvVar(name, value string) error {
 	if !util.IsAllowedEnvVarName(name) {
 		return fmt.Errorf("env var %q is not in the allowed whitelist — refusing to write to registry", name)
+	}
+	return SetUserEnvVarTrusted(name, value)
+}
+
+// SetUserEnvVarTrusted writes a user-level env var without the whitelist check.
+// This is used by the installer for env vars declared in tool manifests —
+// the manifest is the trusted source, so any *_HOME / *_ROOT var it declares
+// is safe to write. The whitelist remains in effect for the GUI manual editor.
+//
+// Security (F-16 / D12): even this "trusted" boundary rejects protected
+// system variables (PATH, SystemRoot, TEMP, ...) and syntactically invalid
+// names — a malicious or hand-edited manifest must not be able to clobber
+// the system environment. All built-in manifests use *_HOME / *_ROOT style
+// names, so existing tools are unaffected.
+func SetUserEnvVarTrusted(name, value string) error {
+	if err := util.ValidateEnvVarName(name); err != nil {
+		return fmt.Errorf("refusing to write env var via trusted path: %w", err)
 	}
 	// Security (M-4): Validate env var value
 	if strings.ContainsRune(value, '\x00') {
@@ -472,10 +492,17 @@ func SetUserEnvVar(name, value string) error {
 	// Returns the value as a string, or ("", error) if the variable doesn't exist
 	// or cannot be read. Only variable names in the allowed whitelist are accepted.
 	// Security (H-10): Used by the installer to save original values for rollback.
+	// Use GetUserEnvVarTrusted for installer-managed vars from manifests.
 	func GetUserEnvVar(name string) (string, error) {
 		if !util.IsAllowedEnvVarName(name) {
 			return "", fmt.Errorf("env var %q is not in the allowed whitelist — refusing to read from registry", name)
 		}
+		return GetUserEnvVarTrusted(name)
+	}
+
+	// GetUserEnvVarTrusted reads a user-level env var without the whitelist check.
+	// Used by the installer for env vars declared in tool manifests.
+	func GetUserEnvVarTrusted(name string) (string, error) {
 		all := GetAllUserEnvVars()
 		v, ok := all[name]
 		if !ok {
@@ -505,6 +532,12 @@ func SetUserEnvVar(name, value string) error {
 		if !util.IsAllowedEnvVarName(name) {
 			return fmt.Errorf("env var %q is not in the allowed whitelist — refusing to delete from registry", name)
 		}
+		return DeleteUserEnvVarTrusted(name)
+	}
+
+	// DeleteUserEnvVarTrusted deletes a user-level env var without the whitelist check.
+	// Used by the installer for env vars declared in tool manifests.
+	func DeleteUserEnvVarTrusted(name string) error {
 		var key uintptr
 		envName, err := syscall.UTF16PtrFromString(`Environment`)
 		if err != nil {
@@ -555,11 +588,11 @@ func getRegKey(level string) (rootKey uintptr, subKey string, err error) {
 
 // SetEnvVar sets a Windows registry environment variable at the given level
 // ("user" or "machine"). The value is stored as REG_EXPAND_SZ.
-// Only variable names in the util.AllowedEnvVarNames whitelist are accepted.
+// Protected system variables (PATH, SystemRoot, etc.) are rejected.
 // The change is broadcast via WM_SETTINGCHANGE for immediate effect.
 func SetEnvVar(name, value, level string) error {
-	if !util.IsAllowedEnvVarName(name) {
-		return fmt.Errorf("env var %q is not in the allowed whitelist — refusing to write to registry", name)
+	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
+		return fmt.Errorf("cannot modify protected system env var: %s", name)
 	}
 	if strings.ContainsRune(value, '\x00') {
 		return fmt.Errorf("env var %q value contains null bytes — refusing to write to registry", name)
@@ -584,6 +617,9 @@ func SetEnvVar(name, value, level string) error {
 		uintptr(unsafe.Pointer(&key)),
 	)
 	if ret != 0 {
+		if level == "machine" && ret == 5 {
+			return fmt.Errorf("修改系统环境变量需要管理员权限，请以管理员身份运行 xdev")
+		}
 		return fmt.Errorf("RegOpenKeyExW (set %s env var) failed: error %d", level, ret)
 	}
 	defer procRegCloseKey.Call(key)
@@ -680,8 +716,12 @@ func GetEnvVar(name, level string) (string, error) {
 }
 
 // DeleteEnvVar deletes a Windows registry environment variable at the given
-// level ("user" or "machine"). The change is broadcast via WM_SETTINGCHANGE.
+// level ("user" or "machine"). Protected system variables (PATH, SystemRoot,
+// etc.) are rejected. The change is broadcast via WM_SETTINGCHANGE.
 func DeleteEnvVar(name, level string) error {
+	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
+		return fmt.Errorf("cannot modify protected system env var: %s", name)
+	}
 	rootKey, subKey, err := getRegKey(level)
 	if err != nil {
 		return err
@@ -701,6 +741,9 @@ func DeleteEnvVar(name, level string) error {
 		uintptr(unsafe.Pointer(&key)),
 	)
 	if ret != 0 {
+		if level == "machine" && ret == 5 {
+			return fmt.Errorf("修改系统环境变量需要管理员权限，请以管理员身份运行 xdev")
+		}
 		return fmt.Errorf("RegOpenKeyExW (delete %s env var) failed: error %d", level, ret)
 	}
 	defer procRegCloseKey.Call(key)
@@ -725,8 +768,8 @@ func DeleteEnvVar(name, level string) error {
 }
 
 // EnumEnvVars lists all environment variable values at the given registry level
-// ("user" or "machine"), filtering to development-related names (those in the
-// util.AllowedEnvVarNames whitelist).
+// ("user" or "machine"). No whitelist filtering — all variables at the level are
+// returned so the caller can present a complete view.
 func EnumEnvVars(level string) ([]EnvPair, error) {
 	rootKey, subKey, err := getRegKey(level)
 	if err != nil {
@@ -747,6 +790,9 @@ func EnumEnvVars(level string) ([]EnvPair, error) {
 		uintptr(unsafe.Pointer(&key)),
 	)
 	if ret != 0 {
+		if level == "machine" && ret == 5 {
+			return nil, fmt.Errorf("修改系统环境变量需要管理员权限，请以管理员身份运行 xdev")
+		}
 		return nil, fmt.Errorf("RegOpenKeyExW (enum %s) failed: error %d", level, ret)
 	}
 	defer procRegCloseKey.Call(key)
@@ -772,10 +818,8 @@ func EnumEnvVars(level string) ([]EnvPair, error) {
 			break
 		}
 		name := syscall.UTF16ToString(nameBuf[:nameSize])
-		if util.IsAllowedEnvVarName(name) {
-			value := syscall.UTF16ToString(buf[:bufSize/2])
-			pairs = append(pairs, EnvPair{Name: name, Value: value})
-		}
+		value := syscall.UTF16ToString(buf[:bufSize/2])
+		pairs = append(pairs, EnvPair{Name: name, Value: value})
 	}
 	return pairs, nil
 }

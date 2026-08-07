@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-08",
+    "approved_at":  "2026-08-08",
+    "schema_version":  1,
+    "target_state":  "Draft",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/011-tool-discovery-automanage/spec.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Create/approve Feature Spec for 011-tool-discovery-automanage",
+    "recorded_by":  "Codex Orchestrator",
+    "asset_type":  "spec",
+    "decision":  "approve-state-transition",
+    "target_version":  "1.0.0",
+    "authorization_text":  "SDD Loop convergence batch approval for 011-tool-discovery-automanage",
+    "approval_id":  "2026-07-26-spec-011-draft-001"
+}

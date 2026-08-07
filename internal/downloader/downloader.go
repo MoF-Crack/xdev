@@ -68,9 +68,16 @@ type Options struct {
 	MaxRetries   int
 	Timeout      time.Duration
 	Quiet        bool
-	OnProgress   func(downloaded, total int64, elapsed time.Duration) // optional progress callback
+	OnProgress   func(downloaded, total int64, elapsed time.Duration)          // optional progress callback
 	OnProgressEx func(downloaded, total int64, speed int64, eta time.Duration) // optional extended progress callback with speed/eta
-	Cookie       string                                               // optional cookie header (e.g. "oraclelicense=accept-securebackup-cookie")
+
+	// OnStatus is called for non-byte status updates such as retry
+	// attempts, fallback URL switches, and restarts caused by the server
+	// ignoring a Range header. The message is human-readable (e.g.
+	// "Attempt 2/3 for github.com"). Callers (e.g. the GUI) can surface
+	// it as a phase/status line.
+	OnStatus func(message string)
+	Cookie   string // optional cookie header (e.g. "oraclelicense=accept-securebackup-cookie")
 
 	// ManifestSignature is the Ed25519 signature for the manifest that
 	// declares this download's SHA-256. When non-nil, the signature is
@@ -115,7 +122,7 @@ type Options struct {
 // If the primary URL fails with HTTP 404/403/410, FallbackURLs are
 // tried in order before giving up.
 func Download(ctx context.Context, opts Options) error {
-	log.Printf("[download] Starting download: url=%s dest=%s", opts.URL, opts.Dest)
+	log.Printf("[download] Starting download: url=%s dest=%s", sanitizedURL(opts.URL), opts.Dest)
 
 	// Verify manifest signature before download if present
 	if len(opts.ManifestSignature) > 0 {
@@ -157,25 +164,7 @@ func Download(ctx context.Context, opts Options) error {
 		return err
 	}
 	if opts.Client == nil {
-		transport := &http.Transport{
-			Proxy: proxyFromOptions(opts),
-		}
-		opts.Client = &http.Client{
-			Timeout:   30 * time.Minute,
-			Transport: transport,
-			// Security (H-8): Prevent HTTPS-to-HTTP redirect downgrades.
-			// An HTTPS URL that redirects to HTTP would expose the download
-			// to MITM attacks even though the original URL was secure.
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return fmt.Errorf("too many redirects")
-				}
-				if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
-					return fmt.Errorf("insecure redirect: %s → %s (HTTPS downgrade blocked)", via[0].URL, req.URL)
-				}
-				return nil
-			},
-		}
+		opts.Client = newHTTPClient(opts, false)
 	}
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Minute
@@ -183,8 +172,8 @@ func Download(ctx context.Context, opts Options) error {
 	if opts.MaxRetries <= 0 {
 		opts.MaxRetries = 3
 	}
-	log.Printf("[download] Config: timeout=%v maxRetries=%d cookie=%v sha256=%v fallbacks=%d",
-		opts.Timeout, opts.MaxRetries, opts.Cookie != "", opts.ExpectedSHA != "", len(opts.FallbackURLs))
+	log.Printf("[download] Config: timeout=%v maxRetries=%d cookie=%v sha256=%v fallbacks=%d proxy=%v",
+		opts.Timeout, opts.MaxRetries, opts.Cookie != "", opts.ExpectedSHA != "", len(opts.FallbackURLs), opts.ProxyURL != "")
 
 	// Build the list of URLs to try: primary first, then fallbacks
 	urls := []string{opts.URL}
@@ -197,23 +186,101 @@ func Download(ctx context.Context, opts Options) error {
 		urls = append(urls, fb)
 	}
 
-	var failures []string
+	ok, failures, proxyFailed := tryURLList(ctx, opts, urls, true)
+	if ok {
+		return nil
+	}
+
+	// Proxy fallback: when a proxy was configured (explicit ProxyURL or an
+	// environment proxy via ProxyFromEnvironment) and a proxy connection
+	// failure occurred, retry every URL once with a direct (no-proxy)
+	// client. This makes a dead/misconfigured proxy fail fast instead of
+	// burning MaxRetries per URL, and still succeeds when the target is
+	// reachable directly.
+	if opts.ProxyURL != "" || proxyFailed {
+		notifyStatus(opts, "Proxy unreachable — retrying directly (no proxy)")
+		log.Printf("[download] Proxy failed; retrying all URLs without a proxy")
+		directOpts := opts
+		directOpts.ProxyURL = ""
+		directOpts.Client = newHTTPClient(opts, true)
+		if ok, directFailures, _ := tryURLList(ctx, directOpts, urls, false); ok {
+			return nil
+		} else {
+			// Actionable hint only when proxy-connection errors were
+			// actually observed (dead/misconfigured proxy), not when the
+			// proxy worked and the target simply 404'd.
+			if opts.ProxyURL != "" && proxyFailed {
+				return fmt.Errorf("download failed: proxy %s unreachable (%s); direct also failed (%s); start the proxy service or disable proxy.enabled",
+					opts.ProxyURL, strings.Join(failures, "; "), strings.Join(directFailures, "; "))
+			}
+			failures = append(failures, directFailures...)
+		}
+	}
+
+	log.Printf("[download] ERROR: all URLs failed for %s", sanitizedURL(opts.URL))
+	return fmt.Errorf("download failed: %s", strings.Join(failures, "; "))
+}
+
+// tryURLList attempts every URL in order with the given options. It returns
+// ok=true as soon as one URL succeeds, otherwise the sanitized per-URL
+// failures and whether any failure was proxy-related.
+func tryURLList(ctx context.Context, opts Options, urls []string, notifyFallback bool) (ok bool, failures []string, proxyFailed bool) {
 	for urlIdx, tryURL := range urls {
-		if urlIdx > 0 {
-			log.Printf("[download] Trying fallback URL #%d: %s", urlIdx, tryURL)
+		if urlIdx > 0 && notifyFallback {
+			log.Printf("[download] Trying fallback URL #%d: %s", urlIdx, sanitizedURL(tryURL))
+			notifyStatus(opts, "Trying fallback URL #%d: %s", urlIdx, shortHost(tryURL))
 		}
 		timeoutCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 		err := downloadWithRetries(timeoutCtx, opts, tryURL)
 		cancel()
 		if err == nil {
-			return nil
+			return true, nil, false
+		}
+		if isProxyError(err) {
+			proxyFailed = true
 		}
 		failures = append(failures, fmt.Sprintf("%s: %s", sanitizedURL(tryURL), sanitizedReason(err)))
-		log.Printf("[download] URL #%d failed: %v", urlIdx, err)
+		log.Printf("[download] URL #%d failed: %s", urlIdx, sanitizedReason(err))
 	}
+	return false, failures, proxyFailed
+}
 
-	log.Printf("[download] ERROR: all URLs failed for %s", opts.URL)
-	return fmt.Errorf("download failed: %s", strings.Join(failures, "; "))
+// newHTTPClient builds the http.Client used for a download. When forceDirect
+// is true the transport's Proxy is explicitly nil, so environment proxy
+// variables (HTTP_PROXY/HTTPS_PROXY) cannot re-trap the request. If
+// opts.Client already carries a transport (e.g. a test client with custom
+// TLS settings), its configuration is preserved and only the proxy is
+// replaced.
+func newHTTPClient(opts Options, forceDirect bool) *http.Client {
+	var proxy func(*http.Request) (*url.URL, error)
+	if !forceDirect {
+		proxy = proxyFromOptions(opts)
+	}
+	var transport *http.Transport
+	if opts.Client != nil {
+		if existing, ok := opts.Client.Transport.(*http.Transport); ok && existing != nil {
+			cloned := existing.Clone()
+			cloned.Proxy = proxy
+			transport = cloned
+		}
+	}
+	if transport == nil {
+		transport = &http.Transport{Proxy: proxy}
+	}
+	return &http.Client{
+		Timeout:   30 * time.Minute,
+		Transport: transport,
+		// Security (H-8): Prevent HTTPS-to-HTTP redirect downgrades
+		// (shared policy — util.SecureRedirectCheck).
+		CheckRedirect: util.SecureRedirectCheck(10),
+	}
+}
+
+// isProxyError reports whether the error indicates a proxy connection
+// failure. Thin alias over util.IsProxyError (Spec 021 D4) — kept for
+// local call sites and tests.
+func isProxyError(err error) bool {
+	return util.IsProxyError(err)
 }
 
 func sanitizedURL(raw string) string {
@@ -225,6 +292,24 @@ func sanitizedURL(raw string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String()
+}
+
+// notifyStatus invokes opts.OnStatus (if set) with a formatted message.
+func notifyStatus(opts Options, format string, args ...any) {
+	if opts.OnStatus == nil {
+		return
+	}
+	opts.OnStatus(fmt.Sprintf(format, args...))
+}
+
+// shortHost extracts the hostname (e.g. "github.com") from a URL for
+// use in human-readable status messages.
+func shortHost(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return raw
+	}
+	return parsed.Host
 }
 
 func sanitizedReason(err error) string {
@@ -264,7 +349,8 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 
 	var lastErr error
 	for attempt := 1; attempt <= opts.MaxRetries; attempt++ {
-		log.Printf("[download] Attempt %d/%d for %s", attempt, opts.MaxRetries, tryURL)
+		log.Printf("[download] Attempt %d/%d for %s", attempt, opts.MaxRetries, sanitizedURL(tryURL))
+		notifyStatus(opts, "Attempt %d/%d for %s", attempt, opts.MaxRetries, shortHost(tryURL))
 		err := downloadOnce(ctx, urlOpts)
 		if err == nil {
 			log.Printf("[download] Download completed successfully: %s", opts.Dest)
@@ -274,6 +360,12 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 		log.Printf("[download] Attempt %d failed: %v", attempt, err)
 		// Don't retry on 404 — move to fallback immediately
 		if isNotFoundError(err) {
+			return err
+		}
+		// Fail fast on proxy errors: a dead/misconfigured proxy will not
+		// recover within the retry window, so don't burn MaxRetries on it.
+		// The caller (Download) retries the whole URL list directly once.
+		if isProxyError(err) {
 			return err
 		}
 		select {
@@ -325,7 +417,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] Set Cookie header for OTN license")
 	}
 
-	log.Printf("[download] Sending HTTP GET request to %s", opts.URL)
+	log.Printf("[download] Sending HTTP GET request to %s", sanitizedURL(opts.URL))
 	resp, err := opts.Client.Do(req)
 	if err != nil {
 		log.Printf("[download] ERROR: HTTP request failed: %v", err)
@@ -335,12 +427,13 @@ func downloadOnce(ctx context.Context, opts Options) error {
 
 	log.Printf("[download] Response: status=%d content-length=%d", resp.StatusCode, resp.ContentLength)
 	if resp.StatusCode/100 != 2 {
-		log.Printf("[download] ERROR: non-2xx status code %d for %s", resp.StatusCode, opts.URL)
-		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, opts.URL)
+		log.Printf("[download] ERROR: non-2xx status code %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
+		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 	}
 	// If server ignored our range, restart from scratch.
 	if fromBytes > 0 && resp.StatusCode == http.StatusOK {
 		log.Printf("[download] Server did not honor Range header, restarting from scratch")
+		notifyStatus(opts, "Server ignored Range header — restarting from scratch")
 		fromBytes = 0
 	}
 
@@ -436,11 +529,29 @@ func downloadOnce(ctx context.Context, opts Options) error {
 				_ = os.Remove(partPath)
 				return fmt.Errorf("manifest has all-zero SHA-256 placeholder for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
 			}
-			log.Printf("[download] WARNING: sha256 is all zeros for %s - saving computed hash for future verification (TOFU)", opts.ProgressDesc)
-			fmt.Fprintf(os.Stderr, "⚠ WARNING: No SHA-256 hash in manifest for %s. Downloaded content will be trusted on first use (TOFU).\n  For production security, embed a root public key and sign manifests.\n", opts.ProgressDesc)
-			// Save the computed hash to a sidecar file for future verification
+			// Security (F-04 / D15): 已有 sidecar pin 时校验本次下载内容，
+			// 绝不静默覆写既有 pin；不匹配则删除 .part 并报错。
 			sidecarPath := opts.Dest + ".sha256"
-			writeSidecarHash(sidecarPath, gotHash, opts.Dest)
+			if sidecarData, err := os.ReadFile(sidecarPath); err == nil && len(sidecarData) > 0 {
+				parts := strings.Fields(strings.TrimSpace(string(sidecarData)))
+				if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
+					if !strings.EqualFold(gotHash, parts[0]) {
+						log.Printf("[download] ERROR: sha256 mismatch with cached sidecar pin! cached=%s got=%s", parts[0], gotHash)
+						_ = os.Remove(partPath)
+						return fmt.Errorf("sha256 mismatch with cached sidecar pin: expected %s, got %s", parts[0], gotHash)
+					}
+					log.Printf("[download] SHA-256 verification passed (cached sidecar pin): %s", gotHash[:16]+"...")
+				} else {
+					// pin 内容无效：允许覆写。
+					log.Printf("[download] WARNING: sidecar %s is malformed — rewriting pin", sidecarPath)
+					writeSidecarHash(sidecarPath, gotHash, opts.Dest)
+				}
+			} else {
+				log.Printf("[download] WARNING: sha256 is all zeros for %s - saving computed hash for future verification (TOFU)", opts.ProgressDesc)
+				fmt.Fprintf(os.Stderr, "⚠ WARNING: No SHA-256 hash in manifest for %s. Downloaded content will be trusted on first use (TOFU).\n  For production security, embed a root public key and sign manifests.\n", opts.ProgressDesc)
+				// Save the computed hash to a sidecar file for future verification
+				writeSidecarHash(sidecarPath, gotHash, opts.Dest)
+			}
 		} else {
 			if !strings.EqualFold(gotHash, expectedSHA) {
 				log.Printf("[download] ERROR: sha256 mismatch! expected=%s got=%s", expectedSHA, gotHash)

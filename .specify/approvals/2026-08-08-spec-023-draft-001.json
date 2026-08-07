@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-08",
+    "approved_at":  "2026-08-08",
+    "schema_version":  1,
+    "target_state":  "已完成",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/023-ide-agent-harness/spec.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Create/approve Feature Spec for 023-ide-agent-harness",
+    "recorded_by":  "Codex Orchestrator",
+    "asset_type":  "spec",
+    "decision":  "approve-state-transition",
+    "target_version":  "app_local_detect.go:442-646",
+    "authorization_text":  "SDD Loop convergence batch approval for 023-ide-agent-harness",
+    "approval_id":  "2026-08-08-spec-023-draft-001"
+}

@@ -1,0 +1,130 @@
+﻿# T-D7 copilot-cli (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
+# 瀹夎绛栫暐锛歺dev 浣跨敤 npm 骞冲彴鍖咃紙optionalDependencies 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃紝
+# 濡?@github/copilot-win32-x64@1.0.77锛夛紝闈?universal loader 钖勫３銆?# 骞冲彴 tgz 鏍逛负 package/锛宻trip 1 鍚?copilot.exe 钀戒簬 install 鏍癸紙integrity 鍛戒腑锛夛紝
+# 鍏朵綑璧勬簮锛坣ode_modules銆乸lugins銆乹ueries 绛夛級涓€骞惰В鍖呭埌 install 鏍广€?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?@github/copilot锛堢増鏈覆涓€鑷达級锛歳emote 杩斿洖
+# universal 鐗堟湰锛?.0.77锛夛紝褰掓。涓哄钩鍙板寘鐗堟湰锛?.0.77锛夛紝浜岃€呭榻愩€?# native 瀹夎鍣紙gh.io/copilot-install锛変綔涓哄閫夋柟妗堝瓨鍦ㄣ€?# 鍖呮湭澹版槑 engines锛屾寜 Spec 023 T-D7 绾﹀畾澹版槑 depends node>=22锛坕nstall_path: npm锛夈€?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: copilot-cli
+display_name: GitHub Copilot CLI
+description: GitHub Copilot CLI brings GitHub Copilot's AI assistance to your terminal, helping you write shell commands and code.
+homepage: https://github.com/features/copilot/cli
+category: development_tools
+shims:
+  - copilot
+  - github-copilot
+form_factor:
+  - cli
+  - tui
+depends:
+  - tool: node
+    min_version: "22.0.0"
+    install_path: npm
+latest: "1.0.77"
+lts: ""
+versions:
+  - version: "1.0.77"
+    stable: true
+    release: "2026-07-30"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-win32-x64/-/copilot-win32-x64-1.0.77.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-win32-x64/-/copilot-win32-x64-1.0.77.tgz
+        sha256: "e5151fe2fc18d4a26b3475ee06015ebc12d64a43079ff805a22b4a865f157c4f"
+        size: 163190676
+        strip: 1
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-win32-arm64/-/copilot-win32-arm64-1.0.77.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-win32-arm64/-/copilot-win32-arm64-1.0.77.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.77.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.77.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-linux-arm64/-/copilot-linux-arm64-1.0.77.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-linux-arm64/-/copilot-linux-arm64-1.0.77.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-darwin-x64/-/copilot-darwin-x64-1.0.77.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-darwin-x64/-/copilot-darwin-x64-1.0.77.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.77.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.77.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+  - version: "1.0.76"
+    stable: true
+    release: "2026-07-30"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-win32-x64/-/copilot-win32-x64-1.0.76.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-win32-x64/-/copilot-win32-x64-1.0.76.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-win32-arm64/-/copilot-win32-arm64-1.0.76.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-win32-arm64/-/copilot-win32-arm64-1.0.76.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.76.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.76.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-linux-arm64/-/copilot-linux-arm64-1.0.76.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-linux-arm64/-/copilot-linux-arm64-1.0.76.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-darwin-x64/-/copilot-darwin-x64-1.0.76.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-darwin-x64/-/copilot-darwin-x64-1.0.76.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.76.tgz
+        mirror_url: https://registry.npmmirror.com/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.76.tgz
+        sha256: ""
+        size: 160000000
+        strip: 1
+remote:
+  type: npm
+  package: "@github/copilot"
+  pattern: "^(\\d+\\.\\d+\\.\\d+)$"

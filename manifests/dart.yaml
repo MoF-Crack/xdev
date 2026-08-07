@@ -6,10 +6,10 @@ category: language
 shims:
     - dart
     - pub
-    - dartfmt
     - dart2js
 env_vars:
     DART_HOME: '{{install}}'
+    PUB_CACHE: '{{install}}\.pub-cache'
 versions:
     - version: 3.12.2
       stable: true

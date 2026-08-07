@@ -1,0 +1,88 @@
+# T-D3 cursor (Spec 023 Phase D)
+# 版本源实测（2026-08）：
+#   - 官方 JSON 更新 API（api2.cursor.sh/updates/v1/update?...）已下线（多平台多参数变体均返回 404 Route not found）。remote 保留该端点作历史引用，
+#     refresh 可能失败，版本人工维护（latest 固定于 manifest）。
+#   - 现行官方端点：https://api2.cursor.sh/updates/download/golden/<platform>/cursor/<version|latest|stable>
+#     302 → downloads.cursor.com 直链（版本编码于文件名，如 CursorSetup-x64-3.14.7.exe）。
+#   - winget 包 Anysphere.Cursor（InstallerType: inno，Custom: /mergetasks=!runcode）。
+# Windows 官方发行物为 Inno 安装器 exe（无 zip）：install_kind executable。
+# 静默参数未官方文档化，按 winget 声明 + Inno 标准采用：
+# /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /MERGETASKS=!runcode /DIR={{install}}。
+# 若静默安装失败，降级为手动运行安装器（zip 降级说明：官方已不发布 zip）。
+# Linux 官方发行物为 AppImage（可执行镜像）：xdev 不管理 AppImage 解包，
+# 需手动 chmod +x 运行（降级说明）。
+# gui_binary Cursor.exe 布局待核实（/DIR 安装后应位于 install 根）。
+#     302 鈫?downloads.cursor.com 鐩撮摼锛堢増鏈紪鐮佷簬鏂囦欢鍚嶏紝濡?CursorSetup-x64-3.14.7.exe锛夈€?#   - winget 鍖?Anysphere.Cursor锛圛nstallerType: inno锛孋ustom: /mergetasks=!runcode锛夈€?# Windows 瀹樻柟鍙戣鐗╀负 Inno 瀹夎鍣?exe锛堟棤 zip锛夛細install_kind executable銆?# 闈欓粯鍙傛暟鏈畼鏂规枃妗ｅ寲锛屾寜 winget 澹版槑 + Inno 鏍囧噯閲囩敤锛?# /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /MERGETASKS=!runcode /DIR={{install}}锛?# 鑻ラ潤榛樺畨瑁呭け璐ワ紝闄嶇骇涓烘墜鍔ㄨ繍琛屽畨瑁呭櫒锛坺ip 闄嶇骇璇存槑锛氬畼鏂瑰凡涓嶅彂甯?zip锛夈€?# Linux 瀹樻柟鍙戣鐗╀负 AppImage锛堝彲鎵ц闀滃儚锛夛細xdev 涓嶇鐞?AppImage 瑙ｅ寘锛?# 闇€鎵嬪姩 chmod +x 杩愯锛堥檷绾ц鏄庯級銆?# gui_binary Cursor.exe 甯冨眬寰呮牳瀹烇紙/DIR 瀹夎鍚庡簲浣嶄簬 install 鏍癸級銆?name: cursor
+display_name: Cursor
+description: Cursor is an AI-first code editor forked from VS Code that helps you write, edit, and navigate code with AI assistance.
+homepage: https://cursor.com
+category: development_tools
+shims:
+  - cursor
+form_factor:
+  - gui
+  - cli
+gui_binary: Cursor.exe
+latest: "3.14.7"
+lts: ""
+versions:
+  - version: "3.14.7"
+    stable: true
+    release: "2026-07-30"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/win32/x64/system-setup/CursorSetup-x64-3.14.7.exe
+        mirror_url: ""
+        sha256: "9db251bc79311a31c543cd2e3122f85621fff9755ef690e4b2fa47b3106410f5"
+        size: 198254024
+        strip: 0
+        install_kind: executable
+        install_args: ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/MERGETASKS=!runcode", "/DIR={{install}}"]
+      - os: windows
+        arch: arm64
+        format: exe
+        url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/win32/arm64/system-setup/CursorSetup-arm64-3.14.7.exe
+        mirror_url: ""
+        sha256: ""
+        size: 188243912
+        strip: 0
+        install_kind: executable
+        install_args: ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/MERGETASKS=!runcode", "/DIR={{install}}"]
+      - os: darwin
+        arch: x86_64
+        format: dmg
+        url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/darwin/x64/Cursor-darwin-x64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 283687210
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/darwin/arm64/Cursor-darwin-arm64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 273073843
+        strip: 0
+      # Linux: Cursor 仅提供 AppImage，xdev 下载后需用户 chmod +x 手动运行（非 archive 解包模型）。
+      - os: linux
+        arch: x86_64
+        format: exe
+        url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/linux/x64/Cursor-3.14.7-x86_64.AppImage
+        mirror_url: ""
+        sha256: ""
+        size: 296299000
+        strip: 0
+      - os: linux
+        arch: arm64
+        format: exe
+        url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/linux/arm64/Cursor-3.14.7-aarch64.AppImage
+        mirror_url: ""
+        sha256: ""
+        size: 283000000
+        strip: 0
+remote:
+  type: none
+  pattern: ""

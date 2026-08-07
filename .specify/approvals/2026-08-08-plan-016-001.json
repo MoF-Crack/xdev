@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-08",
+    "approved_at":  "2026-08-08",
+    "schema_version":  1,
+    "target_state":  "待用户批准（文档补全后交叉审验通过，待报批）",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/016-ui-polish-scan-ignore/plan.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Approve implementation plan for 016-ui-polish-scan-ignore",
+    "recorded_by":  "Codex Orchestrator",
+    "asset_type":  "plan",
+    "decision":  "approve-state-transition",
+    "target_version":  "1.0.0",
+    "authorization_text":  "SDD Loop convergence batch approval for 016-ui-polish-scan-ignore",
+    "approval_id":  "2026-08-08-plan-016-001"
+}

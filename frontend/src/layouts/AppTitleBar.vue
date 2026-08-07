@@ -2,9 +2,9 @@
   <header data-testid="title-bar" class="title-bar" @dblclick="toggleMaximize">
     <div class="title-bar__identity"><XDevLogo decorative /><span>XDev</span></div>
     <div class="title-bar__controls" @dblclick.stop>
-      <button type="button" :aria-label="minimizeLabel" :title="minimizeLabel" @click.stop="minimize" @dblclick.stop><span aria-hidden="true">−</span></button>
-      <button type="button" :aria-label="maximizeLabel" :title="maximizeLabel" @click.stop="toggleMaximize" @dblclick.stop><span aria-hidden="true">□</span></button>
-      <button type="button" :aria-label="closeLabel" :title="closeLabel" class="title-bar__close" @click.stop="close" @dblclick.stop><span aria-hidden="true">×</span></button>
+      <button type="button" class="title-bar__button" :aria-label="minimizeLabel" :title="minimizeLabel" @click.stop="minimize" @dblclick.stop><span aria-hidden="true">−</span></button>
+      <button type="button" class="title-bar__button" :aria-label="maximizeLabel" :title="maximizeLabel" @click.stop="toggleMaximize" @dblclick.stop><span aria-hidden="true">□</span></button>
+      <button type="button" class="title-bar__button title-bar__close" :aria-label="closeLabel" :title="closeLabel" @click.stop="close" @dblclick.stop><span aria-hidden="true">×</span></button>
     </div>
   </header>
 </template>

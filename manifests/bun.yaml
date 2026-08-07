@@ -7,7 +7,7 @@ shims:
     - bun
     - bunx
 env_vars:
-    BUN_HOME: '{{install}}'
+    BUN_INSTALL: '{{install}}'
 versions:
     - version: 1.3.14
       stable: true
@@ -18,8 +18,8 @@ versions:
           format: zip
           url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64.zip
           mirror_url: https://npmmirror.com/mirrors/bun/bun-v1.3.14/bun-windows-x64.zip
-          sha256: 588086429834d14523ae755825b19842330d237b6d9bba554b653625b95a5bfd
-          size: 100000000
+          sha256: 0a0620930b6675d7ba440e81f4e0e00d3cfbe096c4b140d3fff02205e9e18922
+          size: 38366737
           strip: 1
           requires_proxy: true
         - os: linux
@@ -27,8 +27,8 @@ versions:
           format: zip
           url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip
           mirror_url: https://npmmirror.com/mirrors/bun/bun-v1.3.14/bun-linux-x64.zip
-          sha256: 4c09041d417d7534b57da0a427157b6302e48543e6cf55bd317c07a72d991d89
-          size: 95000000
+          sha256: 951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f
+          size: 35969274
           strip: 1
           requires_proxy: true
         - os: darwin
@@ -36,8 +36,8 @@ versions:
           format: zip
           url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip
           mirror_url: https://npmmirror.com/mirrors/bun/bun-v1.3.14/bun-darwin-aarch64.zip
-          sha256: b9fb2d259e03db4b62fad4d1530d2fa2695fee70272a6e7d72472a01e52c4a4f
-          size: 90000000
+          sha256: d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
+          size: 23586433
           strip: 1
           requires_proxy: true
         - os: darwin
@@ -45,8 +45,8 @@ versions:
           format: zip
           url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64.zip
           mirror_url: https://npmmirror.com/mirrors/bun/bun-v1.3.14/bun-darwin-x64.zip
-          sha256: 620b5b437a53dc2df0ff9327cb9b4dd645c763957dc220e78ef1f03a8e0127c1
-          size: 92000000
+          sha256: 4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633
+          size: 26509109
           strip: 1
           requires_proxy: true
     - version: 1.3.13

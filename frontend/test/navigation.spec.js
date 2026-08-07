@@ -8,8 +8,8 @@ import {
 } from '../src/navigation/navigation.js';
 
 const staticPageKeys = [
-  'dashboard', 'favorites', 'env-vars', 'project', 'tasks', 'services',
-  'isolate', 'remote', 'ai', 'custom-tools', 'plugins', 'settings', 'about',
+  'dashboard', 'favorites', 'env-vars',
+  'isolate', 'remote', 'settings', 'about',
 ];
 
 describe('navigation registry', () => {

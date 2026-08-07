@@ -5,12 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/spf13/cobra"
 
+	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/manifest"
-	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -43,63 +42,64 @@ local manifest cache so that subsequent installs can use them.`,
 }
 
 func refreshOne(cmd *cobra.Command, toolName string) error {
+	cfg := Cfg()
+
+	// Load tool catalog and check the tool exists.
 	cat := loadCatalog()
 	t, ok := cat.Tool(toolName)
 	if !ok {
 		return unsupportedToolErr(toolName)
 	}
-	if t.Remote.Type == "" || t.Remote.Type == "none" {
-		return fmt.Errorf("tool %q has no remote source configured", toolName)
-	}
 
-	fmt.Printf("🔍 fetching versions for %s from %s...\n", toolName, t.Remote.Type)
-	versions, err := remote.DiscoverVersions(cmd.Context(), t.Remote)
-	if err != nil {
+	// Count existing versions before sniffing.
+	existingCount := len(t.VersionList)
+
+	// Create scheduler and discover new versions.
+	s := discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
+
+	remoteType := t.Remote.Type
+	if remoteType == "" {
+		remoteType = "auto"
+	}
+	fmt.Printf("🔍 fetching versions for %s from %s...\n", toolName, remoteType)
+
+	if err := s.SniffNow(cmd.Context(), toolName); err != nil {
 		return fmt.Errorf("refresh %s: %w", toolName, err)
 	}
-	if len(versions) == 0 {
+
+	// Reload catalog to get updated version list.
+	cat2 := loadCatalog()
+	t2, ok2 := cat2.Tool(toolName)
+	if !ok2 {
+		return unsupportedToolErr(toolName)
+	}
+
+	versions := t2.Versions()
+	totalCount := len(versions)
+	added := totalCount - existingCount
+	if added < 0 {
+		added = 0
+	}
+
+	if totalCount == 0 {
 		fmt.Printf("⚠️  no versions discovered for %s\n", toolName)
 		return nil
 	}
 
-	// Merge discovered versions into the tool's version list.
-	existing := map[string]bool{}
-	for _, v := range t.VersionList {
-		existing[v.Version] = true
-	}
-	added := 0
-	for _, v := range versions {
-		if !existing[v] {
-			t.VersionList = append(t.VersionList, manifest.Version{
-				Version: v,
-				Stable:  true,
-			})
-			existing[v] = true
-			added++
+	// Update the latest field if a newer version was found.
+	if len(versions) > 0 {
+		t2.Latest = versions[0]
+		// Write updated manifest (only Latest field change).
+		manifestDir := cfg.Core.ManifestDir
+		outPath := filepath.Join(manifestDir, toolName+".yaml")
+		if data, err := manifest.MarshalTool(t2); err == nil {
+			if err := util.AtomicWriteFile(outPath, data, 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠ warning: failed to update Latest field: %v\n", err)
+			}
 		}
 	}
 
-	// Update the latest field if a newer version was found.
-	if len(versions) > 0 {
-		t.Latest = versions[0]
-	}
-
-	// Write the updated manifest back to the local cache.
-	cfg := Cfg()
-	manifestDir := cfg.Core.ManifestDir
-	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
-		return fmt.Errorf("create manifest dir: %w", err)
-	}
-	outPath := filepath.Join(manifestDir, toolName+".yaml")
-	data, err := manifest.MarshalTool(t)
-	if err != nil {
-		return fmt.Errorf("marshal manifest: %w", err)
-	}
-	if err := util.AtomicWriteFile(outPath, data, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", outPath, err)
-	}
-
-	fmt.Printf("✔ %s: %d versions found, %d new → %s\n", toolName, len(versions), added, outPath)
+	fmt.Printf("✔ %s: %d versions available, %d new\n", toolName, totalCount, added)
 	// Show a preview of discovered versions.
 	preview := versions
 	if len(preview) > 10 {
@@ -111,34 +111,16 @@ func refreshOne(cmd *cobra.Command, toolName string) error {
 	}
 	return nil
 }
+
 func refreshAll(cmd *cobra.Command) error {
-	cat := loadCatalog()
-	var tools []*manifest.Tool
-	for _, t := range cat.Tools() {
-		if t.Remote.Type != "" && t.Remote.Type != "none" {
-			tools = append(tools, t)
-		}
+	cfg := Cfg()
+	s := discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
+
+	fmt.Println("Refreshing all tools...")
+	if err := s.SniffAll(cmd.Context()); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ refresh completed with errors: %v\n", err)
+		return err
 	}
-	if len(tools) == 0 {
-		fmt.Println("No tools with remote sources found.")
-		return nil
-	}
-	fmt.Printf("Refreshing %d tools...\n", len(tools))
-	sem := make(chan struct{}, 3) // concurrency limiter
-	var wg sync.WaitGroup
-	for i, t := range tools {
-		wg.Add(1)
-		go func(idx int, toolName string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			fmt.Printf("[%d/%d] Refreshing %s...\n", idx+1, len(tools), toolName)
-			if err := refreshOne(cmd, toolName); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠ %s: %v\n", toolName, err)
-			}
-		}(i, t.Name)
-	}
-	wg.Wait()
 	fmt.Println("✔ Refresh complete.")
 	return nil
 }

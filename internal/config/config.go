@@ -64,12 +64,35 @@ import (
 // even if Load is called concurrently from multiple goroutines.
 var migrateOnce sync.Once
 
-// AIConfig holds AI assistant settings for Ollama integration.
-// When OllamaURL is empty, AI features gracefully degrade (no error, just no response).
-type AIConfig struct {
-	OllamaURL string `yaml:"ollama_url"` // e.g. "http://localhost:11434"
-	Model     string `yaml:"model"`      // e.g. "llama3", "codellama"
-	Timeout   string `yaml:"timeout"`    // e.g. "60s", "2m" (Go duration format)
+// SniffConfig controls the automatic tool-discovery sniffing behaviour
+// (spec 011-tool-discovery-automanage).
+type SniffConfig struct {
+	Strategy        string `yaml:"strategy"`            // interval|startup|service|manual
+	Interval        string `yaml:"interval"`            // default 24h
+	Concurrency     int    `yaml:"concurrency"`         // default 3
+	RateLimitPerHr  int    `yaml:"rate_limit_per_hour"` // default 60
+	AutoArchiveFill bool   `yaml:"auto_archive_fill"`   // default true
+	LastSniffAt     string `yaml:"last_sniff_at"`       // ISO timestamp, maintained by scheduler
+	GitHubToken     string `yaml:"github_token,omitempty"` // optional GitHub API token (env GITHUB_TOKEN/GH_TOKEN also checked)
+}
+
+// CustomToolConfig represents a user-defined custom tool added through the GUI.
+type CustomToolConfig struct {
+	Name        string `yaml:"name"`
+	DisplayName string `yaml:"display_name,omitempty"`
+	SourceURL   string `yaml:"source_url"`
+	SourceType  string `yaml:"source_type"` // github|html|npm
+	Pattern     string `yaml:"pattern,omitempty"`
+	Shim        string `yaml:"shim,omitempty"`
+	EnvVar      string `yaml:"env_var,omitempty"`
+}
+
+// MigrationConfig controls how local tools are migrated into xdev
+// management. Mode "junction" creates a Windows junction pointing at the
+// original installation (no file copy); "move" moves the directory under
+// the xdev install directory. Defaults to "junction".
+type MigrationConfig struct {
+	MigrationMode string `yaml:"migration_mode"` // "junction" | "move", default "junction"
 }
 
 // Config is the in-memory representation of the user's config file.
@@ -88,15 +111,17 @@ type AIConfig struct {
 // invocations. Verification failures are logged as warnings but do not
 // prevent loading — the user may be legitimately editing the file.
 type Config struct {
-	Core      CoreConfig             `yaml:"core"`                // Paths and global toggles
-	Path      PathConfig             `yaml:"path"`                // PATH management mode
-	Proxy     ProxyConfig            `yaml:"proxy"`               // HTTP/HTTPS proxy settings
-	Mirror    map[string]string      `yaml:"mirror"`              // Per-tool mirror URLs
-	Plugin    map[string]interface{} `yaml:"plugin"`              // Plugin-specific settings
-	Aliases   map[string]string      `yaml:"aliases"`             // Command aliases
-	AI        AIConfig               `yaml:"ai"`                  // Ollama/AI configuration
-	Integrity string                 `yaml:"integrity,omitempty"` // Security (H-12): HMAC-SHA256 of sensitive fields
-	mu        sync.Mutex             `yaml:"-"`                   // protects Save and field mutations
+	Core        CoreConfig             `yaml:"core"`                   // Paths and global toggles
+	Path        PathConfig             `yaml:"path"`                   // PATH management mode
+	Proxy       ProxyConfig            `yaml:"proxy"`                  // HTTP/HTTPS proxy settings
+	Mirror      map[string]string      `yaml:"mirror"`                 // Per-tool mirror URLs
+	Plugin      map[string]interface{} `yaml:"plugin"`                 // Plugin-specific settings
+	Aliases     map[string]string      `yaml:"aliases"`                // Command aliases
+	Sniff       SniffConfig            `yaml:"sniff"`                  // Tool-discovery sniffing (011)
+	Migration   MigrationConfig        `yaml:"migration"`              // Local-tool migration mode
+	CustomTools []CustomToolConfig     `yaml:"custom_tools,omitempty"` // User-defined custom tools
+	Integrity   string                 `yaml:"integrity,omitempty"`    // Security (H-12): HMAC-SHA256 of sensitive fields
+	mu          sync.Mutex             `yaml:"-"`                      // protects Save and field mutations
 }
 
 // CoreConfig holds the high-level paths and global toggles.
@@ -104,17 +129,20 @@ type Config struct {
 // (resolved by ResolvePaths). LogLevel defaults to "info", SelfUpdate
 // defaults to true, and ManifestTTL defaults to "24h".
 type CoreConfig struct {
-	XMDevDir    string   `yaml:"xmdevenv_dir"` // Root xdev home directory
-	DownloadDir string   `yaml:"download_dir"` // Where archives are cached
-	InstallDir  string   `yaml:"install_dir"`  // Where tools are extracted to
-	ShimDir     string   `yaml:"shim_dir"`     // Where shim binaries live
-	CacheDir    string   `yaml:"cache_dir"`    // Manifest cache directory
-	EnvDir      string   `yaml:"env_dir"`      // Environment variable fragment directory
-	ManifestDir string   `yaml:"manifest_dir"` // Tool manifest YAML directory
-	LogLevel    string   `yaml:"log_level"`    // Logging verbosity: "debug"|"info"|"warn"|"error"
-	SelfUpdate  bool     `yaml:"self_update"`  // Whether to auto-check for xdev updates
-	ManifestTTL string   `yaml:"manifest_ttl"` // Cache TTL for remote version lists (Go duration)
+	XMDevDir         string   `yaml:"xmdevenv_dir"`      // Root xdev home directory
+	DownloadDir      string   `yaml:"download_dir"`      // Where archives are cached
+	InstallDir       string   `yaml:"install_dir"`       // Where tools are extracted to
+	ShimDir          string   `yaml:"shim_dir"`          // Where shim binaries live
+	CacheDir         string   `yaml:"cache_dir"`         // Manifest cache directory
+	EnvDir           string   `yaml:"env_dir"`           // Environment variable fragment directory
+	ManifestDir      string   `yaml:"manifest_dir"`      // Tool manifest YAML directory
+	LogLevel         string   `yaml:"log_level"`         // Logging verbosity: "debug"|"info"|"warn"|"error"
+	SelfUpdate       bool     `yaml:"self_update"`       // Whether to auto-check for xdev updates
+	ManifestTTL      string   `yaml:"manifest_ttl"`      // Cache TTL for remote version lists (Go duration)
 	MirrorPreference []string `yaml:"mirror_preference"` // User-preferred mirror URLs, highest priority
+	// ArchiveRetention 下载归档的保留策略：
+	// "immediate" 安装成功立即删除 | "7d" 保留 7 天 | "30d" 保留 30 天 | "forever" 永久保留
+	ArchiveRetention string `yaml:"archive_retention"`
 }
 
 // PathConfig controls how the tool interacts with the user's PATH.
@@ -171,6 +199,35 @@ func (c *Config) SetProxy(http, https, noProxy string, enabled bool) error {
 	return c.saveLocked()
 }
 
+// Clone 返回配置的深拷贝快照（Spec 021 D17 / F-19）：复制所有 map/slice
+// 字段并重置内部互斥锁。调用方可安全读取副本，不受其他协程对原配置
+// 的并发修改影响；副本上的修改不会写回原配置。
+func (c *Config) Clone() *Config {
+	cp := Config{
+		Core:      c.Core,
+		Path:      c.Path,
+		Proxy:     c.Proxy,
+		Sniff:     c.Sniff,
+		Migration: c.Migration,
+		Integrity: c.Integrity,
+	}
+	cp.Mirror = make(map[string]string, len(c.Mirror))
+	for k, v := range c.Mirror {
+		cp.Mirror[k] = v
+	}
+	cp.Plugin = make(map[string]interface{}, len(c.Plugin))
+	for k, v := range c.Plugin {
+		cp.Plugin[k] = v
+	}
+	cp.Aliases = make(map[string]string, len(c.Aliases))
+	for k, v := range c.Aliases {
+		cp.Aliases[k] = v
+	}
+	cp.Core.MirrorPreference = append([]string(nil), c.Core.MirrorPreference...)
+	cp.CustomTools = append([]CustomToolConfig(nil), c.CustomTools...)
+	return &cp
+}
+
 // GetPathMode returns the PATH management mode, defaulting to "shim".
 // Valid values: "shim" (single shim directory in PATH), "direct"
 // (each tool's current/<tool>/bin added to PATH directly), or "auto"
@@ -195,6 +252,62 @@ func (c *Config) SetPathMode(mode string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Path.Mode = mode
+	return c.saveLocked()
+}
+
+// GetArchiveRetention returns the download archive retention policy,
+// defaulting to "immediate". Valid values: "immediate" (delete archives
+// right after a successful install), "7d"/"30d" (keep for 7/30 days,
+// cleaned up at startup), or "forever" (never auto-delete).
+func (c *Config) GetArchiveRetention() string {
+	if c.Core.ArchiveRetention == "" {
+		return "immediate"
+	}
+	switch c.Core.ArchiveRetention {
+	case "immediate", "7d", "30d", "forever":
+		return c.Core.ArchiveRetention
+	default:
+		return "immediate"
+	}
+}
+
+// SetArchiveRetention updates the archive retention policy and saves the
+// config. Valid values: "immediate" | "7d" | "30d" | "forever".
+func (c *Config) SetArchiveRetention(v string) error {
+	switch v {
+	case "immediate", "7d", "30d", "forever":
+	default:
+		return fmt.Errorf("invalid archive retention policy: %q", v)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Core.ArchiveRetention = v
+	return c.saveLocked()
+}
+
+// GetMigrationMode returns the local-tool migration mode, defaulting to
+// "junction". Valid values: "junction" (create a Windows junction pointing
+// at the original directory) or "move" (move the directory under xdev).
+func (c *Config) GetMigrationMode() string {
+	if c.Migration.MigrationMode == "" {
+		return "junction"
+	}
+	switch c.Migration.MigrationMode {
+	case "junction", "move":
+		return c.Migration.MigrationMode
+	default:
+		return "junction"
+	}
+}
+
+// SetMigrationMode updates the local-tool migration mode and saves the config.
+func (c *Config) SetMigrationMode(mode string) error {
+	if mode != "junction" && mode != "move" {
+		return fmt.Errorf("invalid migration mode: %q", mode)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Migration.MigrationMode = mode
 	return c.saveLocked()
 }
 
@@ -256,6 +369,31 @@ func Load(xmdeDir string) (*Config, error) {
 		if mirrorURL != "" && !strings.HasPrefix(mirrorURL, "https://") {
 			log.Printf("[config] WARNING: mirror URL for %q is not HTTPS: %q — this could allow MITM attacks", tool, mirrorURL)
 		}
+	}
+
+	// SniffConfig defaults: when the sniff section is absent or has empty
+	// strategy, the user has no explicit sniff config — fill defaults.
+	if cfg.Sniff.Strategy == "" {
+		cfg.Sniff.Strategy = "interval"
+	}
+	if cfg.Sniff.Interval == "" {
+		cfg.Sniff.Interval = "24h"
+	}
+	if cfg.Sniff.Concurrency <= 0 {
+		cfg.Sniff.Concurrency = 3
+	}
+	if cfg.Sniff.RateLimitPerHr <= 0 {
+		cfg.Sniff.RateLimitPerHr = 300
+	}
+	// AutoArchiveFill only gets its default from defaults(); if Strategy was
+	// empty (no sniff section at all) we already filled it above.
+	// If the user explicitly set Strategy but omitted AutoArchiveFill, the
+	// zero false is kept (user can explicitly set it to true if desired).
+
+	// Migration mode default: junction when the migration section is absent
+	// or its mode is empty.
+	if cfg.Migration.MigrationMode == "" {
+		cfg.Migration.MigrationMode = "junction"
 	}
 
 	// Re-resolve paths in case the user only wrote partial settings.
@@ -386,6 +524,16 @@ func defaults(xmdeDir string) *Config {
 		Mirror:  defaultMirrors(),
 		Plugin:  map[string]interface{}{},
 		Aliases: map[string]string{},
+		Sniff: SniffConfig{
+			Strategy:        "interval",
+			Interval:        "24h",
+			Concurrency:     3,
+			RateLimitPerHr:  300,
+			AutoArchiveFill: true,
+		},
+		Migration: MigrationConfig{
+			MigrationMode: "junction",
+		},
 	}
 	c.ResolvePaths(xmdeDir)
 	return c

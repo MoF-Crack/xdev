@@ -1,7 +1,9 @@
 package env
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +106,169 @@ func TestIsVersionLike_Invalid(t *testing.T) {
 		if isVersionLike(tc.input) {
 			t.Errorf("isVersionLike(%q) = true, want false", tc.input)
 		}
+	}
+}
+
+// --- liftCmdToInstallRoot tests ---
+
+// makeFakeGitRoot 在临时目录中构造 Git for Windows / PortableGit 布局：
+// root/cmd/git.exe（launcher）+ root/mingw64 + root/usr + root/bin。
+func makeFakeGitRoot(t *testing.T, withRuntime bool) string {
+	t.Helper()
+	root := t.TempDir()
+	cmdDir := filepath.Join(root, "cmd")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Create(filepath.Join(cmdDir, "git.exe")); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+	if withRuntime {
+		for _, d := range []string{"mingw64", "usr", "bin"} {
+			if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return root
+}
+
+func TestLiftCmdToInstallRoot_LiftsGitCmdDir(t *testing.T) {
+	root := makeFakeGitRoot(t, true)
+	got := liftCmdToInstallRoot(filepath.Join(root, "cmd"))
+	if got != root {
+		t.Errorf("liftCmdToInstallRoot(%q) = %q, want %q", filepath.Join(root, "cmd"), got, root)
+	}
+}
+
+func TestLiftCmdToInstallRoot_NoRuntime_KeepsDir(t *testing.T) {
+	root := makeFakeGitRoot(t, false)
+	cmdDir := filepath.Join(root, "cmd")
+	if got := liftCmdToInstallRoot(cmdDir); got != cmdDir {
+		t.Errorf("liftCmdToInstallRoot(%q) = %q, want %q (no mingw64 runtime)", cmdDir, got, cmdDir)
+	}
+}
+
+func TestLiftCmdToInstallRoot_NonCmdDir_Unchanged(t *testing.T) {
+	root := makeFakeGitRoot(t, true)
+	binDir := filepath.Join(root, "bin")
+	if got := liftCmdToInstallRoot(binDir); got != binDir {
+		t.Errorf("liftCmdToInstallRoot(%q) = %q, want %q", binDir, got, binDir)
+	}
+}
+
+func TestLiftCmdToInstallRoot_CaseInsensitive(t *testing.T) {
+	root := makeFakeGitRoot(t, true)
+	got := liftCmdToInstallRoot(filepath.Join(root, "CMD"))
+	if got != root {
+		t.Errorf("liftCmdToInstallRoot(CMD) = %q, want %q", got, root)
+	}
+}
+
+// --- resolveInstallPathFromBin tests ---
+
+func TestResolveInstallPathFromBin_LiftsGitCmdDir(t *testing.T) {
+	root := makeFakeGitRoot(t, true)
+	rule := toolScanRule{name: "git", binNames: []string{"git"}}
+	got := resolveInstallPathFromBin(filepath.Join(root, "cmd", "git.exe"), rule)
+	if got != root {
+		t.Errorf("resolveInstallPathFromBin(%q) = %q, want %q (git install root)", filepath.Join(root, "cmd", "git.exe"), got, root)
+	}
+}
+
+func TestResolveInstallPathFromBin_CmdWithoutRuntime_KeepsDir(t *testing.T) {
+	root := makeFakeGitRoot(t, false)
+	rule := toolScanRule{name: "git", binNames: []string{"git"}}
+	binPath := filepath.Join(root, "cmd", "git.exe")
+	if got := resolveInstallPathFromBin(binPath, rule); got != filepath.Dir(binPath) {
+		t.Errorf("resolveInstallPathFromBin(%q) = %q, want %q", binPath, got, filepath.Dir(binPath))
+	}
+}
+
+func TestResolveInstallPathFromBin_NodeRoot_Unchanged(t *testing.T) {
+	root := t.TempDir()
+	rule := toolScanRule{name: "node", binNames: []string{"node"}}
+	binPath := filepath.Join(root, "node.exe")
+	if got := resolveInstallPathFromBin(binPath, rule); got != root {
+		t.Errorf("resolveInstallPathFromBin(%q) = %q, want %q", binPath, got, root)
+	}
+}
+
+func TestResolveInstallPathFromBin_JavaBinDir(t *testing.T) {
+	root := t.TempDir()
+	rule := toolScanRule{name: "java", binNames: []string{"java", "javac"}}
+	binPath := filepath.Join(root, "bin", "java.exe")
+	if got := resolveInstallPathFromBin(binPath, rule); got != root {
+		t.Errorf("resolveInstallPathFromBin(%q) = %q, want %q", binPath, got, root)
+	}
+}
+
+// --- resolveInstallPath tests ---
+
+func TestResolveInstallPath_EnvVarPointsAtCmdLauncher(t *testing.T) {
+	root := makeFakeGitRoot(t, true)
+	rule := toolScanRule{name: "git", binNames: []string{"git"}}
+	got := resolveInstallPath(filepath.Join(root, "cmd", "git.exe"), rule)
+	if got != root {
+		t.Errorf("resolveInstallPath(%q) = %q, want %q", filepath.Join(root, "cmd", "git.exe"), got, root)
+	}
+}
+
+// --- hasGitRuntime tests ---
+
+func TestHasGitRuntime_True(t *testing.T) {
+	root := makeFakeGitRoot(t, true)
+	if !hasGitRuntime(root) {
+		t.Errorf("hasGitRuntime(%q) = false, want true", root)
+	}
+}
+
+func TestHasGitRuntime_False_LauncherOnly(t *testing.T) {
+	root := makeFakeGitRoot(t, false)
+	if hasGitRuntime(root) {
+		t.Errorf("hasGitRuntime(%q) = true, want false (launcher-only dir)", root)
+	}
+}
+
+func TestHasGitRuntime_False_EmptyDir(t *testing.T) {
+	root := t.TempDir()
+	if hasGitRuntime(root) {
+		t.Errorf("hasGitRuntime(%q) = true, want false", root)
+	}
+}
+
+// --- MigrateLocalTool guard tests ---
+
+func TestMigrateLocalTool_RefusesGitLauncherOnlyDir(t *testing.T) {
+	// cmd/ 中只有 launcher（git.exe 等），没有 mingw64/ 运行时。
+	root := makeFakeGitRoot(t, false)
+	xdevDir := t.TempDir()
+	tool := LocalTool{Name: "git", Path: filepath.Join(root, "cmd"), Version: "2.55.0"}
+	err := MigrateLocalTool(tool, xdevDir)
+	if err == nil {
+		t.Fatal("MigrateLocalTool accepted a git launcher-only dir, want error")
+	}
+	if !strings.Contains(err.Error(), "launcher-only") {
+		t.Errorf("unexpected error: %v", err)
+	}
+	// 不应产生任何目录
+	if fi, err := os.Stat(filepath.Join(xdevDir, "install", "git")); err == nil || fi != nil {
+		t.Errorf("MigrateLocalTool created target dir for rejected tool")
+	}
+}
+
+func TestMigrateLocalTool_RefusesNonGitToolNormalDir(t *testing.T) {
+	// 非 git 工具不受 guard 影响（正常走到路径校验）。
+	root := t.TempDir()
+	xdevDir := t.TempDir()
+	tool := LocalTool{Name: "node", Path: filepath.Join(root, "node.exe"), Version: "20.0.0"}
+	err := MigrateLocalTool(tool, xdevDir)
+	if err == nil {
+		t.Fatal("expected error (source is a file, not a directory)")
+	}
+	if strings.Contains(err.Error(), "launcher-only") {
+		t.Errorf("git guard wrongly applied to node: %v", err)
 	}
 }

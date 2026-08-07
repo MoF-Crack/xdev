@@ -157,3 +157,158 @@ func TestSetPathMode_InvalidValue(t *testing.T) {
 		t.Errorf("SetPathMode with invalid value should not change mode, got %q", cfg.Path.Mode)
 	}
 }
+
+// --- MigrationConfig defaults ---
+
+func TestGetMigrationMode_Default(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaults(tmp)
+	cfg.Migration.MigrationMode = ""
+	got := cfg.GetMigrationMode()
+	if got != "junction" {
+		t.Errorf("GetMigrationMode() = %q, want %q for empty mode", got, "junction")
+	}
+}
+
+func TestGetMigrationMode_Junction(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaults(tmp)
+	cfg.Migration.MigrationMode = "junction"
+	if got := cfg.GetMigrationMode(); got != "junction" {
+		t.Errorf("GetMigrationMode() = %q, want 'junction'", got)
+	}
+}
+
+func TestGetMigrationMode_Move(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaults(tmp)
+	cfg.Migration.MigrationMode = "move"
+	if got := cfg.GetMigrationMode(); got != "move" {
+		t.Errorf("GetMigrationMode() = %q, want 'move'", got)
+	}
+}
+
+func TestGetMigrationMode_Invalid(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaults(tmp)
+	cfg.Migration.MigrationMode = "invalid"
+	if got := cfg.GetMigrationMode(); got != "junction" {
+		t.Errorf("GetMigrationMode() = %q, want 'junction' for invalid mode", got)
+	}
+}
+
+func TestSetMigrationMode_InvalidValue(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaults(tmp)
+	cfg.Migration.MigrationMode = "junction"
+	if err := cfg.SetMigrationMode("invalid"); err == nil {
+		t.Error("SetMigrationMode with invalid value should return an error")
+	}
+	if cfg.Migration.MigrationMode != "junction" {
+		t.Errorf("SetMigrationMode with invalid value should not change mode, got %q", cfg.Migration.MigrationMode)
+	}
+}
+
+func TestLoadMigrationModeDefault(t *testing.T) {
+	tmp := t.TempDir()
+	// Config without any migration section -> default "junction"
+	noMigrationYAML := `core:
+  xmdevenv_dir: ` + tmp + `
+`
+	if err := os.WriteFile(tmp+"\\config.yaml", []byte(noMigrationYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(tmp)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.GetMigrationMode() != "junction" {
+		t.Errorf("GetMigrationMode() = %q, want 'junction'", cfg.GetMigrationMode())
+	}
+}
+
+func TestLoadMigrationModeExplicit(t *testing.T) {
+	tmp := t.TempDir()
+	migrationYAML := `core:
+  xmdevenv_dir: ` + tmp + `
+migration:
+  migration_mode: move
+`
+	if err := os.WriteFile(tmp+"\\config.yaml", []byte(migrationYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(tmp)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.GetMigrationMode() != "move" {
+		t.Errorf("GetMigrationMode() = %q, want 'move'", cfg.GetMigrationMode())
+	}
+}
+
+// --- SniffConfig defaults ---
+
+func TestSniffConfigDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	// Config without any sniff section
+	noSniffYAML := `core:
+  xmdevenv_dir: ` + tmp + `
+`
+	if err := os.WriteFile(tmp+"\\config.yaml", []byte(noSniffYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(tmp)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Sniff.Strategy != "interval" {
+		t.Errorf("Sniff.Strategy = %q, want 'interval'", cfg.Sniff.Strategy)
+	}
+	if cfg.Sniff.Interval != "24h" {
+		t.Errorf("Sniff.Interval = %q, want '24h'", cfg.Sniff.Interval)
+	}
+	if cfg.Sniff.Concurrency != 3 {
+		t.Errorf("Sniff.Concurrency = %d, want 3", cfg.Sniff.Concurrency)
+	}
+	if cfg.Sniff.RateLimitPerHr != 300 {
+		t.Errorf("Sniff.RateLimitPerHr = %d, want 300", cfg.Sniff.RateLimitPerHr)
+	}
+	if !cfg.Sniff.AutoArchiveFill {
+		t.Error("Sniff.AutoArchiveFill should default to true")
+	}
+}
+
+func TestSniffConfigExplicitValues(t *testing.T) {
+	tmp := t.TempDir()
+	// Config with explicit sniff section (partial)
+	sniffYAML := `core:
+  xmdevenv_dir: ` + tmp + `
+sniff:
+  strategy: startup
+  auto_archive_fill: false
+`
+	if err := os.WriteFile(tmp+"\\config.yaml", []byte(sniffYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(tmp)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Sniff.Strategy != "startup" {
+		t.Errorf("Sniff.Strategy = %q, want 'startup'", cfg.Sniff.Strategy)
+	}
+	// Interval should get default since not explicitly set
+	if cfg.Sniff.Interval != "24h" {
+		t.Errorf("Sniff.Interval = %q, want '24h'", cfg.Sniff.Interval)
+	}
+	if cfg.Sniff.Concurrency != 3 {
+		t.Errorf("Sniff.Concurrency = %d, want 3", cfg.Sniff.Concurrency)
+	}
+	if cfg.Sniff.RateLimitPerHr != 300 {
+		t.Errorf("Sniff.RateLimitPerHr = %d, want 300", cfg.Sniff.RateLimitPerHr)
+	}
+	// Explicit false should be preserved
+	if cfg.Sniff.AutoArchiveFill {
+		t.Error("Sniff.AutoArchiveFill should be false (explicitly set)")
+	}
+}

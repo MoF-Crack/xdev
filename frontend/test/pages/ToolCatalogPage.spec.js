@@ -26,7 +26,7 @@ describe('ToolCatalogPage', () => {
     vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: narrow, addEventListener: vi.fn(), removeEventListener: vi.fn() });
     const rows = [
       { name: 'npm', toolName: 'npm', displayName: 'npm', installed: false, canInstall: true, isFavorite: false },
-      { name: 'pnpm', toolName: 'pnpm', displayName: 'pnpm', installed: true, canInstall: true, isFavorite: true },
+      { name: 'pnpm', toolName: 'pnpm', displayName: 'pnpm', installed: true, canInstall: true, isFavorite: true, hasUpdate: true },
     ];
     const wrapper = mount(ToolCatalogPage, { props: { t, tools: rows, category: 'package-manager' } });
     await wrapper.vm.$nextTick();

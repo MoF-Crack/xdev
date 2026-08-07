@@ -68,9 +68,19 @@ func SetUserEnvVar(name, value string) error {
 	return fmt.Errorf("persistent environment variable writes are not supported on this platform (Windows registry only); use shell RC files or 'xdev env' instead")
 }
 
+// SetUserEnvVarTrusted is not supported on non-Windows platforms.
+func SetUserEnvVarTrusted(name, value string) error {
+	return SetUserEnvVar(name, value)
+}
+
 // GetUserEnvVar reads from the process environment on non-Windows platforms.
 func GetUserEnvVar(name string) (string, error) {
 	return os.Getenv(name), nil
+}
+
+// GetUserEnvVarTrusted reads from the process environment on non-Windows platforms.
+func GetUserEnvVarTrusted(name string) (string, error) {
+	return GetUserEnvVar(name)
 }
 
 // GetUserEnvVarsBatch reads multiple env vars at once. On non-Windows this
@@ -86,6 +96,11 @@ func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
 // DeleteUserEnvVar is not supported on non-Windows platforms.
 func DeleteUserEnvVar(name string) error {
 	return fmt.Errorf("persistent environment variable deletion is not supported on this platform (Windows registry only)")
+}
+
+// DeleteUserEnvVarTrusted is not supported on non-Windows platforms.
+func DeleteUserEnvVarTrusted(name string) error {
+	return DeleteUserEnvVar(name)
 }
 
 // ReadSystemPath is a no-op on non-Windows platforms.

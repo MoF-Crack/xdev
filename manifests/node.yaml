@@ -10,7 +10,37 @@ shims:
     - corepack
 env_vars:
     NODE_HOME: '{{install}}'
+    # npm 全局安装（npm install -g）落到安装根：npm/npx 的 .cmd 位于根目录。
+    npm_config_prefix: '{{install}}'
 versions:
+    - version: 26.5.0
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://nodejs.org/dist/v26.5.0/node-v26.5.0-win-x64.zip
+          mirror_url: https://npmmirror.com/mirrors/node/v26.5.0/node-v26.5.0-win-x64.zip
+          sha256: "d3b2277dbcccfdf24ef6302928f64f484cff1d77a6d3caa3a28f4d20ce9158f6"
+          size: 30500000
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://nodejs.org/dist/v26.5.0/node-v26.5.0-linux-x64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v26.5.0/node-v26.5.0-linux-x64.tar.xz
+          sha256: ""
+          size: 44000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.xz
+          url: https://nodejs.org/dist/v26.5.0/node-v26.5.0-darwin-arm64.tar.xz
+          mirror_url: https://npmmirror.com/mirrors/node/v26.5.0/node-v26.5.0-darwin-arm64.tar.xz
+          sha256: ""
+          size: 42000000
+          strip: 1
     - version: 20.18.0
       stable: true
       release: "2024-10-03"
@@ -108,6 +138,6 @@ remote:
     url: nodejs/node
     path: ""
     pattern: v?(\d+\.\d+\.\d+)$
-latest: 20.18.0
+latest: 26.5.0
 lts: 20.18.0
 install_root: ""

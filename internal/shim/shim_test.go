@@ -166,6 +166,49 @@ func TestFindInDir_Directory(t *testing.T) {
 	}
 }
 
+func TestFindInDir_NestedSubdir(t *testing.T) {
+	dir := t.TempDir()
+	// Simulate strip:0 layout: dir/<toolname>/bin/<alias>
+	// e.g. cangjie/bin/cjc.exe or go/bin/go.exe
+	nestedBin := filepath.Join(dir, "cangjie", "bin")
+	if err := os.MkdirAll(nestedBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exeFile := filepath.Join(nestedBin, "cjc"+testExeSuffix())
+	if err := os.WriteFile(exeFile, []byte("#!/bin/sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := FindInDir(dir, "cjc")
+	if !ok {
+		t.Fatal("expected to find cjc in nested subdirectory cangjie/bin/")
+	}
+	if got != exeFile {
+		t.Errorf("got %q, want %q", got, exeFile)
+	}
+}
+
+func TestFindInDir_NestedSubdirRoot(t *testing.T) {
+	dir := t.TempDir()
+	// Simulate strip:0 layout with executable at dir/<toolname>/<alias> (no bin/)
+	nestedDir := filepath.Join(dir, "some-tool")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exeFile := filepath.Join(nestedDir, "mytool"+testExeSuffix())
+	if err := os.WriteFile(exeFile, []byte("#!/bin/sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := FindInDir(dir, "mytool")
+	if !ok {
+		t.Fatal("expected to find mytool in nested subdirectory root")
+	}
+	if got != exeFile {
+		t.Errorf("got %q, want %q", got, exeFile)
+	}
+}
+
 // --- Lookup tests ---
 
 func TestLookup_DirectTool(t *testing.T) {
@@ -291,5 +334,51 @@ func TestMaybeExec_ShimName(t *testing.T) {
 	didExec, _ := MaybeExec("node")
 	if !didExec {
 		t.Error("non-xdev name should trigger shim dispatch (didExec = true)")
+	}
+}
+
+// TestInstallShim_RejectsInvalidNames verifies InstallShim refuses names
+// that could escape the shims directory or are otherwise unsafe (F-08 /
+// D11) — validation happens before any filesystem access.
+func TestInstallShim_RejectsInvalidNames(t *testing.T) {
+	tmp := t.TempDir()
+	shimDir := filepath.Join(tmp, "shims")
+	// selfPath 不需要存在：无效名称在触碰文件系统前就被拒绝。
+	selfPath := filepath.Join(tmp, "xdev")
+
+	badNames := []string{"", ".", "..", "../outside", `..\outside`, "a/b", "a\\b", "C:evil", "CON", "bad\x00name"}
+	for _, name := range badNames {
+		if err := InstallShim(shimDir, name, selfPath); err == nil {
+			t.Errorf("InstallShim(%q) should be rejected", name)
+		}
+	}
+
+	// 拒绝后 shim 目录不应被创建（验证先于 MkdirAll/写入）。
+	if _, err := os.Stat(shimDir); err == nil {
+		t.Error("shim dir should not be created for invalid names")
+	}
+}
+
+// TestInstallShim_AcceptsValidName verifies a valid shim name still works.
+func TestInstallShim_AcceptsValidName(t *testing.T) {
+	tmp := t.TempDir()
+	shimDir := filepath.Join(tmp, "shims")
+	selfPath := filepath.Join(tmp, "xdev")
+	if err := os.WriteFile(selfPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallShim(shimDir, "validtool", selfPath); err != nil {
+		t.Fatalf("InstallShim(validtool) failed: %v", err)
+	}
+	// Unix: symlink 或文件；Windows: 副本 + .exe 副本。
+	base := filepath.Join(shimDir, "validtool")
+	if _, err := os.Lstat(base); err != nil {
+		t.Errorf("shim %s missing: %v", base, err)
+	}
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(base + ".exe"); err != nil {
+			t.Errorf("shim %s.exe missing: %v", base, err)
+		}
 	}
 }

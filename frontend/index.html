@@ -6,20 +6,20 @@
     <title>XDev</title>
     <link rel="icon" type="image/svg+xml" href="/src/assets/logo-small.svg">
     <style>
-        /* Immediate dark background to prevent white flash before
-           Vue mounts.  This style is applied before any JS runs. */
+        /* Pre-mount dark background to prevent white flash before Vue mounts.
+           After mount, theme.css + data-theme attribute take over. */
         html, body {
             margin: 0;
             padding: 0;
-             background-color: #111113;
-             color: #f4f4f5;
+            background-color: #0d1117;
+            color: #e6edf3;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
                          Roboto, "Helvetica Neue", Arial, sans-serif;
             overflow: hidden;
         }
         #app {
             min-height: 100vh;
-             background-color: #111113;
+            background-color: #0d1117;
         }
         /* Pre-mount loading indicator */
         .pre-mount {
@@ -29,8 +29,8 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-             background-color: #111113;
-             color: #a1a1aa;
+            background-color: #0d1117;
+            color: #8b949e;
             font-size: 14px;
             gap: 16px;
         }
@@ -42,7 +42,7 @@
         .pre-mount-bar {
             width: 120px;
             height: 2px;
-             background: rgba(129, 140, 248, 0.12);
+            background: rgba(88, 166, 255, 0.12);
             border-radius: 1px;
             overflow: hidden;
             position: relative;
@@ -54,7 +54,7 @@
             left: -40%;
             width: 40%;
             height: 100%;
-             background: linear-gradient(90deg, transparent, #818cf8, transparent);
+            background: linear-gradient(90deg, transparent, #58a6ff, transparent);
             border-radius: 1px;
             animation: preMountSlide 1.4s ease-in-out infinite;
         }

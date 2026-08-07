@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-08",
+    "approved_at":  "2026-08-08",
+    "schema_version":  1,
+    "target_state":  "待批准",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/025-install-flow-enhancement/plan.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Approve implementation plan for 025-install-flow-enhancement",
+    "recorded_by":  "Codex Orchestrator",
+    "asset_type":  "plan",
+    "decision":  "approve-state-transition",
+    "target_version":  "1.0.0",
+    "authorization_text":  "SDD Loop convergence batch approval for 025-install-flow-enhancement",
+    "approval_id":  "2026-08-08-plan-025-001"
+}

@@ -64,14 +64,48 @@ func (a *App) ScanLocalEnvironments() []ToolInfo {
 	}
 
 	tools := a.registry.All()
+	// 只返回真正的系统本地安装（source == "local"），排除 xdev 已管理；
+	// 且路径在 xdev 管理目录内的也应排除（双保险）。
+	cfg := a.getCfg()
+	xdevDirs := []string{cfg.Core.XMDevDir, cfg.Core.InstallDir, cfg.Core.ShimDir}
 	var result []ToolInfo
 	for _, t := range tools {
-		localVer, localPath, _ := a.getLocalCached(t.Name())
-		if localVer != "" || localPath != "" {
-			result = append(result, a.pluginToToolInfo(t))
+		_, localPath, localSource := a.getLocalCached(t.Name())
+		if !isLocalInstallForScan(localInfo{Path: localPath, Source: localSource}, xdevDirs) {
+			continue
+		}
+		result = append(result, a.pluginToToolInfo(t))
+	}
+
+	// Filter out ignored tools (kind=local-scan)
+	before := len(result)
+	filtered := result[:0]
+	for _, ti := range result {
+		if !a.isIgnored(ti.Name, "local-scan", ti.LocalPath) {
+			filtered = append(filtered, ti)
 		}
 	}
-	return result
+	if before != len(filtered) {
+		logDebug("[ignore] filtered scan: before=%d after=%d", before, len(filtered))
+	}
+	return filtered
+}
+
+// isLocalInstallForScan determines whether a cached local entry should be
+// included in ScanLocalEnvironments results. Only genuine system-local
+// installs are returned: source must not be "xdev", the path must be
+// non-empty, and it must not reside inside any xdev-managed directory
+// (XMDevDir / InstallDir / ShimDir) as a double safety net.
+func isLocalInstallForScan(info localInfo, xdevDirs []string) bool {
+	if info.Source == "xdev" || info.Path == "" {
+		return false
+	}
+	for _, dir := range xdevDirs {
+		if dir != "" && isInsideDir(info.Path, dir) {
+			return false
+		}
+	}
+	return true
 }
 
 // GetDashboardStats returns statistics for the dashboard.
@@ -98,11 +132,22 @@ func (a *App) GetDashboardStats() DashboardStats {
 		return *oldCache
 	}
 
-	// 首次访问，触发后台刷新并返回零值
+	// 首次访问，触发后台刷新
 	if atomic.CompareAndSwapInt32(&a.dashRefreshing, 0, 1) {
 		go a.refreshDashboardStats()
 	}
-	return DashboardStats{}
+
+	// 首次不要返回全零 — 至少填入路径字段和 TotalTools
+	cfg := a.getCfg()
+	tools := a.registry.All()
+	return DashboardStats{
+		TotalTools:  len(tools),
+		XMDevDir:    cfg.Core.XMDevDir,
+		InstallDir:  cfg.Core.InstallDir,
+		ShimDir:     cfg.Core.ShimDir,
+		CacheDir:    cfg.Core.CacheDir,
+		DownloadDir: cfg.Core.DownloadDir,
+	}
 }
 
 // refreshDashboardStats computes dashboard stats in the background
@@ -182,6 +227,16 @@ func (a *App) refreshDashboardStats() {
 
 	// 重置 in-flight 标志，允许下次刷新
 	atomic.StoreInt32(&a.dashRefreshing, 0)
+}
+
+// invalidateDashboardCache forces the next GetDashboardStats call to
+// recompute from scratch instead of returning stale cached data. Called
+// after version switches, installs, and uninstalls so the dashboard
+// reflects the change immediately.
+func (a *App) invalidateDashboardCache() {
+	a.dashMu.Lock()
+	a.dashExpire = time.Time{} // zero → cache always expired
+	a.dashMu.Unlock()
 }
 
 // CheckForUpdate checks if a new version is available.
@@ -347,28 +402,39 @@ type pmDef struct {
 	detectArgs                     []string
 	toolName                       string // xdev tool name (empty = not installable via xdev)
 	installHint                    string // hint when not installable
+	// Spec 025: 包管理器自动安装支持。
+	// installCommand 非空时，InstallPackageManager 走 script install 路径
+	// （后台执行官方安装命令，而非 xdev download→extract→activate 管线）。
+	installCommand string // 官方安装命令（空 = 不可自动安装，保持现有行为）
+	requiresAdmin  bool   // 是否需要管理员权限（Windows 下检测，非管理员时提示）
+	executionEnv   string // "powershell" | "bash" — 执行环境
+	platform       string // "windows" | "darwin" | "linux" | "any" — 限定平台
+	// Spec 026: 附属工具动态安装支持。
+	// enableCommand 非空时，该工具是"可启用附属工具"（如 yarn/pnpm 通过
+	// corepack enable 启用）。CanInstall 在父工具（parentTool）已安装时为 true。
+	enableCommand string // 启用命令（如 "corepack enable yarn"），空 = 非附属工具
+	parentTool    string // 父工具名（如 "node"），用于检测父工具是否已安装
+	// installMethods 列出可选安装方式（如 pipx 可通过 pip 或 uv 安装）。
+	// 非空时，安装流程根据可用方法动态选择/弹选项。
+	installMethods []installMethod // 空 = 单一安装方式或不可安装
+}
+
+// installMethod 描述附属工具的一种安装方式（Spec 026）。
+// 例如 pipx 可通过 pip install pipx 或 uv tool install pipx 安装。
+type installMethod struct {
+	name       string // 方法标识（如 "pip" / "uv"），前端用于选项对话框
+	command    string // 执行命令（如 "pip install pipx"）
+	detectCmd  string // 检测该方法前置工具是否可用的命令名（如 "pip" / "uv"）
 }
 
 // GetPackageManagers returns available package managers with their status.
+// Spec 026: 两阶段检测——第一阶段并发检测所有 pmDef 的基础状态，
+// 第二阶段串行计算附属工具（enableCommand/installMethods 非空）的动态
+// CanInstall + InstallHint（复用同批次检测结果，避免新增扫描）。
 func (a *App) GetPackageManagers() []PackageManagerInfo {
-	pms := []pmDef{
-		{"npx", "NPX", "Node 包执行器 - 运行 npm 包", "npx", []string{"--version"}, "node", "随 Node.js 自动安装"},
-		{"npm", "NPM", "Node 包管理器", "npm", []string{"--version"}, "node", "随 Node.js 自动安装"},
-		{"yarn", "Yarn", "快速、可靠的依赖管理工具", "yarn", []string{"--version"}, "node", "需先安装 Node.js，然后运行 corepack enable yarn"},
-		{"pnpm", "PNPM", "快速、节省磁盘的包管理器", "pnpm", []string{"--version"}, "node", "需先安装 Node.js，然后运行 corepack enable pnpm"},
-		{"uvx", "UVX", "通过 UV 运行 Python 工具", "uvx", []string{"--version"}, "uv", ""},
-		{"uv", "UV", "极速 Python 包安装器", "uv", []string{"--version"}, "uv", ""},
-		{"pip", "PIP", "Python 包安装器", "pip", []string{"--version"}, "python", "随 Python 自动安装"},
-		{"pipx", "PIPX", "在隔离环境中安装运行 Python 应用", "pipx", []string{"--version"}, "", "通过 pip install pipx 或 uv tool install pipx 安装"},
-		{"cargo", "Cargo", "Rust 包管理器", "cargo", []string{"--version"}, "rust", "随 Rust 自动安装"},
-		{"maven", "Maven", "Java 构建自动化工具", "mvn", []string{"--version"}, "maven", "随 Maven 自动安装"},
-		{"brew", "Homebrew", "macOS/Linux 包管理器", "brew", []string{"--version"}, "", "访问 https://brew.sh 安装"},
-		{"scoop", "Scoop", "Windows 命令行安装器", "scoop", []string{"--version"}, "", "访问 https://scoop.sh 安装"},
-		{"choco", "Chocolatey", "Windows 包管理器", "choco", []string{"--version"}, "", "访问 https://chocolatey.org 安装"},
-		{"dotnet", ".NET CLI", ".NET 开发工具", "dotnet", []string{"--version"}, "dotnet", ""},
-		{"go", "Go 工具链", "Go 模块和构建工具", "go", []string{"version"}, "go", ""},
-	}
+	pms := packageManagerDefs()
 
+	// Phase 1: 并发检测所有 pmDef 的基础状态（现有逻辑）。
 	results := make([]PackageManagerInfo, len(pms))
 	var wg sync.WaitGroup
 	for i, pm := range pms {
@@ -379,7 +445,84 @@ func (a *App) GetPackageManagers() []PackageManagerInfo {
 		}(i, pm)
 	}
 	wg.Wait()
+
+	// Phase 2: 串行计算附属工具的动态 CanInstall + InstallHint。
+	// 构建已检测工具名 → Installed 的索引，供附属工具查父工具状态。
+	detectedByName := make(map[string]bool, len(results))
+	for _, r := range results {
+		if r.Installed {
+			detectedByName[r.Name] = true
+		}
+	}
+	for i, pm := range pms {
+		if pm.enableCommand == "" && len(pm.installMethods) == 0 {
+			continue // 非附属工具，跳过
+		}
+		results[i] = a.applySubToolDynamicState(pm, results[i], results, detectedByName)
+	}
 	return results
+}
+
+// applySubToolDynamicState 根据同批次检测结果，计算附属工具的动态
+// CanInstall + InstallHint + EnableCommand + InstallMethods（Spec 026）。
+func (a *App) applySubToolDynamicState(pm pmDef, info PackageManagerInfo, allResults []PackageManagerInfo, detectedByName map[string]bool) PackageManagerInfo {
+	// 场景1: enableCommand 非空（yarn/pnpm）——查 parentTool 是否已安装。
+	if pm.enableCommand != "" && pm.parentTool != "" {
+		// parentTool 是 pmDef.name（如 "npm" 代表 node 生态）。
+		// 检测同批次中 parentTool 对应的 pmDef 是否 Installed。
+		parentInstalled := false
+		for _, r := range allResults {
+			if r.Name == pm.parentTool || r.ToolName == pm.parentTool {
+				if r.Installed {
+					parentInstalled = true
+					break
+				}
+			}
+		}
+		// 也检查 parentTool 本身是否在 PATH（如 "node" 不在 pmDef 但需检测）。
+		if !parentInstalled {
+			if _, err := exec.LookPath(pm.parentTool); err == nil {
+				parentInstalled = true
+			}
+		}
+		if parentInstalled {
+			info.CanInstall = true
+			info.InstallHint = "" // 已安装父工具，无需提示
+			info.EnableCommand = pm.enableCommand
+		} else {
+			info.CanInstall = false
+			info.InstallHint = pm.installHint // 保持"需先安装 Node.js"
+		}
+		return info
+	}
+
+	// 场景2: installMethods 非空（pipx）——查每个 method 的 detectCmd 是否可用。
+	if len(pm.installMethods) > 0 {
+		var availableMethods []InstallMethodInfo
+		for _, m := range pm.installMethods {
+			if _, err := exec.LookPath(m.detectCmd); err == nil {
+				availableMethods = append(availableMethods, InstallMethodInfo{
+					Name:    m.name,
+					Command: m.command,
+				})
+			}
+		}
+		if len(availableMethods) > 0 {
+			info.CanInstall = true
+			info.InstallMethods = availableMethods
+			if len(availableMethods) == 1 {
+				info.InstallHint = "" // 单一方法，直接安装无需提示
+			} else {
+				info.InstallHint = "" // 多方法，前端弹选项对话框
+			}
+		} else {
+			info.CanInstall = false
+			info.InstallHint = "需先安装 pip 或 uv"
+		}
+		return info
+	}
+
+	return info
 }
 
 // detectPackageManager detects a single package manager's status.
@@ -387,15 +530,19 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 	// 对于附属工具（detectCmd != toolName，如 yarn/pnpm 是 node 的附属工具），
 	// xdev 不能直接安装它们，需要先安装父工具再启用。
 	// CanInstall 仅对 xdev 可以直接安装的工具为 true。
-	canInstall := pm.toolName != "" && pm.detectCmd == pm.toolName
+	// Spec 025：installCommand 非空时也可自动安装（script install 路径）。
+	// Spec 025 L3 审查阻塞项2：CanInstall 结合平台——brew 在 Windows 上
+	// CanInstall=false（pmCanInstall 内部用 pmPlatformMatches 检查）。
+	canInstall := pmCanInstall(pm)
 	info := PackageManagerInfo{
-		Name:        pm.name,
-		DisplayName: pm.displayName,
-		Description: pm.description,
-		Category:    "package-manager",
-		CanInstall:  canInstall,
-		ToolName:    pm.toolName,
-		InstallHint: pm.installHint,
+		Name:         pm.name,
+		DisplayName:  pm.displayName,
+		Description:  pm.description,
+		Category:     "package-manager",
+		CanInstall:   canInstall,
+		ToolName:     pm.toolName,
+		InstallHint:  pm.installHint,
+		RequiresAdmin: pm.requiresAdmin,
 	}
 
 	// Check if available via PATH
@@ -547,28 +694,38 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 		}
 	}
 
-	// Also check if installed via xdev (for tools not found on PATH)
-	// 但对于附属工具（detectCmd != toolName），需要验证附属工具可执行文件是否真的存在
-	if !info.Installed && pm.toolName != "" {
-		if activeVer, installed := a.currentVersion(pm.toolName); installed {
-			if pm.detectCmd != pm.toolName {
+	// Also check if installed via xdev.
+	// Spec 026 增量：对附属工具（detectCmd != toolName，如 pip 是 python 的
+	// 附属），即使 PATH 已找到系统版本，也优先检查 xdev 管理的版本并覆盖——
+	// 确保 xdev 管理的 pip 等附属工具被正确识别（而非只识别 PATH 中的系统 pip）。
+	// 非附属工具（detectCmd == toolName，如 npm）保持原条件：仅 PATH 未找到时才查 xdev。
+	// Spec 027 增量：pipx 的 toolName="" 但实际是 python 的附属工具——
+	// 当 xdev 安装了 python 时，也检查 python 目录中的 pipx 副本。
+	effectiveParent := pm.toolName
+	if effectiveParent == "" && pm.name == "pipx" {
+		effectiveParent = "python"
+	}
+	checkXdevManaged := effectiveParent != "" && (!info.Installed || pm.detectCmd != effectiveParent)
+	if checkXdevManaged {
+		if activeVer, installed := a.currentVersion(effectiveParent); installed {
+			if pm.detectCmd != effectiveParent {
 				// 附属工具：验证可执行文件是否存在
-				parentDir := a.currentLink(pm.toolName)
+				parentDir := a.currentLink(effectiveParent)
 				if target, ok := shim.FindInDir(parentDir, pm.detectCmd); ok {
 					info.Installed = true
 					info.LocalPath = target
 					// 尝试获取版本号
-					actualVer := a.getSubToolVersion(pm.detectCmd, pm.toolName)
+					actualVer := a.getSubToolVersion(pm.detectCmd, effectiveParent)
 					if actualVer != "" {
 						info.Version = actualVer
 					} else {
-						info.Version = "随 " + pm.toolName + " " + activeVer + " 附带"
+						info.Version = "随 " + effectiveParent + " " + activeVer + " 附带"
 					}
 				}
 			} else {
 				info.Installed = true
 				info.Version = activeVer
-				link := a.currentLink(pm.toolName)
+				link := a.currentLink(effectiveParent)
 				if target, err := os.Readlink(link); err == nil {
 					info.LocalPath = target
 				}
@@ -576,10 +733,131 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 		}
 	}
 
+	// HasUpdate: only for xdev-managed, installed, installable package
+	// managers, and only when a strictly newer version exists (semver).
+	// This prevents the frontend from showing a misleading "Update" button
+	// when the tool is already at the latest version.
+	if info.Installed && info.CanInstall && pm.toolName != "" && isComparableVersion(info.Version) {
+		if latest := a.GetLatestVersionForTool(pm.toolName); latest != "" && isComparableVersion(latest) {
+			info.HasUpdate = util.CompareSemver(latest, info.Version) > 0
+		}
+	}
+
+	// Spec 027: 收集所有检测到的实例（xdev 管理的 + 系统安装的）。
+	info.Instances = a.collectPMInstances(pm, info)
+
+	// Fallback: 如果主检测逻辑未设置 Installed/Version/LocalPath，
+	// 但 collectPMInstances 找到了实例，从第一个实例填充——
+	// 确保 yarn/pnpm 等附属工具即使 corepack shim 在非标准位置
+	// 也能在列表中显示版本和路径（Spec 027 Bug 2 修复）。
+	if len(info.Instances) > 0 && (!info.Installed || info.Version == "" || info.LocalPath == "") {
+		inst := info.Instances[0]
+		if !info.Installed {
+			info.Installed = true
+		}
+		if info.Version == "" {
+			info.Version = inst.Version
+		}
+		if info.LocalPath == "" {
+			info.LocalPath = inst.Path
+		}
+	}
+
 	return info
 }
 
-// getSubToolVersion 获取附属工具的实际版本号
+// collectPMInstances 收集包管理器的所有检测实例（Spec 027）。
+// 返回去重后的实例列表：xdev 管理的 + 系统安装的。
+// info.LocalPath 是 detectPackageManager 最终选定的路径（xdev 优先）；
+// 此函数额外查 PATH 收集系统实例，与 info.LocalPath 去重。
+func (a *App) collectPMInstances(pm pmDef, info PackageManagerInfo) []PMInstanceInfo {
+	var instances []PMInstanceInfo
+	seenPaths := make(map[string]bool)
+
+	// 1. 已选定的实例（info.LocalPath）——可能是 xdev 管理或系统
+	if info.LocalPath != "" {
+		normalized := filepath.Clean(strings.ToLower(info.LocalPath))
+		managed := false
+		shimDir := resolveShimDir()
+		installDir := a.getCfg().Core.InstallDir
+		if (shimDir != "" && isInsideDir(info.LocalPath, shimDir)) ||
+			(installDir != "" && isInsideDir(info.LocalPath, installDir)) {
+			managed = true
+		}
+		source := "local"
+		if managed {
+			source = "xdev"
+		}
+		instances = append(instances, PMInstanceInfo{
+			Version: info.Version,
+			Path:    info.LocalPath,
+			Managed: managed,
+			Source:  source,
+		})
+		seenPaths[normalized] = true
+	}
+
+	// 2. xdev 管理的附属工具实例（即使 info.LocalPath 已是系统版本，
+	// 附属工具可能在 xdev 管理的父工具目录中也有副本）。
+	// pipx 的 toolName="" 但实际是 python 的附属工具——当 xdev 安装了
+	// python 时，也查 python 目录中的 pipx 副本。
+	parentToolName := pm.toolName
+	if parentToolName == "" && pm.detectCmd != "python" && pm.name == "pipx" {
+		parentToolName = "python"
+	}
+	if parentToolName != "" && pm.detectCmd != parentToolName {
+		if _, installed := a.currentVersion(parentToolName); installed {
+			parentDir := a.currentLink(parentToolName)
+			if target, ok := shim.FindInDir(parentDir, pm.detectCmd); ok {
+				normalized := filepath.Clean(strings.ToLower(target))
+				if !seenPaths[normalized] {
+					ver := a.getSubToolVersion(pm.detectCmd, parentToolName)
+					if ver == "" {
+						ver = info.Version
+					}
+					instances = append(instances, PMInstanceInfo{
+						Version: ver,
+						Path:    target,
+						Managed: true,
+						Source:  "xdev",
+					})
+					seenPaths[normalized] = true
+				}
+			}
+		}
+	}
+
+	// 3. PATH 中的系统实例（如果与已收集的实例不同路径）
+	if path, err := exec.LookPath(pm.detectCmd); err == nil {
+		normalized := filepath.Clean(strings.ToLower(path))
+		if !seenPaths[normalized] {
+			ver := ""
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			cmd := exec.CommandContext(ctx, path, pm.detectArgs...)
+			util.HideWindow(cmd)
+			if output, err := cmd.CombinedOutput(); err == nil {
+				line := strings.TrimSpace(string(output))
+				if idx := strings.Index(line, "\n"); idx > 0 {
+					line = line[:idx]
+				}
+				ver = extractVersion(line)
+			}
+			cancel()
+			if ver == "" {
+				ver = "unknown"
+			}
+			instances = append(instances, PMInstanceInfo{
+				Version: ver,
+				Path:    path,
+				Managed: false,
+				Source:  "local",
+			})
+			seenPaths[normalized] = true
+		}
+	}
+
+	return instances
+}
 // 例如 yarn/pnpm 在 node 安装目录内，尝试执行该工具获取版本号
 func (a *App) getSubToolVersion(subToolCmd, parentToolName string) string {
 	parentDir := a.currentLink(parentToolName)
@@ -627,9 +905,19 @@ func (a *App) getSubToolVersion(subToolCmd, parentToolName string) string {
 }
 
 // InstallPackageManager installs a package manager via xdev.
-// toolName is the xdev tool name (e.g. "uv", "node", "python").
+// toolName is the xdev tool name (e.g. "uv", "node", "python") or the
+// pmDef name for script-installable managers (e.g. "scoop", "brew", "choco").
+//
+// Spec 025: 当 toolName 匹配一个有 installCommand 的 pmDef 时，走 script
+// install 路径（后台执行官方安装命令）；否则走现有 xdev 安装管线。
 func (a *App) InstallPackageManager(toolName string) error {
 	logInfo("[InstallPackageManager] installing %s", toolName)
+
+	// Spec 025: 先查 pmDef 是否有 script install 命令。
+	if pm, ok := findPMDefByName(toolName); ok && pm.installCommand != "" {
+		return a.installPackageManagerViaScript(pm)
+	}
+
 	p, ok := a.registry.Get(toolName)
 	if !ok {
 		return fmt.Errorf("tool %q not found in registry", toolName)
@@ -642,6 +930,460 @@ func (a *App) InstallPackageManager(toolName string) error {
 	}
 
 	return a.InstallTool(toolName, ver)
+}
+
+// InstallSubTool 安装附属工具（Spec 026）。
+// toolName 是 pmDef.name（如 "yarn" / "pnpm" / "pipx"）。
+// method 指定安装方式（如 "pip" / "uv"）；空表示自动选择：
+//   - enableCommand 非空（yarn/pnpm）→ 执行 corepack enable
+//   - installMethods 长度==1 → 用唯一 method
+//   - installMethods 长度>1 且 method="" → 返回错误"请指定安装方式"
+func (a *App) InstallSubTool(toolName, method string) error {
+	logInfo("[InstallSubTool] %s method=%q", toolName, method)
+	pm, ok := findPMDefByName(toolName)
+	if !ok {
+		return fmt.Errorf("package manager %q not found in pmDef", toolName)
+	}
+
+	// 场景1: enableCommand 非空（yarn/pnpm）→ corepack enable 路径。
+	if pm.enableCommand != "" {
+		return a.installSubToolViaEnable(pm)
+	}
+
+	// 场景2: installMethods 非空（pipx）→ method 路径。
+	if len(pm.installMethods) > 0 {
+		var selected *installMethod
+		if method == "" {
+			// 自动选择：唯一 method 直接用；多个则报错。
+			if len(pm.installMethods) == 1 {
+				selected = &pm.installMethods[0]
+			} else {
+				return fmt.Errorf("%s 有多种安装方式，请指定 method（%s）",
+					pm.displayName, formatMethodNames(pm.installMethods))
+			}
+		} else {
+			// 按 method name 查找。
+			for i := range pm.installMethods {
+				if pm.installMethods[i].name == method {
+					selected = &pm.installMethods[i]
+					break
+				}
+			}
+			if selected == nil {
+				return fmt.Errorf("unknown install method %q for %s (available: %s)",
+					method, pm.displayName, formatMethodNames(pm.installMethods))
+			}
+		}
+		return a.installSubToolViaMethod(pm, *selected)
+	}
+
+	return fmt.Errorf("%q is not a sub-tool (no enableCommand or installMethods)", toolName)
+}
+
+// installSubToolViaEnable 执行 corepack enable 命令（yarn/pnpm）。
+// 在 PATH 含 node 的环境中执行。
+func (a *App) installSubToolViaEnable(pm pmDef) error {
+	logInfo("[InstallSubTool] enable: %s", pm.enableCommand)
+	// corepack enable yarn → args = ["enable", "yarn"]
+	parts := strings.Fields(pm.enableCommand)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid enableCommand %q for %s", pm.enableCommand, pm.name)
+	}
+	// parts[0] = "corepack", parts[1:] = ["enable", "yarn"]
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	// 确保 PATH 含 node（corepack 是 node 附属命令）。
+	cmd.Env = os.Environ()
+	util.HideWindow(cmd)
+	output, err := cmd.CombinedOutput()
+	logInfo("[InstallSubTool] %s enable output:\n%s", pm.name, string(output))
+	if err != nil {
+		return fmt.Errorf("%s 启用失败: %w\n输出:\n%s", pm.displayName, err, string(output))
+	}
+	logInfo("[InstallSubTool] %s 启用完成", pm.name)
+	a.InvalidateToolsCache()
+	return nil
+}
+
+// installSubToolViaMethod 执行指定安装方式的命令（pipx via pip/uv）。
+// Spec 026 增量：当 method 用 pip 安装时，优先用 xdev 管理的 Python 的 pip，
+// 而非 PATH 中的系统 pip——确保 pipx 安装到 xdev 管理的目录。
+func (a *App) installSubToolViaMethod(pm pmDef, m installMethod) error {
+	logInfo("[InstallSubTool] method %s: %s", m.name, m.command)
+	parts := strings.Fields(m.command)
+	if len(parts) == 0 {
+		return fmt.Errorf("empty command for method %s of %s", m.name, pm.name)
+	}
+
+	// Spec 026 增量：若 method 是 pip，优先用 xdev 管理的 Python 的 pip。
+	// parts[0] 是 "pip"——替换为 xdev python 的 pip 完整路径。
+	if m.detectCmd == "pip" {
+		if xdevPip, ok := a.findXdevManagedPip(); ok {
+			logInfo("[InstallSubTool] using xdev-managed pip: %s (instead of PATH pip)", xdevPip)
+			parts[0] = xdevPip
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	// 确保 PATH 含 xdev 的 shim 目录（这样 pip 能找到 xdev 管理的 python）。
+	cmd.Env = a.envWithXdevShims(os.Environ())
+	util.HideWindow(cmd)
+	output, err := cmd.CombinedOutput()
+	logInfo("[InstallSubTool] %s via %s output:\n%s", pm.name, m.name, string(output))
+	if err != nil {
+		return fmt.Errorf("%s 安装失败（%s）: %w\n输出:\n%s", pm.displayName, m.name, err, string(output))
+	}
+	logInfo("[InstallSubTool] %s via %s 安装完成", pm.name, m.name)
+	a.InvalidateToolsCache()
+	return nil
+}
+
+// findXdevManagedPip 查找 xdev 管理的 Python 的 pip 可执行文件路径。
+// 检查 xdev 是否已安装 python → 若已装，在 python 的安装目录中找 pip。
+// 返回 pip 完整路径（如 E:\XDev\install\python\3.14.4\Scripts\pip.exe）。
+func (a *App) findXdevManagedPip() (string, bool) {
+	if activeVer, installed := a.currentVersion("python"); installed {
+		pythonDir := a.currentLink("python")
+		if pythonDir == "" {
+			return "", false
+		}
+		// pip 通常在 <python_dir>/Scripts/pip (Windows) 或 <python_dir>/bin/pip (Unix)
+		candidates := []string{
+			filepath.Join(pythonDir, "Scripts", "pip.exe"), // Windows
+			filepath.Join(pythonDir, "Scripts", "pip"),     // Windows (no .exe)
+			filepath.Join(pythonDir, "bin", "pip"),         // Unix
+		}
+		for _, c := range candidates {
+			if path, err := exec.LookPath(c); err == nil {
+				return path, true
+			}
+			// 也检查文件直接存在（LookPath 可能因权限/PATH 问题失败）
+			if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+				return c, true
+			}
+		}
+		logInfo("[InstallSubTool] xdev python %s installed but pip not found in %s", activeVer, pythonDir)
+	}
+	return "", false
+}
+
+// envWithXdevShims 返回追加 xdev shim 目录到 PATH 的环境变量列表，
+// 确保 exec.Command 能找到 xdev 管理的工具（如 python）。
+func (a *App) envWithXdevShims(base []string) []string {
+	cfg := a.getCfg()
+	shimDir := cfg.Core.ShimDir
+	if shimDir == "" {
+		return base
+	}
+	// 找到 PATH 条目并前置 shimDir
+	for i, e := range base {
+		if strings.HasPrefix(strings.ToUpper(e), "PATH=") {
+			pathVal := e[5:] // strip "PATH="
+			base[i] = "PATH=" + shimDir + string(os.PathListSeparator) + pathVal
+			return base
+		}
+	}
+	// PATH 不在 base 中，新增一条
+	return append(base, "PATH="+shimDir)
+}
+
+// formatMethodNames 返回 installMethod 列表的 name 逗号分隔串（错误信息用）。
+func formatMethodNames(methods []installMethod) string {
+	names := make([]string, 0, len(methods))
+	for _, m := range methods {
+		names = append(names, m.name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// MigratePackageManager 把系统安装的包管理器迁移到 xdev 管理目录（Spec 027）。
+//
+// 对于附属工具（pip/pipx 等 toolName 非空且 detectCmd != toolName）：
+// 在 xdev 管理的父工具目录中创建附属工具的链接/复制——
+// 例如 pip 迁移 = 在 E:\XDev\install\python\3.14.4\Scripts\ 创建 pip 链接。
+//
+// 对于独立工具（scoop/brew/choco）：
+// 复制目录到 xdev install dir + 创建 current 链接（类似 MigrateLocalTool）。
+func (a *App) MigratePackageManager(toolName string) error {
+	logInfo("[MigratePackageManager] migrating %s", toolName)
+	pm, ok := findPMDefByName(toolName)
+	if !ok {
+		return fmt.Errorf("package manager %q not found in pmDef", toolName)
+	}
+
+	// 查找系统安装的实例（非 xdev 管理的）。
+	var systemPath string
+	instances := a.collectPMInstances(pm, PackageManagerInfo{LocalPath: ""})
+	for _, inst := range instances {
+		if !inst.Managed && inst.Path != "" {
+			systemPath = inst.Path
+			break
+		}
+	}
+	if systemPath == "" {
+		return fmt.Errorf("%s 没有可迁移的系统实例", pm.displayName)
+	}
+
+	// 附属工具迁移：在 xdev 管理的父工具目录创建链接。
+	// pipx 的 toolName="" 但实际是 python 的附属工具——当 xdev 安装了
+	// python 时，也走附属工具路径（用 python 作为 parentTool）。
+	if pm.toolName != "" && pm.detectCmd != pm.toolName {
+		return a.migrateSubToolToXdev(pm, systemPath, pm.toolName)
+	}
+	if pm.toolName == "" && pm.detectCmd != "python" {
+		// pipx 等 toolName="" 的 Python 附属工具：检查 xdev 是否安装了 python。
+		if _, installed := a.currentVersion("python"); installed {
+			return a.migrateSubToolToXdev(pm, systemPath, "python")
+		}
+	}
+
+	// 独立工具迁移：复制到 xdev install dir。
+	return a.migrateIndependentPMToXdev(pm, systemPath)
+}
+
+// migrateSubToolToXdev 把附属工具（pip/pipx）从系统路径迁移到 xdev 管理
+// 的父工具目录（Spec 027）。通过复制可执行文件实现。
+// parentToolName 指定父工具名（pm.toolName 或 "python" 用于 pipx 等 toolName="" 的附属工具）。
+func (a *App) migrateSubToolToXdev(pm pmDef, systemPath, parentToolName string) error {
+	if parentToolName == "" {
+		return fmt.Errorf("%s is not a sub-tool (parentToolName empty)", pm.name)
+	}
+	if _, installed := a.currentVersion(parentToolName); !installed {
+		return fmt.Errorf("父工具 %s 未通过 xdev 安装，无法迁移附属工具 %s", parentToolName, pm.displayName)
+	}
+	parentDir := a.currentLink(parentToolName)
+	if parentDir == "" {
+		return fmt.Errorf("无法确定 %s 的安装目录", parentToolName)
+	}
+
+	// 确定目标目录：Windows 在 Scripts/，Unix 在 bin/
+	var targetDir string
+	if runtime.GOOS == "windows" {
+		targetDir = filepath.Join(parentDir, "Scripts")
+	} else {
+		targetDir = filepath.Join(parentDir, "bin")
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("创建目标目录 %s 失败: %w", targetDir, err)
+	}
+
+	// 构造目标路径：同名可执行文件（保留 .exe 后缀如果系统路径有）
+	targetName := filepath.Base(systemPath)
+	targetPath := filepath.Join(targetDir, targetName)
+
+	// 如果目标已存在，跳过（xdev 管理版本已存在）。
+	if _, err := os.Stat(targetPath); err == nil {
+		logInfo("[MigratePackageManager] %s 已存在于 xdev 目录 %s，跳过", pm.name, targetPath)
+		return nil
+	}
+
+	// 复制可执行文件（附属工具是单个文件，复制最安全可靠）。
+	if err := util.CopyFile(systemPath, targetPath); err != nil {
+		return fmt.Errorf("迁移 %s 到 %s 失败: %w", pm.displayName, targetPath, err)
+	}
+
+	logInfo("[MigratePackageManager] %s 迁移完成: %s -> %s", pm.name, systemPath, targetPath)
+	a.InvalidateToolsCache()
+	return nil
+}
+
+// migrateIndependentPMToXdev 把独立包管理器（scoop/brew/choco）从系统路径
+// 迁移到 xdev install dir（Spec 027）。复制目录 + 创建 current 链接。
+func (a *App) migrateIndependentPMToXdev(pm pmDef, systemPath string) error {
+	cfg := a.getCfg()
+	installDir := cfg.Core.InstallDir
+	if installDir == "" {
+		return fmt.Errorf("xdev install dir 未配置")
+	}
+
+	// 推断版本号（从系统实例）
+	ver := ""
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	cmd := exec.CommandContext(ctx, systemPath, pm.detectArgs...)
+	util.HideWindow(cmd)
+	if output, err := cmd.CombinedOutput(); err == nil {
+		line := strings.TrimSpace(string(output))
+		if idx := strings.Index(line, "\n"); idx > 0 {
+			line = line[:idx]
+		}
+		ver = extractVersion(line)
+	}
+	cancel()
+	if ver == "" {
+		ver = "unknown"
+	}
+
+	// 目标路径：<installDir>/<pm.name>/<ver>
+	targetDir := filepath.Join(installDir, pm.name, ver)
+	if _, err := os.Stat(targetDir); err == nil {
+		return fmt.Errorf("%s %s 已存在于 xdev 目录，无需迁移", pm.displayName, ver)
+	}
+
+	// 推断源目录（系统可执行文件的父目录）
+	srcDir := filepath.Dir(systemPath)
+	if err := util.CopyDir(srcDir, targetDir); err != nil {
+		return fmt.Errorf("复制 %s 到 %s 失败: %w", srcDir, targetDir, err)
+	}
+
+	// 创建 current 链接
+	link := filepath.Join(cfg.Core.XMDevDir, "current", pm.name)
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return fmt.Errorf("创建 current 目录失败: %w", err)
+	}
+	// 移除旧链接（如果存在）
+	os.Remove(link)
+	// 创建 current 链接（Windows 用 junction，Unix 用 symlink）。
+	if runtime.GOOS == "windows" {
+		if err := util.CreateJunction(link, targetDir); err != nil {
+			return fmt.Errorf("创建 current junction 失败: %w", err)
+		}
+	} else {
+		if err := os.Symlink(targetDir, link); err != nil {
+			return fmt.Errorf("创建 current symlink 失败: %w", err)
+		}
+	}
+
+	logInfo("[MigratePackageManager] %s 迁移完成: %s -> %s", pm.name, srcDir, targetDir)
+	a.InvalidateToolsCache()
+	return nil
+}
+
+// findPMDefByName 在 GetPackageManagers 使用的 pmDef 列表中按 name 查找。
+// 返回匹配的 pmDef（scoop/brew/choco 等用于 script install）。
+func findPMDefByName(name string) (pmDef, bool) {
+	for _, pm := range packageManagerDefs() {
+		if pm.name == name {
+			return pm, true
+		}
+	}
+	return pmDef{}, false
+}
+
+// packageManagerDefs 返回包管理器定义列表（GetPackageManagers 共享）。
+// 抽出为独立函数以便 findPMDefByName 在 InstallPackageManager 中复用。
+func packageManagerDefs() []pmDef {
+	return []pmDef{
+		{"npx", "NPX", "Node 包执行器 - 运行 npm 包", "npx", []string{"--version"}, "node", "随 Node.js 自动安装", "", false, "", "", "", "", nil},
+		{"npm", "NPM", "Node 包管理器", "npm", []string{"--version"}, "node", "随 Node.js 自动安装", "", false, "", "", "", "", nil},
+		// Spec 026: yarn/pnpm 是附属工具，通过 corepack enable 启用。
+		// enableCommand 非空时，detectPackageManager 两阶段检测会查 parentTool
+		// （node）是否已安装，动态设置 CanInstall + InstallHint。
+		{name: "yarn", displayName: "Yarn", description: "快速、可靠的依赖管理工具", detectCmd: "yarn", detectArgs: []string{"--version"}, toolName: "node", installHint: "需先安装 Node.js，然后运行 corepack enable yarn",
+			enableCommand: "corepack enable yarn", parentTool: "node"},
+		{name: "pnpm", displayName: "PNPM", description: "快速、节省磁盘的包管理器", detectCmd: "pnpm", detectArgs: []string{"--version"}, toolName: "node", installHint: "需先安装 Node.js，然后运行 corepack enable pnpm",
+			enableCommand: "corepack enable pnpm", parentTool: "node"},
+		{"uvx", "UVX", "通过 UV 运行 Python 工具", "uvx", []string{"--version"}, "uv", "", "", false, "", "", "", "", nil},
+		{"uv", "UV", "极速 Python 包安装器", "uv", []string{"--version"}, "uv", "", "", false, "", "", "", "", nil},
+		{"pip", "PIP", "Python 包安装器", "pip", []string{"--version"}, "python", "随 Python 自动安装", "", false, "", "", "", "", nil},
+		// Spec 026: pipx 可通过 pip 或 uv 安装。installMethods 非空时，
+		// detectPackageManager 两阶段检测会查每个 method 的 detectCmd 是否
+		// 可用，动态设置 CanInstall + InstallHint + InstallMethods。
+		{name: "pipx", displayName: "PIPX", description: "在隔离环境中安装运行 Python 应用", detectCmd: "pipx", detectArgs: []string{"--version"}, toolName: "", installHint: "通过 pip install pipx 或 uv tool install pipx 安装",
+			installMethods: []installMethod{
+				{name: "pip", command: "pip install pipx", detectCmd: "pip"},
+				{name: "uv", command: "uv tool install pipx", detectCmd: "uv"},
+			}},
+		{"cargo", "Cargo", "Rust 包管理器", "cargo", []string{"--version"}, "rust", "随 Rust 自动安装", "", false, "", "", "", "", nil},
+		{"maven", "Maven", "Java 构建自动化工具", "mvn", []string{"--version"}, "maven", "随 Maven 自动安装", "", false, "", "", "", "", nil},
+		{name: "brew", displayName: "Homebrew", description: "macOS/Linux 包管理器", detectCmd: "brew", detectArgs: []string{"--version"}, installHint: "访问 https://brew.sh 安装",
+			installCommand: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`,
+			requiresAdmin: false, executionEnv: "bash", platform: "unix"}, // darwin/linux/WSL，非 windows
+		{name: "scoop", displayName: "Scoop", description: "Windows 命令行安装器", detectCmd: "scoop", detectArgs: []string{"--version"}, installHint: "访问 https://scoop.sh 安装",
+			installCommand: "irm get.scoop.sh | iex",
+			requiresAdmin: false, executionEnv: "powershell", platform: "windows"},
+		{name: "choco", displayName: "Chocolatey", description: "Windows 包管理器", detectCmd: "choco", detectArgs: []string{"--version"}, installHint: "访问 https://chocolatey.org 安装",
+			installCommand: `Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`,
+			requiresAdmin: true, executionEnv: "powershell", platform: "windows"},
+	}
+}
+
+// installPackageManagerViaScript 执行包管理器的官方安装命令（Spec 025）。
+// 后台执行 + 捕获输出到 GUI log + cmd.Wait() 防僵尸。
+func (a *App) installPackageManagerViaScript(pm pmDef) error {
+	logInfo("[InstallPackageManager] script install: %s (env=%s, admin=%v)", pm.name, pm.executionEnv, pm.requiresAdmin)
+
+	// 平台检查
+	if !pmPlatformMatches(pm.platform) {
+		return fmt.Errorf("%s 仅支持 %s 平台（当前: %s）", pm.displayName, pm.platform, runtime.GOOS)
+	}
+
+	// 管理员权限检查（Windows）
+	if pm.requiresAdmin && runtime.GOOS == "windows" {
+		if !isWindowsAdmin() {
+			return fmt.Errorf("%s 需要管理员权限。请以管理员身份重启 xdev，或在管理员 PowerShell 中手动执行以下命令：\n\n%s", pm.displayName, pm.installCommand)
+		}
+	}
+
+	// 构造 exec.Command
+	var cmd *exec.Cmd
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	switch pm.executionEnv {
+	case "powershell":
+		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", pm.installCommand)
+	case "bash":
+		cmd = exec.CommandContext(ctx, "bash", "-c", pm.installCommand)
+		// Homebrew 安装脚本默认交互式确认，设 NONINTERACTIVE=1 跳过。
+		if pm.name == "brew" {
+			cmd.Env = append(os.Environ(), "NONINTERACTIVE=1")
+		}
+	default:
+		return fmt.Errorf("unknown executionEnv %q for %s", pm.executionEnv, pm.name)
+	}
+
+	util.HideWindow(cmd)
+	output, err := cmd.CombinedOutput()
+	logInfo("[InstallPackageManager] %s output:\n%s", pm.name, string(output))
+	if err != nil {
+		return fmt.Errorf("%s 安装失败: %w\n输出:\n%s", pm.displayName, err, string(output))
+	}
+	logInfo("[InstallPackageManager] %s 安装完成", pm.name)
+	// Spec 025 L3 审查阻塞项4：脚本安装成功后失效工具列表缓存，
+	// 使下次 GetToolsByCategory("package-manager") 重新检测安装状态，
+	// 而非在 60s TTL 内继续显示"未安装"。
+	a.InvalidateToolsCache()
+	return nil
+}
+
+// isWindowsAdmin 检测当前进程是否以管理员权限运行。
+// Windows 实现在 is_windows_admin_windows.go（用 token elevation API）；
+// 非 Windows 实现在 is_windows_admin_other.go（返回 false）。
+// 调用方应在 runtime.GOOS=="windows" 时才依赖其返回值。
+
+// pmPlatformMatches 报告 pmDef.platform 是否匹配当前 runtime.GOOS。
+// 支持的平台值：windows / darwin / linux / unix（=darwin+linux）/ any。
+// Spec 025 L3 审查阻塞项2：brew platform 从 "any" 改为 "unix"，避免
+// 在 Windows 上尝试运行 Homebrew。
+func pmPlatformMatches(platform string) bool {
+	switch platform {
+	case "any":
+		return true
+	case "windows":
+		return runtime.GOOS == "windows"
+	case "darwin":
+		return runtime.GOOS == "darwin"
+	case "linux":
+		return runtime.GOOS == "linux"
+	case "unix":
+		return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+	default:
+		return false
+	}
+}
+
+// pmCanInstall 报告包管理器在当前平台是否可安装。
+// Spec 025 L3 审查阻塞项2：CanInstall 结合平台——brew 在 Windows 上
+// CanInstall=false（避免前端展示可安装但实际无法执行）。
+func pmCanInstall(pm pmDef) bool {
+	if pm.installCommand != "" {
+		return pmPlatformMatches(pm.platform)
+	}
+	// 现有 xdev 管线安装：toolName 非空且 detectCmd==toolName
+	return pm.toolName != "" && pm.detectCmd == pm.toolName
 }
 
 // UpdatePackageManager updates a package manager to the latest version.
@@ -719,6 +1461,47 @@ func detectLocalToolPath(name string, shims []string) string {
 		}
 	}
 
+	// 4. Check npm global bin dirs. npm-installed CLIs (codex, opencode,
+	//    claude-code, ...) may live in the npm global bin even when that
+	//    dir is not on PATH. Precise per-file check (never returns a bare
+	//    directory), so this cannot produce false positives for tools
+	//    that are not actually npm-installed.
+	if p := detectInNpmGlobalBins(searchNames); p != "" {
+		return p
+	}
+
+	return ""
+}
+
+// detectInNpmGlobalBins looks for any of the given shim names inside npm's
+// global bin directory (Windows: %APPDATA%\npm; Unix: ~/.npm-global/bin,
+// ~/npm/bin, ~/.local/bin). Returns the first existing file, or "".
+func detectInNpmGlobalBins(searchNames []string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	var dirs []string
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			dirs = append(dirs, filepath.Join(appData, "npm"))
+		}
+	} else {
+		dirs = append(dirs,
+			filepath.Join(home, ".npm-global", "bin"),
+			filepath.Join(home, "npm", "bin"),
+			filepath.Join(home, ".local", "bin"),
+		)
+	}
+	for _, dir := range dirs {
+		for _, s := range searchNames {
+			for _, cand := range []string{filepath.Join(dir, s), filepath.Join(dir, s+".cmd")} {
+				if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+					return cand
+				}
+			}
+		}
+	}
 	return ""
 }
 
@@ -975,24 +1758,43 @@ func getVersion(name, path string) string {
 		return ""
 	}
 
-	// Parse version from output - take first line, extract version number
-	line := strings.TrimSpace(string(output))
-	if idx := strings.Index(line, "\n"); idx > 0 {
-		line = line[:idx]
-	}
+	// Parse version from output: iterate lines in order and return the
+	// first line that yields an extractable version. This fixes tools whose
+	// first output line is a banner/separator (e.g. `gradle -version` prints
+	// "------------------------------------------------------------" first,
+	// then "Gradle 9.4.1") — previously the raw separator became the version
+	// and later failed SafeName during migration ("unsafe-version-blocked").
+	ver := extractVersionFromOutput(string(output))
+	logDebug("[getVersion] %s → %q (in %v)", name, ver, time.Since(start))
+	return ver
+}
 
-	// Try to extract a semver-like pattern
-	ver := extractVersion(line)
-	if ver != "" {
-		logDebug("[getVersion] %s → %s (in %v)", name, ver, time.Since(start))
-		return ver
+// extractVersionFromOutput 从工具输出中解析版本号：
+//  1. 逐行尝试 extractVersion，返回第一个成功提取的版本（跳过空行）；
+//  2. 没有任何行可提取时，回退到旧行为：整个输出的首行原文（截断 60）。
+//
+// 该函数独立以便单元测试；被 getVersion 及迁移/刷新路径共用。
+func extractVersionFromOutput(output string) string {
+	text := strings.TrimSpace(output)
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if ver := extractVersion(line); ver != "" {
+			return ver
+		}
 	}
-	// Return the whole first line if no version pattern found (truncated)
-	if len(line) > 60 {
-		line = line[:60] + "..."
+	// 回退：首行原文（截断 60）
+	first := text
+	if idx := strings.Index(first, "\n"); idx > 0 {
+		first = first[:idx]
 	}
-	logDebug("[getVersion] %s → %q (raw, in %v)", name, line, time.Since(start))
-	return line
+	first = strings.TrimSpace(first)
+	if len(first) > 60 {
+		first = first[:60] + "..."
+	}
+	return first
 }
 
 // findBinaryInDir finds the executable binary for a tool inside a directory.

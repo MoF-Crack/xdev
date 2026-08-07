@@ -2,7 +2,7 @@
   <div class="app-shell" :class="{ 'app-shell--compact': compact }">
     <AppTitleBar v-bind="titleBarProps" />
     <div class="app-shell__body">
-      <AppSidebar :groups="navigationGroups" :selected-view="selectedView" :compact="compact" :narrow="narrow" @select="$emit('select-view', $event)" @toggle-compact="userCompact = !userCompact" />
+      <AppSidebar :groups="navigationGroups" :selected-view="selectedView" :compact="compact" :narrow="narrow" :t="t" @select="$emit('select-view', $event)" @toggle-compact="userCompact = !userCompact" />
       <div class="app-shell__main">
         <slot name="toolbar" />
         <div class="app-shell__content"><slot /></div>
@@ -18,6 +18,7 @@ import AppTitleBar from './AppTitleBar.vue';
 
 const props = defineProps({
   selectedView: { type: String, required: true }, navigationGroups: { type: Array, required: true },
+  t: { type: Function, required: true },
   minimize: { type: Function, required: true }, toggleMaximize: { type: Function, required: true }, close: { type: Function, required: true },
   minimizeLabel: { type: String, default: 'Minimize' }, maximizeLabel: { type: String, default: 'Maximize' }, closeLabel: { type: String, default: 'Close' },
 });
@@ -45,9 +46,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.app-shell { height: 100vh; overflow: hidden; background: var(--xdev-bg-app); }
+.app-shell { height: 100vh; overflow: hidden; background: var(--xdev-bg-app); background-image: radial-gradient(circle at 100% 0, var(--xdev-accent-soft), transparent 34rem); }
 .app-shell__body { height: calc(100vh - 34px); display: flex; min-width: 0; }
 .app-shell__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.app-shell__content { flex: 1; min-width: 0; overflow: auto; padding: var(--xdev-space-4) var(--xdev-space-6); }
-@media (max-width: 799px) { .app-shell__content { padding: var(--xdev-space-4); } }
+.app-shell__content { flex: 1; min-width: 0; overflow: auto; padding: var(--xdev-page-top-space) var(--xdev-content-padding) 56px; scrollbar-gutter: stable; }
+@media (max-width: 799px) { .app-shell__content { padding: var(--xdev-space-5) var(--xdev-space-4) 40px; } }
 </style>

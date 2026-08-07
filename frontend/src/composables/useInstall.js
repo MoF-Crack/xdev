@@ -17,6 +17,11 @@ export function useInstall({ onComplete, onError: reportError, onCancel } = {}) 
   const onProgress = (data = {}) => {
     if (!active.value || !belongsToCurrentTask(data)) return;
     phase.value = data.phase || phase.value;
+    // Percent < 0 is a status-only update (retry/fallback/proxy messages):
+    // keep the entire current progress (bar, bytes, speed, ETA) — only the
+    // phase text changes. A real event (percent >= 0) updates the bar,
+    // including hard resets to 0 for new attempts/URLs.
+    if (data.percent != null && data.percent < 0) return;
     progress.value = {
       percent: Math.round(data.percent || 0), bytes: data.bytes ?? data.transferredBytes ?? 0,
       totalBytes: data.totalBytes ?? data.total ?? 0, speed: data.speed || '', eta: data.eta || '',
@@ -39,7 +44,19 @@ export function useInstall({ onComplete, onError: reportError, onCancel } = {}) 
   const unsubscribeProgress = window.runtime?.EventsOn?.('installProgress', onProgress);
   const unsubscribeError = window.runtime?.EventsOn?.('installError', onError);
 
-  async function install(tool, version) {
+  async function install(tool, version, formFilter = '') {
+    return installInternal(tool, version, false, formFilter);
+  }
+
+  // installConfirmed is like install but calls InstallToolConfirmed with
+  // confirmed=true so the backend skips its native Wails MessageDialog
+  // (which can be hidden behind the window). The frontend is responsible
+  // for showing a Naive UI confirmation dialog before calling this.
+  async function installConfirmed(tool, version, formFilter = '') {
+    return installInternal(tool, version, true, formFilter);
+  }
+
+  async function installInternal(tool, version, confirmed, formFilter = '') {
     if (!tool || !version || active.value) return false;
     active.value = true;
     paused.value = false;
@@ -50,7 +67,39 @@ export function useInstall({ onComplete, onError: reportError, onCancel } = {}) 
     progress.value = { percent: 0, bytes: 0, totalBytes: 0, speed: '', eta: '' };
     error.value = null;
     try {
-      await window.go.gui.App.InstallTool(tool, version);
+      if (formFilter) {
+        await window.go.gui.App.InstallToolWithForm(tool, version, formFilter);
+      } else if (confirmed) {
+        await window.go.gui.App.InstallToolConfirmed(tool, version, true);
+      } else {
+        await window.go.gui.App.InstallTool(tool, version);
+      }
+      return true;
+    } catch (cause) {
+      error.value = { message: String(cause?.message || cause), details: String(cause?.stack || cause) };
+      phase.value = 'error';
+      active.value = false;
+      paused.value = false;
+      reportError?.({ taskId: taskId.value, tool, version, error: error.value.message, details: error.value.details });
+      return false;
+    }
+  }
+
+  // repair force-reinstalls an existing (possibly incomplete) version.
+  // The backend shows a native confirmation dialog before removing the
+  // existing install directory; progress events flow as usual.
+  async function repair(tool, version) {
+    if (!tool || !version || active.value) return false;
+    active.value = true;
+    paused.value = false;
+    taskId.value = `${tool}@${version}`;
+    currentTool.value = tool;
+    currentVersion.value = version;
+    phase.value = 'Downloading';
+    progress.value = { percent: 0, bytes: 0, totalBytes: 0, speed: '', eta: '' };
+    error.value = null;
+    try {
+      await window.go.gui.App.RepairInstall(tool, version);
       return true;
     } catch (cause) {
       error.value = { message: String(cause?.message || cause), details: String(cause?.stack || cause) };
@@ -90,5 +139,5 @@ export function useInstall({ onComplete, onError: reportError, onCancel } = {}) 
     if (typeof unsubscribeError === 'function') unsubscribeError();
   }
   if (getCurrentScope()) onScopeDispose(dispose);
-  return { install, pause, resume, cancel, phase, progress, error, active, paused, taskId, dispose };
+  return { install, installConfirmed, repair, pause, resume, cancel, phase, progress, error, active, paused, taskId, dispose };
 }

@@ -1,36 +1,33 @@
 <template>
-  <AppShell :selected-view="selectedView" :navigation-groups="localizedNavigationGroups"
+  <AppShell :selected-view="selectedView" :navigation-groups="localizedNavigationGroups" :t="t"
     :minimize="minimizeWindow" :toggle-maximize="toggleMaximize" :close="closeWindow"
     :minimize-label="t('window.minimize')" :maximize-label="isMaximized ? t('window.restore') : t('window.maximize')" :close-label="t('window.close')"
     @select-view="onMenuSelect" @open-command-palette="openCommandPalette" @escape="setCommandPaletteVisible(false)">
     <template #toolbar>
       <PageToolbar :title="headerTitle">
+        <n-space>
+          <UpdateBadge :t="t" :count="availableUpdates.length" :updates="availableUpdates" :loading="updatesLoading" :sniffing="sniffOperating" :installing="updateInstalling" @refresh="loadUpdates" @install="installUpdate" @ignore="ignoreUpdate" @sniff-all="sniffAll" />
+          <NotificationCenter :t="t" :notifications="notifications" @clear="clearNotifications" />
           <n-button ref="commandPaletteTrigger" size="small" secondary :aria-label="t('command_palette.open')" @click="openCommandPalette">
             <template #icon><n-icon aria-hidden="true"><search-outline /></n-icon></template>
             Ctrl+K
           </n-button>
+        </n-space>
       </PageToolbar>
     </template>
         <!-- Dashboard -->
-        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" />
+        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
 
         <!-- Favorites Page -->
-        <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" />
+        <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
         <!-- Settings -->
-        <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :is-dark="isDark" :locale="locale" :path-mode="pathMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :import-result="importResult" :update-info="updateInfo" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" @update:is-dark="toggleTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" />
+        <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
         <!-- Environment Variables Page -->
-        <EnvironmentVariablesPage v-else-if="selectedView === 'env-vars'" :t="t" :browse-directory="browseEnvDir" :env-vars="envVars" :all-env-vars="allEnvVars" :view-mode="envViewMode" :all-level="envAllLevel" :validation-stats="envValidationStats" :editing="editingEnvVar" :migration-mode="migrationMode" :migration-tools="migrationTools" :migration-results="migrationResults" @update:view-mode="setEnvViewMode" @update:all-level="setEnvAllLevel" @validate="validateAllEnvVars" @edit="editEnvVar" @save="saveEnvDraft" @cancel="cancelEditEnvVar" @delete="deleteEnvRow" @clean="cleanEnvRow" @update:migration-mode="migrationMode = $event" @migration-scan="scanForMigration" @migration-single="migrateSingle" @migration-all="migrateAll" />
-        <CustomToolsPage v-else-if="selectedView === 'custom-tools'" :t="t" :tools="customTools" :operating="customToolOperating" :submitting="customToolSubmitting" @add="submitAddCustomTool" @install="installCustomTool" @remove="removeCustomTool" />
-
-        <ProjectPage v-else-if="selectedView === 'project'" :t="t" :config="projectConfig" :lockfile="lockfileInfo" :task-states="taskStates" :loading="projectLoading" :error="projectError" :lockfile-loading="lockfileLoading" :lockfile-installing="lockfileInstalling" @set-tool="setProjectTool" @unset-tool="unsetProjectTool" @run-task="runProjectTask" @refresh-lockfile="loadLockfile" @install-lockfile="installFromLockfile" />
-        <TasksPage v-else-if="selectedView === 'tasks'" :t="t" :tasks="projectConfig?.tasks" :loading="projectLoading" :error="projectError" :task-states="taskStates" @run="runProjectTask" />
-        <PluginsPage v-else-if="selectedView === 'plugins'" :t="t" :plugins="plugins" :loading="pluginsLoading" :error="pluginsError" :creating="pluginCreating" @create="createPlugin" @retry="loadPlugins" />
-        <ServicesPage v-else-if="selectedView === 'services'" :t="t" :services="services" :loading="servicesLoading" :error="servicesError" :operating="serviceOperating" @refresh="loadServices" @retry="loadServices" @start="startService" @stop="stopService" />
-        <AIAssistantPage v-else-if="selectedView === 'ai'" :t="t" :status="aiStatus" :loading="aiLoading" :error="aiError" :suggesting="aiSuggesting" :diagnosing="aiDiagnosing" :chatting="aiChatting" :suggestion-result="aiSuggestionResult" :suggestion-error="aiSuggestionError" :diagnose-result="aiDiagnoseResult" :diagnose-error="aiDiagnoseError" :chat-result="aiChatResult" :chat-error="aiChatError" @suggest="aiSuggest" @diagnose="aiDiagnose" @chat="aiChat" />
+        <EnvironmentVariablesPage v-else-if="selectedView === 'env-vars'" :t="t" :all-env-vars="allEnvVars" :all-level="envAllLevel" :validation-stats="envValidationStats" :migration-mode="migrationMode" :migration-tools="migrationTools" :migration-results="migrationResults" @update:all-level="setEnvAllLevel" @validate="validateAllEnvVars" @new="newEnvVar" @edit="editEnvVar" @delete="deleteEnvRow" @clean="cleanEnvRow" @clean-all-invalid="cleanAllInvalidEnvVars" @migration-scan="scanForMigration" @migration-single="migrateSingle" @migration-all="migrateAll" />
 
         <IsolationPage v-else-if="selectedView === 'isolate'" :t="t" :status="isolateStatus" :loading="isolateLoading" :error="isolateError" :output="isolateExecOutput" :operating="isolateOperating" @setup="isolateSetup" @exec="isolateExec" @teardown="isolateTeardown" />
 
-        <RemoteDevelopmentPage v-else-if="selectedView === 'remote'" :t="t" :instances="remoteInstances" :loading="remoteLoading" :error="remoteError" :creating="remoteCreating" :operating="remoteOperating" :outputs="remoteOutputs" @list="loadRemoteInstances" @create="createRemoteInstance" @copy-address="copyRemoteAddress" @exec="execRemoteInstance" @destroy="destroyRemoteInstance" />
+        <RemoteDevelopmentPage v-else-if="selectedView === 'remote'" :t="t" :instances="remoteInstances" :loading="remoteLoading" :error="remoteError" :creating="remoteCreating" :operating="remoteOperating" :outputs="remoteOutputs" :browse-file="browseRemoteKey" :test-ssh="testSSHConnection" @list="loadRemoteInstances" @create="createRemoteInstance" @copy-address="copyRemoteAddress" @exec="execRemoteInstance" @destroy="destroyRemoteInstance" />
 
         <AboutPage v-else-if="selectedView === 'about'" :t="t" :info="aboutInfo" @check-update="checkUpdate" />
 
@@ -38,9 +35,11 @@
         <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" :operating-tool="pmOperating" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @install="installLatest" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
   </AppShell>
 
-  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :return-focus-to="drawerTrigger" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @show-more="showCount += 20" />
+  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" />
   <!-- Install progress modal -->
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" />
+  <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
+  <EnvVarEditorDialog :show="showEnvEditor" :editing="editingEnvVar" :browse-directory="browseEnvDir" :t="t" @update:show="showEnvEditor = $event" @save="saveEnvDraft" />
   <CommandPalette
     v-model:show="showCommandPalette"
     :options="commandPaletteOptions"
@@ -53,8 +52,8 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
-import { NIcon, NButton, useMessage, useDialog } from 'naive-ui';
+import { ref, computed, nextTick, onMounted, onUnmounted, h } from 'vue';
+import { NIcon, NButton, NSpace, NRadio, NRadioGroup, useMessage, useDialog } from 'naive-ui';
 import {
   SearchOutline,
   HomeOutline, SettingsOutline, CodeOutline, PhonePortraitOutline, ConstructOutline,
@@ -67,17 +66,15 @@ import ToolCatalogPage from './pages/ToolCatalogPage.vue';
 import FavoritesPage from './pages/FavoritesPage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
 import EnvironmentVariablesPage from './pages/EnvironmentVariablesPage.vue';
-import ProjectPage from './pages/ProjectPage.vue';
-import TasksPage from './pages/TasksPage.vue';
-import PluginsPage from './pages/PluginsPage.vue';
-import ServicesPage from './pages/ServicesPage.vue';
-import AIAssistantPage from './pages/AIAssistantPage.vue';
+import UpdateBadge from './components/UpdateBadge.vue';
+import NotificationCenter from './components/NotificationCenter.vue';
 import IsolationPage from './pages/IsolationPage.vue';
 import RemoteDevelopmentPage from './pages/RemoteDevelopmentPage.vue';
-import CustomToolsPage from './pages/CustomToolsPage.vue';
 import AboutPage from './pages/AboutPage.vue';
 import ToolDetailDrawer from './components/ToolDetailDrawer.vue';
 import InstallProgressDialog from './components/InstallProgressDialog.vue';
+import FormSelectorDialog from './components/FormSelectorDialog.vue';
+import EnvVarEditorDialog from './components/EnvVarEditorDialog.vue';
 import { useInstall } from './composables/useInstall.js';
 import { useTools } from './composables/useTools.js';
 import AppShell from './layouts/AppShell.vue';
@@ -91,6 +88,15 @@ const { t, locale, setLocale } = useI18n();
 
 const message = useMessage();
 const dialog = useDialog();
+
+// ToolInfo currently exposes the install hint, while the script bodies are
+// owned by the package-manager definitions. Keep the confirmation summary
+// short and recognizable without presenting it as an editable command.
+const packageManagerInstallCommands = {
+  brew: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+  scoop: 'irm get.scoop.sh | iex',
+  choco: "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))",
+};
 
 // Window control for frameless mode
 const isMaximized = ref(false);
@@ -123,42 +129,55 @@ onMounted(() => {
 });
 onUnmounted(() => {
   if (maximizePollTimer) clearInterval(maximizePollTimer);
+  window.runtime?.EventsOff?.('dashboardStatsUpdated');
 });
 
 onMounted(async () => {
   await loadCategories();
-  await loadDashboard();
+  const dashboardLoaded = await loadDashboard();
+  if (dashboardLoaded) prefetchSizeBreakdowns();
   await loadFavorites();
-  // Auto-select the first category so tools are visible immediately.
-  if (categories.value.length > 0) {
-    selectedView.value = categories.value[0].name;
-    await onCategorySelect(categories.value[0].name);
-  }
+  await loadUpdates();
+  await loadIgnoredTools();
+  await loadSniffConfig();
+  await loadSniffServiceStatus();
+  await loadMigrationMode();
   // 扫描旧版目录，发现后弹出迁移确认对话框
   scanAndPromptLegacyMigration();
-});
 
-onMounted(() => {
-  const stored = localStorage.getItem('xdev-theme');
-  if (stored === 'light') {
-    isDark.value = false;
-    applyThemeToDocument();
-  }
+  // Listen for TOFU warning events from the backend
+  window.runtime?.EventsOn?.('xdev:tofu-warning', (data) => {
+    if (!data || !data.tool) return;
+    dialog.warning({
+      title: t('install.tofu_warning_title'),
+      content: t('install.tofu_warning_content', { tool: data.tool, version: data.version }),
+      positiveText: t('install.tofu_warning_confirm'),
+      closable: false,
+      maskClosable: false,
+    });
+  });
+
+  // Listen for dashboard stats refresh events from the backend
+  window.runtime?.EventsOn?.('dashboardStatsUpdated', () => {
+    loadDashboard();
+  });
 });
 
 const selectedView = ref('dashboard');
-const isDark = ref(true);
+const storedTheme = localStorage.getItem('xdev-theme');
+const themeName = ref(storedTheme === 'true' ? 'dark' : storedTheme === 'false' ? 'light' : ['light', 'dark', 'eye-care'].includes(storedTheme) ? storedTheme : 'dark');
 
 function applyThemeToDocument() {
-  document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', themeName.value);
 }
 
-function toggleTheme(dark) {
-  isDark.value = dark;
-  localStorage.setItem('xdev-theme', dark ? 'dark' : 'light');
+function setTheme(name) {
+  if (!['light', 'dark', 'eye-care'].includes(name)) return;
+  themeName.value = name;
+  localStorage.setItem('xdev-theme', name);
   applyThemeToDocument();
   // Notify parent (App.vue) to switch Naive UI theme
-  window.dispatchEvent(new CustomEvent('xdev-theme-change', { detail: dark }));
+  window.dispatchEvent(new CustomEvent('xdev-theme-change', { detail: name }));
 }
 const showCommandPalette = ref(false);
 const commandPaletteTrigger = ref(null);
@@ -175,17 +194,29 @@ const { tools, loading: toolsLoading, error: toolsError, searchQuery, hideUnavai
 const selectedTool = ref(null);
 const showDrawer = ref(false);
 const drawerTrigger = ref(null);
+// Spec 023: 当前工具详情页的依赖环境检查结果（CheckToolDependencies）。
+const toolDeps = ref([]);
 const installedVersions = ref([]);
 const availableVersions = ref([]);
 const showCount = ref(10);
-const { install: runInstall, pause: runPause, resume: runResume, cancel: runCancel, phase: installPhase, progress: installProgress, error: installError, active: installing, paused: downloadPaused } = useInstall({ onComplete: handleInstallComplete, onError: handleInstallError, onCancel: handleInstallCancel });
+const { install: runInstall, installConfirmed: runInstallConfirmed, repair: runRepair, pause: runPause, resume: runResume, cancel: runCancel, phase: installPhase, progress: installProgress, error: installError, active: installing, paused: downloadPaused } = useInstall({ onComplete: handleInstallComplete, onError: handleInstallError, onCancel: handleInstallCancel });
 const showProgress = ref(false);
 const installTrigger = ref(null);
+const showFormSelector = ref(false);
+const formSelectorTool = ref(null);
+const formSelectorRequest = ref(null);
 
 // Dashboard state
 const stats = ref({});
 const dashboardLoading = ref(false);
 const dashboardError = ref(null);
+const installSizeEntries = ref([]);
+const cacheSizeEntries = ref([]);
+const installSizeLoading = ref(false);
+const cacheSizeLoading = ref(false);
+const dashVersionExpanded = ref('');
+const dashInstalledVers = ref([]);
+const dashAvailableVers = ref([]);
 
 // Settings state
 const mirrorConfig = ref({});
@@ -194,6 +225,12 @@ const mirrorRequests = createLatestRequestController();
 const updateInfo = ref(null);
 const diagResults = ref([]);
 const cacheBreakdown = ref({});
+const archiveRetention = ref('immediate');
+
+// Custom tools state
+const customTools = ref([]);
+const customToolSubmitting = ref(false);
+const customToolPreview = ref([]);
 
 // 代理设置状态
 const proxyEnabled = ref(false);
@@ -201,6 +238,7 @@ const proxyHTTP = ref('');
 const proxyHTTPS = ref('');
 const proxyNoProxy = ref('');
 const proxyTestResult = ref(null);
+const proxyProbes = ref([]);
 const proxyRequests = createLatestRequestController();
 const proxyModel = computed(() => ({ enabled: proxyEnabled.value, http: proxyHTTP.value, https: proxyHTTPS.value, noProxy: proxyNoProxy.value }));
 function updateProxy(value) { proxyEnabled.value = value.enabled; proxyHTTP.value = value.http; proxyHTTPS.value = value.https; proxyNoProxy.value = value.noProxy; }
@@ -212,18 +250,14 @@ function addMirrorValues(tool, url) { mirrorConfig.value[tool] = url; }
 const importResult = ref(null);
 
 // Environment variables & version switching state
-const envVars = ref([]);
 const editingEnvVar = ref(null);
-const newEnvName = ref('');
-const newEnvValue = ref('');
-const newEnvTool = ref('');
-const newEnvLevel = ref('user');
+const showEnvEditor = ref(false);
+const envEditorTrigger = ref(null);
 
 // 环境变量视图切换和验证状态
-const envViewMode = ref('dev'); // 'dev' 或 'all'
-const envAllLevel = ref('user'); // 全部环境变量的级别
+const envAllLevel = ref('user'); // 环境变量级别
 const allEnvVars = ref([]); // 全部环境变量
-const envValidationStats = ref(null); // { valid: number, invalid: number }
+const envValidationStats = ref(null); // { valid: number, partial: number, invalid: number }
 
 // Package manager install/update state
 const pmOperating = ref('');
@@ -242,37 +276,128 @@ const migrationMode = ref('junction');
 // About page state
 const aboutInfo = ref({});
 
-// Project config state
-const projectConfig = ref(null);
-const projectLoading = ref(false);
-const projectError = ref(null);
-const taskStates = ref({});
+// Updates & sniff state
+const availableUpdates = ref([]);
+const updatesLoading = ref(false);
+const sniffOperating = ref(false);
+const updateInstalling = ref({});
+const scanOperating = ref(false);
+const updateOperating = ref(false);
+const sniffConfig = ref({});
+const serviceStatus = ref(null);
+const notifications = ref([]);
+const scanResults = ref([]);
+const scanAttempted = ref(false);
+const ignoredTools = ref([]);
 
-// Plugins state
-const plugins = ref([]);
-const pluginsLoading = ref(false);
-const pluginsError = ref(null);
-const pluginCreating = ref(false);
+function addNotification(title, type = 'info') {
+  notifications.value.unshift({ title, type, time: new Date().toLocaleTimeString() });
+  if (notifications.value.length > 50) {
+    notifications.value = notifications.value.slice(0, 50);
+  }
+}
+function clearNotifications() {
+  notifications.value = [];
+}
 
-// Services state
-const services = ref([]);
-const servicesLoading = ref(false);
-const servicesError = ref(null);
-const serviceOperating = ref({});
+async function loadUpdates() {
+  updatesLoading.value = true;
+  try {
+    availableUpdates.value = await window.go.gui.App.GetAvailableUpdates() || [];
+  } catch (e) {
+    console.error('Failed to load updates:', e);
+  } finally {
+    updatesLoading.value = false;
+  }
+}
 
-// AI state
-const aiStatus = ref(null);
-const aiLoading = ref(false);
-const aiError = ref(null);
-const aiSuggesting = ref(false);
-const aiSuggestionResult = ref('');
-const aiSuggestionError = ref('');
-const aiDiagnosing = ref(false);
-const aiDiagnoseResult = ref('');
-const aiDiagnoseError = ref('');
-const aiChatting = ref(false);
-const aiChatResult = ref('');
-const aiChatError = ref('');
+
+async function loadIgnoredTools() {
+  try { ignoredTools.value = await window.go.gui.App.GetIgnoredTools() || []; } catch (e) { console.error("Failed to load ignored tools:", e); }
+}
+
+async function ignoreUpdate(update) {
+  try { await window.go.gui.App.IgnoreTool(update.tool, "update", ""); message.success(t("updates.ignored_ok")); await loadUpdates(); await loadIgnoredTools(); } catch (e) { message.error(t("ignore.add_failed") + ": " + e); }
+}
+async function loadSniffConfig() {
+  try {
+    sniffConfig.value = await window.go.gui.App.GetSniffConfig() || {};
+  } catch (e) {
+    console.error('Failed to load sniff config:', e);
+  }
+}
+
+async function loadSniffServiceStatus() {
+  try {
+    serviceStatus.value = await window.go.gui.App.SniffServiceStatus();
+  } catch (e) {
+    console.error('Failed to load sniff service status:', e);
+  }
+}
+
+async function sniffAll() {
+  sniffOperating.value = true;
+  try {
+    await window.go.gui.App.SniffAll();
+    addNotification(t('updates.sniff_completed'), 'success');
+    await loadUpdates();
+  } catch (e) {
+    console.error('Sniff all failed:', e);
+    addNotification(`${t('updates.sniff_failed')}: ${e}`, 'error');
+  } finally {
+    sniffOperating.value = false;
+  }
+}
+
+async function sniffTool(tool) {
+  try {
+    await window.go.gui.App.SniffNow(tool);
+    addNotification(`Sniffed ${tool}`, 'success');
+    await loadUpdates();
+  } catch (e) {
+    console.error('Sniff tool failed:', e);
+    addNotification('Sniff failed: ' + e, 'error');
+  }
+}
+
+async function installUpdate(update) {
+  await doInstall(update.tool, update.latestVersion);
+  await loadUpdates();
+}
+
+async function saveSniffStrategy(strategy) {
+  try {
+    await window.go.gui.App.SetSniffStrategy(strategy);
+    sniffConfig.value.strategy = strategy;
+    message.success(t('settings.saved'));
+  } catch (e) {
+    message.error('Failed to save sniff strategy: ' + e);
+  }
+}
+
+async function installSniffService(schedule) {
+  try {
+    await window.go.gui.App.InstallSniffService(schedule);
+    message.success('Sniff service installed');
+    await loadSniffServiceStatus();
+  } catch (e) {
+    message.error('Failed to install sniff service: ' + e);
+  }
+}
+
+async function uninstallSniffService() {
+  try {
+    await window.go.gui.App.UninstallSniffService();
+    message.success('Sniff service uninstalled');
+    await loadSniffServiceStatus();
+  } catch (e) {
+    message.error('Failed to uninstall sniff service: ' + e);
+  }
+}
+
+// Old AI state removed - AIAssistantPage now manages its own state
+// Dashboard and settings pass through sniff/update data
+
 
 // Isolate state
 const isolateStatus = ref(null);
@@ -291,11 +416,6 @@ const remoteError = ref(null);
 const remoteCreating = ref(false);
 const remoteOperating = ref({});
 const remoteOutputs = ref({});
-
-// Lockfile state
-const lockfileInfo = ref(null);
-const lockfileLoading = ref(false);
-const lockfileInstalling = ref(false);
 
 // Favorites state
 const favorites = ref([]);
@@ -368,6 +488,36 @@ async function openFavVersionManager(fav, force = false) {
   }
 }
 
+async function openDashVersionManager(tool, force = false) {
+  if (!force && dashVersionExpanded.value === tool.name) {
+    dashVersionExpanded.value = '';
+    return;
+  }
+  dashVersionExpanded.value = tool.name;
+  try {
+    const [installed, available] = await Promise.all([
+      window.go.gui.App.GetInstalledVersions(tool.name),
+      window.go.gui.App.GetAvailableVersions(tool.name),
+    ]);
+    dashInstalledVers.value = installed || [];
+    dashAvailableVers.value = available || [];
+  } catch (e) {
+    console.error('Failed to load dashboard versions:', e);
+    dashInstalledVers.value = [];
+    dashAvailableVers.value = [];
+  }
+}
+
+async function installDashVersion(toolName, version) {
+  await doInstall(toolName, version);
+  await loadDashboard();
+}
+
+async function repairDashVersion(toolName, version) {
+  await repairInstall(toolName, version);
+  await loadDashboard();
+}
+
 async function installFavLatest(fav) {
   try {
     const versions = await window.go.gui.App.GetAvailableVersions(fav.name);
@@ -396,240 +546,11 @@ async function openDetailFromFav(fav) {
     canInstall: true,
     source: fav.source || '',
     isFavorite: true,
+    formFactor: fav.formFactor || [],
   };
   await openDetail(toolInfo);
   // 切换到收藏页面时刷新收藏列表
   await loadFavorites();
-}
-
-// Custom tools state
-const customTools = ref([]);
-const customToolSubmitting = ref(false);
-const customToolOperating = ref({});
-
-async function loadCustomTools() {
-  try {
-    customTools.value = await window.go.gui.App.GetCustomTools();
-  } catch (e) {
-    console.error('Failed to load custom tools:', e);
-  }
-}
-
-async function submitAddCustomTool(tool) {
-  if (customToolSubmitting.value) return;
-  customToolSubmitting.value = true;
-  try {
-    const toolJson = JSON.stringify(tool);
-    await window.go.gui.App.AddCustomTool(toolJson);
-    await loadCustomTools();
-    message.success(t('custom_tools.added'));
-  } catch (e) {
-    message.error(t('custom_tools.add_failed') + ': ' + e);
-  } finally { customToolSubmitting.value = false; }
-}
-
-async function removeCustomTool(toolName) {
-  if (customToolOperating.value[toolName]) return;
-  customToolOperating.value = { ...customToolOperating.value, [toolName]: true };
-  try {
-    await window.go.gui.App.RemoveCustomTool(toolName);
-    await loadCustomTools();
-    message.success(t('custom_tools.removed'));
-  } catch (e) {
-    message.error(t('custom_tools.remove_failed') + ': ' + e);
-  } finally { const { [toolName]: _, ...rest } = customToolOperating.value; customToolOperating.value = rest; }
-}
-
-async function installCustomTool(toolName) {
-  if (customToolOperating.value[toolName]) return;
-  customToolOperating.value = { ...customToolOperating.value, [toolName]: true };
-  try {
-    message.info(t('custom_tools.installing'));
-    await window.go.gui.App.InstallCustomTool(toolName);
-    await loadCustomTools();
-    message.success(t('custom_tools.install_success'));
-  } catch (e) {
-    message.error(t('custom_tools.install_failed') + ': ' + e);
-  } finally { const { [toolName]: _, ...rest } = customToolOperating.value; customToolOperating.value = rest; }
-}
-
-// ── Project Config ──
-async function loadProjectConfig() {
-  projectLoading.value = true;
-  projectError.value = null;
-  try {
-    projectConfig.value = await window.go.gui.App.GetProjectConfig();
-  } catch (e) {
-    projectError.value = e;
-    console.error('Failed to load project config:', e);
-    message.error(t('project.load_failed') + ': ' + e);
-  } finally {
-    projectLoading.value = false;
-  }
-}
-
-async function setProjectTool(tool, version) {
-  if (!tool || !version) return;
-  try {
-    await window.go.gui.App.SetProjectTool(tool, version);
-    await loadProjectConfig();
-    message.success(t('project.tool_set'));
-  } catch (e) {
-    message.error(t('project.tool_set_failed') + ': ' + e);
-  }
-}
-
-async function unsetProjectTool(toolName) {
-  try {
-    await window.go.gui.App.UnsetProjectTool(toolName);
-    await loadProjectConfig();
-    message.success(t('project.tool_unset'));
-  } catch (e) {
-    message.error(t('project.tool_unset_failed') + ': ' + e);
-  }
-}
-
-async function runProjectTask(taskName) {
-  if (taskStates.value[taskName] === 'running') return;
-  taskStates.value = { ...taskStates.value, [taskName]: 'running' };
-  try {
-    await window.go.gui.App.RunProjectTask(taskName);
-    taskStates.value = { ...taskStates.value, [taskName]: 'success' };
-    message.success(t('project.task_run_success', { name: taskName }));
-  } catch (e) {
-    taskStates.value = { ...taskStates.value, [taskName]: 'error' };
-    message.error(t('project.task_run_failed') + ': ' + e);
-  }
-}
-
-// ── Plugins ──
-async function loadPlugins() {
-  pluginsLoading.value = true;
-  pluginsError.value = null;
-  try {
-    plugins.value = await window.go.gui.App.ListPlugins();
-  } catch (e) {
-    pluginsError.value = e;
-    console.error('Failed to load plugins:', e);
-    message.error(t('plugins.load_failed') + ': ' + e);
-  } finally {
-    pluginsLoading.value = false;
-  }
-}
-
-async function createPlugin(name) {
-  if (!name) return;
-  pluginCreating.value = true;
-  try {
-    await window.go.gui.App.CreatePlugin(name);
-    await loadPlugins();
-    message.success(t('plugins.created'));
-  } catch (e) {
-    message.error(t('plugins.create_failed') + ': ' + e);
-  } finally {
-    pluginCreating.value = false;
-  }
-}
-
-// ── Services ──
-async function loadServices() {
-  servicesLoading.value = true;
-  servicesError.value = null;
-  try {
-    services.value = await window.go.gui.App.ListServices();
-  } catch (e) {
-    servicesError.value = e;
-    console.error('Failed to load services:', e);
-    message.error(t('services.load_failed') + ': ' + e);
-  } finally {
-    servicesLoading.value = false;
-  }
-}
-
-async function startService(name) {
-  if (serviceOperating.value[name]) return;
-  serviceOperating.value = { ...serviceOperating.value, [name]: true };
-  try {
-    await window.go.gui.App.StartService(name);
-    await loadServices();
-    message.success(t('services.started', { name }));
-  } catch (e) {
-    message.error(t('services.start_failed') + ': ' + e);
-  } finally {
-    const { [name]: _, ...rest } = serviceOperating.value;
-    serviceOperating.value = rest;
-  }
-}
-
-async function stopService(name) {
-  if (serviceOperating.value[name]) return;
-  serviceOperating.value = { ...serviceOperating.value, [name]: true };
-  try {
-    await window.go.gui.App.StopService(name);
-    await loadServices();
-    message.success(t('services.stopped', { name }));
-  } catch (e) {
-    message.error(t('services.stop_failed') + ': ' + e);
-  } finally {
-    const { [name]: _, ...rest } = serviceOperating.value;
-    serviceOperating.value = rest;
-  }
-}
-
-// ── AI Assistant ──
-async function loadAIStatus() {
-  aiLoading.value = true;
-  aiError.value = null;
-  try {
-    aiStatus.value = await window.go.gui.App.GetAIStatus();
-  } catch (e) {
-    aiError.value = e;
-    console.error('Failed to load AI status:', e);
-  } finally {
-    aiLoading.value = false;
-  }
-}
-
-async function aiSuggest(tool) {
-  if (!tool || aiSuggesting.value) return;
-  aiSuggesting.value = true;
-  aiSuggestionResult.value = '';
-  aiSuggestionError.value = '';
-  try {
-    aiSuggestionResult.value = await window.go.gui.App.AISuggest(tool);
-  } catch (e) {
-    aiSuggestionError.value = t('ai.suggest_failed') + ': ' + e;
-  } finally {
-    aiSuggesting.value = false;
-  }
-}
-
-async function aiDiagnose(problem) {
-  if (!problem || aiDiagnosing.value) return;
-  aiDiagnosing.value = true;
-  aiDiagnoseResult.value = '';
-  aiDiagnoseError.value = '';
-  try {
-    aiDiagnoseResult.value = await window.go.gui.App.AIDiagnose(problem);
-  } catch (e) {
-    aiDiagnoseError.value = t('ai.diagnose_failed') + ': ' + e;
-  } finally {
-    aiDiagnosing.value = false;
-  }
-}
-
-async function aiChat(chatMessage) {
-  if (!chatMessage || aiChatting.value) return;
-  aiChatting.value = true;
-  aiChatResult.value = '';
-  aiChatError.value = '';
-  try {
-    aiChatResult.value = await window.go.gui.App.AIChat(chatMessage);
-  } catch (e) {
-    aiChatError.value = t('ai.chat_failed') + ': ' + e;
-  } finally {
-    aiChatting.value = false;
-  }
 }
 
 // ── Isolate ──
@@ -708,7 +629,7 @@ async function createRemoteInstance(config) {
   remoteCreating.value = true;
   try {
     const result = await window.go.gui.App.CreateRemoteInstance(
-      config.adapter, config.image, config.sshHost, config.sshPort, config.sshUser, config.sshKeyPath,
+      config.adapter, config.image, config.sshHost, config.sshPort, config.sshUser, config.sshKeyPath, config.sshPassword || '',
     );
     message.success(result.message);
     await loadRemoteInstances();
@@ -716,6 +637,23 @@ async function createRemoteInstance(config) {
     message.error(t('remote.create_failed') + ': ' + e);
   } finally {
     remoteCreating.value = false;
+  }
+}
+
+async function browseRemoteKey() {
+  try {
+    return await window.go.gui.App.BrowseFile(t('remote.select_key'), '*.pem;*.key;*.id_rsa;*.id_ed25519;*.id_ecdsa;*.id_dsa');
+  } catch (e) {
+    console.error('Browse key failed:', e);
+    return '';
+  }
+}
+
+async function testSSHConnection(host, port, user, keyPath, password) {
+  try {
+    return await window.go.gui.App.TestSSHConnection(host, port, user, keyPath, password);
+  } catch (e) {
+    return { success: false, message: String(e) };
   }
 }
 
@@ -754,30 +692,6 @@ async function execRemoteInstance(adapter, id, command) {
   }
 }
 
-// ── Lockfile ──
-async function loadLockfile() {
-  lockfileLoading.value = true;
-  try {
-    lockfileInfo.value = await window.go.gui.App.GetLockfile();
-  } catch (e) {
-    console.error('Failed to load lockfile:', e);
-  } finally {
-    lockfileLoading.value = false;
-  }
-}
-
-async function installFromLockfile() {
-  lockfileInstalling.value = true;
-  try {
-    const result = await window.go.gui.App.InstallFromLockfile();
-    message.info(result);
-    await loadLockfile();
-  } catch (e) {
-    message.error(t('lockfile.install_failed') + ': ' + e);
-  } finally {
-    lockfileInstalling.value = false;
-  }
-}
 
 const categoryIcons = {
   language: CodeOutline,
@@ -798,6 +712,26 @@ async function switchPathMode(mode) {
   } catch (e) {
     console.error('Failed to switch path mode:', e);
     message.error(t('settings.path_mode_switch_failed') + ': ' + e);
+  }
+}
+
+async function loadMigrationMode() {
+  try {
+    migrationMode.value = await window.go.gui.App.GetMigrationMode() || 'junction';
+  } catch (e) {
+    console.error('Failed to load migration mode:', e);
+    migrationMode.value = 'junction';
+  }
+}
+
+async function switchMigrationMode(mode) {
+  try {
+    await window.go.gui.App.SetMigrationMode(mode);
+    migrationMode.value = mode;
+    message.success(t('settings.migration_mode_switched'));
+  } catch (e) {
+    console.error('Failed to switch migration mode:', e);
+    message.error(t('settings.migration_mode_switch_failed') + ': ' + e);
   }
 }
 
@@ -827,14 +761,13 @@ async function onCommandSelect(key) {
 }
 
 async function onMenuSelect(key) {
-  // 离开设置或环境变量页面时清空环境变量编辑状态
   if ((selectedView.value === 'settings' || selectedView.value === 'env-vars') && key !== 'settings' && key !== 'env-vars') {
     editingEnvVar.value = null;
-    newEnvTool.value = '';
-    newEnvName.value = '';
-    newEnvValue.value = '';
-    newEnvLevel.value = 'user';
-    envViewMode.value = 'dev';
+    showEnvEditor.value = false;
+
+
+
+
     allEnvVars.value = [];
     envValidationStats.value = null;
   }
@@ -843,24 +776,15 @@ async function onMenuSelect(key) {
     await loadDashboard();
   } else if (key === 'favorites') {
     await loadFavorites();
-  } else if (key === 'custom-tools') {
-    await loadCustomTools();
   } else if (key === 'settings') {
     await loadSettings();
+    await loadCustomTools();
+    await loadSniffConfig();
+    await loadSniffServiceStatus();
   } else if (key === 'env-vars') {
-    await loadEnvVars();
+    await loadAllEnvVars();
   } else if (key === 'about') {
     await loadAboutInfo();
-  } else if (key === 'project') {
-    await Promise.all([loadProjectConfig(), loadLockfile()]);
-  } else if (key === 'tasks') {
-    await loadProjectConfig(); // tasks are part of project config
-  } else if (key === 'plugins') {
-    await loadPlugins();
-  } else if (key === 'services') {
-    await loadServices();
-  } else if (key === 'ai') {
-    await loadAIStatus();
   } else if (key === 'isolate') {
     await loadIsolateStatus();
   } else if (key === 'remote') {
@@ -877,13 +801,78 @@ async function onCategorySelect(key) {
 async function loadDashboard() {
   dashboardLoading.value = true;
   dashboardError.value = null;
+  let loaded = false;
   try {
     stats.value = await window.go.gui.App.GetDashboardStats();
+    loaded = true;
   } catch (e) {
     dashboardError.value = e;
     console.error('Failed to load dashboard:', e);
   } finally {
     dashboardLoading.value = false;
+  }
+  return loaded;
+}
+
+async function prefetchSizeBreakdowns() {
+  const prefetchInstall = async () => {
+    try {
+      installSizeEntries.value = await window.go.gui.App.GetInstallSizeBreakdown() || [];
+    } catch {
+      // Size details are optional during initial dashboard loading.
+    }
+  };
+  const prefetchCache = async () => {
+    try {
+      cacheSizeEntries.value = await window.go.gui.App.GetCacheSizeBreakdown() || [];
+    } catch {
+      // Size details are optional during initial dashboard loading.
+    }
+  };
+  await Promise.all([prefetchInstall(), prefetchCache()]);
+}
+
+async function showInstallSize() {
+  installSizeLoading.value = true;
+  try {
+    installSizeEntries.value = await window.go.gui.App.GetInstallSizeBreakdown() || [];
+  } catch (e) {
+    message.error(t('dashboard.size_load_failed') + ': ' + e);
+  } finally {
+    installSizeLoading.value = false;
+  }
+}
+
+async function showCacheSize() {
+  cacheSizeLoading.value = true;
+  try {
+    cacheSizeEntries.value = await window.go.gui.App.GetCacheSizeBreakdown() || [];
+  } catch (e) {
+    message.error(t('dashboard.size_load_failed') + ': ' + e);
+  } finally {
+    cacheSizeLoading.value = false;
+  }
+}
+
+async function cleanCacheCategory(category) {
+  try {
+    await window.go.gui.App.CleanCacheCategory(category);
+    message.success(t('cache.clean_success'));
+    await showCacheSize();
+    await loadDashboard();
+  } catch (e) {
+    message.error(t('cache.clean_failed') + ': ' + e);
+  }
+}
+
+async function deleteCacheFile(entry) {
+  try {
+    await window.go.gui.App.DeleteCacheFile(entry.path);
+    message.success(t('cache.clean_success'));
+    await showCacheSize();
+    await loadDashboard();
+  } catch (e) {
+    message.error(t('cache.clean_failed') + ': ' + e);
   }
 }
 
@@ -899,6 +888,7 @@ async function loadSettings() {
   try {
     mirrorConfig.value = await window.go.gui.App.GetMirrorConfig();
     pathMode.value = await window.go.gui.App.GetPathMode();
+    await loadMigrationMode();
     // 加载代理配置
     const proxy = await window.go.gui.App.GetProxyConfig();
     proxyEnabled.value = proxy.enabled || false;
@@ -906,6 +896,11 @@ async function loadSettings() {
     proxyHTTPS.value = proxy.https || '';
     proxyNoProxy.value = proxy.noProxy || '';
     await loadCacheBreakdown();
+    try {
+      archiveRetention.value = await window.go.gui.App.GetArchiveRetention() || 'immediate';
+    } catch (e) {
+      console.error('Failed to load archive retention:', e);
+    }
   } catch (e) {
     console.error('Failed to load settings:', e);
     message.error(t('settings.load_failed') + ': ' + e);
@@ -917,15 +912,152 @@ async function openDetail(tool) {
   selectedTool.value = tool;
   showDrawer.value = true;
   showCount.value = 10;
+  // Spec 023: 竞态防护——打开前立即清空旧依赖，避免闪烁显示上一工具的数据。
+  toolDeps.value = [];
   await loadVersions(tool.name);
+  // Spec 023: 拉取依赖环境检查结果（竞态防护：仅当选中工具未变时才更新）。
+  const requestedName = tool.name;
+  try {
+    const deps = await window.go.gui.App.CheckToolDependencies(requestedName) || [];
+    if (selectedTool.value?.name === requestedName) toolDeps.value = deps;
+  } catch (e) {
+    if (selectedTool.value?.name === requestedName) toolDeps.value = [];
+    console.error('Failed to load tool dependencies:', e);
+  }
 }
 
 function installLatest(tool) {
-  if (tool?.name) doInstall(tool.name, 'latest');
+  if (tool?.name) doInstall(tool.name, 'latest', tool);
+}
+
+// Spec 023: 启动工具的 GUI 主程序（仅 form_factor 含 gui 时可用）。
+// pending guard 防止连续点击启动多个进程。
+const launchPending = ref(false);
+async function launchTool(name) {
+  if (launchPending.value) return;
+  launchPending.value = true;
+  try {
+    await window.go.gui.App.LaunchTool(name);
+    message.success(t('detail.launched', { name }));
+  } catch (e) {
+    message.error(t('detail.launch_failed', { name }) + ': ' + e);
+  } finally {
+    launchPending.value = false;
+  }
+}
+
+// Spec 023: 复制工具的 CLI 启动命令（取首个 shim）。
+const copyPending = ref(false);
+async function copyToolCommand(name) {
+  if (copyPending.value) return;
+  copyPending.value = true;
+  try {
+    const cmd = await window.go.gui.App.ToolCommand(name);
+    if (!cmd) {
+      message.warning(t('detail.no_command'));
+      return;
+    }
+    await navigator.clipboard.writeText(cmd);
+    message.success(t('detail.copied'));
+  } catch (e) {
+    message.error(t('detail.copy_failed') + ': ' + e);
+  } finally {
+    copyPending.value = false;
+  }
 }
 
 function installPackageManager(tool) {
-  installPm(tool?.toolName || tool?.name, tool?.displayName || tool?.name);
+  const toolName = tool?.toolName || tool?.name;
+  const displayName = tool?.displayName || tool?.name;
+  if (!toolName) return;
+
+  // Spec 026: 附属工具动态安装——三种路径。
+  // 1. enableCommand 非空（yarn/pnpm）→ 调 InstallSubTool(toolName, "")
+  // 2. installMethods 长度>1（pipx 同时有 pip+uv）→ 弹选项对话框
+  // 3. installMethods 长度==1 → 直接调 InstallSubTool(toolName, onlyMethod)
+  // 4. installCommand 非空（brew/scoop/choco）→ 现有 script install 路径
+  // 5. toolName 在 registry → 现有 InstallTool 路径
+  if (tool?.enableCommand) {
+    // 路径1: corepack enable（yarn/pnpm）
+    // 传 tool.name（pmDef.name，如 "yarn"），而非 tool.toolName（父工具名 "node"）。
+    // onPositiveClick 不返回 Promise（返回 undefined），让 Naive UI 自动关闭对话框。
+    // installSubTool 异步执行，不阻塞对话框关闭。
+    dialog.warning({
+      title: t('pm.enable_confirm_title', { name: displayName }),
+      content: `${t('pm.enable_confirm_content', { name: displayName })}\n\n${t('pm.install_command_summary')}\n${tool.enableCommand}`,
+      positiveText: t('pm.enable_button'),
+      negativeText: t('btn.cancel'),
+      ariaLabel: t('pm.enable_confirm_title', { name: displayName }),
+      onPositiveClick: () => { installSubTool(tool.name, displayName, ''); },
+    });
+    return;
+  }
+
+  if (tool?.installMethods?.length > 1) {
+    // 路径2: 多方法 → 弹选项对话框（需用 dynamic render）
+    showPmMethodSelector(tool);
+    return;
+  }
+
+  if (tool?.installMethods?.length === 1) {
+    // 路径3: 单一方法 → 直接安装
+    installSubTool(toolName, displayName, tool.installMethods[0].name);
+    return;
+  }
+
+  // 路径4/5: 现有 script install 或 InstallTool 路径
+  const command = tool?.installCommand || packageManagerInstallCommands[toolName] || tool?.installHint || t('pm.install_command_unavailable');
+  const commandSummary = `${t('pm.install_command_summary')}\n${command}`;
+  dialog.warning({
+    title: t('pm.install_confirm_title', { name: displayName }),
+    content: `${t('pm.install_confirm_content', { name: displayName })}\n\n${commandSummary}`,
+    positiveText: tool?.requiresAdmin ? t('pm.install_admin_required') : t('btn.install'),
+    negativeText: t('btn.cancel'),
+    ariaLabel: t('pm.install_confirm_title', { name: displayName }),
+    onPositiveClick: () => installPm(toolName, displayName),
+  });
+}
+
+// showPmMethodSelector 弹出包管理器安装方式选项对话框（Spec 026）。
+// 使用 NRadioGroup 让用户真正选择 pip 或 uv 安装方式。
+function showPmMethodSelector(tool) {
+  const toolName = tool?.toolName || tool?.name;
+  const displayName = tool?.displayName || tool?.name;
+  const methods = tool?.installMethods || [];
+  if (methods.length < 2) return;
+
+  // 用 ref 跟踪用户选择的 method（通过 h 渲染函数创建交互式 radio）
+  const selectedMethod = ref(methods[0].name);
+  dialog.warning({
+    title: t('pm.install_method_selector_title', { name: displayName }),
+    content: () => h(NRadioGroup, {
+      value: selectedMethod.value,
+      'onUpdate:value': (v) => { selectedMethod.value = v; },
+    }, {
+      default: () => methods.map(m => h(NRadio, { value: m.name, key: m.name }, { default: () => `[${m.name}] ${m.command}` })),
+    }),
+    positiveText: t('btn.install'),
+    negativeText: t('btn.cancel'),
+    ariaLabel: t('pm.install_method_selector_title', { name: displayName }),
+    onPositiveClick: () => {
+      installSubTool(toolName, displayName, selectedMethod.value);
+    },
+  });
+}
+
+// installSubTool 调后端 InstallSubTool API 并处理结果（Spec 026）。
+async function installSubTool(toolName, displayName, method) {
+  if (!toolName) return;
+  pmOperating.value = toolName;
+  try {
+    await window.go.gui.App.InstallSubTool(toolName, method);
+    message.success(t('pm.install_success', { name: displayName }));
+    await refreshTools();
+  } catch (e) {
+    message.error(t('pm.install_failed', { name: displayName }) + ': ' + e);
+  } finally {
+    pmOperating.value = '';
+  }
 }
 
 function updatePackageManager(tool) {
@@ -952,19 +1084,120 @@ async function loadVersions(toolName) {
   }
 }
 
-async function doInstall(toolName, version) {
+async function resolveInstallTool(toolName, fallback = null) {
+  const current = selectedTool.value?.name === toolName ? selectedTool.value : null;
+  const local = tools.value.find(item => item.name === toolName || item.toolName === toolName);
+  const base = { ...(fallback || {}), ...(current || {}), ...(local || {}) };
+  if (base.hasFormSpecificArchives) return base;
+
+  const categoryNames = [base.category, activeCategory.value, ...categories.value
+    .map(category => typeof category === 'string' ? category : category?.name)]
+    .filter((category, index, all) => category && all.indexOf(category) === index);
+  if (!categoryNames.length) return base;
+  try {
+    const results = await Promise.all(categoryNames.map(category => window.go.gui.App.GetToolsByCategory(category)));
+    const match = results.flat().find(item => item?.name === toolName || item?.toolName === toolName);
+    return match ? { ...base, ...match } : base;
+  } catch (e) {
+    return base;
+  }
+}
+
+async function doInstall(toolName, version, tool = null, formFilter = '') {
+  if (!version || installing.value) return;
+  tool = await resolveInstallTool(toolName, tool);
+  if (!formFilter && tool?.hasFormSpecificArchives && Array.isArray(tool.formFactor) && tool.formFactor.length) {
+    installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
+    showDrawer.value = false;
+    formSelectorTool.value = tool;
+    formSelectorRequest.value = { toolName, version, tool };
+    showFormSelector.value = true;
+    return;
+  }
+  installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
+  showDrawer.value = false;
+
+  // Incomplete existing install → offer repair (frontend dialog, not native Wails).
+  try {
+    const integrity = await window.go.gui.App.CheckInstallIntegrity(toolName, version);
+    if (integrity && integrity.path && !integrity.ok && integrity.reason !== 'not installed') {
+      const missing = (integrity.missing || []).length ? ` (${(integrity.missing || []).join(', ')})` : '';
+      dialog.warning({
+        title: t('confirm_repair_title'),
+        content: `${t('confirm_repair_content', { tool: toolName, version })}${missing}`,
+        positiveText: t('detail.repair'),
+        negativeText: t('btn.cancel'),
+        onPositiveClick: () => startRepairConfirmed(toolName, version),
+      });
+      return;
+    }
+  } catch (e) {
+    // Older builds may lack CheckInstallIntegrity — continue normal install.
+  }
+
+  // Sniff-discovered unverified versions → Naive UI confirmation first.
+  let unverified = false;
+  try {
+    unverified = await window.go.gui.App.IsVersionUnverified(toolName, version);
+  } catch (e) {
+    // Method may not exist in older builds — proceed without pre-check.
+  }
+  if (unverified) {
+    dialog.warning({
+      title: t('install.unverified_title') || 'Unverified Version',
+      content: t('install.unverified_content', { tool: toolName, version }) || `Version ${toolName}@${version} was discovered by sniffing. The archive URL has not been verified — downloads may fail. Continue?`,
+      positiveText: t('btn.install'),
+      negativeText: t('btn.cancel'),
+      onPositiveClick: () => startInstallConfirmed(toolName, version, true, formFilter),
+    });
+    return;
+  }
+  startInstallConfirmed(toolName, version, false, formFilter);
+}
+
+function confirmFormInstall(formFilter) {
+  const request = formSelectorRequest.value;
+  showFormSelector.value = false;
+  formSelectorTool.value = null;
+  formSelectorRequest.value = null;
+  if (request) doInstall(request.toolName, request.version, request.tool, formFilter);
+}
+
+async function startInstallConfirmed(toolName, version, confirmed, formFilter = '') {
+  showProgress.value = true;
+  const started = confirmed
+    ? await runInstallConfirmed(toolName, version, formFilter)
+    : await runInstall(toolName, version, formFilter);
+  if (!started && installError.value) message.error(t('install.failed', { error: installError.value.message }));
+}
+
+// repairInstall force-reinstalls an installed (possibly incomplete) version.
+// Confirmation uses Naive UI so it is not hidden behind the Wails window.
+async function repairInstall(toolName, version) {
   if (!version || installing.value) return;
   installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
   showDrawer.value = false;
+  dialog.warning({
+    title: t('confirm_repair_title'),
+    content: t('confirm_repair_content', { tool: toolName, version }),
+    positiveText: t('detail.repair'),
+    negativeText: t('btn.cancel'),
+    onPositiveClick: () => startRepairConfirmed(toolName, version),
+  });
+}
+
+async function startRepairConfirmed(toolName, version) {
   showProgress.value = true;
-  const started = await runInstall(toolName, version);
+  const started = await runRepair(toolName, version);
   if (!started && installError.value) message.error(t('install.failed', { error: installError.value.message }));
 }
 
 async function refreshInstallViews(toolName) {
   const refreshExpandedFavorite = favVersionExpanded.value === toolName;
-  await Promise.all([loadVersions(toolName), refreshTools(), loadDashboard(), loadFavorites()]);
+  const refreshExpandedDashboard = dashVersionExpanded.value === toolName;
+  await Promise.all([loadVersions(toolName), refreshTools(), loadDashboard(), loadFavorites(), loadUpdates()]);
   if (refreshExpandedFavorite) await openFavVersionManager({ name: toolName }, true);
+  if (refreshExpandedDashboard) await openDashVersionManager({ name: toolName }, true);
 }
 
 async function handleInstallComplete(data) {
@@ -1003,6 +1236,7 @@ async function useVersion(toolName, version) {
     message.success(t('detail.switched_version', { name: toolName, version }));
     await loadVersions(toolName);
     await refreshTools();
+    await loadDashboard();
   } catch (e) {
     message.error(t('detail.switch_failed') + ': ' + e);
   }
@@ -1020,6 +1254,7 @@ function confirmUninstall(toolName, version) {
         message.success(t('detail.uninstall_success', { name: toolName, version }));
         await loadVersions(toolName);
         await refreshTools();
+        await loadDashboard();
       } catch (e) {
         message.error(t('detail.uninstall_failed') + ': ' + e);
       }
@@ -1028,8 +1263,11 @@ function confirmUninstall(toolName, version) {
 }
 
 async function scanLocal() {
+  scanOperating.value = true;
   try {
     const localTools = await window.go.gui.App.ScanLocalEnvironments();
+    scanResults.value = localTools || [];
+    scanAttempted.value = true;
     if (localTools && localTools.length > 0) {
       message.info(t('dashboard.local_found', { count: localTools.length }));
     } else {
@@ -1038,11 +1276,26 @@ async function scanLocal() {
     await refreshTools();
   } catch (e) {
     console.error('Scan failed:', e);
-    message.error(t('migration.scan_failed'));
+    message.error(t('dashboard.scan_failed'));
+  } finally {
+    scanOperating.value = false;
   }
 }
 
+
+async function ignoreScanTool(item) {
+  try { await window.go.gui.App.IgnoreTool(item.name, "local-scan", item.localPath || item.path || ""); scanResults.value = scanResults.value.filter(tool => tool !== item); await loadIgnoredTools(); } catch (e) { message.error(t("ignore.add_failed") + ": " + e); }
+}
+
+async function migrateScanTool(item) {
+  await migrateTool(item.name, item.localPath || item.path || ""); scanResults.value = await window.go.gui.App.ScanLocalEnvironments() || []; await loadDashboard();
+}
+
+async function unignoreTool(item) {
+  try { await window.go.gui.App.UnignoreTool(item.name, item.kind, item.path || ""); await loadIgnoredTools(); await loadUpdates(); } catch (e) { message.error(t("ignore.remove_failed") + ": " + e); }
+}
 async function checkUpdate() {
+  updateOperating.value = true;
   try {
     updateInfo.value = await window.go.gui.App.CheckForUpdate();
     if (updateInfo.value && updateInfo.value.hasUpdate) {
@@ -1052,6 +1305,8 @@ async function checkUpdate() {
     }
   } catch (e) {
     message.error(t('update_check_failed') + ': ' + e);
+  } finally {
+    updateOperating.value = false;
   }
 }
 
@@ -1098,9 +1353,27 @@ async function testProxy() {
   }
   proxyTestResult.value = null;
   const input = { url: proxyHTTPS.value || proxyHTTP.value, noProxy: proxyNoProxy.value };
-  const outcome = await proxyRequests.run('proxy', input, snapshot => window.go.gui.App.TestProxy(snapshot.url, snapshot.noProxy));
+  const outcome = await proxyRequests.run('proxy', input, snapshot => window.go.gui.App.TestProxy(snapshot.url, 'https://api.github.com'));
   if (!outcome.current) return;
   proxyTestResult.value = outcome.error ? { success: false, message: String(outcome.error), input: outcome.input } : { ...outcome.value, input: outcome.input };
+}
+
+// probeLocalProxies scans common local proxy ports (Clash Verge mixed-port
+// 7897 etc.) and lists the ones that actually proxy HTTPS.
+async function probeLocalProxies() {
+  proxyProbes.value = [];
+  try {
+    proxyProbes.value = (await window.go.gui.App.ProbeLocalProxies()) || [];
+  } catch (e) {
+    console.error('ProbeLocalProxies failed:', e);
+    message.error(t('settings.proxy_probe_failed'));
+  }
+}
+
+// applyProxyProbe fills the HTTP/HTTPS fields with the probed proxy URL.
+function applyProxyProbe(url) {
+  if (!url) return;
+  updateProxy({ enabled: true, http: url, https: url, noProxy: proxyNoProxy.value });
 }
 
 async function exportProfile() {
@@ -1154,6 +1427,64 @@ async function loadCacheBreakdown() {
   }
 }
 
+// ── Custom tools ──
+
+async function loadCustomTools() {
+  try {
+    customTools.value = await window.go.gui.App.ListCustomTools() || [];
+  } catch (e) {
+    console.error('Failed to load custom tools:', e);
+  }
+}
+
+async function previewCustomToolVersions(formData) {
+  customToolSubmitting.value = true;
+  customToolPreview.value = [];
+  try {
+    customToolPreview.value = await window.go.gui.App.PreviewCustomToolVersions(
+      formData.sourceURL, formData.sourceType, formData.pattern || '',
+    ) || [];
+  } catch (e) {
+    console.error('Preview failed:', e);
+    message.error(t('custom_tools.preview_failed') + ': ' + e);
+  } finally {
+    customToolSubmitting.value = false;
+  }
+}
+
+async function submitAddCustomTool(formData) {
+  customToolSubmitting.value = true;
+  try {
+    const result = await window.go.gui.App.AddCustomTool(
+      formData.name, formData.displayName || '', formData.sourceURL,
+      formData.sourceType, formData.pattern || '', formData.shim || '', formData.envVar || '',
+    );
+    if (result.success) {
+      message.success(t('custom_tools.added'));
+      customToolPreview.value = result.versions || [];
+      await loadCustomTools();
+    } else {
+      message.error(t('custom_tools.add_failed') + ': ' + (result.message || ''));
+    }
+  } catch (e) {
+    console.error('Add custom tool failed:', e);
+    message.error(t('custom_tools.add_failed') + ': ' + e);
+  } finally {
+    customToolSubmitting.value = false;
+  }
+}
+
+async function removeCustomTool(name) {
+  try {
+    await window.go.gui.App.RemoveCustomTool(name);
+    message.success(t('custom_tools.removed'));
+    await loadCustomTools();
+  } catch (e) {
+    console.error('Remove custom tool failed:', e);
+    message.error(t('custom_tools.remove_failed') + ': ' + e);
+  }
+}
+
 async function cleanCache(category) {
   try {
     await window.go.gui.App.CleanCache(category);
@@ -1165,6 +1496,16 @@ async function cleanCache(category) {
   }
 }
 
+async function saveArchiveRetention(policy) {
+  try {
+    await window.go.gui.App.SetArchiveRetention(policy);
+    archiveRetention.value = policy;
+    message.success(t('settings.retention_saved'));
+  } catch (e) {
+    message.error(t('settings.save_failed') + ': ' + e);
+  }
+}
+
 async function migrateTool(toolName, localPath) {
   try {
     await window.go.gui.App.MigrateLocalTool(toolName, localPath);
@@ -1173,6 +1514,21 @@ async function migrateTool(toolName, localPath) {
     await refreshTools();
   } catch (e) {
     message.error(t('migration.migrate_failed') + ': ' + e);
+  }
+}
+
+// migratePackageManager 迁移系统安装的包管理器到 xdev 管理目录（Spec 027）。
+async function migratePackageManager(toolName) {
+  const displayName = selectedTool.value?.displayName || toolName;
+  pmOperating.value = toolName;
+  try {
+    await window.go.gui.App.MigratePackageManager(toolName);
+    message.success(t('pm.migrate_success', { name: displayName }));
+    await refreshTools();
+  } catch (e) {
+    message.error(t('pm.migrate_failed', { name: displayName }) + ': ' + e);
+  } finally {
+    pmOperating.value = '';
   }
 }
 
@@ -1223,7 +1579,8 @@ async function migrateSingle(tool) {
   }
 }
 
-async function migrateAll(mode = migrationMode.value) {
+async function migrateAll() {
+  const mode = migrationMode.value;
   migratingAll.value = true;
   migrationResults.value = [];
   try {
@@ -1255,28 +1612,6 @@ async function migrateAll(mode = migrationMode.value) {
   }
 }
 
-async function loadEnvVars() {
-  try {
-    envVars.value = await window.go.gui.App.GetEnvVars();
-  } catch (e) {
-    console.error('Failed to load env vars:', e);
-  }
-}
-
-// 视图模式切换
-async function onEnvViewModeChange(mode) {
-  if (mode === 'all') {
-    await loadAllEnvVars();
-  }
-  envValidationStats.value = null;
-}
-async function setEnvViewMode(mode) { envViewMode.value = mode; await onEnvViewModeChange(mode); }
-async function setEnvAllLevel(level) { envAllLevel.value = level; await loadAllEnvVars(); }
-async function refreshCurrentEnvVars() { if (envViewMode.value === 'all') await loadAllEnvVars(); else await loadEnvVars(); }
-async function saveEnvDraft(draft) { await setEnvVar(draft.toolName, draft.name, draft.value, draft.level, draft.original); }
-async function deleteEnvRow(row) { await deleteEnvVar(row.toolName ?? row.tool, row.name, row.level); if (sameEnvIdentity(editingEnvVar.value, row)) cancelEditEnvVar(); }
-async function cleanEnvRow(row) { await cleanEnvVar(row.name, row.level); }
-
 // 加载全部环境变量
 async function loadAllEnvVars() {
   try {
@@ -1287,27 +1622,45 @@ async function loadAllEnvVars() {
   }
 }
 
+// 视图级别切换
+async function setEnvAllLevel(level) { envAllLevel.value = level; await loadAllEnvVars(); }
+async function refreshCurrentEnvVars() { await loadAllEnvVars(); }
+async function saveEnvDraft(draft) { await setEnvVar(draft.toolName, draft.name, draft.value, draft.level, draft.original); }
+async function deleteEnvRow(row) { await deleteEnvVar(row.name, row.level); if (sameEnvIdentity(editingEnvVar.value, row)) cancelEditEnvVar(); }
+async function cleanEnvRow(row) { await cleanEnvVar(row.name, row.level); }
+
 // 检测所有环境变量的有效性
 async function validateAllEnvVars() {
   try {
-    let vars;
-    if (envViewMode.value === 'all') {
-      vars = allEnvVars.value;
-    } else {
-      vars = envVars.value;
-    }
+    // 重新拉取最新数据，保证统计新鲜
+    await loadAllEnvVars();
+    const vars = allEnvVars.value || [];
     let valid = 0;
+    let partial = 0;
     let invalid = 0;
+    const issues = [];
     for (const v of vars) {
-      if (v.isValid) {
-        valid++;
-      } else if (v.invalidReason) {
+      const status = v.validationStatus || (v.isValid ? 'valid' : v.invalidReason ? 'invalid' : 'valid');
+      if (status === 'partial') {
+        partial++;
+        issues.push({ name: v.name, reason: v.invalidReason || t('env.partial_tip') });
+      } else if (status === 'invalid') {
         invalid++;
+        issues.push({ name: v.name, reason: v.invalidReason || t('env.invalid_tip') });
+      } else {
+        valid++;
       }
     }
-    envValidationStats.value = { valid, invalid };
-    if (invalid > 0) {
-      message.warning(t('env.invalid_count', { count: invalid }));
+    envValidationStats.value = { valid, partial, invalid };
+    if (invalid > 0 || partial > 0) {
+      const list = issues.slice(0, 20).map(item => `${item.name}: ${item.reason}`).join('\n');
+      const extra = issues.length > 20 ? `\n${t('env.more_count', { count: issues.length - 20 })}` : '';
+      dialog.warning({
+        title: t('env.validate_title'),
+        content: `${t('env.invalid_list_hint', { invalid, partial })}\n${list}${extra}`,
+        positiveText: t('btn.close'),
+      });
+      message.warning(t('env.invalid_list_hint', { invalid, partial }));
     } else {
       message.success(t('env.all_valid'));
     }
@@ -1321,6 +1674,40 @@ async function validateAllEnvVars() {
 async function cleanEnvVar(name, level) {
   try { await window.go.gui.App.CleanEnvVarPath(name, level || 'user'); message.success(t('env.cleaned', { name })); await refreshCurrentEnvVars(); }
   catch (e) { message.error(t('env.clean_failed') + ': ' + e); }
+}
+
+// 一键清理所有无效环境变量
+async function cleanAllInvalidEnvVars() {
+  const level = envAllLevel.value || 'user';
+  dialog.warning({
+    title: t('env.clean_all_confirm_title'),
+    content: t('env.clean_all_confirm_content'),
+    positiveText: t('btn.confirm_save'),
+    negativeText: t('btn.cancel'),
+    onPositiveClick: async () => {
+      try {
+        const results = await window.go.gui.App.CleanAllInvalidEnvVars(level);
+        let cleaned = 0, deleted = 0, skipped = 0;
+        const lines = [];
+        for (const r of results || []) {
+          if (r.action === 'cleaned') { cleaned++; lines.push(`${r.name}: ${t('env.clean_action_cleaned')} — ${r.detail}`); }
+          else if (r.action === 'deleted') { deleted++; lines.push(`${r.name}: ${t('env.clean_action_deleted')} — ${r.detail}`); }
+          else { skipped++; lines.push(`${r.name}: ${t('env.clean_action_skipped')} — ${r.detail}`); }
+        }
+        message.success(t('env.clean_all_done', { cleaned, deleted, skipped }));
+        if (lines.length > 0) {
+          dialog.info({
+            title: t('env.clean_all_results'),
+            content: lines.join('\n'),
+            positiveText: t('btn.close'),
+          });
+        }
+        await refreshCurrentEnvVars();
+      } catch (e) {
+        message.error(t('env.clean_failed') + ': ' + e);
+      }
+    },
+  });
 }
 
 async function setEnvVar(toolName, name, value, level, original = null) {
@@ -1358,6 +1745,7 @@ async function doSetEnvVar(toolName, name, value, level) {
     await window.go.gui.App.SetEnvVar(toolName, name, value, level || 'user');
     message.success(t('env.var_set_success', { name, tool: toolName, level: level || 'user' }));
     editingEnvVar.value = null;
+    showEnvEditor.value = false;
     await refreshCurrentEnvVars();
   } catch (e) {
     message.error(t('env.set_failed') + ': ' + e);
@@ -1366,34 +1754,24 @@ async function doSetEnvVar(toolName, name, value, level) {
 
 function editEnvVar(row) {
   editingEnvVar.value = row;
-  newEnvTool.value = row.toolName || '';
-  newEnvName.value = row.name;
-  newEnvValue.value = row.value;
-  newEnvLevel.value = row.level || 'user';
+  showEnvEditor.value = true;
+}
+
+function newEnvVar() {
+  editingEnvVar.value = null;
+  showEnvEditor.value = true;
 }
 
 function cancelEditEnvVar() {
   editingEnvVar.value = null;
-  newEnvTool.value = '';
-  newEnvName.value = '';
-  newEnvValue.value = '';
-  newEnvLevel.value = 'user';
+  showEnvEditor.value = false;
 }
 
-async function deleteEnvVar(toolName, name, level) {
+async function deleteEnvVar(name, level) {
   try {
-    // 在全部环境变量视图下使用 DeleteEnvVarEntry，开发视图下使用 DeleteEnvVar
-    if (envViewMode.value === 'all') {
-      await window.go.gui.App.DeleteEnvVarEntry(name, level || 'user');
-    } else {
-      await window.go.gui.App.DeleteEnvVar(toolName, name, level || 'user');
-    }
+    await window.go.gui.App.DeleteEnvVarEntry(name, level || 'user');
     message.success(t('env.var_deleted', { name }));
-    if (envViewMode.value === 'all') {
-      await loadAllEnvVars();
-    } else {
-      await loadEnvVars();
-    }
+    await loadAllEnvVars();
   } catch (e) {
     message.error(t('env.delete_failed') + ': ' + e);
   }
@@ -1417,7 +1795,7 @@ async function installPm(toolName, displayName) {
     message.success(t('pm.install_success', { name: displayName }));
     await refreshTools();
   } catch (e) {
-    message.error(t('pm.install_failed') + ': ' + e);
+    message.error(t('pm.install_failed', { name: displayName }) + ': ' + e);
   } finally {
     pmOperating.value = '';
   }

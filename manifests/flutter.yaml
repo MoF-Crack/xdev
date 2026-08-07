@@ -5,11 +5,38 @@ homepage: https://flutter.dev/
 category: mobile
 shims:
     - flutter
-    - dart
 env_vars:
     FLUTTER_HOME: '{{install}}'
     PUB_CACHE: '{{install}}\.pub-cache'
 versions:
+    - version: 3.44.7
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_3.44.7-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/windows/flutter_windows_3.44.7-stable.zip
+          sha256: "a973249b76251e24b335524da1609c0045b562519d8a6e6b685696c9ded2434c"
+          size: 1210000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_3.44.7-stable.zip
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_3.44.7-stable.zip
+          sha256: ""
+          size: 1160000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.xz
+          url: https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.7-stable.tar.xz
+          mirror_url: https://storage.flutter-io.cn/flutter_infra_release/releases/stable/linux/flutter_linux_3.44.7-stable.tar.xz
+          sha256: ""
+          size: 860000000
+          strip: 0
     - version: 3.44.1
       stable: true
       release: "2026-06-02"
@@ -91,6 +118,6 @@ remote:
     url: flutter/flutter
     path: ""
     pattern: (\d+\.\d+\.\d+)$
-latest: 3.44.1
+latest: 3.44.7
 lts: ""
 install_root: ""

@@ -47,7 +47,7 @@ var scanRules = []toolScanRule{
 	{name: "ruby", binNames: []string{"ruby"}, envVarKeys: []string{}},
 	{name: "php", binNames: []string{"php"}, envVarKeys: []string{}},
 	{name: "perl", binNames: []string{"perl"}, envVarKeys: []string{}},
-	{name: "git", binNames: []string{"git"}, envVarKeys: []string{}},
+	{name: "git", binNames: []string{"git"}, envVarKeys: []string{"GIT_HOME"}},
 	{name: "deno", binNames: []string{"deno"}, envVarKeys: []string{}},
 	{name: "bun", binNames: []string{"bun"}, envVarKeys: []string{}},
 	{name: "zig", binNames: []string{"zig"}, envVarKeys: []string{}},
@@ -225,6 +225,38 @@ func scanByCommonDirs(rule toolScanRule, xdevDir string) *LocalTool {
 	return nil
 }
 
+// hasGitRuntime 判断目录是否包含 Git for Windows / PortableGit 的运行时
+// （mingw64/ 目录，或 usr/ + bin/ 目录组合）。仅含 launcher（cmd/git.exe
+// 等启动器）的目录无法独立运行 git，不应被迁移。
+func hasGitRuntime(dir string) bool {
+	if fi, err := os.Stat(filepath.Join(dir, "mingw64")); err == nil && fi.IsDir() {
+		return true
+	}
+	if fi1, err1 := os.Stat(filepath.Join(dir, "usr")); err1 == nil && fi1.IsDir() {
+		if fi2, err2 := os.Stat(filepath.Join(dir, "bin")); err2 == nil && fi2.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// liftCmdToInstallRoot 处理 Git for Windows / PortableGit 的安装布局：
+// PATH 中通常只包含 <root>/cmd（launcher 目录，cmd/git.exe 只是定位真实
+// 二进制的启动器），而真正的安装根目录是 cmd 的父目录，其中包含
+// mingw64/（运行时）以及 usr/、bin/ 等目录。若 dir 名为 cmd 且父目录
+// 具备 git 运行时标记（mingw64/ 目录，或 usr/ + bin/ 目录组合），则
+// 返回父目录；否则原样返回。
+func liftCmdToInstallRoot(dir string) string {
+	if strings.ToLower(filepath.Base(dir)) != "cmd" {
+		return dir
+	}
+	parent := filepath.Dir(dir)
+	if hasGitRuntime(parent) {
+		return parent
+	}
+	return dir
+}
+
 // resolveInstallPath 从环境变量值推导工具安装路径
 func resolveInstallPath(envVal string, rule toolScanRule) string {
 	fi, err := os.Stat(envVal)
@@ -242,7 +274,8 @@ func resolveInstallPath(envVal string, rule toolScanRule) string {
 	if filepath.Base(dir) == "bin" {
 		dir = filepath.Dir(dir)
 	}
-	return dir
+	// Git for Windows：环境变量可能指向 <root>/cmd/git.exe（launcher）
+	return liftCmdToInstallRoot(dir)
 }
 
 // resolveInstallPathFromBin 从可执行文件路径推导安装目录
@@ -257,6 +290,13 @@ func resolveInstallPathFromBin(binPath string, rule toolScanRule) string {
 	// 如果在 Scripts 子目录下（Python），安装目录是父目录
 	if filepath.Base(dir) == "Scripts" {
 		return filepath.Dir(dir)
+	}
+
+	// Git for Windows / PortableGit：PATH 条目通常是 <root>/cmd，
+	// cmd/git.exe 只是 launcher，安装根目录是 cmd 的父目录。
+	// 必须先于 looksLikeInstallDir 处理，避免把 launcher 目录误当安装根。
+	if lifted := liftCmdToInstallRoot(dir); lifted != dir {
+		return lifted
 	}
 
 	// 某些工具（如 node）可执行文件直接在安装根目录
@@ -499,6 +539,22 @@ func isInsideXdevDir(path, xdevDir string) bool {
 // MigrateLocalTool 将本地工具迁移到 xdev 管理
 // 使用 Windows junction 指向原始安装路径，不复制文件
 func MigrateLocalTool(tool LocalTool, xdevDir string) error {
+	// Security (F-10): 工具名必须安全（防止目录穿越），源路径必须是绝对路径。
+	if err := util.ValidateShimName(tool.Name); err != nil {
+		return fmt.Errorf("invalid tool name %q: %w", tool.Name, err)
+	}
+	if tool.Path == "" || !filepath.IsAbs(tool.Path) {
+		return fmt.Errorf("source path must be absolute: %q", tool.Path)
+	}
+
+	// Git for Windows / PortableGit 的 cmd/（以及单独拷出的 launcher 目录）
+	// 只包含启动器：cmd/git.exe 会以自身目录的父目录作为 git 根目录去查找
+	// mingw64/bin/git.exe，缺少运行时（mingw64/ 等）时任何命令都会报
+	// "error launching git"。拒绝迁移这类残缺目录，避免迁移后 git 不可用。
+	if tool.Name == "git" && !hasGitRuntime(tool.Path) {
+		return fmt.Errorf("source path %q looks like a git launcher-only directory (missing mingw64/ runtime); migrate the git install root instead", tool.Path)
+	}
+
 	installDir := filepath.Join(xdevDir, "install")
 	version := tool.Version
 	if version == "" {
@@ -510,6 +566,10 @@ func MigrateLocalTool(tool LocalTool, xdevDir string) error {
 
 	// 目标路径：xdevDir/install/toolName/version
 	targetPath := filepath.Join(installDir, tool.Name, version)
+	// F-10: 目标必须位于 install 目录内。
+	if err := util.ValidateAbsPathUnder(installDir, targetPath); err != nil {
+		return fmt.Errorf("target path escapes install dir: %w", err)
+	}
 
 	// 检查目标是否已存在
 	if _, err := os.Stat(targetPath); err == nil {

@@ -1,30 +1,10 @@
+import { darkTheme, lightTheme } from 'naive-ui';
 const palettes = {
-  dark: {
-    accent: '#818cf8', hover: '#a5b4fc', pressed: '#6366f1', app: '#111113', panel: '#18181b', card: '#202024', elevated: '#29292e',
-    text: '#f4f4f5', text2: '#d4d4d8', muted: '#a1a1aa', dim: '#71717a', border: 'rgba(161, 161, 170, 0.16)', soft: 'rgba(129, 140, 248, 0.12)', onAccent: '#ffffff',
-    success: '#34d399', warning: '#fbbf24', error: '#f87171', info: '#60a5fa', shadow: '0 8px 24px rgba(0, 0, 0, 0.28)',
-  },
-  light: {
-    accent: '#4f46e5', hover: '#4338ca', pressed: '#3730a3', app: '#f7f7f8', panel: '#ffffff', card: '#ffffff', elevated: '#f4f4f5',
-    text: '#18181b', text2: '#3f3f46', muted: '#52525b', dim: '#71717a', border: 'rgba(39, 39, 42, 0.1)', soft: 'rgba(79, 70, 229, 0.1)', onAccent: '#ffffff',
-    success: '#047857', warning: '#b45309', error: '#dc2626', info: '#2563eb', shadow: '0 8px 24px rgba(24, 24, 27, 0.1)',
-  },
+  dark: { accent: '#58a6ff', hover: '#79b8ff', pressed: '#388bfd', app: '#0d1117', panel: '#161b22', card: '#1c2128', elevated: '#22272e', text: '#e6edf3', text2: '#8b949e', muted: '#8d96a0', dim: '#484f58', border: 'rgba(110, 118, 129, 0.2)', soft: 'rgba(88, 166, 255, 0.12)', onAccent: '#ffffff', success: '#3fb950', warning: '#d29922', error: '#ff7b72', info: '#58a6ff', shadow: '0 8px 24px rgba(0, 0, 0, 0.28)' },
+  light: { accent: '#2563eb', hover: '#3b82f6', pressed: '#1d4ed8', app: '#eef1f5', panel: '#f4f6f9', card: '#ffffff', elevated: '#e8ecf1', text: '#1e293b', text2: '#475569', muted: '#5b6b85', dim: '#94a3b8', border: 'rgba(15, 23, 42, 0.1)', soft: 'rgba(37, 99, 235, 0.08)', onAccent: '#ffffff', success: '#16a34a', warning: '#d97706', error: '#dc2626', info: '#2563eb', shadow: '0 8px 24px rgba(0, 0, 0, 0.1)' },
+  'eye-care': { accent: '#5b8c5a', hover: '#6fa06e', pressed: '#4a7849', app: '#f5f1e8', panel: '#faf7f0', card: '#fdfbf5', elevated: '#f0ebe0', text: '#3d3528', text2: '#6b5d4f', muted: '#8a7d6f', dim: '#a89b8d', border: 'rgba(61, 53, 40, 0.12)', soft: 'rgba(91, 140, 90, 0.12)', onAccent: '#ffffff', success: '#5b8c5a', warning: '#b8860b', error: '#c45a3a', info: '#5b8c9a', shadow: '0 8px 24px rgba(61, 53, 40, 0.12)' },
 };
-
-function createOverrides(p) {
-  return {
-    common: { primaryColor: p.accent, primaryColorHover: p.hover, primaryColorPressed: p.pressed, primaryColorSuppl: p.accent, infoColor: p.info, successColor: p.success, warningColor: p.warning, errorColor: p.error, textColorBase: p.text, textColor1: p.text, textColor2: p.text2, textColor3: p.muted, placeholderColor: p.dim, dividerColor: p.border, borderColor: p.border, inputColor: p.panel, actionColor: p.elevated, tableColor: p.card, hoverColor: p.soft, bodyColor: p.app, cardColor: p.card, modalColor: p.panel, popoverColor: p.panel, tooltipColor: p.card, borderRadius: '8px', borderRadiusSmall: '4px', boxShadow1: p.shadow, boxShadow2: p.shadow },
-    Button: { textColorPrimary: p.onAccent, colorPrimary: p.accent, colorHoverPrimary: p.hover, colorPressedPrimary: p.pressed, borderPrimary: `1px solid ${p.accent}` },
-    Menu: { itemTextColor: p.muted, itemTextColorHover: p.accent, itemTextColorActive: p.accent, itemIconColor: p.muted, itemIconColorHover: p.accent, itemIconColorActive: p.accent, itemColorActive: p.soft, itemColorHover: p.soft },
-    Card: { color: p.card, borderColor: p.border, titleTextColor: p.text },
-    Input: { color: p.panel, colorFocus: p.panel, borderColor: p.border, borderColorHover: p.accent, borderColorFocus: p.accent, textColor: p.text, placeholderColor: p.dim, boxShadowFocus: `0 0 0 2px ${p.soft}` },
-    DataTable: { thColor: p.panel, tdColor: p.card, tdColorHover: p.soft, borderColor: p.border, thTextColor: p.muted, tdTextColor: p.text },
-    Tabs: { tabTextColorLine: p.muted, tabTextColorActiveLine: p.accent, tabTextColorHoverLine: p.accent, barColor: p.accent },
-    Switch: { railColorActive: p.accent }, Checkbox: { colorChecked: p.accent, borderChecked: `1px solid ${p.accent}`, checkMarkColor: p.onAccent },
-    LayoutSider: { color: p.panel, borderColor: p.border }, Layout: { color: p.app, siderColor: p.panel },
-    Progress: { fillColor: p.accent, textColorLineInner: p.onAccent }, Badge: { color: p.accent }, Scrollbar: { color: p.border, colorHover: p.muted },
-  };
-}
-
-const overrides = { dark: createOverrides(palettes.dark), light: createOverrides(palettes.light) };
-export function getNaiveThemeOverrides(theme) { return overrides[theme] ?? overrides.dark; }
+function createOverrides(p) { return { common: { primaryColor: p.accent, primaryColorHover: p.hover, primaryColorPressed: p.pressed, primaryColorSuppl: p.accent, infoColor: p.info, successColor: p.success, warningColor: p.warning, errorColor: p.error, textColorBase: p.text, textColor1: p.text, textColor2: p.text2, textColor3: p.muted, placeholderColor: p.dim, dividerColor: p.border, borderColor: p.border, inputColor: p.panel, actionColor: p.elevated, tableColor: p.card, hoverColor: p.soft, bodyColor: p.app, cardColor: p.card, modalColor: p.panel, popoverColor: p.panel, tooltipColor: p.card, borderRadius: '8px', borderRadiusSmall: '4px', boxShadow1: p.shadow, boxShadow2: p.shadow }, Empty: { textColor: p.muted, extraTextColor: p.text2 }, Button: { textColorPrimary: p.onAccent, colorPrimary: p.accent, colorHoverPrimary: p.hover, colorPressedPrimary: p.pressed, borderPrimary: `1px solid ${p.accent}` }, Menu: { itemTextColor: p.muted, itemTextColorHover: p.accent, itemTextColorActive: p.accent, itemIconColor: p.muted, itemIconColorHover: p.accent, itemIconColorActive: p.accent, itemColorActive: p.soft, itemColorHover: p.soft }, Card: { color: p.card, borderColor: p.border, titleTextColor: p.text }, Input: { color: p.panel, colorFocus: p.panel, borderColor: p.border, borderColorHover: p.accent, borderColorFocus: p.accent, textColor: p.text, placeholderColor: p.dim, boxShadowFocus: `0 0 0 2px ${p.soft}` }, DataTable: { thColor: p.panel, tdColor: p.card, tdColorHover: p.soft, borderColor: p.border, thTextColor: p.muted, tdTextColor: p.text }, Tabs: { tabTextColorLine: p.muted, tabTextColorActiveLine: p.accent, tabTextColorHoverLine: p.accent, barColor: p.accent }, Switch: { railColorActive: p.accent }, Checkbox: { colorChecked: p.accent, borderChecked: `1px solid ${p.accent}`, checkMarkColor: p.onAccent }, LayoutSider: { color: p.panel, borderColor: p.border }, Layout: { color: p.app, siderColor: p.panel }, Progress: { fillColor: p.accent, textColorLineInner: p.onAccent }, Badge: { color: p.accent }, Scrollbar: { color: p.border, colorHover: p.muted } }; }
+const configs = Object.fromEntries(Object.entries(palettes).map(([name, palette]) => [name, { theme: name === 'dark' ? darkTheme : lightTheme, overrides: createOverrides(palette) }]));
+export function getNaiveThemeConfig(themeName) { return configs[themeName] ?? configs.dark; }
+export function getNaiveThemeOverrides(themeName) { return getNaiveThemeConfig(themeName).overrides; }

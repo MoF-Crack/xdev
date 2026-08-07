@@ -27,8 +27,8 @@ const contractColumns = [{ key: 'identity', contract: 'identity' }, { key: 'stat
 </script>
 
 <style scoped>
-.tool-catalog { display: grid; gap: var(--xdev-space-4); }
-.tool-catalog__filters { display: flex; align-items: center; justify-content: space-between; gap: var(--xdev-space-3); }
+.tool-catalog { width: min(var(--xdev-table-max-width), 100%); margin: 0 auto; display: grid; gap: var(--xdev-section-gap); }
+.tool-catalog__filters { display: flex; align-items: center; justify-content: space-between; gap: var(--xdev-space-3); padding: var(--xdev-space-3) var(--xdev-space-4); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-lg); background: color-mix(in srgb, var(--xdev-bg-panel) 72%, transparent); }
 .tool-catalog__filters > input { width: min(360px, 100%); padding: 8px 10px; border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-panel); color: var(--xdev-text-primary); }
 .tool-catalog__filters label { color: var(--xdev-text-muted); font-size: 12px; white-space: nowrap; }
 @media (max-width: 560px) { .tool-catalog__filters { align-items: stretch; flex-direction: column; } }

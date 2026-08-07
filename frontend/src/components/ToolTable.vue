@@ -2,13 +2,15 @@
   <table class="tool-table" data-testid="tool-table">
     <thead><tr><th>{{ t('table.tool') }}</th><th>{{ t('table.version') }}</th><th>{{ t('table.local_path') }}</th><th>{{ t('table.action') }}</th></tr></thead>
     <tbody><tr v-for="tool in tools" :key="tool.name">
-      <td><button class="tool-table__identity" type="button" data-action="detail" :data-tool="tool.name" @click="$emit('open-detail', tool)"><strong>{{ tool.displayName || tool.name }}</strong><small>{{ tool.description }}</small></button></td>
+      <td><button class="xdev-btn xdev-btn--secondary tool-table__identity" type="button" data-action="detail" :data-tool="tool.name" @click="$emit('open-detail', tool)"><strong>{{ tool.displayName || tool.name }}</strong><span class="form-badges"><span v-for="f in tool.formFactor || []" :key="f" class="form-badge" :data-form="f">{{ t('form.' + f) }}</span></span><small>{{ tool.description }}</small></button></td>
       <td>{{ tool.activeVersion || tool.localVersion || '-' }} <span v-if="isLocal(tool)" class="tool-table__note">{{ t('catalog.local_detected') }}</span></td><td class="tool-table__path">{{ tool.localPath || '-' }}</td>
       <td><div class="tool-table__actions">
-        <button v-if="category === 'package-manager' && tool.canInstall" type="button" data-action="package-manager" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit(tool.installed ? 'update-package-manager' : 'install-package-manager', tool)">{{ t(tool.installed ? 'btn.update' : 'btn.install') }}</button>
-        <button v-else-if="category !== 'package-manager' && canInstall(tool)" type="button" data-action="install" @click="$emit('install', tool)">{{ t('btn.install') }}</button>
+        <button class="xdev-btn xdev-btn--secondary" v-if="category === 'package-manager' && tool.canInstall && !tool.installed && tool.enableCommand" type="button" data-action="package-manager" :aria-busy="operatingTool === (tool.toolName || tool.name)" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit('install-package-manager', tool)">{{ operatingTool === (tool.toolName || tool.name) ? t('pm.installing') : t('pm.enable_button') }}</button>
+        <button class="xdev-btn xdev-btn--secondary" v-else-if="category === 'package-manager' && tool.canInstall && !tool.installed" type="button" data-action="package-manager" :title="tool.requiresAdmin ? t('pm.install_admin_tooltip') : undefined" :aria-busy="operatingTool === (tool.toolName || tool.name)" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit('install-package-manager', tool)">{{ operatingTool === (tool.toolName || tool.name) ? t('pm.installing') : (tool.requiresAdmin ? t('pm.install_admin_required') : t('btn.install')) }}</button>
+        <button class="xdev-btn xdev-btn--secondary" v-else-if="category === 'package-manager' && tool.canInstall && tool.installed && tool.hasUpdate" type="button" data-action="package-manager" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit('update-package-manager', tool)">{{ t('btn.update') }}</button>
+        <button class="xdev-btn xdev-btn--secondary" v-else-if="category !== 'package-manager' && canInstall(tool)" type="button" data-action="install" @click="$emit('install', tool)">{{ t('btn.install') }}</button>
         <span v-if="!tool.installed && !tool.canInstall && tool.installHint" class="tool-table__hint">{{ tool.installHint }}</span>
-        <button type="button" data-action="favorite" :aria-label="favoriteLabel(tool)" :title="favoriteLabel(tool)" @click="$emit('toggle-favorite', tool)">{{ tool.isFavorite ? '★' : '☆' }}</button>
+        <button class="xdev-btn xdev-btn--secondary" type="button" data-action="favorite" :aria-label="favoriteLabel(tool)" :title="favoriteLabel(tool)" @click="$emit('toggle-favorite', tool)">{{ tool.isFavorite ? '★' : '☆' }}</button>
       </div></td>
     </tr></tbody>
   </table>
@@ -32,5 +34,8 @@ td > button:not(.tool-table__identity) { padding: 5px 9px; border: 1px solid var
 .tool-table__actions { display: flex; align-items: center; gap: var(--xdev-space-2); }
 .tool-table__actions button { padding: 5px 9px; border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-sm); background: transparent; color: var(--xdev-accent); cursor: pointer; }
 .tool-table__hint, .tool-table__note { color: var(--xdev-text-muted); font-size: 11px; }
+.form-badges { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.form-badge { padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; border: 1px solid var(--xdev-border-strong); color: var(--xdev-text-muted); justify-self: start; width: max-content; }
+.form-badge[data-form="gui"] { color: var(--xdev-accent); border-color: var(--xdev-accent); }
 button:disabled { opacity: .4; cursor: not-allowed; }
 </style>

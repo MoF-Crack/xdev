@@ -80,3 +80,62 @@ func TestRenderShellBlockPowerShell(t *testing.T) {
 		t.Errorf("expected powershell syntax, got %q", out)
 	}
 }
+
+// ---- ToolBinPaths tests ----
+
+func TestToolBinPaths_Go_Nested(t *testing.T) {
+	// strip:0 layout: installPath/go/bin/
+	installPath := t.TempDir()
+	nestedBin := filepath.Join(installPath, "go", "bin")
+	if err := os.MkdirAll(nestedBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ToolBinPaths("go", installPath)
+	want := []string{nestedBin}
+	if len(got) != len(want) {
+		t.Fatalf("ToolBinPaths(go nested) = %v, want %v", got, want)
+	}
+	for i, p := range got {
+		if p != want[i] {
+			t.Errorf("ToolBinPaths(go nested)[%d] = %q, want %q", i, p, want[i])
+		}
+	}
+}
+
+func TestToolBinPaths_Cangjie(t *testing.T) {
+	// strip:1 layout: installPath/bin/
+	installPath := t.TempDir()
+	binDir := filepath.Join(installPath, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ToolBinPaths("cangjie", installPath)
+	want := []string{binDir}
+	if len(got) != len(want) {
+		t.Fatalf("ToolBinPaths(cangjie) = %v, want %v", got, want)
+	}
+	for i, p := range got {
+		if p != want[i] {
+			t.Errorf("ToolBinPaths(cangjie)[%d] = %q, want %q", i, p, want[i])
+		}
+	}
+}
+
+func TestToolBinPaths_Cangjie_Nested(t *testing.T) {
+	// strip:0 layout: installPath/cangjie/bin/
+	installPath := t.TempDir()
+	nestedBin := filepath.Join(installPath, "cangjie", "bin")
+	if err := os.MkdirAll(nestedBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ToolBinPaths("cangjie", installPath)
+	want := []string{nestedBin, installPath}
+	if len(got) != len(want) {
+		t.Fatalf("ToolBinPaths(cangjie nested) = %v, want %v", got, want)
+	}
+	for i, p := range got {
+		if p != want[i] {
+			t.Errorf("ToolBinPaths(cangjie nested)[%d] = %q, want %q", i, p, want[i])
+		}
+	}
+}

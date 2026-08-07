@@ -1,7 +1,7 @@
 <template>
   <span class="copyable-value">
     <code class="xdev-mono" :title="value">{{ displayValue }}</code>
-    <button type="button" :aria-label="copyLabel" :disabled="copying" @click="copy"><slot name="icon">Copy</slot></button>
+    <button type="button" class="xdev-btn xdev-btn--secondary xdev-btn--sm" :aria-label="copyLabel" :disabled="copying" @click="copy"><slot name="icon">Copy</slot></button>
     <span v-if="feedback" class="copyable-value__feedback" role="status" :data-announcement="announcement">{{ feedback }}</span>
   </span>
 </template>

@@ -46,6 +46,7 @@ import (
 	"archive/zip"
 	"compress/bzip2"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -54,6 +55,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 // maxDecompressSize limits the total decompressed bytes per file to
@@ -92,9 +95,153 @@ func Extract(src, dst, format string, strip int) error {
 	case "pkg":
 		// macOS .pkg is xar-based; try 7z extraction as fallback
 		return extract7z(src, dst)
+	case "dmg":
+		// macOS disk image — hdiutil attach → copy .app → detach
+		return extractDmg(src, dst)
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
+}
+
+// hdiutilCmd is the hdiutil command used by extractDmg. It is a package
+// variable so tests can override it with a mock script (same pattern as
+// the zstd/xz external-command fallbacks).
+var hdiutilCmd = "hdiutil"
+
+// defaultDittoCmd is the macOS ditto binary path used to copy .app bundles
+// (preserves symlinks/metadata, unlike a plain recursive copy).
+const defaultDittoCmd = "/usr/bin/ditto"
+
+// dittoCmd is overridable by tests (same hook pattern as hdiutilCmd).
+var dittoCmd = defaultDittoCmd
+
+// detachDMG unmounts the image at mountDir: first a normal detach, then a
+// forced detach (-force) if the first attempt fails. Returns a joined error
+// when both attempts fail. 若 hdiutil 本身不可执行（exec.Error，如命令不存在），
+// -force 同样无意义，直接返回原错误。
+func detachDMG(mountDir string) error {
+	first := exec.Command(hdiutilCmd, "detach", mountDir)
+	util.HideWindow(first)
+	if err := first.Run(); err == nil {
+		return nil
+	} else if isExecNotFound(err) {
+		return fmt.Errorf("hdiutil detach %s: %w", mountDir, err)
+	} else {
+		force := exec.Command(hdiutilCmd, "detach", "-force", mountDir)
+		util.HideWindow(force)
+		err2 := force.Run()
+		if err2 == nil {
+			return nil
+		}
+		return fmt.Errorf("hdiutil detach %s failed (normal: %v; force: %v)", mountDir, err, err2)
+	}
+}
+
+// isExecNotFound reports whether err indicates the command itself could not
+// be executed (exec.Error: not found / not executable), as opposed to the
+// command running and returning a non-zero exit.
+func isExecNotFound(err error) bool {
+	var execErr *exec.Error
+	return errors.As(err, &execErr)
+}
+
+// extractDmg extracts a macOS .dmg disk image: attach it read-only with
+// hdiutil, copy every .app bundle into dst, then detach.
+//
+// dmg 解包仅支持 macOS（依赖 hdiutil）。非 macOS 平台直接返回明确错误。
+//
+// 错误处理（023-A3-02）：
+//   - attach 失败：尽力 detach 已知挂载点（可能部分挂载）后返回 attach 错误；
+//   - detach 失败：先普通 detach，再尝试 detach -force，仍失败则并入返回值，
+//     避免"解包成功但镜像残留挂载"。
+func extractDmg(src, dst string) (retErr error) {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("dmg extraction is only supported on macOS (current: %s)", runtime.GOOS)
+	}
+
+	// 在系统临时目录创建挂载点（os.MkdirTemp 返回绝对路径，
+	// hdiutil -mountpoint 要求绝对路径）。
+	mountDir, err := os.MkdirTemp("", "xdev-dmg-*")
+	if err != nil {
+		return fmt.Errorf("create dmg mount dir: %w", err)
+	}
+	// 清理：无论成败都移除挂载点目录。
+	defer os.RemoveAll(mountDir)
+
+	// hdiutil attach -nobrowse -readonly -mountpoint <mountDir> <src>
+	attach := exec.Command(hdiutilCmd, "attach", "-nobrowse", "-readonly", "-mountpoint", mountDir, src)
+	util.HideWindow(attach)
+	attach.Stdout = os.Stderr
+	attach.Stderr = os.Stderr
+	if err := attach.Run(); err != nil {
+		// attach 失败：尽力卸载已知挂载点（可能部分挂载），仅记录不掩盖主错误。
+		if dErr := detachDMG(mountDir); dErr != nil {
+			log.Printf("[extractor] WARNING: cleanup detach after attach failure: %v", dErr)
+		}
+		return fmt.Errorf("hdiutil attach %s: %w", src, err)
+	}
+	// detach 在 defer 中执行，保证复制失败时镜像也被卸载；失败并入返回值。
+	defer func() {
+		if dErr := detachDMG(mountDir); dErr != nil {
+			if retErr != nil {
+				retErr = fmt.Errorf("%w; %v", retErr, dErr)
+			} else {
+				retErr = dErr
+			}
+		}
+	}()
+
+	// 复制挂载点下所有 .app 包到 dst（dmg 通常含一个 .app）。
+	copied, err := copyAppsFromMount(mountDir, dst)
+	if err != nil {
+		return err
+	}
+	if copied == 0 {
+		return fmt.Errorf("no .app bundle found in dmg %s", src)
+	}
+	return nil
+}
+
+// copyAppsFromMount copies every ".app" directory under mountDir into dst.
+// It returns the number of .app bundles copied. 独立函数便于在非 macOS
+// 平台用假挂载目录做单元测试（无需 hdiutil）。
+func copyAppsFromMount(mountDir, dst string) (int, error) {
+	entries, err := os.ReadDir(mountDir)
+	if err != nil {
+		return 0, fmt.Errorf("read dmg mount %s: %w", mountDir, err)
+	}
+	copied := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".app") {
+			continue
+		}
+		if err := copyAppBundle(filepath.Join(mountDir, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+			return copied, fmt.Errorf("copy %s from dmg: %w", e.Name(), err)
+		}
+		copied++
+	}
+	return copied, nil
+}
+
+// copyAppBundle copies one .app bundle from the dmg mount into dstApp.
+//
+// macOS 上使用 /usr/bin/ditto（保留符号链接/元数据——Electron/IDE 包内含
+// framework 符号链接，util.CopyDir 会跳过符号链接）。ditto 是 macOS 平台
+// 先决条件：失败即返回错误，绝不静默降级为 CopyDir（否则 .app 会"复制成功"
+// 但符号链接损坏，解包结果不可用）。仅非 darwin（且未覆盖 dittoCmd 测试
+// 钩子）时使用 util.CopyDir 兜底（跨平台单测路径）。
+func copyAppBundle(srcApp, dstApp string) error {
+	if runtime.GOOS == "darwin" || dittoCmd != defaultDittoCmd {
+		c := exec.Command(dittoCmd, srcApp, dstApp)
+		util.HideWindow(c)
+		c.Stdout = os.Stderr
+		c.Stderr = os.Stderr
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("ditto copy %s: %w", srcApp, err)
+		}
+		return nil
+	}
+	return util.CopyDir(srcApp, dstApp)
 }
 
 func extractZip(src, dst string, strip int) error {

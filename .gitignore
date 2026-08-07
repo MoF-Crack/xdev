@@ -61,3 +61,10 @@ build/baseline-*
 
 # Signing keys (public key may be committed; private key never)
 keys/priv.key
+
+# Handoff document (session handover state, generated per-machine; see AGENTS.md)
+HANDOFF.md
+
+# Stray artifacts
+one-api/
+test-results/

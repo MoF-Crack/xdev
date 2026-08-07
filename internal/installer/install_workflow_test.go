@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,8 +75,8 @@ func (f *fakePlugin) RequiredPlugin() []string { return nil }
 var _ plugin.Plugin = (*fakePlugin)(nil)
 
 // makeFakeZip writes a valid zip at dest containing a single file
-// "<name>/bin/hello<exeSuffix>". This mirrors the shape of a real tool
-// archive so extraction + shim wiring have something to act on.
+// "<name>/bin/<name><exeSuffix>". The binary name matches the tool/shim
+// name so post-extract integrity checks (VerifyInstallIntegrity) pass.
 func makeFakeZip(t *testing.T, dest, name string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -88,9 +89,9 @@ func makeFakeZip(t *testing.T, dest, name string) {
 	defer f.Close()
 
 	w := zip.NewWriter(f)
-	binName := "hello"
+	binName := name
 	if runtime.GOOS == "windows" {
-		binName = "hello.exe"
+		binName = name + ".exe"
 	}
 	path := name + "/bin/" + binName
 	fw, err := w.Create(path)
@@ -98,6 +99,35 @@ func makeFakeZip(t *testing.T, dest, name string) {
 		t.Fatalf("create zip entry: %v", err)
 	}
 	if _, err := fw.Write([]byte("#!/bin/sh\necho hello\n")); err != nil {
+		t.Fatalf("write zip entry: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+}
+
+// makeFlatFakeZip writes a zip with binaries at archive root (no top-level
+// directory). Used to exercise strip-layout integrity failures.
+func makeFlatFakeZip(t *testing.T, dest, binName string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		t.Fatalf("create zip: %v", err)
+	}
+	defer f.Close()
+	w := zip.NewWriter(f)
+	name := binName
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		name = name + ".exe"
+	}
+	fw, err := w.Create(name)
+	if err != nil {
+		t.Fatalf("create zip entry: %v", err)
+	}
+	if _, err := fw.Write([]byte("MZ-fake-binary")); err != nil {
 		t.Fatalf("write zip entry: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -314,9 +344,19 @@ func TestInstallWorkflow_AlreadyInstalled(t *testing.T) {
 		},
 	}
 	// Pre-create the install dir to trigger the already-installed branch.
+	// The fixture includes the shim binary so VerifyInstallIntegrity
+	// considers the install complete (a bare/empty dir would now be
+	// rejected as incomplete).
 	installPath := filepath.Join(cfg.Core.InstallDir, "fakego", "1.0.0")
 	if err := os.MkdirAll(filepath.Join(installPath, "bin"), 0o755); err != nil {
 		t.Fatalf("mkdir install: %v", err)
+	}
+	binName := "fakego"
+	if runtime.GOOS == "windows" {
+		binName = "fakego.exe"
+	}
+	if err := os.WriteFile(filepath.Join(installPath, "bin", binName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake shim binary: %v", err)
 	}
 
 	res, err := ins.Install(context.Background(), p, "1.0.0")
@@ -376,3 +416,163 @@ var errNoVersion = errString("no such version")
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// TestInstallWorkflow_IncompleteInstall asserts that an existing install
+// directory that fails integrity (missing shim binary) is NOT silently
+// activated: InstallWithProgress returns ErrIncompleteInstall.
+func TestInstallWorkflow_IncompleteInstall(t *testing.T) {
+	ins, cfg, _ := newTestInstaller(t)
+
+	p := &fakePlugin{
+		name:  "fakego",
+		shims: []string{"fakego"},
+		archive: &manifest.Archive{
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
+			URL: "https://example.test/fakego-1.0.0.zip", SHA256: "abc",
+		},
+	}
+	// Pre-create an install dir that is non-empty but lacks the shim binary.
+	installPath := filepath.Join(cfg.Core.InstallDir, "fakego", "1.0.0")
+	if err := os.MkdirAll(filepath.Join(installPath, "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir install: %v", err)
+	}
+
+	_, err := ins.Install(context.Background(), p, "1.0.0")
+	if err == nil {
+		t.Fatal("expected ErrIncompleteInstall, got nil")
+	}
+	if !errors.Is(err, ErrIncompleteInstall) {
+		t.Fatalf("errors.Is(err, ErrIncompleteInstall) = false, got: %v", err)
+	}
+	ie, ok := err.(*IncompleteInstallError)
+	if !ok {
+		t.Fatalf("error type = %T, want *IncompleteInstallError", err)
+	}
+	if ie.Tool != "fakego" || ie.Version != "1.0.0" {
+		t.Errorf("IncompleteInstallError fields: tool=%q version=%q", ie.Tool, ie.Version)
+	}
+	if len(ie.Missing) == 0 || ie.Missing[0] != "fakego" {
+		t.Errorf("Missing = %v, want [fakego]", ie.Missing)
+	}
+}
+
+// TestInstallWorkflow_ForceReinstall asserts that Force removes an existing
+// complete install directory and reinstalls from scratch.
+func TestInstallWorkflow_ForceReinstall(t *testing.T) {
+	ins, cfg, _ := newTestInstaller(t)
+
+	const toolName = "fakego"
+	// Seed the cache so the reinstall path is a verified cache hit (offline).
+	cacheFile := filepath.Join(cfg.Core.CacheDir, toolName+"-1.0.0.zip")
+	makeFakeZip(t, cacheFile, toolName)
+	realSHA := fileSHA(t, cacheFile)
+
+	p := &fakePlugin{
+		name:  toolName,
+		shims: []string{"fakego"},
+		archive: &manifest.Archive{
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
+			URL: "https://example.test/fakego-1.0.0.zip", SHA256: realSHA, Strip: 1,
+		},
+	}
+
+	// Pre-create a "complete" install dir with a stale marker file.
+	installPath := filepath.Join(cfg.Core.InstallDir, toolName, "1.0.0")
+	binName := "fakego"
+	if runtime.GOOS == "windows" {
+		binName = "fakego.exe"
+	}
+	if err := os.MkdirAll(filepath.Join(installPath, "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(installPath, "bin", binName), []byte("stale"), 0o755); err != nil {
+		t.Fatalf("write stale shim: %v", err)
+	}
+	staleMarker := filepath.Join(installPath, "stale-marker.txt")
+	if err := os.WriteFile(staleMarker, []byte("old"), 0o644); err != nil {
+		t.Fatalf("write stale marker: %v", err)
+	}
+
+	res, err := ins.InstallWithProgress(context.Background(), p, "1.0.0", nil, InstallOptions{Force: true})
+	if err != nil {
+		t.Fatalf("Force reinstall failed: %v", err)
+	}
+	if !res.Activated {
+		t.Error("Activated = false, want true after force reinstall")
+	}
+	// The old directory was removed: stale marker must be gone, and a fresh
+	// extraction (with .postinstall marker) must exist.
+	if _, err := os.Stat(staleMarker); err == nil {
+		t.Error("stale-marker.txt still exists — old install dir was not removed")
+	}
+	if _, err := os.Stat(filepath.Join(installPath, ".postinstall")); err != nil {
+		t.Errorf("fresh install missing .postinstall marker: %v", err)
+	}
+	// The fake zip extracts <name>/bin/<name><exeSuffix> with strip=1,
+	// so the freshly extracted binary must exist again.
+	extractedName := "fakego"
+	if runtime.GOOS == "windows" {
+		extractedName = "fakego.exe"
+	}
+	if _, err := os.Stat(filepath.Join(installPath, "bin", extractedName)); err != nil {
+		t.Errorf("reinstalled extracted binary missing: %v", err)
+	}
+}
+
+// TestInstallWorkflow_PostExtractIntegrityRejectsStripMistake asserts that
+// a flat-root archive installed with strip=1 fails the post-extract
+// integrity hard gate (instead of silently leaving an empty/broken dir).
+func TestInstallWorkflow_PostExtractIntegrityRejectsStripMistake(t *testing.T) {
+	ins, cfg, _ := newTestInstaller(t)
+
+	const toolName = "flattool"
+	cacheFile := filepath.Join(cfg.Core.CacheDir, toolName+"-1.0.0.zip")
+	makeFlatFakeZip(t, cacheFile, toolName)
+	realSHA := fileSHA(t, cacheFile)
+
+	p := &fakePlugin{
+		name:  toolName,
+		shims: []string{toolName},
+		archive: &manifest.Archive{
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
+			URL: "https://example.test/flattool-1.0.0.zip", SHA256: realSHA,
+			// Wrong strip for a flat-root archive: binaries sit at root.
+			Strip: 1,
+		},
+	}
+
+	_, err := ins.Install(context.Background(), p, "1.0.0")
+	if err == nil {
+		t.Fatal("expected post-extract integrity failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "post-extract integrity check failed") {
+		t.Fatalf("error = %q, want post-extract integrity failure", err)
+	}
+	if !strings.Contains(err.Error(), "strip=1") {
+		t.Fatalf("error = %q, want strip layout hint", err)
+	}
+	// Broken install dir must not remain as "installed".
+	installPath := filepath.Join(cfg.Core.InstallDir, toolName, "1.0.0")
+	if _, err := os.Stat(installPath); err == nil {
+		t.Error("broken install dir still exists after integrity failure")
+	}
+}
+
+// TestEnsureInstallIntegrity_OK covers the success path used as a hard gate.
+func TestEnsureInstallIntegrity_OK(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tool", "1.0.0")
+	bin := "tool"
+	if runtime.GOOS == "windows" {
+		bin = "tool.exe"
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", bin), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &fakePlugin{name: "tool", shims: []string{"tool"}}
+	if err := ensureInstallIntegrity(p, dir, 1); err != nil {
+		t.Fatalf("ensureInstallIntegrity OK path failed: %v", err)
+	}
+}

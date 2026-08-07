@@ -460,6 +460,115 @@ xdev config set mirror.python https://mirrors.tuna.tsinghua.edu.cn/python
 
 ---
 
+## 工具版本嗅探与 GitHub Token
+
+### 全局嗅探机制
+
+xdev 的「嗅探」(sniff) 功能会自动发现工具的远程可用版本，支持多种上游源：
+
+- **GitHub Releases API** (`api.github.com`) — 多数托管在 GitHub 的工具
+- **Google Android 仓库** — Android SDK 工具链
+- **官网 HTML 页面** — 部分无统一 API 的工具（如仓颉）
+- **其他自定义源** — Lua 插件或 manifest 中可配置
+
+嗅探在以下时机触发：后台定时（默认 24h）、启动时、手动 `xdev sniff`。
+
+### GitHub API 限流
+
+GitHub 类工具依赖 `api.github.com`，其 API 存在访问频率限制：
+
+| 认证状态 | 每小时限额 | 说明 |
+|---------|-----------|------|
+| 未认证 | ≈ 60 次 | 全量嗅探（约 40+ 工具）极易触发 |
+| 已配置 Token | 5,000 次 | 足够日常使用 |
+
+未认证时，全量嗅探很快耗尽配额，日志中会出现：
+```
+github remote: API rate limit exhausted
+```
+
+### 配置 GitHub Token
+
+配置 Token 可将配额提升至 ≈5,000 次/小时，避免嗅探因限流中断。
+
+**方法一：环境变量（推荐）**
+
+设置用户级环境变量（Windows 在「系统属性 > 环境变量」中添加）：
+
+- `GITHUB_TOKEN` — 首选变量名
+- `GH_TOKEN` — 备选变量名
+
+从 Windows 资源管理器启动 GUI 时，xdev 也会读取注册表 `HKCU\Environment` 中的值，确保 Explorer 启动的进程也能找到 Token。
+
+**方法二：config.yaml**
+
+```yaml
+sniff:
+  github_token: ghp_xxxxxxxxxxxx  # 注意：勿提交到仓库
+```
+
+优先级：配置文件 > `GITHUB_TOKEN` 环境变量 > `GH_TOKEN` 环境变量。
+
+启动日志确认 Token 是否生效：
+```
+[startup] GitHub API token: configured
+```
+若未配置：
+```
+[startup] GitHub API token: not configured — rate limit ~60 req/h
+```
+
+### 代理与 Token 的区别
+
+| 概念 | 作用 | 配置方式 |
+|------|------|---------|
+| **代理 (Proxy)** | 解决网络连通性（如公司内网、防火墙） | `xdev config proxy --http http://proxy:8080 --enable` |
+| **Token** | 解决 GitHub API 配额限制 | 见上方配置方法 |
+
+**建议**：
+- 配置 Token 后，确认代理设置无误，避免无效代理导致连接失败
+- Token 仅用于读取公开的 releases 信息，不需要 CI/Runner 权限
+- 创建 Token 时无需勾选任何 `repo` 或 `admin` 权限，`public_repo` 只读即可
+
+### 常见问题
+
+**Q: 已经配置了 Token，为什么还提示未配置？**
+
+重启终端或 GUI 使环境变量生效。从 Windows 资源管理器启动 GUI 时，需重新登录或重启 Explorer。
+
+**Q: 配置 Token 后嗅探仍然失败？**
+
+1. 检查网络连通性：`curl -I https://api.github.com`
+2. 确认 Token 有效：`curl -H "Authorization: token ghp_xxx" https://api.github.com/rate_limit`
+3. 检查是否配置了无效代理——代理与服务端不通会导致 API 不可达（日志可能显示 proxy refused）
+4. 关闭不必要的代理，或在 config.yaml 中将 `proxy.enabled` 设为 `false`
+
+---
+
+## 更新忽略与本地扫描结果
+
+### 可用更新「忽略」
+
+顶部更新徽标（如「2 个更新」）展开后，每项除「安装」外提供 **忽略**：
+
+- 忽略后该工具不再出现在可用更新列表，徽标计数减少
+- 持久化路径：`$XMDEV_HOME/cache/ignored_tools.json`（字段 `kind=update`）
+- 仪表盘 **忽略清单** 可查看全部忽略项，并 **取消忽略**
+- 取消忽略后，若 sniff 缓存仍显示有新版本，该项会重新出现
+
+### 本地扫描结果
+
+仪表盘「扫描本地环境」完成后会展示 **本地扫描结果** 列表（工具 / 版本 / 路径）：
+
+| 操作 | 行为 |
+|------|------|
+| **迁移** | 将检测到的本地安装纳入 xdev 管理（复用现有迁移逻辑） |
+| **忽略** | 写入忽略清单（`kind=local-scan`），下次扫描不再显示 |
+
+忽略清单与更新忽略共用同一文件 `$XMDEV_HOME/cache/ignored_tools.json`。在忽略清单中移除某项后，对应更新或本地扫描结果可再次出现。
+
+---
+
 ## 高级功能
 
 ### 服务编排

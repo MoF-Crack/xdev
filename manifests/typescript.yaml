@@ -8,16 +8,44 @@ shims:
   - tsserver
 env_vars:
   TYPESCRIPT_HOME: "{{install}}"
-latest: "5.7.3"
+latest: "7.0.2"
 lts: ""
 versions:
+  - version: "7.0.2"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-7.0.2.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-7.0.2.tgz
+        sha256: "da2513f4b95176d6dde8b51aab7afe8a927656c9d277369793f77f7e59371c08"
+        size: 5000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-7.0.2.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-7.0.2.tgz
+        sha256: ""
+        size: 5000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/typescript/-/typescript-7.0.2.tgz
+        mirror_url: https://registry.npmmirror.com/typescript/-/typescript-7.0.2.tgz
+        sha256: ""
+        size: 5000000
+        strip: 1
   - version: "5.7.3"
     stable: true
     release: "2025-01-15"
     archives:
       - os: windows
         arch: amd64
-        format: zip
+        format: tar.gz
         url: https://registry.npmjs.org/typescript/-/typescript-5.7.3.tgz
         mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.7.3.tgz
         sha256: 80cfca1254bab8e81d639178e42d6406d856fba6e34cad60d1ab50ee6e5f7ebb
@@ -45,7 +73,7 @@ versions:
     archives:
       - os: windows
         arch: amd64
-        format: zip
+        format: tar.gz
         url: https://registry.npmjs.org/typescript/-/typescript-5.6.3.tgz
         mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.6.3.tgz
         sha256: ef67f8d8ad895858024b7339d3e34bf112cae3c5db1f538c3079038b17ae30fa
@@ -73,7 +101,7 @@ versions:
     archives:
       - os: windows
         arch: amd64
-        format: zip
+        format: tar.gz
         url: https://registry.npmjs.org/typescript/-/typescript-5.5.4.tgz
         mirror_url: https://registry.npmmirror.com/typescript/-/typescript-5.5.4.tgz
         sha256: 2680b6354d462a1d90a2cf10c790e071f1c45081c9d4561cb47ce23c934d8586

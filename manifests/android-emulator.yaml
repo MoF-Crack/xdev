@@ -42,5 +42,5 @@ versions:
         strip: 0
 remote:
   type: html
-  url: "https://dl.google.com/android/repository/"
+  url: "https://dl.google.com/android/repository/repository2-3.xml"
   pattern: "emulator-\\w+-(\\d+)"

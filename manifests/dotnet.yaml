@@ -8,6 +8,34 @@ shims:
 env_vars:
     DOTNET_ROOT: '{{install}}'
 versions:
+    - version: 9.0.119
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.119/dotnet-sdk-9.0.119-win-x64.zip
+          mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/9.0.119/dotnet-sdk-9.0.119-win-x64.zip
+          sha256: "e969d520df9b34682c9cf3f6b02463347441fb2c4ab05aa5ff4b20210ff73fc8"
+          size: 210000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.119/dotnet-sdk-9.0.119-linux-x64.tar.gz
+          mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/9.0.119/dotnet-sdk-9.0.119-linux-x64.tar.gz
+          sha256: ""
+          size: 220000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://builds.dotnet.microsoft.com/dotnet/Sdk/9.0.119/dotnet-sdk-9.0.119-osx-arm64.tar.gz
+          mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/9.0.119/dotnet-sdk-9.0.119-osx-arm64.tar.gz
+          sha256: ""
+          size: 200000000
+          strip: 0
     - version: 8.0.403
       stable: true
       release: "2024-10-08"
@@ -19,7 +47,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/8.0.403/dotnet-sdk-8.0.403-win-x64.zip
           sha256: c459550a3dc77e3a2af36d5bf8836746603f72fca0e6c142cbf253d4bc1f0bc7
           size: 200000000
-          strip: 1
+          strip: 0
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -27,7 +55,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/8.0.403/dotnet-sdk-8.0.403-linux-x64.tar.gz
           sha256: f7c31f1397444aab91afbef8d8a46e36531443faced60fa9d4070cf15a81b256
           size: 210000000
-          strip: 1
+          strip: 0
         - os: linux
           arch: arm64
           format: tar.gz
@@ -35,7 +63,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/8.0.403/dotnet-sdk-8.0.403-linux-arm64.tar.gz
           sha256: e6b539de634b5c40d86631e5e35488af6dbe682229e367375261c635ad5e8cb0
           size: 200000000
-          strip: 1
+          strip: 0
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -43,7 +71,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/8.0.403/dotnet-sdk-8.0.403-osx-arm64.tar.gz
           sha256: f225575b44b1f49acc0c58be92ad3f4ff6e7b8f4f4349794478c2b26d751cb05
           size: 190000000
-          strip: 1
+          strip: 0
         - os: darwin
           arch: x86_64
           format: tar.gz
@@ -51,7 +79,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/8.0.403/dotnet-sdk-8.0.403-osx-x64.tar.gz
           sha256: 74cb047ea84fd717d03796b49e6af2e19e58d976fae6157109851106cfe99c5e
           size: 195000000
-          strip: 1
+          strip: 0
     - version: 7.0.410
       stable: true
       release: "2024-06-11"
@@ -63,7 +91,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/7.0.410/dotnet-sdk-7.0.410-win-x64.zip
           sha256: 7da7134c00dbb4f789111f6369eb68bc9d0fd5109380afa2a45c0f079c998b0b
           size: 190000000
-          strip: 1
+          strip: 0
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -71,7 +99,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/7.0.410/dotnet-sdk-7.0.410-linux-x64.tar.gz
           sha256: acc4047f48cc0d401ed51f8d1c02c801f9e1c58b80c137cb13fd4bee316308a9
           size: 195000000
-          strip: 1
+          strip: 0
         - os: linux
           arch: arm64
           format: tar.gz
@@ -79,7 +107,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/7.0.410/dotnet-sdk-7.0.410-linux-arm64.tar.gz
           sha256: 482b232ce9d69b3bb2c18fd52498507d86455476b36e165157c496ed302fce72
           size: 185000000
-          strip: 1
+          strip: 0
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -87,7 +115,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/7.0.410/dotnet-sdk-7.0.410-osx-arm64.tar.gz
           sha256: 2c470a56c7e951277ad91ce53b91226c153214e172f8bf2db0e7672a3d32dfb6
           size: 180000000
-          strip: 1
+          strip: 0
         - os: darwin
           arch: x86_64
           format: tar.gz
@@ -95,7 +123,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/7.0.410/dotnet-sdk-7.0.410-osx-x64.tar.gz
           sha256: a657347cebdef932119446dfabe0f9d992b7d96929eadfb8ad8177bbd33b632a
           size: 185000000
-          strip: 1
+          strip: 0
     - version: 6.0.423
       stable: true
       release: "2024-06-11"
@@ -107,7 +135,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/6.0.423/dotnet-sdk-6.0.423-win-x64.zip
           sha256: 0165d56172e86cfaa10fa8afad94a0139ad215353c3ec9c9e852cf7d6dded4a9
           size: 185000000
-          strip: 1
+          strip: 0
         - os: linux
           arch: x86_64
           format: tar.gz
@@ -115,7 +143,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/6.0.423/dotnet-sdk-6.0.423-linux-x64.tar.gz
           sha256: 4d4812259c74e078cda66bf4f0ff03126ad52e60187737215a94907b2fd71e64
           size: 190000000
-          strip: 1
+          strip: 0
         - os: linux
           arch: arm64
           format: tar.gz
@@ -123,7 +151,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/6.0.423/dotnet-sdk-6.0.423-linux-arm64.tar.gz
           sha256: 1c70b04474e667153e234834337972a35e516cb486ed745aef2dac5b31c14176
           size: 180000000
-          strip: 1
+          strip: 0
         - os: darwin
           arch: arm64
           format: tar.gz
@@ -131,7 +159,7 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/6.0.423/dotnet-sdk-6.0.423-osx-arm64.tar.gz
           sha256: 36d8aeb85c159d02e9045069c27c3e8a92b5498697509afe8cd9b872205e6e4f
           size: 175000000
-          strip: 1
+          strip: 0
         - os: darwin
           arch: x86_64
           format: tar.gz
@@ -139,12 +167,12 @@ versions:
           mirror_url: https://dotnetcli.azureedge.net/dotnet/Sdk/6.0.423/dotnet-sdk-6.0.423-osx-x64.tar.gz
           sha256: 322c552d7f00c673a6d8ddd9c6b67700d2b5676a44d55300a73b3252e610b425
           size: 180000000
-          strip: 1
+          strip: 0
 remote:
     type: github
     url: dotnet/sdk
     path: ""
     pattern: v(\d+\.\d+\.\d+)
-latest: 8.0.403
+latest: 9.0.119
 lts: 8.0.403
 install_root: ""

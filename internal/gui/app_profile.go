@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -29,6 +30,15 @@ import (
 // The profile includes: installed tools, active versions, environment variables,
 // PATH mode, proxy settings, and mirror configuration.
 func (a *App) ExportProfile(filePath string) error {
+	// Security (F-11): 只允许导出为 .json 文件，且目标目录必须存在（可写）。
+	if strings.ToLower(filepath.Ext(filePath)) != ".json" {
+		return fmt.Errorf("profile export path must end with .json: %q", filePath)
+	}
+	parent := filepath.Dir(filePath)
+	if fi, err := os.Stat(parent); err != nil || !fi.IsDir() {
+		return fmt.Errorf("export directory does not exist: %s", parent)
+	}
+
 	cfg := a.getCfg()
 
 	profile := map[string]interface{}{
@@ -101,6 +111,9 @@ func (a *App) ExportProfile(filePath string) error {
 	return nil
 }
 
+// profileMaxSize 是导入配置文件的大小上限（10 MB），防止读取任意超大文件。
+const profileMaxSize = 10 << 20
+
 // ImportProfile imports an environment profile from a JSON file.
 // It installs the specified tool versions, sets active versions,
 // configures environment variables, proxy, and mirrors.
@@ -111,6 +124,26 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 		Installed: 0,
 		Failed:    0,
 		Errors:    []string{},
+	}
+
+	// Security (F-11): 校验路径 —— 必须是 .json 常规文件且大小受限，
+	// 防止读取任意路径/设备文件。
+	if strings.ToLower(filepath.Ext(filePath)) != ".json" {
+		result.Message = fmt.Sprintf("profile import path must end with .json: %q", filePath)
+		return result
+	}
+	fi, err := os.Stat(filePath)
+	if err != nil {
+		result.Message = fmt.Sprintf("读取文件失败: %v", err)
+		return result
+	}
+	if !fi.Mode().IsRegular() {
+		result.Message = fmt.Sprintf("profile path is not a regular file: %q", filePath)
+		return result
+	}
+	if fi.Size() > profileMaxSize {
+		result.Message = fmt.Sprintf("profile file too large (%d bytes, limit %d)", fi.Size(), profileMaxSize)
+		return result
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -141,27 +174,34 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 		return result
 	}
 
-	cfg := a.getCfg()
 	errors := []string{}
 	installed := 0
 	failed := 0
 
-	// Apply PATH mode
+	// Apply PATH mode（F-19/D17：写锁内操作实时配置）
 	if profile.PathMode != "" {
-		if err := cfg.SetPathMode(profile.PathMode); err != nil {
+		if err := a.mutateCfg(func(cfg *config.Config) error {
+			return cfg.SetPathMode(profile.PathMode)
+		}); err != nil {
 			errors = append(errors, fmt.Sprintf("set path mode: %v", err))
 		}
 	}
 
 	// Apply proxy settings
-	if err := cfg.SetProxy(profile.Proxy.HTTP, profile.Proxy.HTTPS, profile.Proxy.NoProxy, profile.Proxy.Enabled); err != nil {
+	if err := a.mutateCfg(func(cfg *config.Config) error {
+		return cfg.SetProxy(profile.Proxy.HTTP, profile.Proxy.HTTPS, profile.Proxy.NoProxy, profile.Proxy.Enabled)
+	}); err != nil {
 		errors = append(errors, fmt.Sprintf("set proxy: %v", err))
 	}
 
 	// Apply mirror settings
 	if len(profile.Mirrors) > 0 {
-		cfg.Mirror = profile.Mirrors
-		cfg.Save()
+		if err := a.mutateCfg(func(cfg *config.Config) error {
+			cfg.Mirror = profile.Mirrors
+			return cfg.Save()
+		}); err != nil {
+			errors = append(errors, fmt.Sprintf("set mirrors: %v", err))
+		}
 	}
 
 	// Install tools

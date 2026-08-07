@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-08",
+    "approved_at":  "2026-08-08",
+    "schema_version":  1,
+    "target_state":  "待用户批准",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/014-manifest-version-sync/plan.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Approve implementation plan for 014-manifest-version-sync",
+    "recorded_by":  "Codex Orchestrator",
+    "asset_type":  "plan",
+    "decision":  "approve-state-transition",
+    "target_version":  "isVersionNewer(\"2.55.0\\x00malicious\", \"2.47.0\")",
+    "authorization_text":  "SDD Loop convergence batch approval for 014-manifest-version-sync",
+    "approval_id":  "2026-08-08-plan-014-001"
+}

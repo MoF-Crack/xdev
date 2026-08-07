@@ -33,6 +33,7 @@ package installer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -56,6 +57,11 @@ import (
 	"github.com/xmdemt/xdev/internal/version"
 )
 
+// TOFUWarningCallback is called when an archive with an empty or placeholder
+// SHA-256 is downloaded and the actual hash is computed. The callback can be
+// used by the GUI to emit a Wails event for the frontend warning dialog.
+type TOFUWarningCallback func(tool, version, osName, arch, sha256 string)
+
 // Installer is a high-level workflow runner that coordinates tool installation,
 // activation, and uninstallation. It holds references to the global config,
 // mirror table, and plugin registry, and delegates OS-specific and format-
@@ -69,6 +75,8 @@ type Installer struct {
 
 	mirrorCacheOnce sync.Once          // Ensures mirror health cache is loaded once
 	mirrorCache     *MirrorHealthCache // Lazy-loaded mirror health cache
+
+	tofuCB TOFUWarningCallback // Optional callback for TOFU warnings (set by GUI)
 }
 
 // New constructs an Installer with the given config and plugin registry.
@@ -108,12 +116,33 @@ func (osExecRunner) Run(ctx context.Context, name string, args []string, env []s
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// 隐藏子进程的控制台窗口（Windows），避免 rustup 等安装器弹出
+	// 独立命令行窗口打断用户操作（与 getVersion 等其他调用一致）。
+	util.HideWindow(cmd)
 	return cmd.Run()
+}
+
+// envHasKey 报告 env 列表（"KEY=value" 形式）中是否已存在指定键。
+// 用于判断子进程环境是否已显式设置代理等变量，避免覆盖用户配置。
+func envHasKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetExecRunner injects a custom execRunner (used by tests to verify
 // routing without executing real commands).
 func (i *Installer) SetExecRunner(r execRunner) { i.runner = r }
+
+// SetTOFUWarningCallback registers a callback that is invoked when an archive
+// with an empty or placeholder SHA-256 is downloaded and the actual hash is
+// computed and written to the on-disk manifest. The GUI uses this to emit a
+// Wails event for the frontend warning dialog.
+func (i *Installer) SetTOFUWarningCallback(cb TOFUWarningCallback) { i.tofuCB = cb }
 
 // ProgressPhase represents the current phase of installation for progress reporting.
 // Used by ProgressCallback to inform the UI which stage is active.
@@ -143,6 +172,18 @@ type InstallResult struct {
 	SHA256      string // Archive SHA-256 (may be empty when manifest omits it)
 	InstallPath string // Local installation directory
 	Activated   bool   // Whether the version was set as active
+
+	// TOFUWarning is set when the archive had an empty or placeholder SHA-256
+	// and the actual hash was computed and written to the on-disk manifest.
+	// The frontend can check this field to show a warning dialog.
+	TOFUWarning string `json:"tofuWarning,omitempty"` // computed SHA-256, non-empty when TOFU occurred
+
+	// ActivationError is set when the version was installed successfully
+	// but activation (shim/PATH update) failed — typically because the
+	// currently active version's binary is locked by a running process.
+	// The version is fully installed and can be activated later via
+	// `xdev use <tool>@<version>` once the conflicting process exits.
+	ActivationError string `json:"activationError,omitempty"`
 }
 
 // InstallOptions controls optional behaviour of the install workflow.
@@ -158,6 +199,59 @@ type InstallOptions struct {
 
 	// BatchTotal is the total number of tools in a batch install.
 	BatchTotal int
+
+	// Force, when true, removes any existing install directory (complete
+	// or incomplete) and reinstalls from scratch. Without Force, a
+	// complete install is only re-activated, and an incomplete install
+	// returns ErrIncompleteInstall instead of being silently activated.
+	Force bool
+}
+
+// ErrIncompleteInstall is the sentinel error wrapped by
+// IncompleteInstallError. It is returned when an install directory exists
+// but fails VerifyInstallIntegrity and no Force reinstall was requested.
+var ErrIncompleteInstall = errors.New("incomplete install")
+
+// IncompleteInstallError describes an existing-but-incomplete installation.
+// Callers can use errors.Is(err, ErrIncompleteInstall) to detect it and,
+// for example, prompt the user to repair the installation.
+type IncompleteInstallError struct {
+	Tool    string
+	Version string
+	Path    string
+	Reason  string
+	Missing []string
+}
+
+func (e *IncompleteInstallError) Error() string {
+	msg := fmt.Sprintf("%s@%s is incompletely installed at %s: %s", e.Tool, e.Version, e.Path, e.Reason)
+	if len(e.Missing) > 0 {
+		msg += " (missing: " + strings.Join(e.Missing, ", ") + ")"
+	}
+	return msg
+}
+
+// Is reports whether target is ErrIncompleteInstall.
+func (e *IncompleteInstallError) Is(target error) bool {
+	return target == ErrIncompleteInstall
+}
+
+// CheckProxyConfigured reports whether a proxy is configured for downloads,
+// either via xdev config (GetProxyURL) or the standard environment variables
+// (HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy). Used to warn users when an
+// archive requires a proxy but none is available (Spec 021 D7 — shared by
+// CLI downloadWithProgress and the GUI install path).
+func CheckProxyConfigured(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.GetProxyURL("https") != "" {
+		return true
+	}
+	return os.Getenv("HTTP_PROXY") != "" ||
+		os.Getenv("HTTPS_PROXY") != "" ||
+		os.Getenv("http_proxy") != "" ||
+		os.Getenv("https_proxy") != ""
 }
 
 // Install performs the full install workflow for p at the given
@@ -209,14 +303,36 @@ func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) [
 			ver = p.DefaultVersion()
 		}
 
-		// Check if already installed
+		// Check if already installed. Unlike the old plain directory check,
+		// an existing-but-incomplete install is NOT treated as installed —
+		// same decision as InstallWithProgress (Spec 021 D8).
 		installPath := p.InstallDir(i.cfg.Core.InstallDir, ver)
 		if fi, err := os.Stat(installPath); err == nil && fi.IsDir() {
+			integrity := VerifyInstallIntegrity(p, installPath)
+			if integrity.OK {
+				results[idx] = BatchInstallResult{
+					Tool:        item.ToolName,
+					Version:     ver,
+					InstallPath: installPath,
+					Status:      "already_installed",
+				}
+				continue
+			}
+			// 不完整安装：与 InstallWithProgress 一致，返回 ErrIncompleteInstall。
+			log.Printf("[install] WARNING: %s@%s is incompletely installed at %s: %s",
+				item.ToolName, ver, installPath, integrity.Reason)
 			results[idx] = BatchInstallResult{
 				Tool:        item.ToolName,
 				Version:     ver,
 				InstallPath: installPath,
-				Status:      "already_installed",
+				Status:      "failed",
+				Error: &IncompleteInstallError{
+					Tool:    item.ToolName,
+					Version: ver,
+					Path:    installPath,
+					Reason:  integrity.Reason,
+					Missing: integrity.Missing,
+				},
 			}
 			continue
 		}
@@ -250,7 +366,9 @@ func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) [
 // The workflow is:
 //  1. Resolve version spec via plugin
 //  2. Select archive for current OS/arch
-//  3. Check if already installed (fast path: just activate)
+//  3. Check if already installed: if intact and no Force, just activate;
+//     if incomplete and no Force, return ErrIncompleteInstall; if Force,
+//     remove the existing directory and reinstall
 //  4. Download with mirror support and SHA-256 verification
 //  5. Extract archive to install directory
 //  6. Run PostInstall hook
@@ -299,21 +417,45 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	resSHA := arch.SHA256
 
 	if _, err := os.Stat(installPath); err == nil {
-		// Already installed - just activate (unless NoActivate).
-		log.Printf("[install] Already installed at %s", installPath)
-		if opts.NoActivate {
-			log.Printf("[install] NoActivate set, skipping activation")
-			return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: false}, nil
+		// Already installed. Verify integrity: an incomplete install must
+		// not be silently activated — return ErrIncompleteInstall so the
+		// caller can prompt the user for a same-version repair.
+		integrity := VerifyInstallIntegrity(p, installPath)
+		if !integrity.OK && !opts.Force {
+			log.Printf("[install] WARNING: %s@%s is incompletely installed at %s: %s",
+				p.Name(), ver, installPath, integrity.Reason)
+			return nil, &IncompleteInstallError{
+				Tool:    p.Name(),
+				Version: ver,
+				Path:    installPath,
+				Reason:  integrity.Reason,
+				Missing: integrity.Missing,
+			}
 		}
-		if onProgress != nil {
-			onProgress(PhaseActivating, 100, "", "")
+		if opts.Force {
+			// Force reinstall: remove the existing directory (complete or
+			// incomplete) and fall through to a full download + install.
+			log.Printf("[install] Force reinstall requested for %s@%s — removing existing install dir", p.Name(), ver)
+			if err := os.RemoveAll(installPath); err != nil {
+				return nil, fmt.Errorf("force reinstall: remove existing install dir: %w", err)
+			}
+		} else {
+			// Intact install — just activate (unless NoActivate).
+			log.Printf("[install] Already installed at %s", installPath)
+			if opts.NoActivate {
+				log.Printf("[install] NoActivate set, skipping activation")
+				return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: false}, nil
+			}
+			if onProgress != nil {
+				onProgress(PhaseActivating, 100, "", "")
+			}
+			if err := i.Activate(p, installPath, ver); err != nil {
+				log.Printf("[install] ERROR: activation failed: %v", err)
+				return nil, err
+			}
+			log.Printf("[install] Activation complete: %s@%s", p.Name(), ver)
+			return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: true}, nil
 		}
-		if err := i.Activate(p, installPath, ver); err != nil {
-			log.Printf("[install] ERROR: activation failed: %v", err)
-			return nil, err
-		}
-		log.Printf("[install] Activation complete: %s@%s", p.Name(), ver)
-		return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: true}, nil
 	}
 
 	log.Printf("[install] Starting download phase")
@@ -329,7 +471,21 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		log.Printf("[install] ERROR: install-by-kind failed for %s@%s: %v", p.Name(), ver, err)
 		return nil, err
 	}
-	log.Printf("[install] Install-by-kind complete")
+	// Hard gate for archive extracts only. Executable/script installers
+	// may populate the install tree asynchronously or outside installPath
+	// (e.g. rustup), so binary-presence checks would false-fail them.
+	kind := resolveKind(arch)
+	if kind == manifest.InstallKindArchive {
+		if err := ensureInstallIntegrity(p, installPath, arch.Strip); err != nil {
+			log.Printf("[install] ERROR: %v", err)
+			// Best-effort cleanup so the broken dir is not left as "installed".
+			_ = os.RemoveAll(installPath)
+			return nil, err
+		}
+		log.Printf("[install] Install-by-kind complete (integrity OK)")
+	} else {
+		log.Printf("[install] Install-by-kind complete (kind=%s, skip extract integrity)", kind)
+	}
 
 	// Post-install hook
 	if err := p.PostInstall(ctx, installPath); err != nil {
@@ -346,8 +502,26 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		onProgress(PhaseActivating, 50, "", "")
 	}
 	if err := i.Activate(p, installPath, ver); err != nil {
-		log.Printf("[install] ERROR: activation failed for %s@%s: %v", p.Name(), ver, err)
-		return nil, err
+		// Activation (shim/PATH update) may fail when the currently
+		// active version's binary is locked by a running process.
+		// The new version IS fully installed and can be activated
+		// later via `xdev use` once the conflicting process exits.
+		// We must NOT treat this as a failure — return a successful
+		// result with Activated=false and a hint.
+		log.Printf("[install] WARNING: activation failed for %s@%s (version installed, not activated): %v", p.Name(), ver, err)
+		if onProgress != nil {
+			onProgress(PhaseActivating, 100, "", "")
+		}
+		return &InstallResult{
+			Tool:            p.Name(),
+			Version:         ver,
+			Spec:            resSpec,
+			URL:             resURL,
+			SHA256:          resSHA,
+			InstallPath:     installPath,
+			Activated:       false,
+			ActivationError: err.Error(),
+		}, nil
 	}
 	if onProgress != nil {
 		onProgress(PhaseActivating, 100, "", "")
@@ -406,24 +580,103 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 				}
 			}
 		} else {
-			log.Printf("[install] Cache hit: %s already exists, skipping download", dest)
-			if onProgress != nil {
-				onProgress(PhaseDownloading, 100, "", "")
+			// 缓存命中但 manifest 无可靠 SHA-256（空或占位符）。
+			// Security (F-04 / D15): 若存在 .sha256 sidecar pin 则先校验；
+			// 不匹配时删除缓存（含 pin）并重新下载，绝不静默接受被篡改的缓存。
+			// 无 pin 时接受缓存并走 TOFU 建立 pin。
+			ok, reason := verifyCacheSidecar(dest)
+			if !ok {
+				log.Printf("[install] WARNING: %s — removing cached archive and re-downloading", reason)
+				os.Remove(dest)
+				os.Remove(dest + ".sha256")
+			} else {
+				log.Printf("[install] Cache hit: %s already exists, skipping download", dest)
+				if onProgress != nil {
+					onProgress(PhaseDownloading, 100, "", "")
+				}
+				downloader.LogAudit(downloader.AuditEntry{
+					Tool:    tool,
+					Version: ver,
+					URL:     a.URL,
+					Source:  "cache",
+				})
+				// TOFU: If the archive had an empty or placeholder SHA-256, compute
+				// the actual hash from the cached file and write to on-disk manifest.
+				if a.SHA256 == "" || util.IsAllZeroHash(a.SHA256) {
+					if err := i.TOFUArchiveIfNeeded(tool, ver, a, dest); err != nil {
+						log.Printf("[install] TOFU warning: failed to update manifest for %s@%s: %v", tool, ver, err)
+					}
+				}
+				return nil
 			}
-			downloader.LogAudit(downloader.AuditEntry{
-				Tool:    tool,
-				Version: ver,
-				URL:     a.URL,
-				Source:  "cache",
-			})
-			return nil
 		}
 	}
 	log.Printf("[install] Cache miss, starting download from %s", url)
 
 	// Load manifest signature if available.
-	// Built-in manifests have .yaml.sig files in ManifestDir.
-	// Third-party manifests have .yaml.sig files in ManifestDir/third-party/.
+	manifestSig, isThirdParty := i.LoadManifestSignature(tool)
+
+	// Proxy warning: if the archive explicitly requires a proxy but none
+	// is configured (either via env vars or xdev config), warn the user.
+	if a.RequiresProxy && !CheckProxyConfigured(i.cfg) {
+		log.Printf("[install] WARNING: %s@%s requires a proxy but none is configured", tool, ver)
+		fmt.Fprintf(os.Stderr,
+			"⚠ WARNING: This download requires a proxy to access (GitHub releases may be unreachable in mainland China).\n"+
+				"  Set HTTP_PROXY/HTTPS_PROXY environment variables or configure a proxy in xdev config.\n")
+	}
+
+	var err error
+	err = downloader.Download(ctx, downloader.Options{
+		URL:               url,
+		Dest:              dest,
+		ExpectedSHA:       a.SHA256,
+		URLShaMap:         urlShaMap,
+		ProgressDesc:      progressDesc,
+		Cookie:            util.CookieFromInstallArgs(a.InstallArgs),
+		ManifestSignature: manifestSig,
+		IsThirdParty:      isThirdParty,
+		ProxyURL:          i.cfg.GetProxyURL("https"),
+		FallbackURLs:      fallbackURLs,
+		// Surface non-byte status updates (retries, fallback switches,
+		// range restarts) through the audit log. The GUI wires its own
+		// OnStatus for live progress events.
+		OnStatus: func(message string) {
+			log.Printf("[download] status: %s", message)
+		},
+		OnProgress: func(downloaded, total int64, elapsed time.Duration) {
+			if onProgress != nil && total > 0 {
+				pct := float64(downloaded) / float64(total) * 100
+				speed := util.HumanSpeedStr(downloaded, elapsed)
+				eta := util.HumanETAStr(downloaded, total, elapsed)
+				onProgress(PhaseDownloading, pct, speed, eta)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// TOFU: If the archive had an empty or placeholder SHA-256, compute the
+	// actual hash from the downloaded file and write it to the on-disk manifest.
+	if a.SHA256 == "" || util.IsAllZeroHash(a.SHA256) {
+		if err := i.TOFUArchiveIfNeeded(tool, ver, a, dest); err != nil {
+			// TOFU is best-effort — log the error but don't fail the install.
+			log.Printf("[install] TOFU warning: failed to update manifest for %s@%s: %v", tool, ver, err)
+		}
+	}
+
+	return nil
+}
+
+// LoadManifestSignature loads the Ed25519 manifest signature for a tool
+// (if available) and reports whether the tool is a third-party manifest.
+//
+// Resolution order (shared by CLI and GUI install paths, Spec 021 D6):
+//  1. <ManifestDir>/<tool>.yaml.sig (built-in manifest signature)
+//  2. <ManifestDir>/third-party/<tool>.yaml.sig (third-party signature)
+//  3. Embedded manifest signature (signer.ReadEmbeddedSignature)
+//  4. Third-party manifest existence (no signature → TOFU fallback)
+func (i *Installer) LoadManifestSignature(tool string) ([]byte, bool) {
 	var manifestSig []byte
 	isThirdParty := false
 	thirdPartyDir := filepath.Join(i.cfg.Core.ManifestDir, "third-party")
@@ -449,43 +702,92 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 			log.Printf("[install] Third-party manifest detected for %s (TOFU fallback if no signature)", tool)
 		}
 	}
+	return manifestSig, isThirdParty
+}
 
-	// Proxy warning: if the archive explicitly requires a proxy but none
-	// is configured (either via env vars or xdev config), warn the user.
-	if a.RequiresProxy {
-		proxyURL := i.cfg.GetProxyURL("https")
-		envHTTP := os.Getenv("HTTP_PROXY")
-		envHTTPS := os.Getenv("HTTPS_PROXY")
-		envhttp := os.Getenv("http_proxy")
-		envhttps := os.Getenv("https_proxy")
-		if proxyURL == "" && envHTTP == "" && envHTTPS == "" && envhttp == "" && envhttps == "" {
-			log.Printf("[install] WARNING: %s@%s requires a proxy but none is configured", tool, ver)
-			fmt.Fprintf(os.Stderr,
-				"⚠ WARNING: This download requires a proxy to access (GitHub releases may be unreachable in mainland China).\n"+
-					"  Set HTTP_PROXY/HTTPS_PROXY environment variables or configure a proxy in xdev config.\n")
-		}
+// TOFUArchiveIfNeeded computes the SHA-256 of the downloaded archive and
+// writes it to the on-disk manifest when the manifest carried an empty or
+// placeholder hash. It also invokes the TOFUWarningCallback if set.
+// This is best-effort: errors are logged but not returned to the caller.
+// Exported for the GUI install path (Spec 021 D7).
+func (i *Installer) TOFUArchiveIfNeeded(tool, ver string, a *manifest.Archive, dest string) error {
+	actualSHA, err := util.FileSHA256(dest)
+	if err != nil {
+		return fmt.Errorf("compute SHA-256: %w", err)
+	}
+	if actualSHA == "" {
+		return fmt.Errorf("computed SHA-256 is empty")
 	}
 
-	return downloader.Download(ctx, downloader.Options{
-		URL:               url,
-		Dest:              dest,
-		ExpectedSHA:       a.SHA256,
-		URLShaMap:         urlShaMap,
-		ProgressDesc:      progressDesc,
-		Cookie:            util.CookieFromInstallArgs(a.InstallArgs),
-		ManifestSignature: manifestSig,
-		IsThirdParty:      isThirdParty,
-		ProxyURL:          i.cfg.GetProxyURL("https"),
-		FallbackURLs:      fallbackURLs,
-		OnProgress: func(downloaded, total int64, elapsed time.Duration) {
-			if onProgress != nil && total > 0 {
-				pct := float64(downloaded) / float64(total) * 100
-				speed := util.HumanSpeedStr(downloaded, elapsed)
-				eta := util.HumanETAStr(downloaded, total, elapsed)
-				onProgress(PhaseDownloading, pct, speed, eta)
-			}
-		},
-	})
+	// Determine OS and arch from the archive entry.
+	osName := a.OS
+	arch := a.Arch
+	if osName == "" || osName == "any" {
+		osName = plugin.HostOS()
+	}
+	if arch == "" || arch == "any" {
+		arch = plugin.HostArch()
+	}
+
+	// Write to on-disk manifest.
+	manifestDir := filepath.Join(i.cfg.Core.XMDevDir, "manifests")
+	if err := manifest.UpdateArchiveSHA256(manifestDir, tool, ver, osName, arch, actualSHA); err != nil {
+		return fmt.Errorf("UpdateArchiveSHA256: %w", err)
+	}
+
+	log.Printf("[install] TOFU: computed SHA256 for %s@%s (%s/%s): %s", tool, ver, osName, arch, actualSHA)
+
+	// Invoke callback (GUI mode).
+	if i.tofuCB != nil {
+		i.tofuCB(tool, ver, osName, arch, actualSHA)
+	}
+
+	return nil
+}
+
+// verifyCacheSidecar 校验缓存归档的 .sha256 sidecar pin（F-04 / D15）。
+// 返回 (ok, reason)：
+//   - ok=true 表示可以接受缓存（无 pin、pin 无效、或 pin 与文件哈希一致）
+//   - ok=false 且 reason 非空时，调用方应删除缓存并重新下载
+func verifyCacheSidecar(dest string) (bool, string) {
+	sidecarData, err := os.ReadFile(dest + ".sha256")
+	if err != nil {
+		return true, "" // 无 pin：接受，由 TOFU 建立新 pin
+	}
+	parts := strings.Fields(strings.TrimSpace(string(sidecarData)))
+	if len(parts) < 1 || util.IsAllZeroHash(parts[0]) {
+		return true, "" // pin 内容无效：接受，由 TOFU 覆写
+	}
+	cacheHash, err := util.FileSHA256(dest)
+	if err != nil {
+		return false, fmt.Sprintf("cannot compute SHA-256 of cached archive %s: %v", dest, err)
+	}
+	if !strings.EqualFold(cacheHash, parts[0]) {
+		return false, fmt.Sprintf("cache sidecar pin mismatch for %s (cached=%s got=%s)",
+			dest, parts[0][:16]+"...", cacheHash[:16]+"...")
+	}
+	return true, ""
+}
+
+// verifyInstallerSidecarPin 校验安装器二进制与其 .sha256 sidecar pin 是否一致
+// （F-04/D15）。返回 (matched, err)：
+//   - matched=true：pin 存在且与文件哈希一致，允许运行
+//   - matched=false：pin 缺失或内容无效（拒绝运行——安装器必须可验证）
+//   - err：读取/计算哈希失败
+func verifyInstallerSidecarPin(src string) (bool, error) {
+	data, err := os.ReadFile(src + ".sha256")
+	if err != nil {
+		return false, nil // 无 pin：拒绝（需要真实 manifest SHA）
+	}
+	parts := strings.Fields(strings.TrimSpace(string(data)))
+	if len(parts) < 1 || util.IsAllZeroHash(parts[0]) {
+		return false, nil // pin 内容无效：拒绝
+	}
+	got, err := util.FileSHA256(src)
+	if err != nil {
+		return false, fmt.Errorf("compute SHA-256 of %s: %w", src, err)
+	}
+	return strings.EqualFold(got, parts[0]), nil
 }
 
 // getMirrorHealthCache returns the mirror health cache, loading it from
@@ -697,43 +999,90 @@ func (i *Installer) installByKind(ctx context.Context, p plugin.Plugin, a *manif
 	}
 }
 
+// installerRunMu 串行化“以原始文件名复制安装器 → 运行 → 清理”临界区。
+// 同一 URL 基名（如 rustup-init.exe）在并发安装两个版本时会被竞争
+// 复制/删除，互斥锁保证安全。
+var installerRunMu sync.Mutex
+
 // runInstaller executes a cached installer binary or script after
 // verifying its SHA-256. Unlike the extract path, this runs code — so
 // the SHA check is mandatory: an empty or all-zero (placeholder) SHA
 // is refused, and a mismatch rejects the run.
+//
+// F-04/D15 例外：当 manifest SHA 为空/占位符时，若缓存文件旁存在匹配的
+// .sha256 sidecar pin（TOFU 首次下载时建立），允许运行——这修复了
+// rust 1.97.1（rustup-init.exe，sha256 为空）等工具的安装。
 func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
 	src := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", p.Name(), ver, a.Format))
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return fmt.Errorf("installer binary not in cache: %s", src)
 	}
 
-	// Security: executable/script must have a real SHA-256 (no placeholders).
+	// Security: executable/script must have a real SHA-256 (no placeholders),
+	// unless a matching sidecar pin exists.
 	if a.SHA256 == "" || util.IsAllZeroHash(a.SHA256) {
-		return fmt.Errorf("refusing to run %s: SHA-256 is missing or placeholder", p.Name())
-	}
-	got, err := util.FileSHA256(src)
-	if err != nil {
-		return fmt.Errorf("compute SHA-256 of %s: %w", src, err)
-	}
-	if !strings.EqualFold(got, a.SHA256) {
-		return fmt.Errorf("SHA-256 mismatch for %s: expected %s, got %s", p.Name(), a.SHA256, got)
+		matched, err := verifyInstallerSidecarPin(src)
+		if err != nil {
+			return err
+		}
+		if !matched {
+			return fmt.Errorf("refusing to run %s: SHA-256 is missing or placeholder and no matching sidecar pin exists", p.Name())
+		}
+		log.Printf("[install] %s SHA-256 verified via sidecar pin", p.Name())
+	} else {
+		got, err := util.FileSHA256(src)
+		if err != nil {
+			return fmt.Errorf("compute SHA-256 of %s: %w", src, err)
+		}
+		if !strings.EqualFold(got, a.SHA256) {
+			return fmt.Errorf("SHA-256 mismatch for %s: expected %s, got %s", p.Name(), a.SHA256, got)
+		}
 	}
 
 	if err := os.MkdirAll(installPath, 0o755); err != nil {
 		return fmt.Errorf("create install dir: %w", err)
 	}
 
+	// 部分安装器（rustup 等）按 argv[0] 文件名分派角色（rustc/cargo/
+	// rustdoc/rustup-init…），而 xdev 缓存名 <tool>-<ver>.<fmt> 会破坏
+	// 该机制（rustup 会报 "unknown proxy name"）。若 URL 原始文件名与
+	// 缓存名不同，将文件复制为原始文件名再运行，运行后清理。
+	runPath := src
+	if base := filepath.Base(a.URL); base != "" && base != filepath.Base(src) {
+		alt := filepath.Join(i.cfg.Core.CacheDir, base)
+		installerRunMu.Lock()
+		defer installerRunMu.Unlock()
+		if err := util.CopyFile(src, alt); err != nil {
+			return fmt.Errorf("prepare installer under original name %s: %w", alt, err)
+		}
+		runPath = alt
+		// LIFO：先 os.Remove(alt) 再 Unlock，清理也在锁内。
+		defer os.Remove(alt)
+	}
+
 	// Build the command. Scripts are run via "sh" on all platforms;
 	// executables are run directly.
+	//
+	// 支持 {{version}} / {{tool}} / {{install}} 模板替换：滚动安装器
+	// （如 rustup-init）需要把目标工具链版本传给 --default-toolchain；
+	// 静默安装器（如 JetBrains /D=<dir>）需要目标安装目录。替换在运行时
+	// 进行，无模板时行为不变。
+	//
+	// strings.NewReplacer 为单趟替换：替换值不会再被扫描，三个占位符
+	// 互不依赖（顺序无关），不会级联展开。
+	replacer := strings.NewReplacer("{{version}}", ver, "{{tool}}", p.Name(), "{{install}}", installPath)
+	args := make([]string, len(a.InstallArgs))
+	for i, arg := range a.InstallArgs {
+		args[i] = replacer.Replace(arg)
+	}
+
 	kind := resolveKind(a)
 	var name string
-	var args []string
 	if kind == manifest.InstallKindScript {
 		name = "sh"
-		args = append([]string{src}, a.InstallArgs...)
+		args = append([]string{src}, args...)
 	} else {
-		name = src
-		args = a.InstallArgs
+		name = runPath
 	}
 
 	// Inherit current environment and overlay plugin env vars so the
@@ -741,6 +1090,19 @@ func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manife
 	env := os.Environ()
 	for k, v := range p.EnvVars(installPath) {
 		env = append(env, k+"="+v)
+	}
+	// 把 xdev 配置的代理注入子进程环境变量（HTTP_PROXY/HTTPS_PROXY），
+	// 否则 rustup 等安装器下载工具链时不走代理，导致极慢或失败。
+	// 仅当子进程环境尚未设置代理时才注入（尊重用户显式设置）。
+	if proxyURL := i.cfg.GetProxyURL("https"); proxyURL != "" {
+		if !envHasKey(env, "HTTPS_PROXY") && !envHasKey(env, "https_proxy") {
+			env = append(env, "HTTPS_PROXY="+proxyURL)
+		}
+	}
+	if proxyURL := i.cfg.GetProxyURL("http"); proxyURL != "" {
+		if !envHasKey(env, "HTTP_PROXY") && !envHasKey(env, "http_proxy") {
+			env = append(env, "HTTP_PROXY="+proxyURL)
+		}
 	}
 
 	log.Printf("[install] Running installer: %s %v (dir=%s)", name, args, installPath)
@@ -953,10 +1315,10 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 			continue // PATH 由 shim 管理，不写入
 		}
 		// Save current value for rollback
-		if cur, err := env.GetUserEnvVar(name); err == nil {
+		if cur, err := env.GetUserEnvVarTrusted(name); err == nil {
 			originals[name] = cur
 		}
-		if err := env.SetUserEnvVar(name, value); err != nil {
+		if err := env.SetUserEnvVarTrusted(name, value); err != nil {
 			log.Printf("[install] ERROR: failed to set user env var %s: %v", name, err)
 			firstErr = err
 			break
@@ -971,12 +1333,12 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 		log.Printf("[install] Rolling back %d env var writes due to failure", len(written))
 		for _, name := range written {
 			if orig, ok := originals[name]; ok {
-				if err := env.SetUserEnvVar(name, orig); err != nil {
+				if err := env.SetUserEnvVarTrusted(name, orig); err != nil {
 					log.Printf("[install] WARNING: failed to rollback env var %s: %v", name, err)
 				}
 			} else {
 				// Wasn't set before — try to delete
-				if err := env.DeleteUserEnvVar(name); err != nil {
+				if err := env.DeleteUserEnvVarTrusted(name); err != nil {
 					log.Printf("[install] WARNING: failed to delete env var %s during rollback: %v", name, err)
 				}
 			}
@@ -986,12 +1348,70 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 	return nil
 }
 
-// ExtractAndActivate 解压已下载的缓存文件并激活工具
+// ExtractAndActivate 解压（或运行安装器）已下载的缓存文件并激活工具。
+// 与 InstallWithProgress 的 installByKind 一致：executable/script 安装器
+// （如 rustup-init.exe）通过 runInstaller 运行，而非解压——修复 GUI 安装
+// 路径误把 exe 当归档解压（需系统 7z）的问题。
+// 解压/运行成功即视为安装完成。激活（shim/PATH 切换）失败不会使
+// 安装失败——新版本已完整安装在 installPath，用户可以稍后通过
+// `xdev use` 手动切换。返回 (nil, activationErr) 形式：
+//   - err == nil：解压、激活都成功
+//   - err != nil 且解压已成功：err 是激活错误（版本已安装）
+//   - err != nil 且解压失败：err 是解压错误（版本未安装）
 func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
-	if err := i.extract(p.Name(), a, ver, installPath); err != nil {
-		return fmt.Errorf("extraction failed: %w", err)
+	kind := resolveKind(a)
+	switch kind {
+	case manifest.InstallKindExecutable, manifest.InstallKindScript:
+		// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
+		// 跳过解压与完整性硬门（安装器可能异步/在 installPath 外写文件）。
+		if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
+			return fmt.Errorf("installer run failed: %w", err)
+		}
+	default:
+		if err := i.extract(p.Name(), a, ver, installPath); err != nil {
+			return fmt.Errorf("extraction failed: %w", err)
+		}
+		// Hard gate after extract (same as InstallWithProgress): broken trees
+		// must not be treated as successful installs.
+		if err := ensureInstallIntegrity(p, installPath, a.Strip); err != nil {
+			log.Printf("[install] ERROR: %v", err)
+			_ = os.RemoveAll(installPath)
+			return err
+		}
 	}
-	return i.Activate(p, installPath, ver)
+	// Post-install hook — run even if activation will fail later.
+	if err := p.PostInstall(context.Background(), installPath); err != nil {
+		log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+	}
+	if err := i.Activate(p, installPath, ver); err != nil {
+		log.Printf("[install] WARNING: activation failed for %s@%s (version installed, not activated): %v", p.Name(), ver, err)
+		return &ActivationError{Tool: p.Name(), Version: ver, Err: err}
+	}
+	return nil
+}
+
+// ActivationError indicates that a version was installed successfully
+// but could not be activated (shim/PATH update failed, typically because
+// the currently active version's binary is locked by a running process).
+// The version is fully installed and can be activated later.
+type ActivationError struct {
+	Tool    string
+	Version string
+	Err     error
+}
+
+func (e *ActivationError) Error() string {
+	return fmt.Sprintf("installed %s@%s but activation failed: %v (use `xdev use %s@%s` after closing the conflicting process)", e.Tool, e.Version, e.Err, e.Tool, e.Version)
+}
+
+func (e *ActivationError) Unwrap() error { return e.Err }
+
+// IsActivationError reports whether err is an ActivationError (version
+// installed but not activated). Callers should treat this as a soft
+// failure: the install succeeded, only the automatic switch failed.
+func IsActivationError(err error) bool {
+	var ae *ActivationError
+	return errors.As(err, &ae)
 }
 
 // MirrorApply 应用镜像规则，返回镜像 URL
@@ -1096,7 +1516,7 @@ func (i *Installer) IsUpgradeAvailable(toolName string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if compareVersions(latest, current) > 0 {
+	if util.CompareSemver(latest, current) > 0 {
 		return latest, true
 	}
 	return "", false
@@ -1134,12 +1554,6 @@ func (i *Installer) ListInstalledTools() []string {
 	return tools
 }
 
-// CompareVersions is an exported wrapper around compareVersions for
-// use by callers outside the installer package.
-func CompareVersions(a, b string) int {
-	return compareVersions(a, b)
-}
-
 // currentVersion reads the current/<tool> symlink to determine the
 // active version. Returns ("", false) when no active version exists.
 func (i *Installer) currentVersion(toolName string) (string, bool) {
@@ -1164,22 +1578,23 @@ func (i *Installer) findOtherVersion(p plugin.Plugin) string {
 			continue
 		}
 		// Compare using semver, not lexicographic ordering
-		if compareVersions(e.Name(), best) > 0 {
+		if util.CompareSemver(e.Name(), best) > 0 {
 			best = e.Name()
 		}
 	}
 	return best
 }
 
-// compareVersions compares two version strings using semver rules.
-// Returns 1 if a > b, 0 if equal, -1 if a < b.
-func compareVersions(a, b string) int {
-	return util.CompareSemver(a, b)
-}
-
 // removeShims removes all shim entries for a plugin.
+// Security (F-08 / D11): names failing shim validation are skipped
+// (never used as paths), so legacy/corrupt entries cannot be targeted
+// via traversal — while valid legacy entries are still removed.
 func (i *Installer) removeShims(p plugin.Plugin) {
 	for _, name := range p.Shims() {
+		if err := util.ValidateShimName(name); err != nil {
+			log.Printf("[install] WARNING: skipping shim removal for invalid name %q: %v", name, err)
+			continue
+		}
 		shimPath := filepath.Join(i.cfg.Core.ShimDir, name)
 		_ = os.Remove(shimPath)
 		// Windows also has .exe variant

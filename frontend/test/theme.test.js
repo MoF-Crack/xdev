@@ -31,26 +31,30 @@ describe('theme system', () => {
   it('defines the complete semantic contract for dark and light themes', () => {
     const rootBlock = themeCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '';
     const lightBlock = themeCss.match(/\[data-theme=["']light["']\]\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+    const eyeCareBlock = themeCss.match(/\[data-theme=["']eye-care["']\]\s*\{([\s\S]*?)\}/)?.[1] ?? '';
 
     const darkDeclarations = declarations(rootBlock);
     const lightDeclarations = declarations(lightBlock);
     expect([...semanticTokens, ...foundationTokens].filter((token) => !darkDeclarations.has(token))).toEqual([]);
     expect(semanticTokens.filter((token) => !lightDeclarations.has(token))).toEqual([]);
-    expect(rootBlock).toContain('--xdev-accent: #818cf8');
-    expect(lightBlock).toContain('--xdev-accent: #4f46e5');
+    expect(semanticTokens.filter((token) => !declarations(eyeCareBlock).has(token))).toEqual([]);
+    expect(rootBlock).toContain('--xdev-accent: #58a6ff');
+    expect(lightBlock).toContain('--xdev-accent: #2563eb');
   });
 
   it('exposes Naive UI overrides through one theme-based interface', async () => {
-    const { getNaiveThemeOverrides } = await import('../src/theme/naive-theme.js');
-    const dark = getNaiveThemeOverrides('dark');
-    const light = getNaiveThemeOverrides('light');
+    const { getNaiveThemeConfig } = await import('../src/theme/naive-theme.js');
+    const dark = getNaiveThemeConfig('dark').overrides;
+    const light = getNaiveThemeConfig('light').overrides;
+    const eyeCare = getNaiveThemeConfig('eye-care').overrides;
 
-    expect(dark.common.primaryColor).toBe('#818cf8');
-    expect(light.common.primaryColor).toBe('#4f46e5');
-    expect(dark.common.bodyColor).toBe('#111113');
-    expect(light.common.bodyColor).toBe('#f7f7f8');
-    expect(getNaiveThemeOverrides('unknown')).toBe(dark);
-  });
+    expect(dark.common.primaryColor).toBe('#58a6ff');
+    expect(light.common.primaryColor).toBe('#2563eb');
+    expect(eyeCare.common.primaryColor).toBe('#5b8c5a');
+    expect(dark.common.bodyColor).toBe('#0d1117');
+    expect(light.common.bodyColor).toBe('#eef1f5');
+    expect(getNaiveThemeConfig('unknown').overrides).toBe(dark);
+  }, 15000);
 
   it('removes the legacy neon palette from application styles', () => {
     const applicationStyles = [

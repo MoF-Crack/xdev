@@ -1,0 +1,77 @@
+﻿# JetBrains GoLand锛圫pec 023 T-D2锛?#   - Win: 瀹樻柟瀹夎鍣?exe锛坕nstall_kind executable锛夈€傞潤榛樺弬鏁帮細
+#     /S /D={{install}}鈥斺€?D 蹇呴』鏄渶鍚庝竴涓弬鏁颁笖涓嶅甫寮曞彿銆?#   - mac: dmg锛坋xtractor 鎸傝浇鍚庡鍒?.app 鍒?install 鏍癸級
+#   - linux: tar.gz锛堝惈 goland-*/ 鏍?鈫?strip 1锛?#   - 鑷甫 JBR锛屾棤 depends
+#   - gui_binary 涓哄崟瀛楁锛氶粯璁?Windows 甯冨眬 bin/goland64.exe锛?#     Linux 瀹為檯鍏ュ彛涓?bin/goland.sh锛圱-C1 鍚姩鍦?Linux 涓婇渶鎸夊钩鍙板鐞嗭級
+#   - sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛?name: goland
+display_name: GoLand
+description: GoLand 鈥?the IDE for Go by JetBrains, with code completion, refactoring and a built-in debugger (bundles its own JBR runtime).
+homepage: https://www.jetbrains.com/go/
+category: development_tools
+shims:
+  - goland
+  - goland64
+form_factor: [gui, cli]
+gui_binary: bin/goland64.exe
+latest: "2026.2.0.1"
+lts: ""
+versions:
+  - version: "2026.2.0.1"
+    stable: true
+    release: "2026-07-24"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://download.jetbrains.com/go/goland-2026.2.0.1.exe
+        mirror_url: ""
+        sha256: cbb1baa41c12bba7d973d2c614dfabea29ef03b2ca9ce84bb24b3f8c84dbf13e
+        size: 937142216
+        strip: 0
+        install_kind: executable
+        install_args: ["/S", "/D={{install}}"]
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://download.jetbrains.com/go/goland-2026.2.0.1-aarch64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 1166929987
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://download.jetbrains.com/go/goland-2026.2.0.1.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 1243435643
+        strip: 1
+  - version: "2026.2"
+    stable: true
+    release: "2026-07-16"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://download.jetbrains.com/go/goland-2026.2.exe
+        mirror_url: ""
+        sha256: ""
+        size: 937114368
+        strip: 0
+        install_kind: executable
+        install_args: ["/S", "/D={{install}}"]
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://download.jetbrains.com/go/goland-2026.2-aarch64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 1166910602
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://download.jetbrains.com/go/goland-2026.2.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 1243386895
+        strip: 1

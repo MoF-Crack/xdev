@@ -17,20 +17,37 @@ package gui
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/plugin"
 )
+
+// devToolsCategoryNames 列出归并到「开发工具」(development_tools) 的所有
+// 旧分类名。Spec 024 把 ide/agent/harness 三个扁平分类合并为单一的
+// development_tools 分类，归并层确保磁盘 manifest 残留旧 category 字段
+// 时这些工具仍能在「开发工具」下显示（兜底迁移过程）。
+var devToolsCategoryNames = map[string]bool{
+	"ide":               true,
+	"agent":             true,
+	"harness":           true,
+	"development_tools": true,
+}
+
+// isDevToolsCategory 报告 category 是否属于「开发工具」归并集合。
+func isDevToolsCategory(category string) bool {
+	return devToolsCategoryNames[category]
+}
 
 // pluginToToolInfo converts a plugin.Plugin to a ToolInfo struct,
 // populating common fields including local cache info.
 func (a *App) pluginToToolInfo(p plugin.Plugin) ToolInfo {
 	activeVer, installed := a.currentVersion(p.Name())
 	localVer, localPath, localSource := a.getLocalCached(p.Name())
-	return ToolInfo{
+	info := ToolInfo{
 		Name:         p.Name(),
 		DisplayName:  p.DisplayName(),
 		Category:     p.Category(),
@@ -42,6 +59,15 @@ func (a *App) pluginToToolInfo(p plugin.Plugin) ToolInfo {
 		LocalPath:    localPath,
 		Source:       localSource,
 	}
+	// 形态信息来自 manifest（Spec 023）。manifest 可能为 nil
+	// （Lua 插件/测试桩）——nil 安全，留空即可（omitempty）。
+	if m := p.Manifest(); m != nil {
+		info.FormFactor = m.EffectiveFormFactor()
+		info.GUIBinary = m.GUIBinary
+		// Spec 025：是否需要按形态区分下载（多形态独立 archive 工具才为 true）。
+		info.HasFormSpecificArchives = m.HasFormSpecificArchives()
+	}
+	return info
 }
 
 // GetCategories returns all tool categories with counts.
@@ -73,8 +99,25 @@ func (a *App) GetCategories() []CategoryInfo {
 		catMap["language"] = 0
 	}
 
-	// Fixed display order
-	order := []string{"language", "build", "mobile", "system", "local", "package-manager"}
+	// Spec 024：把旧分类 ide/agent/harness 的计数归并到 development_tools。
+	// 这样即使磁盘 manifest 残留旧 category 字段，GetCategories 也只输出
+	// development_tools 一个入口（归并层兜底迁移过程）。
+	devCount := 0
+	for name, count := range catMap {
+		if name != "development_tools" && isDevToolsCategory(name) {
+			devCount += count
+			delete(catMap, name)
+		}
+	}
+	// 确保 development_tools 条目始终存在（即使计数为 0，也要出现在分类列表中，
+	// 以便前端渲染入口——与 language 分类始终存在的处理一致）。
+	if _, ok := catMap["development_tools"]; !ok {
+		catMap["development_tools"] = 0
+	}
+	catMap["development_tools"] += devCount
+
+	// Fixed display order (Spec 024: ide/agent/harness 合并为 development_tools)
+	order := []string{"language", "build", "development_tools", "mobile", "system", "local", "package-manager"}
 	var result []CategoryInfo
 	for _, name := range order {
 		if count, ok := catMap[name]; ok {
@@ -129,10 +172,79 @@ func (a *App) GetDebugInfo() DebugInfo {
 }
 
 // GetToolsByCategory returns tools filtered by category.
-// Waits for the local tool cache to be populated before returning
-// so that localVersion and localPath are always available.
+//
+// Results are cached per category for toolListCacheTTL so that
+// switching between 编程语言/包管理器 pages doesn't re-spawn
+// subprocesses for version detection every time. The cache is cleared
+// by InvalidateToolsCache after install/uninstall/use-version.
 func (a *App) GetToolsByCategory(category string) []ToolInfo {
+	// TTL cache lookup — fast path avoids waitForLocalCache + subprocess scans.
+	if cached, ok := a.toolCacheGet(category); ok {
+		return cached
+	}
+	result := a.computeToolsByCategory(category)
+	a.toolCachePut(category, result)
+	return result
+}
+
+// toolListCacheTTL 工具列表缓存有效期。
+const toolListCacheTTL = 60 * time.Second
+
+// toolCacheGet 返回指定分类的缓存工具列表；未命中或过期时 ok=false。
+func (a *App) toolCacheGet(category string) ([]ToolInfo, bool) {
+	a.toolsCacheMu.Lock()
+	defer a.toolsCacheMu.Unlock()
+	if a.toolsCache == nil {
+		return nil, false
+	}
+	entry, ok := a.toolsCache[category]
+	if !ok || time.Now().After(entry.Expire) {
+		return nil, false
+	}
+	return entry.Entries, true
+}
+
+// toolCachePut 写入指定分类的工具列表缓存。
+func (a *App) toolCachePut(category string, entries []ToolInfo) {
+	a.toolsCacheMu.Lock()
+	defer a.toolsCacheMu.Unlock()
+	if a.toolsCache == nil {
+		a.toolsCache = make(map[string]toolsCacheEntry)
+	}
+	a.toolsCache[category] = toolsCacheEntry{Entries: entries, Expire: time.Now().Add(toolListCacheTTL)}
+}
+
+// InvalidateToolsCache 清除全部工具列表缓存，使下次 GetToolsByCategory
+// 重新扫描。安装/卸载/切换版本/修复后调用，确保列表反映最新状态。
+func (a *App) InvalidateToolsCache() {
+	a.toolsCacheMu.Lock()
+	a.toolsCache = nil
+	a.toolsCacheMu.Unlock()
+}
+
+// computeToolsByCategory 实际的分类工具列表计算（无缓存）。
+func (a *App) computeToolsByCategory(category string) []ToolInfo {
 	a.waitForLocalCache()
+
+	// Handle "development_tools" category - Spec 024 归并 ide/agent/harness。
+	// 返回归并集合（ide/agent/harness/development_tools）内的全部工具，
+	// 确保磁盘 manifest 残留旧 category 字段时工具仍能在「开发工具」下显示。
+	//
+	// 注意：只对 "development_tools" 触发归并。直接查询旧分类名
+	// （ide/agent/harness）时走下方 regular filtering 精确匹配——
+	// 保持向后兼容契约（外部调用者/测试可能直接查 "ide" 期望只返回
+	// category==ide 的工具，而非全部 dev-tools）。
+	if category == "development_tools" {
+		tools := a.registry.All()
+		var result []ToolInfo
+		for _, t := range tools {
+			if !isDevToolsCategory(t.Category()) {
+				continue
+			}
+			result = append(result, a.pluginToToolInfo(t))
+		}
+		return result
+	}
 
 	// Handle "local" category - show only tools with local installations
 	if category == "local" {
@@ -148,30 +260,45 @@ func (a *App) GetToolsByCategory(category string) []ToolInfo {
 		return result
 	}
 
-	// Handle "package-manager" category - return as ToolInfo for compatibility
-	if category == "package-manager" {
-		pms := a.GetPackageManagers()
-		var result []ToolInfo
-		for _, pm := range pms {
-			result = append(result, ToolInfo{
-				Name:         pm.Name,
-				DisplayName:  pm.DisplayName,
-				Category:     "package-manager",
-				Description:  pm.Description,
-				Installed:    pm.Installed,
-				LocalVersion: pm.Version,
-				LocalPath:    pm.LocalPath,
-				CanInstall:   pm.CanInstall,
-				ToolName:     pm.ToolName,
-				InstallHint:  pm.InstallHint,
-			})
+		// Handle "package-manager" category - return as ToolInfo for compatibility
+		if category == "package-manager" {
+			pms := a.GetPackageManagers()
+			var result []ToolInfo
+			for _, pm := range pms {
+				ti := ToolInfo{
+					Name:                    pm.Name,
+					DisplayName:             pm.DisplayName,
+					Category:                "package-manager",
+					Description:             pm.Description,
+					Installed:               pm.Installed,
+					LocalVersion:            pm.Version,
+					LocalPath:               pm.LocalPath,
+					CanInstall:              pm.CanInstall,
+					ToolName:                pm.ToolName,
+					InstallHint:             pm.InstallHint,
+					HasUpdate:               pm.HasUpdate,
+					RequiresAdmin:           pm.RequiresAdmin, // Spec 025 L3 阻塞项3
+					EnableCommand:           pm.EnableCommand, // Spec 026: 附属工具启用命令
+				}
+				// Spec 026: 传递可用安装方式（pipx 的 pip/uv 选项）
+				if len(pm.InstallMethods) > 0 {
+					ti.InstallMethods = make([]InstallMethodInfo, len(pm.InstallMethods))
+					for j, m := range pm.InstallMethods {
+						ti.InstallMethods[j] = InstallMethodInfo{Name: m.Name, Command: m.Command}
+					}
+				}
+				// Spec 027: 传递多实例列表（pip 的 xdev 管理 + 系统安装）
+				if len(pm.Instances) > 0 {
+					ti.Instances = make([]PMInstanceInfo, len(pm.Instances))
+					copy(ti.Instances, pm.Instances)
+				}
+				result = append(result, ti)
+			}
+			return result
 		}
-		return result
-	}
 
-	// Handle "language" category - 添加没有 manifest 的编程语言
+	// Handle "language" category
 	if category == "language" {
-		// 先获取 registry 中已有的 language 分类工具
 		tools := a.registry.All()
 		var result []ToolInfo
 		for _, t := range tools {
@@ -180,51 +307,8 @@ func (a *App) GetToolsByCategory(category string) []ToolInfo {
 			}
 			result = append(result, a.pluginToToolInfo(t))
 		}
-
-		// 添加没有 manifest 的编程语言
-		extraLangs := []ToolInfo{
-			{Name: "typescript", DisplayName: "TypeScript", Category: "language", Description: "JavaScript 的超集，添加了静态类型", CanInstall: true, InstallHint: "通过 npm install -g typescript 安装"},
-			{Name: "c", DisplayName: "C", Category: "language", Description: "通用编程语言", CanInstall: false, InstallHint: "安装 MinGW 或 LLVM/Clang 以获取 C 编译器"},
-			{Name: "cpp", DisplayName: "C++", Category: "language", Description: "C 语言的扩展，支持面向对象编程", CanInstall: false, InstallHint: "安装 MinGW 或 LLVM/Clang 以获取 C++ 编译器"},
-			{Name: "cangjie", DisplayName: "仓颉", Category: "language", Description: "华为仓颉编程语言", CanInstall: false, InstallHint: "访问华为开发者网站下载仓颉 SDK"},
-		}
-		for i := range extraLangs {
-			lang := &extraLangs[i]
-			switch lang.Name {
-			case "typescript":
-				if path, err := exec.LookPath("tsc"); err == nil {
-					lang.Installed = true
-					lang.LocalPath = path
-					if ver := getVersion("tsc", path); ver != "" {
-						lang.LocalVersion = ver
-					}
-				}
-			case "c", "cpp":
-				// 优先检查 gcc，其次检查 clang
-				if path, err := exec.LookPath("gcc"); err == nil {
-					lang.Installed = true
-					lang.LocalPath = path
-					if ver := getVersion("gcc", path); ver != "" {
-						lang.LocalVersion = ver
-					}
-				} else if path, err := exec.LookPath("clang"); err == nil {
-					lang.Installed = true
-					lang.LocalPath = path
-					if ver := getVersion("clang", path); ver != "" {
-						lang.LocalVersion = ver
-					}
-				}
-			case "cangjie":
-				if path, err := exec.LookPath("cjc"); err == nil {
-					lang.Installed = true
-					lang.LocalPath = path
-					if ver := getVersion("cjc", path); ver != "" {
-						lang.LocalVersion = ver
-					}
-				}
-			}
-			result = append(result, *lang)
-		}
+		// C/C++ 不是独立工具——它们是 MinGW/LLVM/Clang 的使用场景。
+		// 用户直接在「构建工具」分类安装 MinGW 或 LLVM/Clang 获取 C/C++ 编译器。
 		return result
 	}
 
@@ -241,24 +325,57 @@ func (a *App) GetToolsByCategory(category string) []ToolInfo {
 }
 
 // GetInstalledVersions returns installed versions for a tool.
+// Each entry carries the integrity status (Intact/Integrity) so the
+// frontend can flag incomplete installations and offer a repair action.
 func (a *App) GetInstalledVersions(toolName string) []VersionInfo {
 	tools := a.registry.All()
+	cfg := a.getCfg()
 	for _, t := range tools {
 		if t.Name() == toolName {
 			versions := a.installedVersions(toolName)
 			activeVer, _ := a.currentVersion(toolName)
 			var result []VersionInfo
 			for _, v := range versions {
-				result = append(result, VersionInfo{
+				vi := VersionInfo{
 					Version:   v,
 					Installed: true,
 					Active:    v == activeVer,
-				})
+				}
+				integrity := installer.VerifyInstallIntegrity(t, filepath.Join(cfg.Core.InstallDir, toolName, v))
+				vi.Intact = integrity.OK
+				if !integrity.OK {
+					vi.Integrity = integrity.Reason
+				}
+				result = append(result, vi)
 			}
 			return result
 		}
 	}
 	return nil
+}
+
+// CheckInstallIntegrity verifies whether an installed version is complete
+// (non-empty directory and all shim binaries present). It is safe to call
+// for versions that are not installed — OK will simply be false.
+func (a *App) CheckInstallIntegrity(toolName, version string) IntegrityInfo {
+	info := IntegrityInfo{Tool: toolName, Version: version}
+	p, err := a.mustGetPlugin(toolName)
+	if err != nil {
+		info.Reason = err.Error()
+		return info
+	}
+	cfg := a.getCfg()
+	installPath := p.InstallDir(cfg.Core.InstallDir, version)
+	info.Path = installPath
+	if fi, err := os.Stat(installPath); err != nil || !fi.IsDir() {
+		info.Reason = "not installed"
+		return info
+	}
+	integrity := installer.VerifyInstallIntegrity(p, installPath)
+	info.OK = integrity.OK
+	info.Reason = integrity.Reason
+	info.Missing = integrity.Missing
+	return info
 }
 
 // GetAvailableVersions returns all available versions from the manifest for a tool.

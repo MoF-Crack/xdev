@@ -97,7 +97,7 @@ versions:
           strip: 1
 remote:
     type: github
-    url: ""
+    url: "ghc/ghc"
     path: ""
     pattern: ^v?(\d+\.\d+\.\d+)$
 latest: 9.10.1

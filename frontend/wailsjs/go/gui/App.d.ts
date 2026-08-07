@@ -3,15 +3,9 @@
 import {gui} from '../models';
 import {env} from '../models';
 
-export function AIChat(arg1:string):Promise<string>;
-
-export function AIDiagnose(arg1:string):Promise<string>;
-
-export function AISuggest(arg1:string):Promise<string>;
-
 export function ActivateHook(arg1:string):Promise<void>;
 
-export function AddCustomTool(arg1:string):Promise<void>;
+export function AddCustomTool(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:string):Promise<gui.CustomToolResult>;
 
 export function AddFavorite(arg1:string):Promise<void>;
 
@@ -19,23 +13,35 @@ export function ApplyUpdate():Promise<void>;
 
 export function BrowseDirectory(arg1:string):Promise<string>;
 
+export function BrowseFile(arg1:string,arg2:string):Promise<string>;
+
 export function CancelDownload(arg1:string):Promise<void>;
 
 export function CheckEnvVarExists(arg1:string,arg2:string):Promise<boolean>;
 
 export function CheckForUpdate():Promise<gui.UpdateCheckResult>;
 
+export function CheckInstallIntegrity(arg1:string,arg2:string):Promise<gui.IntegrityInfo>;
+
+export function CheckToolDependencies(arg1:string):Promise<Array<gui.DependencyStatus>>;
+
+export function CleanAllInvalidEnvVars(arg1:string):Promise<Array<gui.CleanResult>>;
+
 export function CleanCache(arg1:string):Promise<void>;
+
+export function CleanCacheCategory(arg1:string):Promise<void>;
 
 export function CleanEnvVarPath(arg1:string,arg2:string):Promise<void>;
 
 export function CleanupDownloadTempFiles():Promise<void>;
 
-export function CreatePlugin(arg1:string):Promise<void>;
+export function CleanupExpiredArchives():Promise<number>;
 
-export function CreateRemoteInstance(arg1:string,arg2:string,arg3:string,arg4:number,arg5:string,arg6:string):Promise<gui.RemoteCreateResult>;
+export function CreateRemoteInstance(arg1:string,arg2:string,arg3:string,arg4:number,arg5:string,arg6:string,arg7:string):Promise<gui.RemoteCreateResult>;
 
 export function DeactivateHook():Promise<void>;
+
+export function DeleteCacheFile(arg1:string):Promise<void>;
 
 export function DeleteEnvVar(arg1:string,arg2:string,arg3:string):Promise<void>;
 
@@ -51,21 +57,23 @@ export function ExportProfile(arg1:string):Promise<void>;
 
 export function FixLocalVersions():Promise<Array<gui.FixedVersion>>;
 
-export function GetAIStatus():Promise<gui.AIStatus>;
-
 export function GetAboutInfo():Promise<gui.AboutInfo>;
 
 export function GetAllEnvVars(arg1:string):Promise<Array<gui.EnvVarInfo>>;
+
+export function GetArchiveRetention():Promise<string>;
+
+export function GetAvailableUpdates():Promise<Array<gui.UpdateInfo>>;
 
 export function GetAvailableVersions(arg1:string):Promise<Array<gui.VersionInfo>>;
 
 export function GetCacheBreakdown():Promise<gui.CacheBreakdown>;
 
+export function GetCacheSizeBreakdown():Promise<Array<gui.DiskUsageEntry>>;
+
 export function GetCategories():Promise<Array<gui.CategoryInfo>>;
 
 export function GetConfig():Promise<gui.ConfigInfo>;
-
-export function GetCustomTools():Promise<Array<gui.CustomTool>>;
 
 export function GetDashboardStats():Promise<gui.DashboardStats>;
 
@@ -79,15 +87,21 @@ export function GetEnvVars():Promise<Array<gui.EnvVarInfo>>;
 
 export function GetFavorites():Promise<Array<gui.FavoriteInfo>>;
 
+export function GetIgnoredTools():Promise<Array<gui.IgnoredToolInfo>>;
+
+export function GetInstallSizeBreakdown():Promise<Array<gui.DiskUsageEntry>>;
+
 export function GetInstalledVersions(arg1:string):Promise<Array<gui.VersionInfo>>;
 
 export function GetIsolateStatus():Promise<gui.IsolateStatus>;
 
 export function GetLastSelection():Promise<Record<string, string>>;
 
-export function GetLockfile():Promise<gui.LockfileInfo>;
+export function GetLatestVersionForTool(arg1:string):Promise<string>;
 
 export function GetLogPath():Promise<string>;
+
+export function GetMigrationMode():Promise<string>;
 
 export function GetMirrorConfig():Promise<Record<string, string>>;
 
@@ -97,27 +111,43 @@ export function GetPackageManagers():Promise<Array<gui.PackageManagerInfo>>;
 
 export function GetPathMode():Promise<string>;
 
-export function GetProjectConfig():Promise<gui.ProjectConfigInfo>;
-
 export function GetProxyConfig():Promise<gui.ProxyInfo>;
 
+export function GetSniffConfig():Promise<gui.SniffConfigInfo>;
+
 export function GetToolsByCategory(arg1:string):Promise<Array<gui.ToolInfo>>;
+
+export function IgnoreTool(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function ImportProfile(arg1:string):Promise<gui.ImportResult>;
 
 export function InitConfig(arg1:string):Promise<void>;
 
-export function InstallCustomTool(arg1:string):Promise<void>;
-
-export function InstallFromLockfile():Promise<string>;
-
 export function InstallPackageManager(arg1:string):Promise<void>;
 
+export function InstallSniffService(arg1:string):Promise<void>;
+
+export function InstallSubTool(arg1:string,arg2:string):Promise<void>;
+
 export function InstallTool(arg1:string,arg2:string):Promise<void>;
+
+export function InstallToolConfirmed(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
+export function InstallToolWithForm(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function InstallToolWithOptions(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
+
+export function InstallUpdate(arg1:string,arg2:string):Promise<void>;
+
+export function InvalidateSizeBreakdown():Promise<void>;
+
+export function InvalidateToolsCache():Promise<void>;
 
 export function IsFavorite(arg1:string):Promise<boolean>;
 
 export function IsInitialized():Promise<boolean>;
+
+export function IsVersionUnverified(arg1:string,arg2:string):Promise<boolean>;
 
 export function IsolateExec(arg1:Array<string>):Promise<string>;
 
@@ -125,13 +155,13 @@ export function IsolateSetup(arg1:string):Promise<string>;
 
 export function IsolateTeardown():Promise<void>;
 
-export function ListPlugins():Promise<Array<gui.PluginInfo>>;
+export function LaunchTool(arg1:string):Promise<void>;
+
+export function ListCustomTools():Promise<Array<gui.CustomToolInfo>>;
 
 export function ListRemoteInstances():Promise<Array<gui.RemoteInstanceInfo>>;
 
-export function ListServices():Promise<Array<gui.ServiceInfo>>;
-
-export function MigrateAllLocalTools():Promise<Array<gui.MigrationResult>>;
+export function MigrateAllLocalTools(arg1:string):Promise<Array<gui.MigrationResult>>;
 
 export function MigrateLegacyDir(arg1:string):Promise<void>;
 
@@ -141,17 +171,23 @@ export function MigrateLocalToolByJunction(arg1:string):Promise<void>;
 
 export function MigrateLocalToolByMove(arg1:string):Promise<void>;
 
+export function MigratePackageManager(arg1:string):Promise<void>;
+
 export function PauseDownload(arg1:string):Promise<void>;
+
+export function PreviewCustomToolVersions(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
+
+export function ProbeLocalProxies():Promise<Array<gui.ProxyProbeResult>>;
 
 export function RemoveCustomTool(arg1:string):Promise<void>;
 
 export function RemoveFavorite(arg1:string):Promise<void>;
 
+export function RepairInstall(arg1:string,arg2:string):Promise<void>;
+
 export function ResumeDownload(arg1:string):Promise<void>;
 
 export function RunDiagnostics():Promise<Array<gui.DiagnosticResult>>;
-
-export function RunProjectTask(arg1:string):Promise<void>;
 
 export function SaveLastSelection(arg1:string,arg2:string):Promise<void>;
 
@@ -165,19 +201,25 @@ export function ScanLocalTools():Promise<Array<gui.LocalToolInfo>>;
 
 export function SelectDirectory(arg1:string):Promise<string>;
 
+export function SetArchiveRetention(arg1:string):Promise<void>;
+
 export function SetEnvVar(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+
+export function SetMigrationMode(arg1:string):Promise<void>;
 
 export function SetMirrorConfig(arg1:Record<string, string>):Promise<void>;
 
 export function SetPathMode(arg1:string):Promise<void>;
 
-export function SetProjectTool(arg1:string,arg2:string):Promise<void>;
-
 export function SetProxyConfig(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
 
-export function StartService(arg1:string):Promise<void>;
+export function SetSniffStrategy(arg1:string):Promise<void>;
 
-export function StopService(arg1:string):Promise<void>;
+export function SniffAll():Promise<void>;
+
+export function SniffNow(arg1:string):Promise<void>;
+
+export function SniffServiceStatus():Promise<gui.ServiceStatusInfo>;
 
 export function SwitchToLocalVersion(arg1:string):Promise<void>;
 
@@ -187,9 +229,15 @@ export function TestMirrorConnectivity(arg1:string):Promise<gui.ProxyTestResult>
 
 export function TestProxy(arg1:string,arg2:string):Promise<gui.ProxyTestResult>;
 
-export function UninstallVersion(arg1:string,arg2:string):Promise<void>;
+export function TestSSHConnection(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<gui.SSHTestResult>;
 
-export function UnsetProjectTool(arg1:string):Promise<void>;
+export function ToolCommand(arg1:string):Promise<string>;
+
+export function UnignoreTool(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function UninstallSniffService():Promise<void>;
+
+export function UninstallVersion(arg1:string,arg2:string):Promise<void>;
 
 export function UpdatePackageManager(arg1:string):Promise<void>;
 

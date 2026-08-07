@@ -1,0 +1,77 @@
+﻿# JetBrains IntelliJ IDEA Community锛圫pec 023 T-D2锛?#   - Win: 瀹樻柟瀹夎鍣?exe锛坕nstall_kind executable锛夈€傞潤榛樺弬鏁帮細
+#     /S /CONFIG=<config> /D={{install}}鈥斺€?D 蹇呴』鏄渶鍚庝竴涓弬鏁颁笖涓嶅甫寮曞彿銆?#     CONFIG 鎸囧悜瀹夎鐩綍鍐呯殑 silent.config锛堥』鍦ㄥ畨瑁呭墠鍒涘缓锛屽彲涓虹┖鏂囦欢鎴?#     鍚?JVM 閫夐」鐨?vmoptions锛涗笉闇€瑕佽嚜瀹氫箟 JVM 閫夐」鏃跺彲绉婚櫎 /CONFIG 鍙傛暟锛?#     浠呯敤 /S /D={{install}}锛夈€?#   - mac: dmg锛坋xtractor 鎸傝浇鍚庡鍒?.app 鍒?install 鏍癸級
+#   - linux: tar.gz锛堝惈 idea-IIC-*/ 鏍?鈫?strip 1锛?#   - 鑷甫 JBR锛屾棤 depends
+#   - gui_binary 涓哄崟瀛楁锛氶粯璁?Windows 甯冨眬 bin/idea64.exe锛?#     Linux 瀹為檯鍏ュ彛涓?bin/idea.sh锛圱-C1 鍚姩鍦?Linux 涓婇渶鎸夊钩鍙板鐞嗭級
+#   - sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛?name: jetbrains-idea-community
+display_name: JetBrains IntelliJ IDEA Community
+description: IntelliJ IDEA Community Edition 鈥?the free, open-source Java/Kotlin IDE by JetBrains (bundles its own JBR runtime).
+homepage: https://www.jetbrains.com/idea/
+category: development_tools
+shims:
+  - idea
+  - idea64
+form_factor: [gui, cli]
+gui_binary: bin/idea64.exe
+latest: "2025.3"
+lts: ""
+versions:
+  - version: "2025.3"
+    stable: true
+    release: "2025-12-08"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://download.jetbrains.com/idea/idea-2025.3.exe
+        mirror_url: ""
+        sha256: d7f0310423078c6a3b136c8a04090c1b6d316c2104dc2502d99167feb7ecc1fc
+        size: 1108206656
+        strip: 0
+        install_kind: executable
+        install_args: ["/S", "/D={{install}}"]
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://download.jetbrains.com/idea/idea-2025.3.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 1445631101
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://download.jetbrains.com/idea/idea-2025.3.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 1515485267
+        strip: 1
+  - version: "2025.2.6.3"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://download.jetbrains.com/idea/ideaIC-2025.2.6.3.exe
+        mirror_url: ""
+        sha256: ""
+        size: 993346080
+        strip: 0
+        install_kind: executable
+        install_args: ["/S", "/D={{install}}"]
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://download.jetbrains.com/idea/ideaIC-2025.2.6.3.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 1272239252
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://download.jetbrains.com/idea/ideaIC-2025.2.6.3.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 1212717768
+        strip: 1

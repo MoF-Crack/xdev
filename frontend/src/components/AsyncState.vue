@@ -1,7 +1,7 @@
 <template>
   <div v-if="error" class="async-state async-state--error" role="alert">
     <slot name="error" :error="error"><p>{{ errorMessage }}</p></slot>
-    <button v-if="retryLabel" type="button" @click="$emit('retry')">{{ retryLabel }}</button>
+    <button v-if="retryLabel" type="button" class="xdev-btn xdev-btn--secondary" @click="$emit('retry')">{{ retryLabel }}</button>
   </div>
   <div v-else-if="loading" class="async-state async-state--loading" role="status" aria-live="polite"><slot name="loading">Loading...</slot></div>
   <slot v-else-if="empty" name="empty" />

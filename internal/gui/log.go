@@ -12,6 +12,7 @@ package gui
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -62,6 +63,12 @@ func InitLogger(dir string) {
 	}
 	logFile = f
 	_, _ = fmt.Fprintf(f, "\n=== XDev GUI started at %s ===\n", time.Now().Format("2006-01-02 15:04:05.000"))
+
+	// Bridge the standard library logger (used by internal/downloader,
+	// internal/installer, etc.) into the GUI log file so download errors,
+	// SHA mismatches, and retry/fallback decisions are captured on disk
+	// instead of being lost to stderr (which is invisible in a Wails GUI).
+	log.SetOutput(io.MultiWriter(f, logWriter{}))
 
 	// Flush any pending logs that were written before the logger
 	// was initialised.

@@ -17,7 +17,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-35_r01.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-35_r01.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ec20a0a65704e1b2554f8e3eebf588ef260569673c848c01aff2e29c28734cf4
           size: 70000000
           strip: 0
         - os: linux
@@ -25,7 +25,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-35_r01.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-35_r01.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ec20a0a65704e1b2554f8e3eebf588ef260569673c848c01aff2e29c28734cf4
           size: 70000000
           strip: 0
     - version: "34"
@@ -37,7 +37,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-34-ext7_r03.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-34-ext7_r03.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "16fdb74c55e59ae3ef52def135aec713508467bd56d7dabcd8c9be31fa8b20f3"
           size: 65000000
           strip: 0
         - os: linux
@@ -45,7 +45,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-34-ext7_r03.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-34-ext7_r03.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 65000000
           strip: 0
     - version: "33"
@@ -57,7 +57,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-33_r01.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-33_r01.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "4a1deecb5d9521bca90b8a50d7c9d83e9cf117a581a9418dc941d30c552c04b7"
           size: 62000000
           strip: 0
         - os: linux
@@ -65,7 +65,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-33_r01.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-33_r01.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 62000000
           strip: 0
     - version: "31"
@@ -77,7 +77,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-31_r01.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-31_r01.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "1d69fe1d7f9788d82ff3a374faf4f6ccc9d1d372aa84a86b5bcfb517523b0b3f"
           size: 58000000
           strip: 0
         - os: linux
@@ -85,12 +85,12 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/platform-31_r01.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/platform-31_r01.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 58000000
           strip: 0
 remote:
     type: html
-    url: https://dl.google.com/android/repository/
+    url: https://dl.google.com/android/repository/repository2-3.xml
     path: ""
     pattern: platform-(\d+)_r
 latest: "35"

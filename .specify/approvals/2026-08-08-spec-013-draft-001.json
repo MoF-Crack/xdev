@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-08",
+    "approved_at":  "2026-08-08",
+    "schema_version":  1,
+    "target_state":  "待用户批准",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/013-ui-theme-refactor/spec.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Create/approve Feature Spec for 013-ui-theme-refactor",
+    "recorded_by":  "Codex Orchestrator",
+    "asset_type":  "spec",
+    "decision":  "approve-state-transition",
+    "target_version":  "1.0.0",
+    "authorization_text":  "SDD Loop convergence batch approval for 013-ui-theme-refactor",
+    "approval_id":  "2026-08-08-spec-013-draft-001"
+}

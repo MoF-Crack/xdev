@@ -1,0 +1,131 @@
+﻿# T-D3 zed (Spec 023 Phase D)
+# 鐗堟湰婧愶細GitHub releases锛坺ed-industries/zed锛夛紝latest 绋冲畾鐗?+ 涓婁竴绋冲畾鐗堛€?# Windows 瀹樻柟鍙戣鐗╃幇涓?Inno 瀹夎鍣?exe锛圸ed-x86_64.exe / Zed-aarch64.exe锛?# 浜岃繘鍒跺唴瀹炴祴 Inno Setup 6.4.3锛夛紝宸叉棤 zip锛歩nstall_kind executable锛?# 闈欓粯鍙傛暟鏈畼鏂规枃妗ｅ寲锛屾寜 Inno 鏍囧噯 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR={{install}}銆?# gui_binary zed.exe 甯冨眬寰呮牳瀹烇紙鏃?zip 鍙煡锛?DIR 瀹夎鍚庡簲浣嶄簬 install 鏍癸級銆?# mac: dmg锛坋xtractor 鎸傝浇鍚庡鍒?.app 鍒?install 鏍癸級锛沴inux: tar.gz锛堟牴涓?zed.app/ 鈫?strip 1锛夈€?# 鑷甫瀹屾暣杩愯鏃讹紝鏃?depends銆?# sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: zed
+display_name: Zed
+description: Zed is a high-performance, multiplayer code editor built by the creators of Atom and Tree-sitter.
+homepage: https://zed.dev
+category: development_tools
+shims:
+  - zed
+form_factor:
+  - gui
+  - cli
+gui_binary: zed.exe
+latest: "1.13.2"
+lts: ""
+versions:
+  - version: "1.13.2"
+    stable: true
+    release: "2026-08-02"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.2/Zed-x86_64.exe
+        mirror_url: ""
+        sha256: "f9e73b28ed1d202832dc2ff1e5df1be46297d16ac7aa1762f230f7c9995fd5b3"
+        size: 91201584
+        strip: 0
+        install_kind: executable
+        install_args: ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR={{install}}"]
+      - os: windows
+        arch: arm64
+        format: exe
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.2/Zed-aarch64.exe
+        mirror_url: ""
+        sha256: ""
+        size: 77788248
+        strip: 0
+        install_kind: executable
+        install_args: ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR={{install}}"]
+      - os: darwin
+        arch: x86_64
+        format: dmg
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.2/Zed-x86_64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 163405073
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.2/Zed-aarch64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 148576234
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.2/zed-linux-x86_64.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 157828302
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.2/zed-linux-aarch64.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 151778646
+        strip: 1
+  - version: "1.13.1"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: exe
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.1/Zed-x86_64.exe
+        mirror_url: ""
+        sha256: ""
+        size: 91233960
+        strip: 0
+        install_kind: executable
+        install_args: ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR={{install}}"]
+      - os: windows
+        arch: arm64
+        format: exe
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.1/Zed-aarch64.exe
+        mirror_url: ""
+        sha256: ""
+        size: 77759832
+        strip: 0
+        install_kind: executable
+        install_args: ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR={{install}}"]
+      - os: darwin
+        arch: x86_64
+        format: dmg
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.1/Zed-x86_64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 163413629
+        strip: 0
+      - os: darwin
+        arch: arm64
+        format: dmg
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.1/Zed-aarch64.dmg
+        mirror_url: ""
+        sha256: ""
+        size: 148572752
+        strip: 0
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.1/zed-linux-x86_64.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 157829476
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://github.com/zed-industries/zed/releases/download/v1.13.1/zed-linux-aarch64.tar.gz
+        mirror_url: ""
+        sha256: ""
+        size: 151780104
+        strip: 1
+remote:
+  type: github
+  url: zed-industries/zed
+  pattern: "v?(\\d+\\.\\d+\\.\\d+)$"

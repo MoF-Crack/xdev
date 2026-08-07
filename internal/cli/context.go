@@ -17,9 +17,15 @@ import (
 	"os"
 
 	"github.com/xmdemt/xdev/internal/config"
+	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/remote"
 )
+
+// Global scheduler reference for startup-strategy lifecycle management.
+// Set by root.go's OnInitialize and used by ShutdownSniffScheduler.
+var sniffScheduler *discovery.Scheduler
 
 // Global context for the running command.
 //
@@ -101,4 +107,23 @@ func initContext(xmdeDir string, verbose, noColor, noPathFix bool) {
 	globalCtx.noColor = noColor
 	globalCtx.noPathFix = noPathFix
 	globalCtx.initialized = true
+
+	// Configure HTTP client proxy from config (fixes sniff failing behind proxy).
+	remote.ConfigureHTTPClient(cfg.GetProxyURL("https"))
+
+	// Configure GitHub API token from config file (env GITHUB_TOKEN/GH_TOKEN
+	// is read by effectiveGitHubToken() automatically each request).
+	if cfg.Sniff.GitHubToken != "" {
+		remote.ConfigureGitHubToken(cfg.Sniff.GitHubToken)
+	}
+}
+
+// ShutdownSniffScheduler shuts down the global sniff scheduler.
+// Called from main.go after root.Execute() returns, so the
+// startup-strategy background goroutine can persist partial results
+// before process exit (SC-002).
+func ShutdownSniffScheduler() {
+	if sniffScheduler != nil {
+		sniffScheduler.Shutdown()
+	}
 }

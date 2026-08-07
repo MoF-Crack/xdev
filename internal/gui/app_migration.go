@@ -43,6 +43,27 @@ func (a *App) ScanLegacyDir() []env.LegacyDirInfo {
 func (a *App) MigrateLegacyDir(legacyDir string) error {
 	logInfo("[MigrateLegacyDir] 开始迁移 %s", legacyDir)
 
+	// Security (F-10): legacyDir 将被子目录迁移后 RemoveAll，
+	// 必须校验为绝对路径、存在、非符号链接、且不在 xdev 主目录内。
+	if legacyDir == "" || !filepath.IsAbs(legacyDir) {
+		return fmt.Errorf("legacy dir must be absolute: %q", legacyDir)
+	}
+	li, err := os.Lstat(legacyDir)
+	if err != nil {
+		return fmt.Errorf("legacy dir does not exist: %s", legacyDir)
+	}
+	// Go 的 Lstat 对 Windows junction/reparse point 也报告 ModeSymlink。
+	if li.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("legacy dir must not be a symlink/junction: %s", legacyDir)
+	}
+	if !li.IsDir() {
+		return fmt.Errorf("legacy dir is not a directory: %s", legacyDir)
+	}
+	cfg := a.getCfg()
+	if util.ValidateAbsPathUnder(cfg.Core.XMDevDir, legacyDir) == nil {
+		return fmt.Errorf("legacy dir is inside xdev home, refusing to migrate: %s", legacyDir)
+	}
+
 	// 根据旧目录路径推算新目录路径
 	vol := filepath.VolumeName(legacyDir)
 	newDir := filepath.Join(vol, "XDev")
@@ -56,7 +77,7 @@ func (a *App) MigrateLegacyDir(legacyDir string) error {
 
 	// 更新配置中的路径（如果当前配置指向旧目录）
 	a.cfgMu.Lock()
-	cfg := a.cfg
+	cfg = a.cfg
 	normalized := strings.ReplaceAll(strings.ToLower(cfg.Core.XMDevDir), "/", "\\")
 	legacyLower := strings.ReplaceAll(strings.ToLower(legacyDir), "/", "\\")
 	if strings.Contains(normalized, legacyLower) || normalized == legacyLower {
@@ -256,10 +277,12 @@ func (a *App) InitConfig(baseDir string) error {
 	a.SaveLastSelection(baseDir, drive)
 
 	// 清理用户 PATH 中旧的 xdev install 目录条目和双反斜杠路径
-	a.cleanupUserPath(baseDir)
+	a.cleanupUserPath(a.cfg, baseDir)
 
 	// 将 xdev 自身安装到 install/xdev/<version>/ 并创建 junction
-	if _, _, err := installer.InstallSelf(a.getCfg()); err != nil {
+	// 注意：此处持有 cfgMu 写锁，必须直接使用 a.cfg 而非 a.getCfg()
+	// （RWMutex 不可重入，getCfg 的 RLock 会造成死锁，F-18）。
+	if _, _, err := installer.InstallSelf(a.cfg); err != nil {
 		logWarn("[InitConfig] failed to install xdev self: %v", err)
 	}
 	xdevBinDir := filepath.Join(baseDir, "current", "xdev")
@@ -274,8 +297,8 @@ func (a *App) InitConfig(baseDir string) error {
 
 // cleanupUserPath 清理用户 PATH 中旧的 xdev install 目录条目、
 // 双反斜杠路径和旧版 xmdevenvmt shim 目录。
-func (a *App) cleanupUserPath(baseDir string) {
-	cfg := a.getCfg()
+// cfg 由调用方传入（InitConfig 持写锁时传 a.cfg，避免 getCfg 死锁，F-18）。
+func (a *App) cleanupUserPath(cfg *config.Config, baseDir string) {
 	mode := cfg.GetPathMode()
 	shimDir := filepath.Join(baseDir, "shims")
 	changed, err := env.CleanupUserPath(shimDir, mode)
@@ -386,7 +409,8 @@ func (a *App) ScanLocalEnvironmentsForMigration() []env.LocalTool {
 }
 
 // MigrateLocalToolByJunction 通过 junction 方式将本地工具迁移到 xdev 管理。
-// 注意：此方法不刷新缓存，调用方应在所有迁移完成后统一刷新。
+// 单个迁移完成后会刷新本地缓存；批量迁移（MigrateAllLocalTools）在
+// 全部完成后统一刷新一次。
 func (a *App) MigrateLocalToolByJunction(toolJson string) error {
 	logInfo("[MigrateLocalToolByJunction] 接收到迁移请求")
 
@@ -395,6 +419,47 @@ func (a *App) MigrateLocalToolByJunction(toolJson string) error {
 		return fmt.Errorf("解析工具信息失败: %v", err)
 	}
 
+	// Security (F-10): 校验工具名与源路径（绝对路径、目录、非符号链接、
+	// 不在 xdev 主目录内）。
+	if err := a.validateMigrationSource(tool); err != nil {
+		return err
+	}
+
+	return a.migrateLocalToolByJunction(tool)
+}
+
+// validateMigrationSource 校验迁移源（F-10）：
+//   - 工具名必须通过 ValidateShimName（防止目录穿越）
+//   - 源路径必须为绝对路径、存在且为目录
+//   - 源路径不得是符号链接/junction（避免跟随到系统任意目录）
+//   - 源路径不得位于 xdev 主目录内（避免迁移自管目录形成循环）
+func (a *App) validateMigrationSource(tool env.LocalTool) error {
+	if err := util.ValidateShimName(tool.Name); err != nil {
+		return fmt.Errorf("invalid tool name %q: %w", tool.Name, err)
+	}
+	if tool.Path == "" || !filepath.IsAbs(tool.Path) {
+		return fmt.Errorf("source path must be absolute: %q", tool.Path)
+	}
+	li, err := os.Lstat(tool.Path)
+	if err != nil {
+		return fmt.Errorf("source path does not exist: %s", tool.Path)
+	}
+	// Go 的 Lstat 对 Windows junction/reparse point 也报告 ModeSymlink。
+	if li.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source path must not be a symlink/junction: %s", tool.Path)
+	}
+	if !li.IsDir() {
+		return fmt.Errorf("source path is not a directory: %s", tool.Path)
+	}
+	cfg := a.getCfg()
+	if util.ValidateAbsPathUnder(cfg.Core.XMDevDir, tool.Path) == nil {
+		return fmt.Errorf("source path is inside xdev home, refusing to migrate: %s", tool.Path)
+	}
+	return nil
+}
+
+// migrateLocalToolByJunction 通过 junction 方式迁移单个本地工具。
+func (a *App) migrateLocalToolByJunction(tool env.LocalTool) error {
 	logInfo("[MigrateLocalToolByJunction] 迁移 %s (版本: %s, 路径: %s)", tool.Name, tool.Version, tool.Path)
 
 	cfg := a.getCfg()
@@ -429,7 +494,8 @@ func (a *App) MigrateLocalToolByJunction(toolJson string) error {
 
 // MigrateLocalToolByMove 将本地工具目录移动到 xdev install 目录下管理。
 // 与 Junction 方式不同，Move 方式会将原始目录移走，原始路径将不再存在。
-// 注意：此方法不刷新缓存，调用方应在所有迁移完成后统一刷新。
+// 单个迁移完成后会刷新本地缓存；批量迁移（MigrateAllLocalTools）在
+// 全部完成后统一刷新一次。
 func (a *App) MigrateLocalToolByMove(toolJson string) error {
 	logInfo("[MigrateLocalToolByMove] 接收到迁移请求")
 
@@ -438,6 +504,17 @@ func (a *App) MigrateLocalToolByMove(toolJson string) error {
 		return fmt.Errorf("解析工具信息失败: %v", err)
 	}
 
+	// Security (F-10): 校验工具名与源路径（绝对路径、目录、非符号链接、
+	// 不在 xdev 主目录内）。move 模式随后会删除源目录，校验尤为重要。
+	if err := a.validateMigrationSource(tool); err != nil {
+		return err
+	}
+
+	return a.migrateLocalToolByMove(tool)
+}
+
+// migrateLocalToolByMove 以 move 方式迁移单个本地工具。
+func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 	logInfo("[MigrateLocalToolByMove] 迁移 %s (版本: %s, 路径: %s)", tool.Name, tool.Version, tool.Path)
 
 	cfg := a.getCfg()
@@ -550,9 +627,13 @@ func (a *App) rollbackMove(targetPath, originalPath string, movedByRename bool) 
 	}
 }
 
-// MigrateAllLocalTools 一键迁移所有扫描到的本地工具（并行执行）
-func (a *App) MigrateAllLocalTools() []MigrationResult {
-	logInfo("[MigrateAllLocalTools] 开始一键迁移")
+// MigrateAllLocalTools 一键迁移所有扫描到的本地工具（并行执行）。
+// mode 指定迁移方式："junction" | "move"。
+func (a *App) MigrateAllLocalTools(mode string) []MigrationResult {
+	logInfo("[MigrateAllLocalTools] 开始一键迁移 (mode=%s)", mode)
+	if mode != "move" {
+		mode = "junction"
+	}
 	cfg := a.getCfg()
 	tools := env.ScanLocalTools(cfg.Core.XMDevDir)
 
@@ -582,7 +663,7 @@ func (a *App) MigrateAllLocalTools() []MigrationResult {
 			defer wg.Done()
 			defer func() { <-limiter }()
 
-			if err := env.MigrateLocalTool(t, cfg.Core.XMDevDir); err != nil {
+			if err := a.migrateLocalToolOne(t, mode); err != nil {
 				results[idx] = MigrationResult{
 					Name:   t.Name,
 					Status: "failed",
@@ -591,9 +672,6 @@ func (a *App) MigrateAllLocalTools() []MigrationResult {
 				logWarn("[MigrateAllLocalTools] 迁移 %s 失败: %v", t.Name, err)
 				return
 			}
-
-			// 迁移成功后创建 shim 和设置环境变量
-			a.postMigrateSetup(t, cfg)
 
 			results[idx] = MigrationResult{
 				Name:    t.Name,
@@ -613,6 +691,15 @@ func (a *App) MigrateAllLocalTools() []MigrationResult {
 
 	logInfo("[MigrateAllLocalTools] 一键迁移完成，共 %d 个工具", len(results))
 	return results
+}
+
+// migrateLocalToolOne 按指定迁移方式迁移单个本地工具。
+// mode: "junction" | "move"（其他值回退到 junction）。
+func (a *App) migrateLocalToolOne(tool env.LocalTool, mode string) error {
+	if mode == "move" {
+		return a.migrateLocalToolByMove(tool)
+	}
+	return a.migrateLocalToolByJunction(tool)
 }
 
 // postMigrateSetup 迁移成功后的公共设置逻辑：创建 shim、设置环境变量

@@ -7,7 +7,7 @@ import MirrorSettings from '../../src/components/settings/MirrorSettings.vue';
 const t = (key) => key;
 const props = {
   t,
-  isDark: true,
+  theme: 'dark',
   locale: 'en',
   pathMode: 'shim',
   mirrorConfig: { node: 'https://nodejs.org/dist', npm: 'https://registry.npmmirror.com' },
@@ -35,14 +35,14 @@ describe('SettingsPage', () => {
 
   it('preserves theme, locale, path, proxy, profile, update and diagnostics actions', async () => {
     const wrapper = mount(SettingsPage, { props });
-    await wrapper.get('[data-action="theme"]').setValue(false);
+    await wrapper.get('[data-action="theme-light"]').find('input').setValue(true);
     await wrapper.get('[data-action="locale"]').setValue('zh');
     await wrapper.get('[data-action="path-mode"]').setValue('direct');
     await wrapper.get('[data-action="proxy-enable"]').setValue(true);
     for (const action of ['proxy-test', 'proxy-save', 'profile-export', 'profile-import', 'check-update', 'run-diagnostics']) {
       await wrapper.get(`[data-action="${action}"]`).trigger('click');
     }
-    expect(wrapper.emitted('update:is-dark')).toEqual([[false]]);
+    expect(wrapper.emitted('update:theme')).toEqual([['light']]);
     expect(wrapper.emitted('update:locale')).toEqual([['zh']]);
     expect(wrapper.emitted('update:path-mode')).toEqual([['direct']]);
     expect(wrapper.emitted('proxy-save')).toBeTruthy();

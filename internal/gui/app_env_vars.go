@@ -12,20 +12,36 @@ import (
 )
 
 type EnvVarInfo struct {
-	Name          string `json:"name"`
-	Value         string `json:"value"`
-	Source        string `json:"source"`
-	Level         string `json:"level"`
-	ToolName      string `json:"toolName"`
-	IsValid       bool   `json:"isValid"`
-	InvalidReason string `json:"invalidReason"`
-	ValidationStatus string `json:"validationStatus"`
+	Name             string     `json:"name"`
+	Value            string     `json:"value"`
+	Source           string     `json:"source"`
+	Level            string     `json:"level"`
+	ToolName         string     `json:"toolName"`
+	IsValid          bool       `json:"isValid"`
+	InvalidReason    string     `json:"invalidReason"`
+	ValidationStatus string     `json:"validationStatus"`
+	PathEntries      []PathEntry `json:"pathEntries,omitempty"`
+}
+
+// PathEntry represents a single semicolon-delimited path within an env var
+// value, with its individual validity status. Used by the frontend env var
+// editor to show per-path validity without parsing the human-readable
+// invalidReason string.
+type PathEntry struct {
+	Path   string `json:"path"`
+	Exists bool   `json:"exists"`
 }
 
 func validationStatus(value string, valid bool, reason string) string {
-	if !strings.Contains(value, ":\\") && !strings.Contains(value, ":/") && !strings.HasPrefix(value, "\\") && !strings.HasPrefix(value, "/") && !strings.Contains(value, "/") { return "not-applicable" }
-	if valid { return "valid" }
-	if strings.Contains(value, ";") && strings.Contains(reason, "/") { return "partial" }
+	if !strings.Contains(value, ":\\") && !strings.Contains(value, ":/") && !strings.HasPrefix(value, "\\") && !strings.HasPrefix(value, "/") && !strings.Contains(value, "/") {
+		return "not-applicable"
+	}
+	if valid {
+		return "valid"
+	}
+	if strings.Contains(value, ";") && strings.Contains(reason, "/") {
+		return "partial"
+	}
 	return "invalid"
 }
 
@@ -64,6 +80,7 @@ func (a *App) GetEnvVars() []EnvVarInfo {
 				result = append(result, EnvVarInfo{
 					Name: name, Value: val, Source: "user", Level: "user",
 					ToolName: toolName, IsValid: isValid, InvalidReason: reason, ValidationStatus: validationStatus(val, isValid, reason),
+					PathEntries: buildPathEntries(val),
 				})
 			}
 		}
@@ -82,6 +99,7 @@ func (a *App) GetEnvVars() []EnvVarInfo {
 				result = append(result, EnvVarInfo{
 					Name: name, Value: val, Source: "system", Level: "machine",
 					ToolName: toolName, IsValid: isValid, InvalidReason: reason, ValidationStatus: validationStatus(val, isValid, reason),
+					PathEntries: buildPathEntries(val),
 				})
 			}
 		}
@@ -96,12 +114,44 @@ func (a *App) GetEnvVars() []EnvVarInfo {
 				result = append(result, EnvVarInfo{
 					Name: name, Value: val, Source: "system", Level: "process",
 					ToolName: toolName, IsValid: isValid, InvalidReason: reason, ValidationStatus: validationStatus(val, isValid, reason),
+					PathEntries: buildPathEntries(val),
 				})
 			}
 		}
 	}
 
 	return result
+}
+
+// buildPathEntries splits a semicolon-delimited env var value into individual
+// path entries with per-entry existence checks. Non-path values (no path-like
+// characters) return nil so the frontend knows not to show a path list.
+func buildPathEntries(value string) []PathEntry {
+	if value == "" {
+		return nil
+	}
+	expanded := os.ExpandEnv(value)
+	looksLikePath := strings.Contains(expanded, ":\\") || strings.Contains(expanded, ":/") ||
+		strings.HasPrefix(expanded, "\\") || strings.HasPrefix(expanded, "/") ||
+		strings.Contains(expanded, "/")
+	if !looksLikePath {
+		return nil
+	}
+	// Split on the RAW (unexpanded) value so the frontend sees the original
+	// string the user typed, not the expanded one. Existence is checked on
+	// the expanded form.
+	parts := strings.Split(value, ";")
+	var entries []PathEntry
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		expandedP := os.ExpandEnv(p)
+		_, err := os.Stat(expandedP)
+		entries = append(entries, PathEntry{Path: p, Exists: err == nil})
+	}
+	return entries
 }
 
 func ValidateEnvVar(name, value string) (bool, string) {
@@ -204,6 +254,7 @@ func (a *App) GetAllEnvVars(level string) []EnvVarInfo {
 			Name: pair.Name, Value: pair.Value,
 			Source: level, Level: level,
 			IsValid: isValid, InvalidReason: reason, ValidationStatus: validationStatus(pair.Value, isValid, reason),
+			PathEntries: buildPathEntries(pair.Value),
 		})
 	}
 	return result
@@ -212,9 +263,6 @@ func (a *App) GetAllEnvVars(level string) []EnvVarInfo {
 func (a *App) DeleteEnvVarEntry(name, level string) error {
 	if util.IsProtectedSystemEnvVar(name) {
 		return fmt.Errorf("cannot delete protected system env var: %s", name)
-	}
-	if !util.IsAllowedEnvVarName(name) {
-		return fmt.Errorf("env var %q is not in the allowed whitelist, refusing delete", name)
 	}
 	switch level {
 	case "user", "machine":
@@ -225,12 +273,10 @@ func (a *App) DeleteEnvVarEntry(name, level string) error {
 }
 
 func (a *App) CleanEnvVarPath(name, level string) error {
-	if util.IsProtectedSystemEnvVar(name) {
+	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
 		return fmt.Errorf("cannot modify protected system env var: %s", name)
 	}
-	if !util.IsAllowedEnvVarName(name) {
-		logInfo("[CleanEnvVarPath] cleaning non-whitelist env var: %s", name)
-	}
+	logInfo("[CleanEnvVarPath] cleaning env var: %s", name)
 
 	var value string
 	var err error
@@ -292,9 +338,54 @@ func (a *App) CleanEnvVarPath(name, level string) error {
 	return nil
 }
 
+// CleanAllInvalidEnvVars iterates all env vars at the given level and cleans
+// every one that is invalid or partially valid (contains non-existent paths).
+// Returns a summary of what was cleaned. Protected system vars are skipped.
+type CleanResult struct {
+	Name   string `json:"name"`
+	Action string `json:"action"` // "cleaned" | "deleted" | "skipped"
+	Detail string `json:"detail"`
+}
+
+func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
+	logInfo("[CleanAllInvalidEnvVars] level=%s", level)
+	vars := a.GetAllEnvVars(level)
+	if len(vars) == 0 {
+		return nil
+	}
+	var results []CleanResult
+	for _, v := range vars {
+		if util.IsProtectedSystemEnvVar(v.Name) && !strings.EqualFold(v.Name, "path") {
+			results = append(results, CleanResult{Name: v.Name, Action: "skipped", Detail: "protected"})
+			continue
+		}
+		if v.IsValid {
+			continue // valid �?nothing to do
+		}
+		// invalid or partial �?try cleaning
+		err := a.CleanEnvVarPath(v.Name, level)
+		if err != nil {
+			if strings.Contains(err.Error(), "admin") || strings.Contains(err.Error(), "ACCESS_DENIED") || strings.Contains(err.Error(), "error 5") {
+				results = append(results, CleanResult{Name: v.Name, Action: "skipped", Detail: "admin required"})
+			} else {
+				results = append(results, CleanResult{Name: v.Name, Action: "skipped", Detail: err.Error()})
+			}
+			continue
+		}
+		// Check if var was deleted (all paths invalid) or just cleaned (some paths removed)
+		remaining, readErr := env.GetEnvVar(v.Name, level)
+		if readErr != nil || remaining == "" {
+			results = append(results, CleanResult{Name: v.Name, Action: "deleted", Detail: "all paths were invalid"})
+		} else {
+			results = append(results, CleanResult{Name: v.Name, Action: "cleaned", Detail: "removed invalid paths"})
+		}
+	}
+	return results
+}
+
 func (a *App) SetEnvVar(toolName, name, value, level string) error {
-	if !util.IsAllowedEnvVarName(name) {
-		return fmt.Errorf("env var %q is not in the allowed whitelist, refusing to write", name)
+	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
+		return fmt.Errorf("cannot modify protected system env var: %s", name)
 	}
 	switch level {
 	case "user", "machine":
@@ -337,8 +428,8 @@ func (a *App) autoAppendBinToPath(name, value, level string) {
 }
 
 func (a *App) DeleteEnvVar(toolName, name, level string) error {
-	if !util.IsAllowedEnvVarName(name) {
-		return fmt.Errorf("env var %q is not in the allowed whitelist, refusing delete", name)
+	if util.IsProtectedSystemEnvVar(name) {
+		return fmt.Errorf("cannot modify protected system env var: %s", name)
 	}
 	switch level {
 	case "user", "machine":

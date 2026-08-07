@@ -8,9 +8,42 @@ shims:
     - gofmt
     - godoc
 env_vars:
-    GOPATH: '{{install}}\..\gopath'
+    # GOROOT：官方要求（安装根，非默认位置时需要）。
     GOROOT: '{{install}}'
+    # GOPATH：官方默认 ~/go（用户工作区，安装器不设置）。
+    # xdev 将其指向 <install_root>\gopath 作为托管工作区
+    # （{{install}}\..\gopath 解析为 install 根下的 gopath），
+    # 与官方默认不同，属于有意为之的 xdev 托管行为，保持现状。
+    GOPATH: '{{install}}\..\gopath'
 versions:
+    - version: 1.26.5
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://go.dev/dl/go1.26.5.windows-amd64.zip
+          mirror_url: ""
+          sha256: "97e6b2a833b6d89f9ff17d25419ac0a7e3b482a044e9ab18cdef834bd834fd38"
+          size: 70000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://go.dev/dl/go1.26.5.linux-amd64.tar.gz
+          mirror_url: https://mirrors.aliyun.com/golang/go1.26.5.linux-amd64.tar.gz
+          sha256: ""
+          size: 70000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://go.dev/dl/go1.26.5.darwin-arm64.tar.gz
+          mirror_url: https://mirrors.aliyun.com/golang/go1.26.5.darwin-arm64.tar.gz
+          sha256: ""
+          size: 70000000
+          strip: 0
     - version: 1.23.2
       stable: true
       release: "2024-10-08"
@@ -100,6 +133,6 @@ remote:
     url: golang/go
     path: ""
     pattern: go(\d+\.\d+\.\d+)$
-latest: 1.23.2
+latest: 1.26.5
 lts: ""
 install_root: ""

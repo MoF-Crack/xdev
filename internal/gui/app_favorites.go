@@ -23,9 +23,10 @@ type FavoriteInfo struct {
 	AddedAt       string `json:"addedAt"`
 	ActiveVersion string `json:"activeVersion"` // 当前活跃版本
 	Installed     bool   `json:"installed"`     // 是否已通过 xdev 安装
-	LocalVersion  string `json:"localVersion"`  // 系统本地检测到的版本
-	LocalPath     string `json:"localPath"`     // 系统本地路径
-	Source        string `json:"source"`        // "xdev" 或 "local"
+	LocalVersion  string   `json:"localVersion"`  // 系统本地检测到的版本
+	LocalPath     string   `json:"localPath"`     // 系统本地路径
+	Source        string   `json:"source"`        // "xdev" 或 "local"
+	FormFactor    []string `json:"formFactor,omitempty"` // 形态（manifest EffectiveFormFactor，gui/cli/tui）
 }
 
 // GetFavorites 返回收藏列表（含版本管理信息）
@@ -61,6 +62,13 @@ func (a *App) GetFavorites() []FavoriteInfo {
 			base[i].LocalVersion = ver
 			base[i].Source = "xdev"
 		}
+		// 形态信息来自 manifest（Spec 023）。manifest 可能为 nil
+		// （Lua 插件/测试桩）——nil 安全，留空即可（omitempty）。
+		if p, ok := a.registry.Get(name); ok {
+			if m := p.Manifest(); m != nil {
+				base[i].FormFactor = m.EffectiveFormFactor()
+			}
+		}
 	}
 	return base
 }
@@ -86,6 +94,9 @@ func (a *App) AddFavorite(toolName string) error {
 		Category:    p.Category(),
 		AddedAt:     time.Now().Format("2006-01-02"),
 	})
+	if m := p.Manifest(); m != nil {
+		a.favorites[len(a.favorites)-1].FormFactor = m.EffectiveFormFactor()
+	}
 	a.saveFavorites()
 	return nil
 }

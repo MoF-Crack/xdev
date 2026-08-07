@@ -225,7 +225,8 @@ func WriteEnvFragment(envDir, tool, version string, vars map[string]string) erro
 //   - java: bin/
 //   - node: / (根目录，node.exe 在根目录)
 //   - python: /, Scripts/
-//   - go: bin/
+//   - go: bin/ 或 go/bin/（兼容 strip:0 嵌套布局）
+//   - cangjie: bin/ 或 cangjie/bin/（兼容 strip:0 嵌套布局）
 //   - rust: .cargo/bin/
 //   - flutter: bin/
 //   - dotnet: / (根目录)
@@ -240,7 +241,37 @@ func ToolBinPaths(toolName, installPath string) []string {
 	case "python":
 		paths = append(paths, installPath, filepath.Join(installPath, "Scripts"))
 	case "go":
-		paths = append(paths, filepath.Join(installPath, "bin"))
+		// Standard layout: installPath/bin/
+		binDir := filepath.Join(installPath, "bin")
+		if fi, err := os.Stat(binDir); err == nil && fi.IsDir() {
+			paths = append(paths, binDir)
+		} else {
+			// Fallback: strip:0 nested layout: installPath/go/bin/
+			nestedBin := filepath.Join(installPath, "go", "bin")
+			if fi, err := os.Stat(nestedBin); err == nil && fi.IsDir() {
+				paths = append(paths, nestedBin)
+			} else {
+				// Last resort: the root itself
+				paths = append(paths, installPath)
+			}
+		}
+	case "cangjie":
+		// Standard layout: installPath/bin/
+		binDir := filepath.Join(installPath, "bin")
+		if fi, err := os.Stat(binDir); err == nil && fi.IsDir() {
+			paths = append(paths, binDir)
+		} else {
+			// Fallback: strip:0 nested layout: installPath/cangjie/bin/
+			nestedBin := filepath.Join(installPath, "cangjie", "bin")
+			if fi, err := os.Stat(nestedBin); err == nil && fi.IsDir() {
+				paths = append(paths, nestedBin)
+			}
+			// Also check the root directory (for tools without bin/)
+			fi, err := os.Stat(installPath)
+			if err == nil && fi.IsDir() {
+				paths = append(paths, installPath)
+			}
+		}
 	case "rust":
 		paths = append(paths, filepath.Join(installPath, ".cargo", "bin"))
 	case "flutter":

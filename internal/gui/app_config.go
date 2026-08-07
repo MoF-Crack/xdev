@@ -16,6 +16,7 @@ package gui
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,8 +25,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
@@ -117,6 +120,26 @@ func (a *App) GetConfig() ConfigInfo {
 func (a *App) GetPathMode() string {
 	cfg := a.getCfg()
 	return cfg.GetPathMode()
+}
+
+// GetMigrationMode returns the current local-tool migration mode
+// ("junction" or "move"), defaulting to "junction".
+func (a *App) GetMigrationMode() string {
+	cfg := a.getCfg()
+	return cfg.GetMigrationMode()
+}
+
+// SetMigrationMode persists the local-tool migration mode ("junction" or
+// "move") and saves the config. The mode is read back by the migration
+// entry points (MigrateLocalToolByJunction / MigrateLocalToolByMove).
+func (a *App) SetMigrationMode(mode string) error {
+	if err := a.mutateCfg(func(cfg *config.Config) error {
+		return cfg.SetMigrationMode(mode)
+	}); err != nil {
+		return err
+	}
+	logInfo("[SetMigrationMode] migration mode set to %s", mode)
+	return nil
 }
 
 // SetPathMode switches the PATH management mode and migrates the PATH entries.
@@ -219,8 +242,10 @@ func (a *App) SetPathMode(mode string) error {
 		}
 	}
 
-	// 保存配置
-	if err := cfg.SetPathMode(mode); err != nil {
+	// 保存配置（F-19/D17：写锁内操作实时配置，快照上的修改不会落盘）
+	if err := a.mutateCfg(func(c *config.Config) error {
+		return c.SetPathMode(mode)
+	}); err != nil {
 		logWarn("[SetPathMode] failed to save config: %v", err)
 	}
 	shim.InvalidateShimIndex()
@@ -241,10 +266,15 @@ func (a *App) GetProxyConfig() ProxyInfo {
 	}
 }
 
-// SetProxyConfig updates proxy settings.
+// SetProxyConfig updates proxy settings and reconfigures the HTTP client.
 func (a *App) SetProxyConfig(http, https, noProxy string, enabled bool) error {
-	cfg := a.getCfg()
-	return cfg.SetProxy(http, https, noProxy, enabled)
+	if err := a.mutateCfg(func(cfg *config.Config) error {
+		return cfg.SetProxy(http, https, noProxy, enabled)
+	}); err != nil {
+		return err
+	}
+	remote.ConfigureHTTPClient(a.getCfg().GetProxyURL("https"))
+	return nil
 }
 
 // TestMirrorConnectivity 测试镜像源连通性
@@ -264,17 +294,8 @@ func (a *App) TestMirrorConnectivity(mirrorURL string) ProxyTestResult {
 	}
 
 	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("too many redirects")
-			}
-			// Security (N-4): block HTTPS→HTTP downgrade.
-			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
-				return fmt.Errorf("insecure redirect: %s → %s", via[0].URL, req.URL)
-			}
-			return nil
-		},
+		Timeout:       10 * time.Second,
+		CheckRedirect: util.SecureRedirectCheck(3),
 	}
 
 	start := time.Now()
@@ -326,14 +347,9 @@ func (a *App) TestProxy(proxyURL, testURL string) ProxyTestResult {
 		Proxy: func(req *http.Request) (*url.URL, error) { return parsed, nil },
 	}
 	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
+		Timeout:       10 * time.Second,
+		Transport:     transport,
+		CheckRedirect: util.SecureRedirectCheck(3),
 	}
 
 	start := time.Now()
@@ -343,6 +359,18 @@ func (a *App) TestProxy(proxyURL, testURL string) ProxyTestResult {
 
 	if err != nil {
 		result.Message = fmt.Sprintf("连接失败: %v", err)
+		if isProxyConnError(err) {
+			// The proxy itself is unreachable — give the user an
+			// actionable hint instead of a raw dial error. Clash Verge
+			// (mihomo) commonly listens on mixed-port 7897, not 7890.
+			result.Message = fmt.Sprintf(
+				"连接失败: 代理 %s 不可达。Clash Verge 当前常用 mixed-port 为 7897（不是 7890）。请在设置中修改端口，或运行「探测本地代理」。",
+				parsed.Host)
+		} else {
+			// Security (F-15): 错误消息中回显的代理地址去除 userinfo/query，
+			// 防止代理 URL 中的凭据泄露。
+			result.Message = strings.ReplaceAll(result.Message, proxyURL, util.SanitizeURL(proxyURL))
+		}
 		return result
 	}
 	defer resp.Body.Close()
@@ -354,6 +382,63 @@ func (a *App) TestProxy(proxyURL, testURL string) ProxyTestResult {
 		result.Message = fmt.Sprintf("HTTP %d (%dms)", resp.StatusCode, latency)
 	}
 	return result
+}
+
+// isProxyConnError reports whether the error indicates the proxy itself
+// was unreachable (dead port), as opposed to a downstream failure.
+// Thin alias over util.IsProxyError (Spec 021 D4).
+func isProxyConnError(err error) bool {
+	return util.IsProxyError(err)
+}
+
+// ProbeLocalProxies returns candidate proxy URLs that accept HTTP CONNECT
+// on localhost. Candidates cover common Clash Verge / V2Ray / sing-box
+// mixed-ports (7890, 7891, 7897, 7899, 10809, 20171, 6152, 1080, 8080).
+// Each candidate is TCP-dialed with a 300ms timeout; open ports are then
+// verified with a HEAD request through the proxy (3s timeout).
+func (a *App) ProbeLocalProxies() []ProxyProbeResult {
+	ports := []int{7890, 7891, 7897, 7899, 10809, 20171, 6152, 1080, 8080}
+	results := make([]ProxyProbeResult, 0, len(ports))
+	for _, port := range ports {
+		results = append(results, probeLocalProxy(port))
+	}
+	return results
+}
+
+// probeLocalProxy probes a single localhost proxy port.
+func probeLocalProxy(port int) ProxyProbeResult {
+	res := ProxyProbeResult{
+		URL:  fmt.Sprintf("http://127.0.0.1:%d", port),
+		Port: port,
+	}
+
+	// Step 1: is the port even listening?
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+	if err != nil {
+		res.Message = "端口未监听"
+		return res
+	}
+	conn.Close()
+
+	// Step 2: verify it actually proxies HTTPS (HTTP CONNECT).
+	proxyURL, _ := url.Parse(res.URL)
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) { return proxyURL, nil },
+	}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: transport}
+	start := time.Now()
+	resp, err := client.Head("https://api.github.com")
+	res.LatencyMs = time.Since(start).Milliseconds()
+	if err != nil {
+		res.Message = fmt.Sprintf("端口已监听，但代理请求失败: %v", err)
+		return res
+	}
+	defer resp.Body.Close()
+
+	res.OK = resp.StatusCode >= 200 && resp.StatusCode < 400
+	res.Message = fmt.Sprintf("HTTP %d (%dms)", resp.StatusCode, res.LatencyMs)
+	return res
 }
 
 // GetCacheBreakdown 遍历 CacheDir，按文件扩展名分类统计大小
@@ -378,14 +463,15 @@ func (a *App) GetCacheBreakdown() CacheBreakdown {
 		name := entry.Name()
 		breakdown.TotalCount++
 
-		switch {
-		case strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".tgz"):
+		// 分类规则单一来源：cache_classify.go 的 cacheEntryCategory。
+		switch cacheEntryCategory(name) {
+		case "archives":
 			breakdown.Archives += size
-		case strings.HasSuffix(name, ".sha256"):
+		case "shaFiles":
 			breakdown.ShaFiles += size
-		case strings.HasSuffix(name, ".part"):
+		case "partFiles":
 			breakdown.PartFiles += size
-		case name == "tool_scan_cache.json":
+		case "scanCache":
 			breakdown.ScanCache += size
 		default:
 			breakdown.OtherFiles += size
@@ -414,7 +500,7 @@ func (a *App) CleanCache(category string) error {
 
 		switch category {
 		case "archives":
-			shouldDelete = strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".tgz")
+			shouldDelete = isArchiveName(name)
 		case "shaFiles":
 			shouldDelete = strings.HasSuffix(name, ".sha256")
 		case "partFiles":
@@ -431,6 +517,9 @@ func (a *App) CleanCache(category string) error {
 			}
 		}
 	}
+
+	// 缓存文件已删除，缓存占用明细必须立即失效。
+	a.InvalidateSizeBreakdown()
 
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -113,7 +114,12 @@ func TestInstall_DepSatisfied(t *testing.T) {
 		t.Fatalf("create cache file: %v", err)
 	}
 	zipW := zip.NewWriter(f)
-	fw, _ := zipW.Create(toolName + "/bin/hello")
+	// Binary name must match the tool shim so post-extract integrity passes.
+	binName := toolName
+	if runtime.GOOS == "windows" {
+		binName = toolName + ".exe"
+	}
+	fw, _ := zipW.Create(toolName + "/bin/" + binName)
 	fw.Write([]byte("#!/bin/sh\necho hello\n"))
 	zipW.Close()
 	f.Close()

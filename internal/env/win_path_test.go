@@ -80,9 +80,14 @@ func TestToolBinPaths_Python(t *testing.T) {
 }
 
 func TestToolBinPaths_Go(t *testing.T) {
-	installPath := filepath.Join(os.TempDir(), "go-1.22")
+	installPath := t.TempDir()
+	// Create standard bin/ directory (strip:1 layout)
+	binDir := filepath.Join(installPath, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	got := ToolBinPaths("go", installPath)
-	want := []string{filepath.Join(installPath, "bin")}
+	want := []string{binDir}
 	if len(got) != len(want) {
 		t.Fatalf("ToolBinPaths(go) = %v, want %v", got, want)
 	}

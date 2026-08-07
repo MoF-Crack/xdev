@@ -1,0 +1,127 @@
+﻿# T-D4 claude-code (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
+# 瀹夎绛栫暐锛歺dev 浣跨敤 npm 骞冲彴鍖咃紙optionalDependencies 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃紝
+# 濡?@anthropic-ai/claude-code-win32-x64@2.1.220锛夛紝闈?universal 钖勫３ tgz銆?# 骞冲彴 tgz 鏍逛负 package/锛宻trip 1 鍚?claude.exe 钀戒簬 install 鏍癸紙integrity 鍛戒腑锛夈€?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?@anthropic-ai/claude-code锛堢増鏈覆涓€鑷达級锛?# remote 杩斿洖 universal 鐗堟湰锛?.1.220锛夛紝褰掓。涓哄钩鍙板寘鐗堟湰锛?.1.220锛夛紝浜岃€呭榻愩€?# native 瀹夎鑴氭湰锛坕nstall.sh / install.ps1锛宨nstallers.claude.com锛変綔涓哄閫夋柟妗堝瓨鍦ㄣ€?# depends 澹版槑 node>=22锛坕nstall_path: npm锛夈€?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: claude-code
+display_name: Claude Code
+description: Claude Code is Anthropic's agentic coding tool that runs in the terminal, helping you plan, build, and ship software with AI assistance.
+homepage: https://claude.com/claude-code
+category: development_tools
+shims:
+  - claude
+form_factor:
+  - cli
+  - tui
+depends:
+  - tool: node
+    min_version: "22.0.0"
+    install_path: npm
+latest: "2.1.220"
+lts: ""
+versions:
+  - version: "2.1.220"
+    stable: true
+    release: "2026-07-24"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.220.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.220.tgz
+        sha256: "17b2a54acc5617cd4c5769ccdde86aa6d149dd44a96338ed9c0b027fda2e43f0"
+        size: 85151234
+        strip: 1
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-win32-arm64/-/claude-code-win32-arm64-2.1.220.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-win32-arm64/-/claude-code-win32-arm64-2.1.220.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.220.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.220.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.220.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.220.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-x64/-/claude-code-darwin-x64-2.1.220.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-darwin-x64/-/claude-code-darwin-x64-2.1.220.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.220.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.220.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+  - version: "2.1.219"
+    stable: true
+    release: "2026-07-24"
+    archives:
+      - os: windows
+        arch: amd64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.219.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.219.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: windows
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-win32-arm64/-/claude-code-win32-arm64-2.1.219.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-win32-arm64/-/claude-code-win32-arm64-2.1.219.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.219.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.219.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: linux
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.219.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.219.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: darwin
+        arch: x86_64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-x64/-/claude-code-darwin-x64-2.1.219.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-darwin-x64/-/claude-code-darwin-x64-2.1.219.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.gz
+        url: https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.219.tgz
+        mirror_url: https://registry.npmmirror.com/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.219.tgz
+        sha256: ""
+        size: 85000000
+        strip: 1
+remote:
+  type: npm
+  package: "@anthropic-ai/claude-code"
+  pattern: "^(\\d+\\.\\d+\\.\\d+)$"

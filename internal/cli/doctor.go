@@ -12,12 +12,12 @@
 //
 // With --fix, doctor attempts to automatically repair detected issues:
 // cleans PATH, installs xdev self, fixes system PATH entries.
-// With --ai, doctor uses Ollama for AI-assisted diagnosis.
 //
 // The command returns a non-zero exit code if any check fails.
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,16 +26,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/xmdemt/xdev/internal/ai"
 	"github.com/xmdemt/xdev/internal/config"
+	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 // newDoctorCmd runs a battery of health checks on the local install.
 func newDoctorCmd() *cobra.Command {
 	var flagFix bool
-	var flagAI bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run sanity checks on your xdev installation",
@@ -98,6 +98,16 @@ func newDoctorCmd() *cobra.Command {
 			check("manifest catalog", len(tools) > 0,
 				fmt.Sprintf("%d tool(s) discovered at %s", len(tools), cfg.Core.ManifestDir))
 
+			// 6b. Available updates from sniff cache
+			updates := loadSniffUpdates(cfg)
+			if len(updates) > 0 {
+				fmt.Println("\n• Available updates (from last sniff):")
+				for _, u := range updates {
+					fmt.Printf("  %-16s ↑ %s\n", u.Tool, u.Available)
+				}
+				_ = allOK // don't mark as check failure, it's informational
+			}
+
 			// 7. Check user PATH for issues
 			userPath, _ := env.ReadUserPath()
 			userPathIssues := diagnosePathEntries(userPath, cfg.Core.XMDevDir)
@@ -122,6 +132,25 @@ func newDoctorCmd() *cobra.Command {
 				allOK = false
 			} else {
 				fmt.Println("✔ System PATH: no issues")
+			}
+
+			// 9. Check PATH for tools that shadow the shim directory.
+			//    On Windows, Machine PATH entries are merged before User PATH entries,
+			//    so a system-level tool directory (e.g. D:\Env\Cangjie\bin) can
+			//    appear before the shim dir and shadow the shim-managed version.
+			shadowIssues := detectPathShadowConflicts(cfg.Core.ShimDir)
+			if len(shadowIssues) > 0 {
+				fmt.Println("\n⚠ PATH shadow conflicts detected:")
+				for _, issue := range shadowIssues {
+					fmt.Printf("  - %s\n", issue)
+				}
+				fmt.Println("  Suggestion: Remove the conflicting directory from Machine (system) PATH,")
+				fmt.Println("  or ensure the shim directory appears first in the merged PATH.")
+				fmt.Println("  You can also temporarily prepend the shim dir with:")
+				fmt.Println("    $env:PATH = \"" + cfg.Core.ShimDir + ";$env:PATH\"")
+				allOK = false
+			} else {
+				fmt.Println("✔ PATH shadow: no conflicts detected")
 			}
 
 			// Fix mode
@@ -170,51 +199,13 @@ func newDoctorCmd() *cobra.Command {
 				}
 			}
 
-			// AI-assisted diagnosis
-			if flagAI {
-				fmt.Println("\n--- AI Diagnosis ---")
-				assistant := ai.NewAssistant(&ai.AIConfig{OllamaURL: cfg.AI.OllamaURL, Model: cfg.AI.Model, Timeout: cfg.AI.Timeout})
-				if !assistant.IsAvailable() {
-					warnOllamaUnavailable()
-				} else {
-					// Collect diagnostic info for AI
-					var problems []string
-					if _, err := os.Stat(cfg.Core.XMDevDir); err != nil {
-						problems = append(problems, "xdev home directory does not exist")
-					}
-					if !pathContainsShim(cfg) {
-						problems = append(problems, "shim directory is not in PATH")
-					}
-					if len(userPathIssues) > 0 {
-						problems = append(problems, "user PATH has issues: "+strings.Join(userPathIssues, "; "))
-					}
-					if len(sysPathIssues) > 0 {
-						problems = append(problems, "system PATH has issues: "+strings.Join(sysPathIssues, "; "))
-					}
-
-					if len(problems) == 0 {
-						fmt.Println("AI: No issues found. Your environment looks healthy! 🎉")
-					} else {
-						problemDesc := strings.Join(problems, "\n- ")
-						fmt.Println("Sending diagnostic info to AI...")
-						suggestion, err := assistant.DiagnoseIssue(problemDesc)
-						if err != nil {
-							fmt.Printf("⚠ AI diagnosis failed: %v\n", err)
-						} else {
-							fmt.Printf("AI Suggestion:\n%s\n", suggestion)
-						}
-					}
-				}
+			if !allOK {
+				return fmt.Errorf("some checks failed")
 			}
-
-				if !allOK {
-					return fmt.Errorf("some checks failed")
-				}
-				return nil
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&flagFix, "fix", false, "Attempt to fix detected issues")
-	cmd.Flags().BoolVar(&flagAI, "ai", false, "Enable AI-assisted diagnosis (requires Ollama)")
 	return cmd
 }
 
@@ -287,4 +278,147 @@ func firstPathEntries(path string, n int) string {
 		parts = parts[:n]
 	}
 	return strings.Join(parts, sep)
+}
+
+// detectPathShadowConflicts checks whether any PATH entry that appears
+// before the shim directory contains executables that could shadow
+// shim-managed tool binaries. This is common on Windows where the
+// Machine (system) PATH is merged before the User PATH.
+//
+// Known conflict directories include Cangjie, Java, Go, and other
+// tool installation directories that may have been added to the
+// system PATH by their installers.
+func detectPathShadowConflicts(shimDir string) []string {
+	var issues []string
+	sep := string(os.PathListSeparator)
+	path := os.Getenv("PATH")
+	if path == "" {
+		return issues
+	}
+
+	shimDirClean := strings.ToLower(filepath.Clean(shimDir))
+	parts := strings.Split(path, sep)
+
+	// Find the shim directory position in the merged PATH.
+	// If shim is missing entirely, treat every entry as potentially
+	// shadowing (scan full PATH). If shim is first, no conflict.
+	shimPos := -1
+	for i, p := range parts {
+		clean := strings.ToLower(filepath.Clean(strings.Trim(p, "\" ")))
+		if clean == shimDirClean {
+			shimPos = i
+			break
+		}
+	}
+	if shimPos == 0 {
+		return issues
+	}
+	scanUntil := shimPos
+	if scanUntil < 0 {
+		scanUntil = len(parts)
+	}
+
+	// Known tool binary names that xdev manages via shims.
+	// We check whether any entry before the shim dir contains these.
+	knownToolBins := []string{
+		"cjc.exe", "cjc",
+		"java.exe", "java",
+		"javac.exe", "javac",
+		"go.exe", "go",
+		"node.exe", "node",
+		"python.exe", "python", "python3.exe", "python3",
+		"dotnet.exe", "dotnet",
+		"rustc.exe", "rustc",
+		"cargo.exe", "cargo",
+		"flutter.exe", "flutter",
+		"dart.exe", "dart",
+		"gradle.exe", "gradle",
+		"mvn.exe", "mvn",
+		"cmake.exe", "cmake",
+		"git.exe", "git",
+	}
+
+	for i := 0; i < scanUntil; i++ {
+		entry := strings.Trim(parts[i], "\" ")
+		if entry == "" {
+			continue
+		}
+		// Check for known tool binaries in this directory.
+		for _, bin := range knownToolBins {
+			candidate := filepath.Join(entry, bin)
+			if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+				msg := fmt.Sprintf(
+					"entry #%d %q contains %q — this appears BEFORE the shim dir and will shadow the shim-managed version",
+					i+1, entry, bin,
+				)
+				if shimPos < 0 {
+					msg = fmt.Sprintf(
+						"entry #%d %q contains %q — shim dir %q is missing/late in PATH so system tools take precedence",
+						i+1, entry, bin, shimDir,
+					)
+				}
+				issues = append(issues, msg)
+				break // one issue per directory entry is enough
+			}
+		}
+	}
+
+	return issues
+}
+
+// loadSniffUpdates reads the sniff cache and returns a list of tools
+// that have newer versions available than the currently installed one.
+// Used by doctor to display available updates.
+func loadSniffUpdates(cfg *config.Config) []struct {
+	Tool      string
+	Installed string
+	Available string
+} {
+	cachePath := filepath.Join(cfg.Core.CacheDir, "sniff-cache.json")
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		return nil
+	}
+	var cache discovery.SniffCache
+	if err := json.Unmarshal(data, &cache); err != nil || cache.Tools == nil {
+		return nil
+	}
+
+	installDir := cfg.Core.InstallDir
+	var updates []struct {
+		Tool      string
+		Installed string
+		Available string
+	}
+
+	for toolName, result := range cache.Tools {
+		if result.Unsupported || result.Error != "" || len(result.Versions) == 0 {
+			continue
+		}
+		// Check if tool is installed.
+		toolDir := filepath.Join(installDir, toolName)
+		if _, err := os.Stat(toolDir); os.IsNotExist(err) {
+			continue
+		}
+		// Find installed version.
+		active, ok := activeVersion(toolName)
+		if !ok {
+			continue
+		}
+		// Find latest sniffed version.
+		latest := result.Versions[0]
+		for _, v := range result.Versions[1:] {
+			if util.CompareSemver(v, latest) > 0 {
+				latest = v
+			}
+		}
+		if util.CompareSemver(latest, active) > 0 {
+			updates = append(updates, struct {
+				Tool      string
+				Installed string
+				Available string
+			}{Tool: toolName, Installed: active, Available: latest})
+		}
+	}
+	return updates
 }

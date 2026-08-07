@@ -212,16 +212,8 @@ func downloadAsset(ctx context.Context, url string, w io.Writer) error {
 		return fmt.Errorf("self-update download URL must use HTTPS, got %q", url)
 	}
 	client := &http.Client{
-		Timeout: 10 * time.Minute,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
-				return fmt.Errorf("insecure redirect during self-update: %s → %s", via[0].URL, req.URL)
-			}
-			return nil
-		},
+		Timeout:       10 * time.Minute,
+		CheckRedirect: util.SecureRedirectCheck(10),
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -395,16 +387,8 @@ func downloadToMemory(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("download URL must use HTTPS, got %q", url)
 	}
 	client := &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
-				return fmt.Errorf("insecure redirect: %s → %s", via[0].URL, req.URL)
-			}
-			return nil
-		},
+		Timeout:       30 * time.Second,
+		CheckRedirect: util.SecureRedirectCheck(10),
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

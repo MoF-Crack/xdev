@@ -1,7 +1,7 @@
 import {
-  CloudOutline, CubeOutline, ExtensionPuzzleOutline, FolderOpenOutline,
-  GitBranchOutline, HomeOutline, InformationCircleOutline, PlayOutline,
-  ServerOutline, SettingsOutline, SparklesOutline, StarOutline, TerminalOutline,
+  CloudOutline,
+  GitBranchOutline, HomeOutline, InformationCircleOutline,
+  SettingsOutline, StarOutline, TerminalOutline,
 } from '@vicons/ionicons5';
 
 const staticGroups = [
@@ -14,22 +14,16 @@ const staticGroups = [
   {
     key: 'environment-group', labelKey: 'nav.environment', items: [
       { key: 'env-vars', labelKey: 'nav.env_vars', icon: TerminalOutline, searchable: false },
-      { key: 'project', labelKey: 'nav.project', icon: FolderOpenOutline, searchable: false },
-      { key: 'tasks', labelKey: 'nav.tasks', icon: PlayOutline, searchable: false },
-      { key: 'services', labelKey: 'nav.services', icon: ServerOutline, searchable: false },
     ],
   },
   {
     key: 'development-group', labelKey: 'nav.development', items: [
       { key: 'isolate', labelKey: 'nav.isolate', icon: GitBranchOutline, searchable: false },
       { key: 'remote', labelKey: 'nav.remote', icon: CloudOutline, searchable: false },
-      { key: 'ai', labelKey: 'nav.ai', icon: SparklesOutline, searchable: false },
     ],
   },
   {
     key: 'settings-group', labelKey: 'nav.settings', items: [
-      { key: 'custom-tools', labelKey: 'nav.custom_tools', icon: ExtensionPuzzleOutline, searchable: false },
-      { key: 'plugins', labelKey: 'nav.plugins', icon: CubeOutline, searchable: false },
       { key: 'settings', labelKey: 'nav.settings', icon: SettingsOutline, searchable: false },
       { key: 'about', labelKey: 'nav.about', icon: InformationCircleOutline, searchable: false },
     ],

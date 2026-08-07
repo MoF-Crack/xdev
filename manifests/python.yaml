@@ -9,8 +9,38 @@ shims:
     - pip
     - pip3
 env_vars:
-    PYTHONHOME: '{{install}}'
+    # python-build-standalone 自带 python3xx._pth，PYTHONHOME 对其无效
+    # （._pth 机制使该变量被忽略），因此不再设置 PYTHONHOME。
+    {}
 versions:
+    - version: 3.14.6
+      stable: true
+      release: "2026-07-28"
+      archives:
+        - os: windows
+          arch: amd64
+          format: tar.gz
+          url: https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-3.14.6%2B20260728-x86_64-pc-windows-msvc-install_only.tar.gz
+          mirror_url: ""
+          sha256: "daf2b7e973cd19a2ffe14a0e9f78ccc0834b970f2b426c57bcf4e71738a18dd6"
+          size: 49192143
+          strip: 1
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-3.14.6%2B20260728-x86_64-unknown-linux-gnu-install_only.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone/cpython-3.14.6%2B20260728-x86_64-unknown-linux-gnu-install_only.tar.gz
+          sha256: ""
+          size: 127362680
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://github.com/astral-sh/python-build-standalone/releases/download/20260728/cpython-3.14.6%2B20260728-aarch64-apple-darwin-install_only.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/astral-sh/python-build-standalone/cpython-3.14.6%2B20260728-aarch64-apple-darwin-install_only.tar.gz
+          sha256: ""
+          size: 26190071
+          strip: 1
     - version: 3.12.7
       stable: true
       release: "2024-10-02"
@@ -100,6 +130,6 @@ remote:
     url: python/cpython
     path: ""
     pattern: v?(\d+\.\d+\.\d+)$
-latest: 3.12.7
+latest: 3.14.6
 lts: ""
 install_root: ""

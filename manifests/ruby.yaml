@@ -11,6 +11,35 @@ shims:
 env_vars:
     RUBY_HOME: '{{install}}'
 versions:
+    - version: 4.0.6
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: 7z
+          url: https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-4.0.6-1/rubyinstaller-4.0.6-1-x64.7z
+          mirror_url: ""
+          sha256: "328d7a86bea2f4c432783025050c9ffa1c36fcfc54ebccc466b63450ec3af223"
+          size: 50000000
+          strip: 1
+          requires_proxy: true
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.6.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/ruby/4.0.6/ruby-4.0.6.tar.gz
+          sha256: ""
+          size: 22000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://cache.ruby-lang.org/pub/ruby/4.0/ruby-4.0.6.tar.gz
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/ruby/4.0.6/ruby-4.0.6.tar.gz
+          sha256: ""
+          size: 22000000
+          strip: 1
     - version: 3.3.5
       stable: true
       release: "2024-09-03"
@@ -79,6 +108,6 @@ remote:
     url: ruby/ruby
     path: ""
     pattern: v(\d+\.\d+\.\d+)$
-latest: 3.3.5
+latest: 4.0.6
 lts: 3.2.5
 install_root: ""

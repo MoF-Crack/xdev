@@ -10,6 +10,35 @@ shims:
 env_vars:
     GIT_HOME: '{{install}}'
 versions:
+    - version: 2.55.0
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.1/MinGit-2.55.0-64-bit.zip
+          mirror_url: https://npmmirror.com/mirrors/git-for-windows/v2.55.0.windows.1/MinGit-2.55.0-64-bit.zip
+          sha256: "31497e7968196332263459ee319d2524e3ebc5786ab895e2abad34ffdd4f4ebf"
+          size: 60000000
+          strip: 1
+          requires_proxy: true
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.55.0.tar.gz
+          sha256: ""
+          size: 11000000
+          strip: 1
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.gz
+          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.55.0.tar.gz
+          sha256: ""
+          size: 11000000
+          strip: 1
     - version: 2.47.0
       stable: true
       release: "2024-10-01"
@@ -102,6 +131,6 @@ remote:
     url: git/git
     path: ""
     pattern: v(\d+\.\d+\.\d+)$
-latest: 2.47.0
+latest: 2.55.0
 lts: ""
 install_root: ""

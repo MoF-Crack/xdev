@@ -3,8 +3,8 @@
 //
 // # hook
 //
-// Outputs shell-specific export statements for the tools specified in the
-// nearest .xdev.toml. Designed to be eval'd from a cd hook:
+// Outputs shell-specific export statements for the current environment.
+// Designed to be eval'd from a cd hook:
 //
 //	eval "$(xdev hook --shell bash)"
 //
@@ -32,8 +32,6 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
-	"github.com/xmdemt/xdev/internal/plugin"
-	"github.com/xmdemt/xdev/internal/project"
 )
 
 // newHookCmd handles `xdev hook --shell <shell>`.
@@ -45,8 +43,7 @@ func newHookCmd() *cobra.Command {
 		Use:   "hook",
 		Short: "Output environment setup for the current directory",
 		Long: `hook outputs shell code (exports / set commands) that
-configures PATH and environment variables for the tools specified
-in the nearest .xdev.toml file.
+configures PATH and environment variables for the current directory.
 
 This is designed to be eval'd from a shell hook:
   eval "$(xdev hook --shell bash)"`,
@@ -54,19 +51,7 @@ This is designed to be eval'd from a shell hook:
 			if flagShell == "" {
 				flagShell = "bash"
 			}
-			cfg := Cfg()
-			dir, proj := project.FindConfig(".")
-			if proj == nil || len(proj.Tools) == 0 {
-				// No project config — output nothing (keep current env)
-				return nil
-			}
-
-			_, reg := loadCatalogAndRegistry()
-			binPaths, envVars := resolveProjectEnv(cfg, reg, dir, proj)
-			output := env.HookOutput(flagShell, binPaths, envVars)
-			if output != "" {
-				fmt.Print(output)
-			}
+			// No project-based tool management — hook outputs nothing
 			return nil
 		},
 	}
@@ -118,55 +103,6 @@ func newDeactivateCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// resolveProjectEnv resolves the bin paths and env vars for a project config.
-func resolveProjectEnv(cfg *config.Config, reg *plugin.Registry, projectDir string, proj *project.ProjectConfig) ([]string, map[string]string) {
-	var binPaths []string
-	envVars := map[string]string{}
-
-	for toolName, versionSpec := range proj.Tools {
-		p, ok := reg.Get(toolName)
-		if !ok {
-			continue
-		}
-		// Try to resolve the version spec
-		ver, err := p.ResolveVersion(versionSpec)
-		installPath := ""
-		if err == nil {
-			// Check if this resolved version is installed
-			ip := p.InstallDir(cfg.Core.InstallDir, ver)
-			if fi, err2 := os.Stat(ip); err2 == nil && fi.IsDir() {
-				installPath = ip
-			}
-		}
-		// Fallback: try current version (the active junction)
-		if installPath == "" {
-			installPath = currentInstallPath(cfg, toolName)
-		}
-		if installPath == "" {
-			continue
-		}
-		// Collect bin paths
-		paths := env.ToolBinPaths(toolName, installPath)
-		binPaths = append(binPaths, paths...)
-		// Collect env vars
-		for k, v := range p.EnvVars(installPath) {
-			envVars[k] = v
-		}
-	}
-
-	// Add project-level env vars
-	for k, v := range proj.Env {
-		envVars[k] = v
-	}
-
-	return binPaths, envVars
-}
-
-// currentInstallPath returns the install path of the currently active version.
-func currentInstallPath(cfg *config.Config, toolName string) string {
-	return activeInstallPath(toolName)
 }
 
 const hookMarker = "# >>> xdev hook >>>"

@@ -3,49 +3,47 @@
     <SectionCard>
       <FormSection :title="t('nav.env_vars')">
         <div class="toolbar">
-          <button data-action="scope-dev" :aria-pressed="viewMode === 'dev'" @click="$emit('update:view-mode', 'dev')">{{ t('env.dev_vars') }}</button>
-          <button data-action="scope-all" :aria-pressed="viewMode === 'all'" @click="$emit('update:view-mode', 'all')">{{ t('env.all_vars') }}</button>
-          <label v-if="viewMode === 'all'" for="env-level">{{ t('env.level') }}</label>
-          <select v-if="viewMode === 'all'" id="env-level" data-action="all-level" :value="allLevel" @change="$emit('update:all-level', $event.target.value)">
+          <label for="env-level">{{ t('env.level') }}</label>
+          <select id="env-level" data-action="all-level" :value="allLevel" @change="$emit('update:all-level', $event.target.value)">
             <option value="user">{{ t('env.level_user') }}</option><option value="machine">{{ t('env.level_machine') }}</option>
           </select>
-          <button data-action="validate" @click="$emit('validate')">{{ t('env.detect_invalid') }}</button>
+          <button class="xdev-btn xdev-btn--secondary" data-action="validate" @click="$emit('validate')">{{ t('env.detect_invalid') }}</button>
+          <button class="xdev-btn xdev-btn--danger" data-action="clean-all-invalid" @click="$emit('clean-all-invalid')">{{ t('env.clean_all_invalid') }}</button>
+          <button class="xdev-btn xdev-btn--primary" data-action="new-env" @click="$emit('new')">{{ t('btn.new') }}</button>
           <StatusBadge v-if="validationStats" tone="info">{{ t('env.validation_stats', validationStats) }}</StatusBadge>
         </div>
+
+        <div v-if="allLevel === 'machine'" class="admin-warning">{{ t('env.machine_hint') }}</div>
 
         <AsyncState :empty="!displayRows.length" retry-label="">
           <div v-if="displayRows.length" class="env-table-wrap">
             <table>
-              <thead><tr><th>{{ t('env.var_name') }}</th><th>{{ t('env.var_value') }}</th><th>{{ t('env.status') }}</th><th>{{ t('env.level') }}</th><th>{{ t('table.action') }}</th></tr></thead>
-              <tbody><tr v-for="row in displayRows" :key="rowKey(row)" :data-row="row.name">
-                <td>{{ row.name }}</td><td><code>{{ row.value }}</code></td><td><StatusBadge :tone="tone(row)">● {{ status(row) }}</StatusBadge></td><td>{{ row.level }}</td>
-                <td><div class="actions"><button data-action="edit-env" @click.stop="$emit('edit', row)">{{ t('btn.edit') }}</button><button data-action="delete-env" @click.stop="request('delete', row)">{{ t('btn.delete') }}</button><button v-if="canClean(row)" data-action="clean-env" @click.stop="request('clean', row)">{{ t('btn.clean') }}</button></div></td>
-              </tr></tbody>
+              <thead><tr><th>{{ t('env.var_name') }}</th><th>{{ t('env.var_value') }}</th><th>{{ t('env.status') }}</th><th>{{ t('table.action') }}</th></tr></thead>
+              <tbody>
+                <tr v-for="row in displayRows" :key="rowKey(row)" :data-row="row.name" :title="row.invalidReason || undefined">
+                  <td>{{ row.name }}</td>
+                  <td><code :title="row.value">{{ row.value }}</code></td>
+                  <td><span class="status-dot" :class="`status-dot--${tone(row)}`" :title="statusTooltip(row)" :aria-label="statusTooltip(row)" role="img"></span></td>
+                  <td><div class="actions"><button class="xdev-btn xdev-btn--secondary" data-action="edit-env" @click.stop="$emit('edit', row)">{{ t('btn.edit') }}</button><button class="xdev-btn xdev-btn--danger" data-action="delete-env" @click.stop="request('delete', row)">{{ t('btn.delete') }}</button><button class="xdev-btn xdev-btn--secondary" v-if="canClean(row)" data-action="clean-env" @click.stop="request('clean', row)">{{ t('btn.clean') }}</button></div></td>
+                </tr>
+              </tbody>
             </table>
             <div class="env-cards">
-              <article v-for="row in displayRows" :key="rowKey(row)" class="env-card" :data-row="row.name">
-                <strong>{{ row.name }}</strong><code>{{ row.value }}</code><StatusBadge :tone="tone(row)">● {{ status(row) }}</StatusBadge>
-                <div class="actions"><button data-action="edit-env" @click="$emit('edit', row)">{{ t('btn.edit') }}</button><button data-action="delete-env" @click="request('delete', row)">{{ t('btn.delete') }}</button><button v-if="canClean(row)" data-action="clean-env" @click="request('clean', row)">{{ t('btn.clean') }}</button></div>
+              <article v-for="row in displayRows" :key="rowKey(row)" class="env-card" :data-row="row.name" :title="row.invalidReason || undefined">
+                <strong>{{ row.name }}</strong><code :title="row.value">{{ row.value }}</code>
+                <div class="card-status"><span class="status-dot" :class="`status-dot--${tone(row)}`" :title="statusTooltip(row)" :aria-label="statusTooltip(row)" role="img"></span></div>
+                <div class="actions"><button class="xdev-btn xdev-btn--secondary" data-action="edit-env" @click="$emit('edit', row)">{{ t('btn.edit') }}</button><button class="xdev-btn xdev-btn--danger" data-action="delete-env" @click="request('delete', row)">{{ t('btn.delete') }}</button><button class="xdev-btn xdev-btn--secondary" v-if="canClean(row)" data-action="clean-env" @click="request('clean', row)">{{ t('btn.clean') }}</button></div>
               </article>
             </div>
           </div>
         </AsyncState>
 
-        <div class="env-form">
-          <label>{{ t('env.tool_name') }}<input v-model="draft.toolName" aria-label="Tool name" :disabled="!!editing"></label>
-          <label>{{ t('env.var_name') }}<input v-model="draft.name" aria-label="Variable name" :disabled="!!editing"></label>
-          <label>{{ t('env.var_value') }}<input v-model="draft.value" aria-label="Variable value"></label>
-          <button data-action="browse" @click="browse">{{ t('btn.browse') }}</button>
-          <label>{{ t('env.level') }}<select v-model="draft.level" aria-label="Level" :disabled="!!editing"><option value="user">{{ t('env.level_user') }}</option><option value="machine">{{ t('env.level_machine') }}</option></select></label>
-          <button data-action="save-env" @click="save">{{ t(editing ? 'btn.save' : 'btn.add') }}</button>
-          <button v-if="editing" data-action="cancel-edit" @click="$emit('cancel')">{{ t('btn.cancel') }}</button>
-        </div>
       </FormSection>
     </SectionCard>
 
     <SectionCard><FormSection :title="t('migration.title')" :description="t('migration.desc')">
-      <div class="toolbar"><button data-action="migration-mode-junction" :aria-pressed="migrationMode === 'junction'" @click="$emit('update:migration-mode', 'junction')">{{ t('migration.junction') }}</button><button data-action="migration-mode-move" :aria-pressed="migrationMode === 'move'" @click="$emit('update:migration-mode', 'move')">{{ t('migration.move') }}</button><button data-action="migration-scan" @click="$emit('migration-scan')">{{ t('migration.scan_local') }}</button><button data-action="migration-all" :disabled="!migrationTools.length" @click="$emit('migration-all', migrationMode)">{{ t('migration.migrate_all') }}</button></div>
-      <article v-for="tool in migrationTools" :key="tool.name" class="migration-row"><strong>{{ tool.name }}</strong><span>{{ tool.version || t('status.unknown') }}</span><code>{{ tool.path }}</code><button data-action="migration-single" @click="$emit('migration-single', tool)">{{ t('btn.migrate') }}</button></article>
+      <div class="toolbar"><span class="migration-mode-label" data-action="migration-mode">{{ t('migration.mode') }} {{ migrationMode === 'move' ? t('migration.move') : t('migration.junction') }}</span><button class="xdev-btn xdev-btn--secondary" data-action="migration-scan" @click="$emit('migration-scan')">{{ t('migration.scan_local') }}</button><button class="xdev-btn xdev-btn--secondary" data-action="migration-all" :disabled="!migrationTools.length" @click="$emit('migration-all')">{{ t('migration.migrate_all') }}</button></div>
+      <article v-for="tool in migrationTools" :key="tool.name" class="migration-row"><strong>{{ tool.name }}</strong><span>{{ tool.version || t('status.unknown') }}</span><code>{{ tool.path }}</code><button class="xdev-btn xdev-btn--secondary" data-action="migration-single" @click="$emit('migration-single', tool)">{{ t('btn.migrate') }}</button></article>
       <div v-for="result in migrationResults" :key="result.name"><StatusBadge :tone="result.status === 'success' ? 'success' : result.status === 'skipped' ? 'warning' : 'error'">● {{ t(`migration.status_${result.status}`) }}</StatusBadge> {{ result.name }} {{ result.error || result.reason }}</div>
     </FormSection></SectionCard>
 
@@ -54,28 +52,51 @@
 </template>
 
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import AsyncState from '../components/AsyncState.vue';
 import ConfirmAction from '../components/ConfirmAction.vue';
 import FormSection from '../components/FormSection.vue';
 import SectionCard from '../components/SectionCard.vue';
 import StatusBadge from '../components/StatusBadge.vue';
-const props = defineProps({ t: { type: Function, required: true }, envVars: { type: Array, default: () => [] }, allEnvVars: { type: Array, default: () => [] }, viewMode: String, allLevel: String, validationStats: Object, editing: Object, browseDirectory: { type: Function, required: true }, migrationMode: String, migrationTools: { type: Array, default: () => [] }, migrationResults: { type: Array, default: () => [] } });
-const emit = defineEmits(['update:view-mode', 'update:all-level', 'validate', 'edit', 'save', 'cancel', 'delete', 'clean', 'update:migration-mode', 'migration-scan', 'migration-single', 'migration-all']);
-const draft = reactive({ toolName: '', name: '', value: '', level: 'user' });
-watch(() => props.editing, (row) => Object.assign(draft, row ? { toolName: row.toolName || '', name: row.name, value: row.value, level: row.level || 'user' } : { toolName: '', name: '', value: '', level: 'user' }), { immediate: true });
-const displayRows = computed(() => props.viewMode === 'all' ? props.allEnvVars : props.envVars);
+const props = defineProps({ t: { type: Function, required: true }, allEnvVars: { type: Array, default: () => [] }, allLevel: String, validationStats: Object, migrationMode: String, migrationTools: { type: Array, default: () => [] }, migrationResults: { type: Array, default: () => [] } });
+const emit = defineEmits(['update:all-level', 'validate', 'new', 'edit', 'delete', 'clean', 'clean-all-invalid', 'migration-scan', 'migration-single', 'migration-all']);
+const displayRows = computed(() => props.allEnvVars);
 const rowKey = (row) => `${row.toolName || ''}|${row.level}|${row.name}`;
 const status = (row) => props.t(`env.${row.validationStatus || (row.isValid ? 'valid' : 'invalid')}`);
 const tone = (row) => ({ valid: 'success', partial: 'warning', invalid: 'error' }[row.validationStatus] || (row.isValid ? 'success' : 'error'));
+const statusTooltip = (row) => row.invalidReason ? `${status(row)}: ${row.invalidReason}` : status(row);
 const canClean = (row) => ['partial', 'invalid'].includes(row.validationStatus) || (!row.isValid && !!row.invalidReason);
-async function browse() { const dir = await props.browseDirectory(); if (dir) draft.value = dir; }
-function save() { emit('save', { ...draft, original: props.editing ? { toolName: props.editing.toolName || '', name: props.editing.name, level: props.editing.level || 'user' } : null }); }
 const pending = ref(null); const confirmTrigger = ref(null);
 async function request(action, row) { pending.value = { action, row }; await nextTick(); confirmTrigger.value?.click(); }
 function confirm() { emit(pending.value.action, pending.value.row); pending.value = null; }
 </script>
 
 <style scoped>
-.env-page{display:grid;gap:20px}.toolbar,.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.env-table-wrap{max-width:100%;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px;text-align:left;border-bottom:1px solid var(--xdev-border-subtle)}.env-cards{display:none}.env-form{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;align-items:end}.env-form label{display:grid;gap:4px}.migration-row{display:grid;grid-template-columns:120px 100px 1fr auto;gap:10px;align-items:center}.env-card{display:grid;gap:8px;padding:12px;border:1px solid var(--xdev-border-subtle);border-radius:var(--xdev-radius-md)}.hidden-trigger{position:fixed;left:-9999px}@media(max-width:700px){table{display:none}.env-cards{display:grid;gap:10px}.env-form,.migration-row{grid-template-columns:1fr}.env-form input,.env-form select,.env-form button{width:100%;min-width:0}}
+.env-page{width:min(var(--xdev-table-max-width),100%);margin:0 auto;display:grid;gap:var(--xdev-section-gap)}
+.toolbar,.actions{display:flex;gap:var(--xdev-space-2);align-items:center;flex-wrap:wrap}
+.migration-mode-label{color:var(--xdev-text-secondary);font-size:13px}
+.env-table-wrap{max-width:100%;overflow:auto}
+table{width:100%;min-width:720px;table-layout:fixed;border-collapse:collapse}
+th,td{padding:6px var(--xdev-space-3);text-align:left;border-bottom:1px solid var(--xdev-border-subtle)}
+th:nth-child(1),td:nth-child(1){width:20%}
+th:nth-child(2),td:nth-child(2){width:48%}
+th:nth-child(3),td:nth-child(3){width:8%}
+th:nth-child(4),td:nth-child(4){width:24%;min-width:132px;white-space:nowrap}
+.env-table-wrap td:nth-child(2){max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.env-table-wrap td:nth-child(2) code{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.env-table-wrap td:nth-child(4) .actions{min-width:132px;white-space:nowrap}
+.env-table-wrap td:nth-child(4) .actions > .xdev-btn{white-space:nowrap}
+.env-table-wrap tbody tr:hover{background:var(--xdev-accent-soft)}
+.status-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;vertical-align:middle;cursor:help}
+.status-dot--success{background:var(--xdev-success)}
+.status-dot--warning{background:var(--xdev-warning)}
+.status-dot--error{background:var(--xdev-error)}
+.env-cards{display:none}
+.env-form{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:var(--xdev-space-3);align-items:end}
+.env-form label{display:grid;gap:var(--xdev-space-1)}
+.migration-row{display:grid;grid-template-columns:140px 100px minmax(0,1fr) auto;gap:var(--xdev-space-3);align-items:center;padding:var(--xdev-space-3) 0;border-bottom:1px solid var(--xdev-border-subtle)}
+.env-card{display:grid;gap:var(--xdev-space-2);padding:var(--xdev-space-4);border:1px solid var(--xdev-border-subtle);border-radius:var(--xdev-radius-md);background:var(--xdev-bg-elevated);box-shadow:var(--xdev-shadow-sm)}
+.hidden-trigger{position:fixed;left:-9999px}
+.admin-warning{padding:var(--xdev-space-3);background:var(--xdev-warning-bg, #fff3cd);border:1px solid var(--xdev-warning-border, #ffc107);border-radius:var(--xdev-radius-md);color:var(--xdev-warning-text, #856404);font-size:13px}
+@media(max-width:700px){table{display:none}.env-cards{display:grid}.env-table-wrap{overflow:visible}}
 </style>

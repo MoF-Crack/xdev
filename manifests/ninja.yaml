@@ -7,6 +7,37 @@ shims:
     - ninja
 env_vars: {}
 versions:
+    - version: 1.13.2
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip
+          mirror_url: ""
+          sha256: "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65"
+          size: 310000
+          strip: 0
+          requires_proxy: true
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.13.2/ninja-linux.zip
+          sha256: ""
+          size: 290000
+          strip: 0
+          requires_proxy: true
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-mac.zip
+          mirror_url: https://mirrors.tuna.tsinghua.edu.cn/github-release/ninja-build/ninja/v1.13.2/ninja-mac.zip
+          sha256: ""
+          size: 280000
+          strip: 0
+          requires_proxy: true
     - version: 1.12.1
       stable: true
       release: "2024-05-01"
@@ -96,6 +127,6 @@ remote:
     url: ninja-build/ninja
     path: ""
     pattern: v(\d+\.\d+\.\d+)$
-latest: 1.12.1
+latest: 1.13.2
 lts: ""
 install_root: ""

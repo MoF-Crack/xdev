@@ -9,7 +9,7 @@ func TestExtractVersion(t *testing.T) {
 	}{
 		{"go1.22.0", "1.22.0"},
 		{"v3.12.7", "3.12.7"},
-		{"java 25", ""},           // "25" has no dot → not version-like per isVersionLike
+		{"java 25", ""}, // "25" has no dot → not version-like per isVersionLike
 		{"git version 2.47.0.windows.1", "2.47.0"},
 		{"1.22.0", "1.22.0"},
 		{"not a version", ""},

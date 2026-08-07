@@ -30,12 +30,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/tui"
 	"github.com/xmdemt/xdev/internal/version"
@@ -106,6 +108,13 @@ Short aliases you can add to your shell rc:
 	// bind persistent pre-run so every subcommand can rely on cfg being loaded
 	cobra.OnInitialize(func() {
 		initContext(flagXMDevDir, flagVerbose, flagNoColor, flagNoPathFix)
+		// Trigger Scheduler.OnStartup per configured strategy (FR-006).
+		// This runs on every command invocation but is idempotent —
+		// interval checks last_sniff_at, startup launches async, etc.
+		cfg := Cfg()
+		s := discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
+		s.OnStartup(context.Background())
+		sniffScheduler = s
 	})
 
 	// register subcommands
@@ -132,17 +141,9 @@ Short aliases you can add to your shell rc:
 		newKeygenCmd(),
 		newSignManifestsCmd(),
 		newFillSHA256Cmd(),
-		// Project-level version management
-		newLocalCmd(),
 		newHookCmd(),
 		newActivateCmd(),
 		newDeactivateCmd(),
-		newLockCmd(),
-		// Task runner
-		newTaskCmd(),
-		newRunCmd(),
-		// Service orchestration
-		newServiceCmd(),
 		// Environment isolation
 		newIsolateCmd(),
 		// Remote development
@@ -151,12 +152,14 @@ Short aliases you can add to your shell rc:
 		newPluginCmd(),
 		// Manifest management
 		newManifestCmd(),
-		// AI-assisted features
-		newAiCmd(),
 		// Version
 		newVersionCmd(),
 		// Shell completion
 		newCompletionCmd(),
+		// Tool discovery sniffing (011)
+		newSniffCmd(),
+		// Available updates (011)
+		newUpdatesCmd(),
 	)
 
 	return root

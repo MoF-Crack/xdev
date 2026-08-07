@@ -10,6 +10,36 @@ shims:
 env_vars:
     ERLANG_HOME: '{{install}}'
 versions:
+    - version: 29.0.4
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: exe
+          install_kind: executable
+          url: https://github.com/erlang/otp/releases/download/OTP-29.0.4/otp_win64_29.0.4.exe
+          mirror_url: https://erlang.org/download/otp_win64_29.0.4.exe
+          sha256: "c119a52ac90363ea4526840fc0d421be13b6e1afe6703a81ec546cbe6160899a"
+          size: 125000000
+          strip: 1
+          requires_proxy: true
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://github.com/erlang/otp/releases/download/OTP-29.0.4/otp_src_29.0.4.tar.gz
+          sha256: ""
+          size: 105000000
+          strip: 1
+          requires_proxy: true
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://github.com/erlang/otp/releases/download/OTP-29.0.4/otp_src_29.0.4.tar.gz
+          sha256: ""
+          size: 105000000
+          strip: 1
+          requires_proxy: true
     - version: 27.1.2
       stable: true
       release: "2024-10-14"
@@ -17,6 +47,7 @@ versions:
         - os: windows
           arch: amd64
           format: exe
+          install_kind: executable
           url: https://github.com/erlang/otp/releases/download/OTP-27.1.2/otp_win64_27.1.2.exe
           mirror_url: https://erlang.org/download/otp_win64_27.1.2.exe
           sha256: fd70fef67fd458f826f02c097c56792f14e5d9e54234f0e2ff6b9d2fa2c95252
@@ -46,6 +77,7 @@ versions:
         - os: windows
           arch: amd64
           format: exe
+          install_kind: executable
           url: https://github.com/erlang/otp/releases/download/OTP-26.2.5/otp_win64_26.2.5.exe
           mirror_url: https://erlang.org/download/otp_win64_26.2.5.exe
           sha256: 8174beedb18223b7e787fd2fbf1b9e2f40005b61be0ac3094c863984d9756a39
@@ -75,6 +107,7 @@ versions:
         - os: windows
           arch: amd64
           format: exe
+          install_kind: executable
           url: https://github.com/erlang/otp/releases/download/OTP-25.3.2/otp_win64_25.3.2.exe
           mirror_url: https://erlang.org/download/otp_win64_25.3.2.exe
           sha256: 0654bd8ff1329c0384daee098d1d1ece6009c4c64c4cdf127076446cd3ceab58
@@ -99,9 +132,9 @@ versions:
           requires_proxy: true
 remote:
     type: github
-    url: ""
+    url: "erlang/otp"
     path: ""
     pattern: ^OTP-(\d+\.\d+\.\d+)$
-latest: 27.1.2
+latest: 29.0.4
 lts: 26.2.5
 install_root: ""

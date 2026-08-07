@@ -7,9 +7,37 @@ shims:
   - zig
 env_vars:
   ZIG_HOME: "{{install}}"
-latest: "0.13.0"
+latest: "0.15.1"
 lts: ""
 versions:
+  - version: "0.15.1"
+    stable: true
+    release: "2026-07-29"
+    archives:
+      - os: windows
+        arch: amd64
+        format: zip
+        url: https://ziglang.org/download/0.15.1/zig-x86_64-windows-0.15.1.zip
+        mirror_url: ""
+        sha256: 91e69e887ca8c943ce9a515df3af013d95a66a190a3df3f89221277ebad29e34
+        size: 92612958
+        strip: 1
+      - os: linux
+        arch: x86_64
+        format: tar.xz
+        url: https://ziglang.org/download/0.15.1/zig-linux-x86_64-0.15.1.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-linux-x86_64-0.15.1.tar.xz
+        sha256: ""
+        size: 45000000
+        strip: 1
+      - os: darwin
+        arch: arm64
+        format: tar.xz
+        url: https://ziglang.org/download/0.15.1/zig-macos-aarch64-0.15.1.tar.xz
+        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-aarch64-0.15.1.tar.xz
+        sha256: ""
+        size: 42000000
+        strip: 1
   - version: "0.13.0"
     stable: true
     release: "2024-06-07"

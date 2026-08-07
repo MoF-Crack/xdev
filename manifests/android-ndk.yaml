@@ -11,6 +11,34 @@ env_vars:
     ANDROID_HOME: '{{install}}\..'
     ANDROID_NDK_HOME: '{{install}}'
 versions:
+    - version: "r29"
+      stable: true
+      release: "2026-07-29"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r29-windows.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r29-windows.zip
+          sha256: 4f83a1a87ea0d33ae2b43812ce27b768be949bc78acf90b955134d19e3068f1c
+          size: 1150000000
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r29-linux.zip
+          sha256: ""
+          size: 1100000000
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: zip
+          url: https://dl.google.com/android/repository/android-ndk-r29-darwin.zip
+          mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r29-darwin.zip
+          sha256: ""
+          size: 1050000000
+          strip: 0
     - version: 27.2.12479018
       stable: true
       release: "2024-06-01"
@@ -20,7 +48,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r27c-windows.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r27c-windows.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "27e49f11e0cee5800983d8af8f4acd5bf09987aa6f790d4439dda9f3643d2494"
           size: 1100000000
           strip: 0
         - os: linux
@@ -28,7 +56,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r27c-linux.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 1050000000
           strip: 0
         - os: darwin
@@ -36,7 +64,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r27c-darwin.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r27c-darwin.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 1000000000
           strip: 0
     - version: 26.3.11579264
@@ -48,7 +76,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r26d-windows.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r26d-windows.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "9b285da57a36818cb65ea5b93ec74f8138f48a40182ff2994f6aade4580ed597"
           size: 1050000000
           strip: 0
         - os: linux
@@ -56,7 +84,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r26d-linux.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 1000000000
           strip: 0
         - os: darwin
@@ -64,7 +92,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r26d-darwin.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r26d-darwin.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 950000000
           strip: 0
     - version: 25.2.9519653
@@ -76,7 +104,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r25c-windows.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r25c-windows.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: "f70093964f6cbbe19268f9876a20f92d3a593db3ad2037baadd25fd8d71e84e2"
           size: 980000000
           strip: 0
         - os: linux
@@ -84,7 +112,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r25c-linux.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 950000000
           strip: 0
         - os: darwin
@@ -92,7 +120,7 @@ versions:
           format: zip
           url: https://dl.google.com/android/repository/android-ndk-r25c-darwin.zip
           mirror_url: https://redirector.gvt1.com/edgedl/android/repository/android-ndk-r25c-darwin.zip
-          sha256: a04cfd774f522d7944520b01a09b3e0fbf4069e9a806cd0c620179b987340029
+          sha256: ""
           size: 900000000
           strip: 0
 remote:
@@ -100,6 +128,6 @@ remote:
     url: android/ndk
     path: ""
     pattern: ^r(\d+[a-z]?)$
-latest: 27.2.12479018
+latest: "r29"
 lts: 26.3.11579264
 install_root: android-sdk

@@ -10,20 +10,19 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
-import { darkTheme, lightTheme } from 'naive-ui';
 import SetupWizard from './SetupWizard.vue';
 import AppContent from './AppContent.vue';
-import { getNaiveThemeOverrides } from './theme/naive-theme.js';
+import { getNaiveThemeConfig } from './theme/naive-theme.js';
 import './styles/theme.css';
 
 const initialized = ref(true);
-const isDark = ref(true);
+const themeName = ref('dark');
 
-const currentTheme = computed(() => isDark.value ? darkTheme : lightTheme);
-const currentThemeOverrides = computed(() => getNaiveThemeOverrides(isDark.value ? 'dark' : 'light'));
+const currentTheme = computed(() => getNaiveThemeConfig(themeName.value).theme);
+const currentThemeOverrides = computed(() => getNaiveThemeConfig(themeName.value).overrides);
 
 function applyTheme() {
-  document.documentElement.setAttribute('data-theme', isDark.value ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme', themeName.value);
 }
 
 async function checkInit() {
@@ -38,12 +37,11 @@ function onInitDone() {
   initialized.value = true;
 }
 
-function onThemeChange(e) { isDark.value = e.detail; applyTheme(); }
+function onThemeChange(e) { if (['light', 'dark', 'eye-care'].includes(e.detail)) { themeName.value = e.detail; applyTheme(); } }
 onMounted(() => {
   const stored = localStorage.getItem('xdev-theme');
-  if (stored === 'light') {
-    isDark.value = false;
-  }
+  themeName.value = stored === 'true' ? 'dark' : stored === 'false' ? 'light' : ['light', 'dark', 'eye-care'].includes(stored) ? stored : 'dark';
+  localStorage.setItem('xdev-theme', themeName.value);
   applyTheme();
   window.addEventListener('xdev-theme-change', onThemeChange);
   checkInit();
