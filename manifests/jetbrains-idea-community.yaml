@@ -1,10 +1,18 @@
-﻿# JetBrains IntelliJ IDEA Community锛圫pec 023 T-D2锛?#   - Win: 瀹樻柟瀹夎鍣?exe锛坕nstall_kind executable锛夈€傞潤榛樺弬鏁帮細
-#     /S /CONFIG=<config> /D={{install}}鈥斺€?D 蹇呴』鏄渶鍚庝竴涓弬鏁颁笖涓嶅甫寮曞彿銆?#     CONFIG 鎸囧悜瀹夎鐩綍鍐呯殑 silent.config锛堥』鍦ㄥ畨瑁呭墠鍒涘缓锛屽彲涓虹┖鏂囦欢鎴?#     鍚?JVM 閫夐」鐨?vmoptions锛涗笉闇€瑕佽嚜瀹氫箟 JVM 閫夐」鏃跺彲绉婚櫎 /CONFIG 鍙傛暟锛?#     浠呯敤 /S /D={{install}}锛夈€?#   - mac: dmg锛坋xtractor 鎸傝浇鍚庡鍒?.app 鍒?install 鏍癸級
-#   - linux: tar.gz锛堝惈 idea-IIC-*/ 鏍?鈫?strip 1锛?#   - 鑷甫 JBR锛屾棤 depends
-#   - gui_binary 涓哄崟瀛楁锛氶粯璁?Windows 甯冨眬 bin/idea64.exe锛?#     Linux 瀹為檯鍏ュ彛涓?bin/idea.sh锛圱-C1 鍚姩鍦?Linux 涓婇渶鎸夊钩鍙板鐞嗭級
-#   - sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛?name: jetbrains-idea-community
+# JetBrains IntelliJ IDEA Community（Spec 023 T-D2）
+#   - Win: 官方安装器 exe（install_kind executable）。静默参数：
+#     /S /CONFIG=<config> /D={{install}}——/D 必须是最后一个参数且不带引号。
+#     CONFIG 指向安装目录内的 silent.config（须在安装前创建，可为空文件或
+#     含 JVM 选项的 vmoptions；不需要自定义 JVM 选项时可移除 /CONFIG 参数，
+#     仅用 /S /D={{install}}）。
+#   - mac: dmg（extractor 挂载后复制 .app 到 install 根）
+#   - linux: tar.gz（含 idea-IIC-*/ 根 → strip 1）
+#   - 自带 JBR，无 depends
+#   - gui_binary 为单字段：默认 Windows 布局 bin/idea64.exe；
+#     Linux 实际入口为 bin/idea.sh（T-C1 启动在 Linux 上需按平台处理）
+#   - sha256：仅实测 Windows 最新版；其余平台留空（TOFU/sidecar 机制兜底）
+name: jetbrains-idea-community
 display_name: JetBrains IntelliJ IDEA Community
-description: IntelliJ IDEA Community Edition 鈥?the free, open-source Java/Kotlin IDE by JetBrains (bundles its own JBR runtime).
+description: IntelliJ IDEA Community Edition — the free, open-source Java/Kotlin IDE by JetBrains (bundles its own JBR runtime).
 homepage: https://www.jetbrains.com/idea/
 category: development_tools
 shims:

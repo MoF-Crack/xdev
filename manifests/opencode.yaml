@@ -1,7 +1,14 @@
-﻿# T-D5 opencode (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
-# 瀹夎绛栫暐锛歺dev 浣跨敤 npm 骞冲彴鍖咃紙optionalDependencies 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃紝
-# 濡?opencode-windows-x64@1.18.11锛夛紝闈?universal 钖勫３ tgz銆?# 骞冲彴 tgz 鏍逛负 package/锛宻trip 1 鍚?bin/opencode.exe 钀戒簬 install/bin锛坕ntegrity 鍛戒腑锛夈€?# npm 鍏?Node锛氬钩鍙板寘鑷甫鍘熺敓浜岃繘鍒讹紝鏃犻渶 node 杩愯鏃讹紝鏁呬笉澹版槑 depends銆?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?opencode-ai锛堢増鏈覆涓€鑷达級锛歳emote 杩斿洖 universal
-# 鐗堟湰锛?.18.11锛夛紝褰掓。涓哄钩鍙板寘鐗堟湰锛?.18.11锛夛紝浜岃€呭榻愩€?# GUI锛歄penCode 鍚屾椂鎻愪緵 Desktop App锛坓ui 褰㈡€侊級锛涙闈㈠簲鐢ㄥ畨瑁呭竷灞€寰呭疄鏂芥湡鏍稿疄锛?# 鏁呬笉璁剧疆 gui_binary锛寈dev 涓昏绠＄悊 CLI/TUI銆?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: opencode
+# T-D5 opencode (Spec 023 Phase D) — 修复：平台包归档。
+# 安装策略：xdev 使用 npm 平台包（optionalDependencies 指向的真实二进制包，
+# 如 opencode-windows-x64@1.18.11），非 universal 薄壳 tgz。
+# 平台 tgz 根为 package/，strip 1 后 bin/opencode.exe 落在 install/bin（integrity 命中）。
+# npm 与 Node：平台包自带原生二进制，无需 node 运行时，故不声明 depends。
+# 版本发现（remote）仍走主包 opencode-ai（版本串一致）；remote 返回 universal
+# 版本（1.18.11），归档为平台包版本（1.18.11），二者对齐。
+# GUI：OpenCode 同时提供 Desktop App（gui 形态）；桌面应用安装布局待实施期核实，
+# 故不设置 gui_binary，xdev 主要管理 CLI/TUI。
+# sha256：仅实测 Windows amd64 最新版；其余平台留空（TOFU/sidecar 机制兜底）。
+name: opencode
 display_name: OpenCode
 description: OpenCode is an open-source AI coding agent that runs in the terminal, IDE, and desktop app, helping you write code across your whole workspace.
 homepage: https://opencode.ai

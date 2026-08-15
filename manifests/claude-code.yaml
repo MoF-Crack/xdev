@@ -1,6 +1,13 @@
-﻿# T-D4 claude-code (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
-# 瀹夎绛栫暐锛歺dev 浣跨敤 npm 骞冲彴鍖咃紙optionalDependencies 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃紝
-# 濡?@anthropic-ai/claude-code-win32-x64@2.1.220锛夛紝闈?universal 钖勫３ tgz銆?# 骞冲彴 tgz 鏍逛负 package/锛宻trip 1 鍚?claude.exe 钀戒簬 install 鏍癸紙integrity 鍛戒腑锛夈€?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?@anthropic-ai/claude-code锛堢増鏈覆涓€鑷达級锛?# remote 杩斿洖 universal 鐗堟湰锛?.1.220锛夛紝褰掓。涓哄钩鍙板寘鐗堟湰锛?.1.220锛夛紝浜岃€呭榻愩€?# native 瀹夎鑴氭湰锛坕nstall.sh / install.ps1锛宨nstallers.claude.com锛変綔涓哄閫夋柟妗堝瓨鍦ㄣ€?# depends 澹版槑 node>=22锛坕nstall_path: npm锛夈€?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: claude-code
+# T-D4 claude-code (Spec 023 Phase D) — 修复：平台包归档。
+# 安装策略：xdev 使用 npm 平台包（optionalDependencies 指向的真实二进制包，
+# 如 @anthropic-ai/claude-code-win32-x64@2.1.220），非 universal 薄壳 tgz。
+# 平台 tgz 根为 package/，strip 1 后 claude.exe 落在 install 根（integrity 命中）。
+# 版本发现（remote）仍走主包 @anthropic-ai/claude-code（版本串一致）；
+# remote 返回 universal 版本（2.1.220），归档为平台包版本（2.1.220），二者对齐。
+# native 安装脚本（install.sh / install.ps1，installers.claude.com）作为备选方案存在。
+# depends 声明 node>=22（install_path: npm）。
+# sha256：仅实测 Windows amd64 最新版；其余平台留空（TOFU/sidecar 机制兜底）。
+name: claude-code
 display_name: Claude Code
 description: Claude Code is Anthropic's agentic coding tool that runs in the terminal, helping you plan, build, and ship software with AI assistance.
 homepage: https://claude.com/claude-code

@@ -1,4 +1,12 @@
-﻿# VS Code锛圫pec 023 T-D1锛?#   - Win: 瀹樻柟 update 绔偣 zip銆傚疄娴嬶紙1.131.0锛墇ip 椤跺眰涓?appx/銆乥in/銆丆ode.exe 鈥斺€?#     鏃犵粺涓€鏍圭洰褰曪紝蹇呴』 strip: 0锛坰trip 1 浼氫涪 Code.exe锛夈€侰LI 鍦?bin/code銆乥in/code.cmd銆?#   - mac: darwin-arm64-dmg 绔偣锛堟敞鎰?darwin-arm64/stable 杩斿洖鐨勬槸 zip锛?#     鏈?manifest 鐢?dmg 鍙樹綋锛宔xtractor 鐨?dmg case 浼氭寕杞藉苟澶嶅埗 .app锛?#   - linux: tar.gz锛堝惈 VSCode-linux-x64/ 鏍?鈫?strip 1锛?#   - 鏃?depends锛堣嚜甯﹀畬鏁磋繍琛屾椂锛?#   - sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛?name: vscode
+# VS Code（Spec 023 T-D1）
+#   - Win: 官方 update 端点 zip。实测（1.131.0）zip 顶层为 appx/、bin/、Code.exe ——
+#     无统一根目录，必须 strip: 0（strip 1 会丢 Code.exe）。CLI 在 bin/code、bin/code.cmd。
+#   - mac: darwin-arm64-dmg 端点（注意 darwin-arm64/stable 返回的是 zip，
+#     本 manifest 用 dmg 变体，extractor 的 dmg case 会挂载并复制 .app）
+#   - linux: tar.gz（含 VSCode-linux-x64/ 根 → strip 1）
+#   - 无 depends（自带完整运行时）
+#   - sha256：仅实测 Windows 最新版；其余平台留空（TOFU/sidecar 机制兜底）
+name: vscode
 display_name: Visual Studio Code
 description: Visual Studio Code is a lightweight but powerful source code editor that runs on your desktop.
 homepage: https://code.visualstudio.com/
@@ -6,7 +14,8 @@ category: development_tools
 shims:
   - code
 form_factor: [gui, cli]
-# Windows GUI 涓荤▼搴忓湪瀹夎鏍圭洰褰曪紙Code.exe锛夛紝CLI 鍦?bin/ 涓嬶紙shim code 鐢?bin/code 瑙ｆ瀽锛夈€?gui_binary: Code.exe
+# Windows GUI 主程序在安装根目录（Code.exe），CLI 在 bin/ 下（shim code 用 bin/code 解析）。
+gui_binary: Code.exe
 latest: "1.131.0"
 lts: ""
 versions:

@@ -1,10 +1,27 @@
-﻿# T-D6 codex (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
-# 瀹夎绛栫暐锛歺dev 浣跨敤 @openai/codex 骞冲彴鐗堟湰 tgz锛坥ptionalDependencies 鍒悕
-# npm:@openai/codex@0.146.0-win32-x64 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃級锛岄潪 universal JS 钖勫３銆?# 骞冲彴 tgz 甯冨眬锛歱ackage/vendor/<triple>/bin/codex.exe锛堝疄娴?win32-x64 涓?# package/vendor/x86_64-pc-windows-msvc/bin/codex.exe锛夈€俿trip 2 鍚?# <triple>/bin/codex.exe 钀戒簬 install 鏍逛笅涓€灞傦紙integrity/shim 鍗曞眰宓屽鍛戒腑锛夛紱
-# strip 1 浼氬鑷翠袱灞傚祵濂楋紙vendor/<triple>/bin/锛塱ntegrity 澶辫触锛屽嬁鏀广€?# 鍏朵綑骞冲彴甯冨眬鍋囪涓€鑷达紙鍚屼竴鏋勫缓绯荤粺锛沴inux=<vendor>/<triple>/bin/codex锛夈€?# gui 褰㈡€佺敱 ChatGPT 妗岄潰搴旂敤鎻愪緵锛堜笉鍦ㄦ湰 manifest 绠＄悊鑼冨洿锛夛紝鏁呬笉璁剧疆 gui_binary锛?# xdev 浠呯鐞?CLI/TUI銆?# 閲嶈锛堟湰鍦版壂鎻忥級锛欳hatGPT 妗岄潰搴旂敤銆愪笉鎻愪緵 codex CLI銆戔€斺€斿叾闆嗘垚鍦ㄥ簲鐢ㄥ唴锛?# 涓嶄骇鐢熷悕涓?codex 鐨勫彲鎵ц鏂囦欢锛屼篃涓嶄細鍐欏叆 PATH銆傚洜姝ゆ湰鍦版壂鎻忥紙鎸?shim
-# 鍚嶇О鍦?PATH / npm 鍏ㄥ眬 bin 鏌ユ壘锛夊彧鍙兘鍙戠幇鐙珛瀹夎鐨?codex CLI锛?#   - npm 鍏ㄥ眬瀹夎锛歯pm install -g @openai/codex锛圵indows 涓嬬敓鎴?#     %APPDATA%\npm\codex.cmd锛宯pm 榛樿灏嗗叏灞€ bin 鍔犲叆 PATH锛?#   - 鍘熺敓瀹夎锛歩nstaller.codex.com 鑴氭湰 / winget
-# 浠呭畨瑁?ChatGPT 妗岄潰搴旂敤鏃舵壂鎻忎笉鏄剧ず codex 灞為鏈熻涓猴紝骞堕潪鎵弿鏁呴殰锛?# 涔熶笉搴斿皢 ChatGPT 妗岄潰搴旂敤璇垽涓?codex锛堝畠鏃?CLI 鍙縼绉?婵€娲伙級銆?# depends 澹版槑 node>=16锛坕nstall_path: npm锛屽寘 engines 瑕佹眰锛夈€?# native 瀹夎锛坕nstaller.codex.com 鑴氭湰 / winget锛変綔涓哄閫夋柟妗堝瓨鍦ㄣ€?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?@openai/codex锛坉ist-tags.latest=0.146.0锛夛紱
-# remote 杩斿洖 universal 鐗堟湰锛屽綊妗ｄ负骞冲彴鐗堟湰锛?.146.0-<platform>锛夛紝鍓嶇紑瀵归綈銆?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: codex
+# T-D6 codex (Spec 023 Phase D) — 修复：平台包归档。
+# 安装策略：xdev 使用 @openai/codex 平台版本 tgz（optionalDependencies 别名
+# npm:@openai/codex@0.146.0-win32-x64 指向的真实二进制包），非 universal JS 薄壳。
+# 平台 tgz 布局：package/vendor/<triple>/bin/codex.exe（实测 win32-x64 为
+# package/vendor/x86_64-pc-windows-msvc/bin/codex.exe）。strip 2 后
+# <triple>/bin/codex.exe 落在 install 根下一层（integrity/shim 单层嵌套命中）；
+# strip 1 会导致两层嵌套（vendor/<triple>/bin/）integrity 失败，勿改。
+# 其余平台布局假设一致（同一构建系统；linux=<vendor>/<triple>/bin/codex）。
+# gui 形态由 ChatGPT 桌面应用提供（不在本 manifest 管理范围），故不设置 gui_binary；
+# xdev 仅管理 CLI/TUI。
+# 重要（本地扫描）：ChatGPT 桌面应用【不提供 codex CLI】——其集成在应用内，
+# 不产生名为 codex 的可执行文件，也不会写入 PATH。因此本地扫描（按 shim
+# 名称在 PATH / npm 全局 bin 查找）只可能发现独立安装的 codex CLI：
+#   - npm 全局安装：npm install -g @openai/codex（Windows 下生成
+#     %APPDATA%\npm\codex.cmd，npm 默认将全局 bin 加入 PATH）
+#   - 原生安装：installer.codex.com 脚本 / winget
+# 仅安装 ChatGPT 桌面应用时扫描不显示 codex 属预期行为，并非扫描故障；
+# 也不应将 ChatGPT 桌面应用误判为 codex（它无 CLI 可迁移/激活）。
+# depends 声明 node>=16（install_path: npm，包 engines 要求）。
+# native 安装（installer.codex.com 脚本 / winget）作为备选方案存在。
+# 版本发现（remote）仍走主包 @openai/codex（dist-tags.latest=0.146.0）；
+# remote 返回 universal 版本，归档为平台版本（0.146.0-<platform>），前缀对齐。
+# sha256：仅实测 Windows amd64 最新版；其余平台留空（TOFU/sidecar 机制兜底）。
+name: codex
 display_name: Codex (OpenAI)
 description: Codex is OpenAI's coding agent that runs in the terminal, helping you build and ship software with AI assistance.
 homepage: https://developers.openai.com/codex/

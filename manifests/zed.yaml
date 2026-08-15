@@ -1,5 +1,13 @@
-﻿# T-D3 zed (Spec 023 Phase D)
-# 鐗堟湰婧愶細GitHub releases锛坺ed-industries/zed锛夛紝latest 绋冲畾鐗?+ 涓婁竴绋冲畾鐗堛€?# Windows 瀹樻柟鍙戣鐗╃幇涓?Inno 瀹夎鍣?exe锛圸ed-x86_64.exe / Zed-aarch64.exe锛?# 浜岃繘鍒跺唴瀹炴祴 Inno Setup 6.4.3锛夛紝宸叉棤 zip锛歩nstall_kind executable锛?# 闈欓粯鍙傛暟鏈畼鏂规枃妗ｅ寲锛屾寜 Inno 鏍囧噯 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR={{install}}銆?# gui_binary zed.exe 甯冨眬寰呮牳瀹烇紙鏃?zip 鍙煡锛?DIR 瀹夎鍚庡簲浣嶄簬 install 鏍癸級銆?# mac: dmg锛坋xtractor 鎸傝浇鍚庡鍒?.app 鍒?install 鏍癸級锛沴inux: tar.gz锛堟牴涓?zed.app/ 鈫?strip 1锛夈€?# 鑷甫瀹屾暣杩愯鏃讹紝鏃?depends銆?# sha256锛氫粎瀹炴祴 Windows 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: zed
+# T-D3 zed (Spec 023 Phase D)
+# 版本源：GitHub releases（zed-industries/zed），latest 稳定版 + 上一稳定版。
+# Windows 官方发行物现为 Inno 安装器 exe（Zed-x86_64.exe / Zed-aarch64.exe，
+# 二进制内实测 Inno Setup 6.4.3），已无 zip，install_kind executable。
+# 静默参数未官方文档化，按 Inno 标准 /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR={{install}}。
+# gui_binary zed.exe 布局待核实（无 zip 可查，/DIR 安装后应位于 install 根）。
+# mac: dmg（extractor 挂载后复制 .app 到 install 根）；linux: tar.gz（根为 zed.app/ → strip 1）。
+# 自带完整运行时，无 depends。
+# sha256：仅实测 Windows 最新版；其余平台留空（TOFU/sidecar 机制兜底）。
+name: zed
 display_name: Zed
 description: Zed is a high-performance, multiplayer code editor built by the creators of Atom and Tree-sitter.
 homepage: https://zed.dev

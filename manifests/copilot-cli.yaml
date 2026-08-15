@@ -1,8 +1,14 @@
-﻿# T-D7 copilot-cli (Spec 023 Phase D) 鈥?淇锛氬钩鍙板寘褰掓。
-# 瀹夎绛栫暐锛歺dev 浣跨敤 npm 骞冲彴鍖咃紙optionalDependencies 鎸囧悜鐨勭湡瀹炰簩杩涘埗鍖咃紝
-# 濡?@github/copilot-win32-x64@1.0.77锛夛紝闈?universal loader 钖勫３銆?# 骞冲彴 tgz 鏍逛负 package/锛宻trip 1 鍚?copilot.exe 钀戒簬 install 鏍癸紙integrity 鍛戒腑锛夛紝
-# 鍏朵綑璧勬簮锛坣ode_modules銆乸lugins銆乹ueries 绛夛級涓€骞惰В鍖呭埌 install 鏍广€?# 鐗堟湰鍙戠幇锛坮emote锛変粛璧颁富鍖?@github/copilot锛堢増鏈覆涓€鑷达級锛歳emote 杩斿洖
-# universal 鐗堟湰锛?.0.77锛夛紝褰掓。涓哄钩鍙板寘鐗堟湰锛?.0.77锛夛紝浜岃€呭榻愩€?# native 瀹夎鍣紙gh.io/copilot-install锛変綔涓哄閫夋柟妗堝瓨鍦ㄣ€?# 鍖呮湭澹版槑 engines锛屾寜 Spec 023 T-D7 绾﹀畾澹版槑 depends node>=22锛坕nstall_path: npm锛夈€?# sha256锛氫粎瀹炴祴 Windows amd64 鏈€鏂扮増锛涘叾浣欏钩鍙扮暀绌猴紙TOFU/sidecar 鏈哄埗鍏滃簳锛夈€?name: copilot-cli
+# T-D7 copilot-cli (Spec 023 Phase D) — 修复：平台包归档。
+# 安装策略：xdev 使用 npm 平台包（optionalDependencies 指向的真实二进制包，
+# 如 @github/copilot-win32-x64@1.0.77），非 universal loader 薄壳。
+# 平台 tgz 根为 package/，strip 1 后 copilot.exe 落在 install 根（integrity 命中），
+# 其余资源（node_modules、plugins、queries 等）一并解包到 install 根。
+# 版本发现（remote）仍走主包 @github/copilot（版本串一致）；remote 返回
+# universal 版本（1.0.77），归档为平台包版本（1.0.77），二者对齐。
+# native 安装器（gh.io/copilot-install）作为备选方案存在。
+# 包未声明 engines，按 Spec 023 T-D7 约定声明 depends node>=22（install_path: npm）。
+# sha256：仅实测 Windows amd64 最新版；其余平台留空（TOFU/sidecar 机制兜底）。
+name: copilot-cli
 display_name: GitHub Copilot CLI
 description: GitHub Copilot CLI brings GitHub Copilot's AI assistance to your terminal, helping you write shell commands and code.
 homepage: https://github.com/features/copilot/cli

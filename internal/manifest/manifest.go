@@ -592,8 +592,43 @@ func (t *Tool) FindVersion(v string) (*Version, bool) {
 
 // ArchiveForCurrent picks the archive whose OS/Arch matches the
 // current platform, falling back to "any" if no exact match exists.
+// The Form field is ignored (legacy form-agnostic selection).
 func (v *Version) ArchiveForCurrent(osName, arch string) (*Archive, bool) {
-	return v.ArchiveForCurrentWithForm(osName, arch, "")
+	return v.archiveFormAgnostic(osName, arch)
+}
+
+// archiveFormAgnostic implements the legacy form-agnostic selection:
+//  1. exact os+arch
+//  2. os + any arch
+//  3. any os
+//
+// It is shared by ArchiveForCurrent and by ArchiveForCurrentWithForm
+// with an empty formFilter. Spec 028: this must NOT delegate back to
+// ArchiveForCurrentWithForm — that caused infinite mutual recursion
+// (fatal error: stack overflow) on every archive resolution.
+func (v *Version) archiveFormAgnostic(osName, arch string) (*Archive, bool) {
+	// 1. exact os+arch
+	for i := range v.Archives {
+		a := &v.Archives[i]
+		if a.OS == osName && a.Arch == arch {
+			return a, true
+		}
+	}
+	// 2. os + any arch
+	for i := range v.Archives {
+		a := &v.Archives[i]
+		if a.OS == osName && a.Arch == "any" {
+			return a, true
+		}
+	}
+	// 3. any os
+	for i := range v.Archives {
+		a := &v.Archives[i]
+		if a.OS == "any" {
+			return a, true
+		}
+	}
+	return nil, false
 }
 
 // ArchiveForCurrentWithForm is like ArchiveForCurrent but additionally
@@ -606,10 +641,10 @@ func (v *Version) ArchiveForCurrent(osName, arch string) (*Archive, bool) {
 //  6. any os with Form=="" (existing fallback)
 //
 // When formFilter is empty, behaves identically to ArchiveForCurrent
-// (ignores Form field entirely).
+// (ignores Form field entirely) via archiveFormAgnostic — no recursion.
 func (v *Version) ArchiveForCurrentWithForm(osName, arch, formFilter string) (*Archive, bool) {
 	if formFilter == "" {
-		return v.ArchiveForCurrent(osName, arch)
+		return v.archiveFormAgnostic(osName, arch)
 	}
 	// formFilter != "": prefer exact form, allow Form=="" fallback
 	// Pass 1: exact os+arch+form

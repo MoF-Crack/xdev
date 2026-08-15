@@ -12,7 +12,7 @@
 # Linux 官方发行物为 AppImage（可执行镜像）：xdev 不管理 AppImage 解包，
 # 需手动 chmod +x 运行（降级说明）。
 # gui_binary Cursor.exe 布局待核实（/DIR 安装后应位于 install 根）。
-#     302 鈫?downloads.cursor.com 鐩撮摼锛堢増鏈紪鐮佷簬鏂囦欢鍚嶏紝濡?CursorSetup-x64-3.14.7.exe锛夈€?#   - winget 鍖?Anysphere.Cursor锛圛nstallerType: inno锛孋ustom: /mergetasks=!runcode锛夈€?# Windows 瀹樻柟鍙戣鐗╀负 Inno 瀹夎鍣?exe锛堟棤 zip锛夛細install_kind executable銆?# 闈欓粯鍙傛暟鏈畼鏂规枃妗ｅ寲锛屾寜 winget 澹版槑 + Inno 鏍囧噯閲囩敤锛?# /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /MERGETASKS=!runcode /DIR={{install}}锛?# 鑻ラ潤榛樺畨瑁呭け璐ワ紝闄嶇骇涓烘墜鍔ㄨ繍琛屽畨瑁呭櫒锛坺ip 闄嶇骇璇存槑锛氬畼鏂瑰凡涓嶅彂甯?zip锛夈€?# Linux 瀹樻柟鍙戣鐗╀负 AppImage锛堝彲鎵ц闀滃儚锛夛細xdev 涓嶇鐞?AppImage 瑙ｅ寘锛?# 闇€鎵嬪姩 chmod +x 杩愯锛堥檷绾ц鏄庯級銆?# gui_binary Cursor.exe 甯冨眬寰呮牳瀹烇紙/DIR 瀹夎鍚庡簲浣嶄簬 install 鏍癸級銆?name: cursor
+name: cursor
 display_name: Cursor
 description: Cursor is an AI-first code editor forked from VS Code that helps you write, edit, and navigate code with AI assistance.
 homepage: https://cursor.com

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -502,6 +503,130 @@ func TestArchiveForCurrentFallsBackToAnyOS(t *testing.T) {
 		if a.URL != "universal" {
 			t.Errorf("%s/%s picked %q", plat[0], plat[1], a.URL)
 		}
+	}
+}
+
+// --- Spec 028 死递归回归（TC-A1~A6）---
+// 背景：ArchiveForCurrent ↔ ArchiveForCurrentWithForm("") 曾互相委托，
+// 导致任何 archive 解析触发 fatal error: stack overflow。以下测试锁定
+// 修复后的语义：空 formFilter 走 legacy form-agnostic 选择，非空走 6-pass。
+
+// TestArchiveForCurrent_NoInfiniteRecursion (TC-A1) 直接入口回归：
+// 死递归版本会耗尽 1GB goroutine 栈后 fatal（>1s），正常应在毫秒级返回。
+func TestArchiveForCurrent_NoInfiniteRecursion(t *testing.T) {
+	v := &Version{
+		Version: "1.0.0",
+		Archives: []Archive{
+			{OS: "windows", Arch: "amd64", URL: "win-amd64", Format: "zip"},
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = v.ArchiveForCurrent("windows", "amd64")
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ArchiveForCurrent did not return within 5s — recursion regression")
+	}
+}
+
+// TestArchiveForCurrentWithForm_EmptyFilterMatchesLegacy (TC-A2)
+// 空 formFilter 与 ArchiveForCurrent 行为完全一致（同一结果指针）。
+func TestArchiveForCurrentWithForm_EmptyFilterMatchesLegacy(t *testing.T) {
+	v := &Version{
+		Version: "1.0.0",
+		Archives: []Archive{
+			{OS: "windows", Arch: "amd64", URL: "win-amd64", Format: "zip"},
+		},
+	}
+	a1, ok1 := v.ArchiveForCurrent("windows", "amd64")
+	a2, ok2 := v.ArchiveForCurrentWithForm("windows", "amd64", "")
+	if !ok1 || !ok2 {
+		t.Fatalf("both lookups should succeed (legacy=%v, withForm=%v)", ok1, ok2)
+	}
+	if a1 != a2 {
+		t.Error("empty formFilter must behave identically to ArchiveForCurrent")
+	}
+}
+
+// TestArchiveForCurrent_IgnoresFormField (TC-A3)
+// legacy 选择完全忽略 Form 字段：exact os+arch 带 Form 的 archive 仍被选中。
+func TestArchiveForCurrent_IgnoresFormField(t *testing.T) {
+	v := &Version{
+		Version: "1.0.0",
+		Archives: []Archive{
+			{OS: "windows", Arch: "amd64", URL: "win-gui", Format: "zip", Form: "gui"},
+		},
+	}
+	a, ok := v.ArchiveForCurrent("windows", "amd64")
+	if !ok {
+		t.Fatal("expected exact os+arch archive even though Form is set")
+	}
+	if a.URL != "win-gui" {
+		t.Errorf("URL = %q, want win-gui (legacy ignores Form)", a.URL)
+	}
+}
+
+// TestArchiveForCurrent_FallbackOrder (TC-A4)
+// legacy 回退顺序：exact os+arch → os+any → any-os。
+func TestArchiveForCurrent_FallbackOrder(t *testing.T) {
+	v := &Version{
+		Version: "1.0.0",
+		Archives: []Archive{
+			{OS: "linux", Arch: "any", URL: "linux-any", Format: "tar.gz"},
+			{OS: "any", Arch: "any", URL: "any-any", Format: "tar.gz"},
+		},
+	}
+	a, ok := v.ArchiveForCurrent("linux", "x86_64")
+	if !ok || a.URL != "linux-any" {
+		t.Errorf("linux/x86_64 = %q (ok=%v), want linux-any (os+any before any-os)", a.URL, ok)
+	}
+	a, ok = v.ArchiveForCurrent("windows", "amd64")
+	if !ok || a.URL != "any-any" {
+		t.Errorf("windows/amd64 = %q (ok=%v), want any-any", a.URL, ok)
+	}
+}
+
+// TestArchiveForCurrentWithForm_PreferenceAndFallback (TC-A5)
+// 非空 formFilter 的 6-pass 语义不回归：Pass 1 精确 Form 优先，
+// 匹配不到时 Pass 2 降级到同 os+arch 的 Form=="" archive。
+func TestArchiveForCurrentWithForm_PreferenceAndFallback(t *testing.T) {
+	v := &Version{
+		Version: "1.0.0",
+		Archives: []Archive{
+			{OS: "windows", Arch: "amd64", URL: "win-gui", Format: "zip", Form: "gui"},
+			{OS: "windows", Arch: "amd64", URL: "win-agnostic", Format: "zip"},
+		},
+	}
+	a, ok := v.ArchiveForCurrentWithForm("windows", "amd64", "gui")
+	if !ok || a.URL != "win-gui" {
+		t.Errorf("form=gui = %q (ok=%v), want win-gui (exact form first)", a.URL, ok)
+	}
+	a, ok = v.ArchiveForCurrentWithForm("windows", "amd64", "tui")
+	if !ok || a.URL != "win-agnostic" {
+		t.Errorf("form=tui = %q (ok=%v), want win-agnostic (Form==\"\" fallback)", a.URL, ok)
+	}
+}
+
+// TestArchiveForCurrentWithForm_EmptyFilterDoesNotRequireEmptyForm (TC-A6)
+// 空 formFilter 不进入 6-pass（Pass 1 要求 Form==formFilter=="" 会漏选带
+// Form 的 archive）。legacy 语义应选中第一个 exact os+arch，Form 忽略。
+func TestArchiveForCurrentWithForm_EmptyFilterDoesNotRequireEmptyForm(t *testing.T) {
+	v := &Version{
+		Version: "1.0.0",
+		Archives: []Archive{
+			{OS: "windows", Arch: "amd64", URL: "win-gui", Format: "zip", Form: "gui"},
+			{OS: "windows", Arch: "amd64", URL: "win-tui", Format: "zip", Form: "tui"},
+		},
+	}
+	a, ok := v.ArchiveForCurrentWithForm("windows", "amd64", "")
+	if !ok {
+		t.Fatal("empty formFilter must pick exact os+arch regardless of Form")
+	}
+	if a.URL != "win-gui" {
+		t.Errorf("URL = %q, want win-gui (legacy first exact os+arch match)", a.URL)
 	}
 }
 

@@ -92,6 +92,22 @@ func TestGenericArchiveForUnknownVersion(t *testing.T) {
 	}
 }
 
+// TestGenericArchiveForPicksFormCarryingArchive (Spec 028 TC-A7)
+// 生产链 smoke：Generic.ArchiveFor → Version.ArchiveForCurrent 无死递归；
+// legacy 语义下带 Form 字段的 exact os+arch archive 仍被选中。
+func TestGenericArchiveForPicksFormCarryingArchive(t *testing.T) {
+	m := sampleTool()
+	m.VersionList[0].Archives[0].Form = "gui"
+	p := NewGeneric(m)
+	a, err := p.ArchiveFor("1.2.0")
+	if err != nil {
+		t.Fatalf("ArchiveFor: %v", err)
+	}
+	if a.URL != "https://example.com/demo-1.2.0.zip" {
+		t.Errorf("URL = %q, want demo archive (Form ignored by legacy path)", a.URL)
+	}
+}
+
 func TestRegistryRegisterAndGet(t *testing.T) {
 	r := NewRegistry()
 	p := NewGeneric(sampleTool())
