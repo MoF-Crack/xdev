@@ -1,0 +1,18 @@
+{
+    "recorded_at":  "2026-08-09",
+    "approved_at":  "2026-08-09",
+    "schema_version":  1,
+    "target_state":  "已批准（2026-08-09）",
+    "supersedes":  [
+
+                   ],
+    "target_path":  "specs/028-handoff-nonblocking-cleanup/plan.md",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "scope":  "Approve implementation plan for 028-handoff-nonblocking-cleanup",
+    "recorded_by":  "XDev Agent",
+    "asset_type":  "plan",
+    "decision":  "approve-state-transition",
+    "target_version":  "1.0.0",
+    "authorization_text":  "用户 2026-08-09 批准 Spec 028 实施方案（Phase A-D 任务拆分与验证门）",
+    "approval_id":  "2026-08-09-plan-028-001"
+}

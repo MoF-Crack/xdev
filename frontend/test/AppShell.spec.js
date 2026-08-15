@@ -17,6 +17,7 @@ function mountShell(props = {}) {
       minimize: vi.fn(),
       toggleMaximize: vi.fn(),
       close: vi.fn(),
+      t: (key) => key,
       ...props,
     },
     slots: { default: '<main>Page content</main>' },
@@ -59,11 +60,11 @@ describe('AppShell', () => {
     const wrapper = mountShell();
 
     await wrapper.get('[data-view="dashboard"]').trigger('click');
-    await wrapper.get('[aria-label="Collapse sidebar"]').trigger('click');
+    await wrapper.get('[aria-label="nav.collapse_sidebar"]').trigger('click');
 
     expect(wrapper.emitted('select-view')).toEqual([['dashboard']]);
     expect(wrapper.classes()).toContain('app-shell--compact');
-    expect(wrapper.get('[aria-label="Expand sidebar"]').exists()).toBe(true);
+    expect(wrapper.get('[aria-label="nav.expand_sidebar"]').exists()).toBe(true);
     expect(wrapper.get('[data-view="dashboard"]').attributes('aria-current')).toBe('page');
   });
 
@@ -74,21 +75,24 @@ describe('AppShell', () => {
       addEventListener: vi.fn((_, listener) => listeners.add(listener)),
       removeEventListener: vi.fn((_, listener) => listeners.delete(listener)),
     };
-    const matchMedia = vi.spyOn(window, 'matchMedia').mockReturnValue(media);
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn(() => media);
+    try {
+      const wrapper = mountShell();
+      await wrapper.vm.$nextTick();
 
-    const wrapper = mountShell();
-    await wrapper.vm.$nextTick();
+      expect(wrapper.classes()).toContain('app-shell--compact');
+      expect(wrapper.find('[aria-label="nav.expand_sidebar"]').exists()).toBe(false);
+      expect(wrapper.get('.app-shell__main').attributes('style')).toBeUndefined();
 
-    expect(wrapper.classes()).toContain('app-shell--compact');
-    expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(false);
-    expect(wrapper.get('.app-shell__main').attributes('style')).toBeUndefined();
-
-    media.matches = false;
-    listeners.forEach((listener) => listener(media));
-    await wrapper.vm.$nextTick();
-    expect(wrapper.get('[aria-label="Collapse sidebar"]').exists()).toBe(true);
-    wrapper.unmount();
-    matchMedia.mockRestore();
+      media.matches = false;
+      listeners.forEach((listener) => listener(media));
+      await wrapper.vm.$nextTick();
+      expect(wrapper.get('[aria-label="nav.collapse_sidebar"]').exists()).toBe(true);
+      wrapper.unmount();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 
   it('opens the command palette with Ctrl/Cmd+K and closes it with Escape', async () => {

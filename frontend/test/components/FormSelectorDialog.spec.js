@@ -4,14 +4,17 @@ import FormSelectorDialog from '../../src/components/FormSelectorDialog.vue';
 
 const t = (key, params) => params?.name ? `${key}:${params.name}` : key;
 
+const modalStub = { props: ['positiveButtonProps'], emits: ['positive-click', 'negative-click', 'close'], template: '<div><slot /><button data-action="confirm" :disabled="positiveButtonProps?.disabled" @click="$emit(\'positive-click\')">confirm</button><button data-action="cancel" @click="$emit(\'negative-click\')">cancel</button></div>' };
+const checkboxStub = { props: ['checked'], emits: ['update:checked'], template: '<label><input type="checkbox" :checked="checked" @change="$emit(\'update:checked\', $event.target.checked)" /><slot /></label>' };
+
 describe('FormSelectorDialog', () => {
   it('selects the first form by default and emits the selected form', async () => {
     const wrapper = mount(FormSelectorDialog, {
       props: { show: true, tool: { name: 'opencode', displayName: 'OpenCode', formFactor: ['gui', 'cli', 'tui'] }, t },
       global: { stubs: {
-        NModal: { props: ['positiveButtonProps'], emits: ['positive-click', 'negative-click', 'close'], template: '<div><slot /><button data-action="confirm" :disabled="positiveButtonProps?.disabled" @click="$emit(\'positive-click\')">confirm</button><button data-action="cancel" @click="$emit(\'negative-click\')">cancel</button></div>' },
-        NCheckbox: { props: ['checked'], emits: ['update:checked'], template: '<label><input type="checkbox" :checked="checked" @change="$emit(\'update:checked\', $event.target.checked)" /><slot /></label>' },
-        NSpace: { template: '<div><slot /></div>' },
+        Modal: modalStub,
+        Checkbox: checkboxStub,
+        Space: { template: '<div><slot /></div>' },
       } },
     });
     expect(wrapper.findAll('input')[0].element.checked).toBe(true);
@@ -23,9 +26,9 @@ describe('FormSelectorDialog', () => {
     const wrapper = mount(FormSelectorDialog, {
       props: { show: true, tool: { name: 'opencode', formFactor: ['gui', 'cli'] }, t },
       global: { stubs: {
-        NModal: { props: ['positiveButtonProps'], template: '<div><slot /><button data-action="confirm" @click="$emit(\'positive-click\')">confirm</button></div>' },
-        NCheckbox: { props: ['checked'], emits: ['update:checked'], template: '<label><input type="checkbox" :checked="checked" @change="$emit(\'update:checked\', $event.target.checked)" /><slot /></label>' },
-        NSpace: { template: '<div><slot /></div>' },
+        Modal: { props: ['positiveButtonProps'], template: '<div><slot /><button data-action="confirm" @click="$emit(\'positive-click\')">confirm</button></div>' },
+        Checkbox: checkboxStub,
+        Space: { template: '<div><slot /></div>' },
       } },
     });
     const inputs = wrapper.findAll('input');

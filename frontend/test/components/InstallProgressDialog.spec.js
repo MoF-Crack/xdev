@@ -1,13 +1,13 @@
 import { mount } from '@vue/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import InstallProgressDialog from '../../src/components/InstallProgressDialog.vue';
 
 const t = (key) => key;
 afterEach(() => { document.body.innerHTML = ''; });
 describe('InstallProgressDialog', () => {
-  it('shows phase, percent, bytes, speed and controls while preventing active close', async () => {
+  it('shows localized phase, percent, bytes, speed and controls while preventing active close', async () => {
     const wrapper = mount(InstallProgressDialog, { global: { stubs: { teleport: true } }, props: { show: true, active: true, paused: false, phase: 'Downloading', progress: { percent: 42, bytes: 420, totalBytes: 1000, speed: '2 MB/s' }, t } });
-    expect(wrapper.text()).toContain('Downloading');
+    expect(wrapper.text()).toContain('installing_downloading');
     expect(wrapper.text()).toContain('42%');
     expect(wrapper.text()).toContain('420 B / 1000 B');
     expect(wrapper.text()).toContain('2 MB/s');
@@ -19,10 +19,13 @@ describe('InstallProgressDialog', () => {
     expect(wrapper.emitted('cancel')).toHaveLength(1);
   });
 
-  it('renders copyable technical error details and non-color status text', () => {
+  it('renders the error message as text and offers a copy action', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     const wrapper = mount(InstallProgressDialog, { global: { stubs: { teleport: true } }, props: { show: true, phase: 'error', error: { message: 'Install failed', details: 'HTTP 503' }, t } });
-    expect(wrapper.get('[role="status"]').text()).toContain('Install failed');
-    expect(wrapper.findComponent({ name: 'CopyableValue' }).props('value')).toBe('HTTP 503');
+    expect(wrapper.get('.install-error__message').text()).toContain('Install failed');
+    await wrapper.get('[data-action="copy-error"]').trigger('click');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('Install failed'));
   });
 
   it('focuses an active control, traps focus, and cannot close while active', async () => {
@@ -32,11 +35,11 @@ describe('InstallProgressDialog', () => {
     const wrapper = mount(InstallProgressDialog, { attachTo: document.body, props: { show: false, active: true, paused: false, t } });
     await wrapper.setProps({ show: true });
     const pause = wrapper.get('[data-action="pause"]');
-    const cancel = wrapper.get('[data-action="cancel"]');
+    const background = wrapper.get('[data-action="background"]');
 
     expect(document.activeElement).toBe(pause.element);
-    cancel.element.focus();
-    await cancel.trigger('keydown', { key: 'Tab' });
+    background.element.focus();
+    await background.trigger('keydown', { key: 'Tab' });
     expect(document.activeElement).toBe(pause.element);
     trigger.focus();
     expect(document.activeElement).toBe(pause.element);
