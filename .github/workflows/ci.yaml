@@ -444,14 +444,18 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          # Generate changelog from commits since last tag using git-cliff
-          cargo install git-cliff 2>/dev/null || true
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            git-cliff --tag "$TAG" --range "$PREV_TAG..HEAD" -o CHANGELOG-fragment.md 2>/dev/null || \
-              echo "git-cliff not available, using GitHub auto-generated notes"
+          # Prefer a preinstalled git-cliff; never cargo-install on the
+          # release runner (that step has hung CI waiting for crates.io).
+          if command -v git-cliff >/dev/null 2>&1; then
+            PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              git-cliff --tag "$TAG" --range "$PREV_TAG..HEAD" -o CHANGELOG-fragment.md || \
+                echo "git-cliff failed, using GitHub auto-generated notes"
+            else
+              echo "No previous tag, using GitHub auto-generated notes"
+            fi
           else
-            echo "No previous tag, using GitHub auto-generated notes"
+            echo "git-cliff not installed, using GitHub auto-generated notes"
           fi
 
       - name: Create Release
@@ -662,11 +666,13 @@ jobs:
           echo "Signing secrets verified"
 
       - name: Build Linux arm64 AppImage
+        continue-on-error: true
         if: ${{ !contains(env.EXISTING_ASSETS, 'aarch64.AppImage') }}
         env:
           TAG: ${{ github.ref_name }}
         run: |
           VER="${TAG#v}"
+          mkdir -p dist
           go build -tags bindings -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev-gui .
 
           APPDIR="XDev.AppDir"
