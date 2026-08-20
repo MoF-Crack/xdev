@@ -45,6 +45,18 @@ func (a *App) PreviewCustomToolVersions(sourceURL, sourceType, pattern string) [
 	if sourceURL == "" {
 		return nil
 	}
+	switch sourceType {
+	case "html", "json", "npm":
+		if err := util.IsSafeExternalURL(sourceURL); err != nil {
+			logWarn("[PreviewCustomToolVersions] unsafe URL %q: %v", sourceURL, err)
+			return nil
+		}
+	case "github":
+		if strings.Contains(sourceURL, "://") || !strings.Contains(sourceURL, "/") {
+			logWarn("[PreviewCustomToolVersions] github source must use owner/repo format, got %q", sourceURL)
+			return nil
+		}
+	}
 	if pattern == "" && sourceType == "github" {
 		pattern = `v?(\d+\.\d+\.\d+)$`
 	}
@@ -108,7 +120,7 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 				Message: "GitHub source must use owner/repo format (e.g. golang/go)",
 			}
 		}
-	case "html", "npm":
+	case "html", "json", "npm":
 		// Validate via the same safety check used by the remote package
 		if err := util.IsSafeExternalURL(sourceURL); err != nil {
 			return &CustomToolResult{
@@ -215,10 +227,9 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 	}
 	a.cfgMu.Unlock()
 
-	// --- Reload catalog ---
-	cat, err := manifest.LoadCatalog(cfg.Core.ManifestDir)
-	if err == nil {
-		a.cat = cat
+	// --- Reload catalog + live plugin manifests ---
+	if err := a.reloadCatalog(); err != nil {
+		logWarn("[custom-tool] reload catalog after add: %v", err)
 	}
 
 	return &CustomToolResult{
@@ -266,10 +277,8 @@ func (a *App) RemoveCustomTool(name string) error {
 		return fmt.Errorf("remove manifest %s: %w", manifestPath, err)
 	}
 
-	// Reload catalog
-	cat, err := manifest.LoadCatalog(cfg.Core.ManifestDir)
-	if err == nil {
-		a.cat = cat
+	if err := a.reloadCatalog(); err != nil {
+		logWarn("[custom-tool] reload catalog after remove: %v", err)
 	}
 
 	return nil

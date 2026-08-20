@@ -63,7 +63,7 @@ func TestDetectLocalToolPath_NpmInstalledCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", tmp+string(os.PathListSeparator)+origPATH)
-	if got := detectLocalToolPath("codex", []string{"codex"}); got != shimFile {
+	if got := detectLocalToolPath("codex", []string{"codex"}, ""); got != shimFile {
 		t.Errorf("PATH-based: detectLocalToolPath = %q, want %q", got, shimFile)
 	}
 
@@ -88,7 +88,7 @@ func TestDetectLocalToolPath_NpmInstalledCodex(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", origPATH)
-		if got := detectLocalToolPath(name, []string{name}); got != file {
+		if got := detectLocalToolPath(name, []string{name}, ""); got != file {
 			t.Errorf("npm-bin fallback: detectLocalToolPath = %q, want %q", got, file)
 		}
 	})

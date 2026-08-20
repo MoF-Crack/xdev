@@ -3,6 +3,7 @@
 package gui
 
 import (
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -78,6 +79,54 @@ func TestFindPMDefByName(t *testing.T) {
 
 	if _, ok := findPMDefByName("nonexistent-pm"); ok {
 		t.Error("findPMDefByName should return false for unknown name")
+	}
+}
+
+func TestFindPMDefByToolName_PipParent(t *testing.T) {
+	pm, ok := findPMDefByToolName("python")
+	if !ok {
+		t.Fatal("findPMDefByToolName(python) should resolve pip")
+	}
+	if pm.name != "pip" {
+		t.Errorf("resolved %q, want pip", pm.name)
+	}
+	if _, ok := findPMDefByToolName("nonexistent"); ok {
+		t.Error("unknown toolName must miss")
+	}
+}
+
+func TestInferIndependentPMRoot_ScoopShims(t *testing.T) {
+	t.Setenv("SCOOP", "")
+	root, err := inferIndependentPMRoot(pmDef{name: "scoop", displayName: "Scoop"}, `C:\Users\demo\scoop\shims\scoop.cmd`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Clean(`C:\Users\demo\scoop`)
+	if root != want {
+		t.Errorf("scoop shim root = %q, want %q", root, want)
+	}
+}
+
+func TestInferIndependentPMRoot_ChocoBin(t *testing.T) {
+	t.Setenv("ChocolateyInstall", "")
+	root, err := inferIndependentPMRoot(pmDef{name: "choco", displayName: "Chocolatey"}, `C:\ProgramData\chocolatey\bin\choco.exe`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Clean(`C:\ProgramData\chocolatey`)
+	if root != want {
+		t.Errorf("choco bin root = %q, want %q", root, want)
+	}
+}
+
+func TestInferIndependentPMRoot_EnvOverride(t *testing.T) {
+	t.Setenv("SCOOP", `E:\ScoopRoot`)
+	root, err := inferIndependentPMRoot(pmDef{name: "scoop", displayName: "Scoop"}, `C:\Users\demo\scoop\shims\scoop.cmd`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != filepath.Clean(`E:\ScoopRoot`) {
+		t.Errorf("SCOOP env override = %q, want %q", root, filepath.Clean(`E:\ScoopRoot`))
 	}
 }
 

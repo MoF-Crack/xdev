@@ -207,15 +207,18 @@ func TestMergeIntoManifest(t *testing.T) {
 		t.Fatalf("expected 3 versions, got %d", len(updated.VersionList))
 	}
 
-	// Check that original version is preserved.
-	if updated.VersionList[0].Version != "1.0.0" {
-		t.Errorf("expected first version 1.0.0, got %s", updated.VersionList[0].Version)
+	byVer := map[string]manifest.Version{}
+	for _, v := range updated.VersionList {
+		byVer[v.Version] = v
+	}
+	// Newest-first: 1.2.0, 1.1.0, 1.0.0 (semver; 1.1.0 also has a release date).
+	if updated.VersionList[0].Version != "1.2.0" || updated.VersionList[1].Version != "1.1.0" || updated.VersionList[2].Version != "1.0.0" {
+		t.Errorf("version order = %v, want newest-first [1.2.0 1.1.0 1.0.0]", []string{updated.VersionList[0].Version, updated.VersionList[1].Version, updated.VersionList[2].Version})
 	}
 
-	// Check discovered version 1.
-	v1 := updated.VersionList[1]
-	if v1.Version != "1.1.0" {
-		t.Errorf("expected version 1.1.0, got %s", v1.Version)
+	v1, ok := byVer["1.1.0"]
+	if !ok {
+		t.Fatal("missing merged version 1.1.0")
 	}
 	if !v1.Discovered {
 		t.Error("expected Discovered=true for merged version")
@@ -230,10 +233,9 @@ func TestMergeIntoManifest(t *testing.T) {
 		t.Errorf("expected 1 archive, got %d", len(v1.Archives))
 	}
 
-	// Check discovered version 2 (unverified).
-	v2 := updated.VersionList[2]
-	if v2.Version != "1.2.0" {
-		t.Errorf("expected version 1.2.0, got %s", v2.Version)
+	v2, ok := byVer["1.2.0"]
+	if !ok {
+		t.Fatal("missing merged version 1.2.0")
 	}
 	if !v2.Discovered {
 		t.Error("expected Discovered=true for merged version")

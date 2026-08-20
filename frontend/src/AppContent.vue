@@ -7,7 +7,7 @@
       <PageToolbar :title="headerTitle">
         <n-space>
           <UpdateBadge :t="t" :count="availableUpdates.length" :updates="availableUpdates" :loading="updatesLoading" :sniffing="sniffOperating" :installing="updateInstalling" @refresh="loadUpdates" @install="installUpdate" @ignore="ignoreUpdate" @sniff-all="sniffAll" />
-          <NotificationCenter :t="t" :notifications="notifications" @clear="clearNotifications" />
+          <NotificationCenter :t="t" :notifications="notifications" @clear="clearNotifications" @dismiss="dismissNotification" />
           <n-button ref="commandPaletteTrigger" size="small" secondary :aria-label="t('command_palette.open')" @click="openCommandPalette">
             <template #icon><n-icon aria-hidden="true"><search-outline /></n-icon></template>
             Ctrl+K
@@ -32,10 +32,10 @@
         <AboutPage v-else-if="selectedView === 'about'" :t="t" :info="aboutInfo" @check-update="checkUpdate" />
 
         <!-- Tool list (table style) -->
-        <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" :operating-tool="pmOperating" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @install="installLatest" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
+        <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
   </AppShell>
 
-  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" />
+  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
@@ -88,15 +88,6 @@ const { t, locale, setLocale } = useI18n();
 
 const message = useMessage();
 const dialog = useDialog();
-
-// ToolInfo currently exposes the install hint, while the script bodies are
-// owned by the package-manager definitions. Keep the confirmation summary
-// short and recognizable without presenting it as an editable command.
-const packageManagerInstallCommands = {
-  brew: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
-  scoop: 'irm get.scoop.sh | iex',
-  choco: "Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))",
-};
 
 // Window control for frameless mode
 const isMaximized = ref(false);
@@ -291,13 +282,16 @@ const scanAttempted = ref(false);
 const ignoredTools = ref([]);
 
 function addNotification(title, type = 'info') {
-  notifications.value.unshift({ title, type, time: new Date().toLocaleTimeString() });
+  notifications.value.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, title, type, time: new Date().toLocaleTimeString() });
   if (notifications.value.length > 50) {
     notifications.value = notifications.value.slice(0, 50);
   }
 }
 function clearNotifications() {
   notifications.value = [];
+}
+function dismissNotification(id) {
+  notifications.value = notifications.value.filter((item) => item.id !== id);
 }
 
 async function loadUpdates() {
@@ -926,10 +920,6 @@ async function openDetail(tool) {
   }
 }
 
-function installLatest(tool) {
-  if (tool?.name) doInstall(tool.name, 'latest', tool);
-}
-
 // Spec 023: 启动工具的 GUI 主程序（仅 form_factor 含 gui 时可用）。
 // pending guard 防止连续点击启动多个进程。
 const launchPending = ref(false);
@@ -967,7 +957,7 @@ async function copyToolCommand(name) {
 }
 
 function installPackageManager(tool) {
-  const toolName = tool?.toolName || tool?.name;
+  const toolName = tool?.name;
   const displayName = tool?.displayName || tool?.name;
   if (!toolName) return;
 
@@ -977,22 +967,6 @@ function installPackageManager(tool) {
   // 3. installMethods 长度==1 → 直接调 InstallSubTool(toolName, onlyMethod)
   // 4. installCommand 非空（brew/scoop/choco）→ 现有 script install 路径
   // 5. toolName 在 registry → 现有 InstallTool 路径
-  if (tool?.enableCommand) {
-    // 路径1: corepack enable（yarn/pnpm）
-    // 传 tool.name（pmDef.name，如 "yarn"），而非 tool.toolName（父工具名 "node"）。
-    // onPositiveClick 不返回 Promise（返回 undefined），让 Naive UI 自动关闭对话框。
-    // installSubTool 异步执行，不阻塞对话框关闭。
-    dialog.warning({
-      title: t('pm.enable_confirm_title', { name: displayName }),
-      content: `${t('pm.enable_confirm_content', { name: displayName })}\n\n${t('pm.install_command_summary')}\n${tool.enableCommand}`,
-      positiveText: t('pm.enable_button'),
-      negativeText: t('btn.cancel'),
-      ariaLabel: t('pm.enable_confirm_title', { name: displayName }),
-      onPositiveClick: () => { installSubTool(tool.name, displayName, ''); },
-    });
-    return;
-  }
-
   if (tool?.installMethods?.length > 1) {
     // 路径2: 多方法 → 弹选项对话框（需用 dynamic render）
     showPmMethodSelector(tool);
@@ -1005,8 +979,21 @@ function installPackageManager(tool) {
     return;
   }
 
+  if (tool?.enableCommand) {
+    // 路径1: 仅 corepack enable（无其他安装方式可选时）
+    dialog.warning({
+      title: t('pm.enable_confirm_title', { name: displayName }),
+      content: `${t('pm.enable_confirm_content', { name: displayName })}\n\n${t('pm.install_command_summary')}\n${tool.enableCommand}`,
+      positiveText: t('pm.enable_button'),
+      negativeText: t('btn.cancel'),
+      ariaLabel: t('pm.enable_confirm_title', { name: displayName }),
+      onPositiveClick: () => { installSubTool(tool.name, displayName, ''); },
+    });
+    return;
+  }
+
   // 路径4/5: 现有 script install 或 InstallTool 路径
-  const command = tool?.installCommand || packageManagerInstallCommands[toolName] || tool?.installHint || t('pm.install_command_unavailable');
+  const command = tool?.installCommand || tool?.installHint || t('pm.install_command_unavailable');
   const commandSummary = `${t('pm.install_command_summary')}\n${command}`;
   dialog.warning({
     title: t('pm.install_confirm_title', { name: displayName }),
@@ -1021,7 +1008,7 @@ function installPackageManager(tool) {
 // showPmMethodSelector 弹出包管理器安装方式选项对话框（Spec 026）。
 // 使用 NRadioGroup 让用户真正选择 pip 或 uv 安装方式。
 function showPmMethodSelector(tool) {
-  const toolName = tool?.toolName || tool?.name;
+  const toolName = tool?.name;
   const displayName = tool?.displayName || tool?.name;
   const methods = tool?.installMethods || [];
   if (methods.length < 2) return;
@@ -1061,7 +1048,7 @@ async function installSubTool(toolName, displayName, method) {
 }
 
 function updatePackageManager(tool) {
-  updatePm(tool?.toolName || tool?.name, tool?.displayName || tool?.name);
+  updatePm(tool?.name, tool?.displayName || tool?.name);
 }
 
 async function toggleCatalogFavorite(tool) {
@@ -1084,65 +1071,60 @@ async function loadVersions(toolName) {
   }
 }
 
-async function resolveInstallTool(toolName, fallback = null) {
+function mergeInstallTool(toolName, fallback = null) {
   const current = selectedTool.value?.name === toolName ? selectedTool.value : null;
   const local = tools.value.find(item => item.name === toolName || item.toolName === toolName);
-  const base = { ...(fallback || {}), ...(current || {}), ...(local || {}) };
-  if (base.hasFormSpecificArchives) return base;
-
-  const categoryNames = [base.category, activeCategory.value, ...categories.value
-    .map(category => typeof category === 'string' ? category : category?.name)]
-    .filter((category, index, all) => category && all.indexOf(category) === index);
-  if (!categoryNames.length) return base;
-  try {
-    const results = await Promise.all(categoryNames.map(category => window.go.gui.App.GetToolsByCategory(category)));
-    const match = results.flat().find(item => item?.name === toolName || item?.toolName === toolName);
-    return match ? { ...base, ...match } : base;
-  } catch (e) {
-    return base;
-  }
+  return { ...(fallback || {}), ...(current || {}), ...(local || {}) };
 }
 
 async function doInstall(toolName, version, tool = null, formFilter = '') {
   if (!version || installing.value) return;
-  tool = await resolveInstallTool(toolName, tool);
-  if (!formFilter && tool?.hasFormSpecificArchives && Array.isArray(tool.formFactor) && tool.formFactor.length) {
-    installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
+  tool = mergeInstallTool(toolName, tool);
+  installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
+
+  let preview = null;
+  try {
+    preview = await window.go.gui.App.PreviewInstall(toolName, version);
+  } catch (e) {
+    // Older builds may lack PreviewInstall — fall back to local metadata.
+  }
+  if (preview) {
+    tool = {
+      ...tool,
+      hasFormSpecificArchives: preview.hasFormSpecificArchives,
+      availableForms: preview.availableForms || tool.availableForms,
+    };
+  }
+
+  const formChoices = (Array.isArray(tool?.availableForms) && tool.availableForms.length)
+    ? tool.availableForms
+    : (Array.isArray(tool?.formFactor) ? tool.formFactor : []);
+  if (!formFilter && tool?.hasFormSpecificArchives && formChoices.length === 1) {
+    formFilter = formChoices[0];
+  }
+  if (!formFilter && tool?.hasFormSpecificArchives && formChoices.length > 1) {
     showDrawer.value = false;
     formSelectorTool.value = tool;
     formSelectorRequest.value = { toolName, version, tool };
     showFormSelector.value = true;
     return;
   }
-  installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
   showDrawer.value = false;
 
-  // Incomplete existing install → offer repair (frontend dialog, not native Wails).
-  try {
-    const integrity = await window.go.gui.App.CheckInstallIntegrity(toolName, version);
-    if (integrity && integrity.path && !integrity.ok && integrity.reason !== 'not installed') {
-      const missing = (integrity.missing || []).length ? ` (${(integrity.missing || []).join(', ')})` : '';
-      dialog.warning({
-        title: t('confirm_repair_title'),
-        content: `${t('confirm_repair_content', { tool: toolName, version })}${missing}`,
-        positiveText: t('detail.repair'),
-        negativeText: t('btn.cancel'),
-        onPositiveClick: () => startRepairConfirmed(toolName, version),
-      });
-      return;
-    }
-  } catch (e) {
-    // Older builds may lack CheckInstallIntegrity — continue normal install.
+  const integrity = preview?.integrity;
+  if (integrity && integrity.path && !integrity.ok && integrity.reason !== 'not installed') {
+    const missing = (integrity.missing || []).length ? ` (${(integrity.missing || []).join(', ')})` : '';
+    dialog.warning({
+      title: t('confirm_repair_title'),
+      content: `${t('confirm_repair_content', { tool: toolName, version })}${missing}`,
+      positiveText: t('detail.repair'),
+      negativeText: t('btn.cancel'),
+      onPositiveClick: () => startRepairConfirmed(toolName, version),
+    });
+    return;
   }
 
-  // Sniff-discovered unverified versions → Naive UI confirmation first.
-  let unverified = false;
-  try {
-    unverified = await window.go.gui.App.IsVersionUnverified(toolName, version);
-  } catch (e) {
-    // Method may not exist in older builds — proceed without pre-check.
-  }
-  if (unverified) {
+  if (preview?.unverified) {
     dialog.warning({
       title: t('install.unverified_title') || 'Unverified Version',
       content: t('install.unverified_content', { tool: toolName, version }) || `Version ${toolName}@${version} was discovered by sniffing. The archive URL has not been verified — downloads may fail. Continue?`,
@@ -1292,7 +1274,16 @@ async function migrateScanTool(item) {
 }
 
 async function unignoreTool(item) {
-  try { await window.go.gui.App.UnignoreTool(item.name, item.kind, item.path || ""); await loadIgnoredTools(); await loadUpdates(); } catch (e) { message.error(t("ignore.remove_failed") + ": " + e); }
+  try {
+    await window.go.gui.App.UnignoreTool(item.name, item.kind, item.path || "");
+    await loadIgnoredTools();
+    await loadUpdates();
+    if (item.kind === "local-scan" && scanAttempted.value) {
+      scanResults.value = await window.go.gui.App.ScanLocalEnvironments() || [];
+    }
+  } catch (e) {
+    message.error(t("ignore.remove_failed") + ": " + e);
+  }
 }
 async function checkUpdate() {
   updateOperating.value = true;

@@ -33,9 +33,9 @@
 // a WARNING is printed to stderr and signature verification is disabled.
 // In that degraded mode, the sidecar .sha256 TOFU (Trust On First Use)
 // mechanism records the first download's hash for future verification.
-// When a real root key IS embedded, all-zero and missing hashes are
-// rejected outright — the TOFU path is disabled, forcing manifest-signed
-// hashes for every download.
+// When a real root key IS embedded, all-zero and missing hashes on
+// pinned built-in archives are rejected. Sniff-discovered versions set
+// AllowPlaceholderTOFU so the first download can still establish a pin.
 package downloader
 
 import (
@@ -111,6 +111,12 @@ type Options struct {
 	// This allows mirror URLs that serve different binaries (e.g. Temurin JDK
 	// vs Oracle JDK) to have different expected hashes than the official URL.
 	URLShaMap map[string]string
+
+	// AllowPlaceholderTOFU permits an all-zero / missing SHA-256 on a
+	// built-in manifest when a real root key is embedded. Used only for
+	// sniff-discovered versions whose archive URL was synthesised after
+	// the manifest was signed — the first download records a sidecar pin.
+	AllowPlaceholderTOFU bool
 }
 
 // Download fetches opts.URL to opts.Dest.
@@ -522,9 +528,11 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	if expectedSHA != "" {
 		if util.IsAllZeroHash(expectedSHA) {
 			// Security (L-10): When signature verification is enabled, refuse
-			// to accept all-zero placeholder hashes on built-in manifests —
-			// they must be real. Third-party manifests use TOFU fallback.
-			if signer.HasRootKey() && !opts.IsThirdParty {
+			// to accept all-zero placeholder hashes on *pinned* built-in
+			// archives. Sniff-discovered versions (Unverified / Discovered)
+			// intentionally ship a zero hash so the first download can
+			// establish a TOFU pin — that is not a signed-hash downgrade.
+			if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU {
 				log.Printf("[download] ERROR: sha256 is all-zero placeholder and signature verification is enabled — refusing download")
 				_ = os.Remove(partPath)
 				return fmt.Errorf("manifest has all-zero SHA-256 placeholder for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
@@ -566,7 +574,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// downloads that have no hash at all on built-in manifests —
 		// sidecar TOFU is disabled for them. Third-party manifests
 		// fall back to TOFU.
-		if signer.HasRootKey() && !opts.IsThirdParty {
+		if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU {
 			log.Printf("[download] ERROR: no sha256 hash provided and signature verification is enabled — refusing download")
 			_ = os.Remove(partPath)
 			return fmt.Errorf("manifest has no SHA-256 hash for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
@@ -681,8 +689,11 @@ func verifyManifestSignature(opts Options) error {
 		return fmt.Errorf("manifest signature is invalid for tool %q — possible tampering detected", ms.Tool)
 	}
 
-	// Verify the ExpectedSHA matches the signed SHA-256 map
-	if opts.ExpectedSHA != "" && ms.SHA256Map != "" {
+	// Verify the ExpectedSHA matches the signed SHA-256 map.
+	// Sniff-discovered versions carry an all-zero placeholder hash that is
+	// intentionally absent from the signed map; those fall through to the
+	// existing TOFU sidecar path instead of being treated as tampering.
+	if opts.ExpectedSHA != "" && ms.SHA256Map != "" && !util.IsAllZeroHash(opts.ExpectedSHA) {
 		if !verifySHAInMap(ms.SHA256Map, opts.ExpectedSHA) {
 			shaPreview := opts.ExpectedSHA
 			if len(shaPreview) > 16 {

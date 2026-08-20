@@ -61,4 +61,61 @@ describe('ToolDetailDrawer', () => {
     expect(cli.get('[data-action="copy-command"]').exists()).toBe(true);
     cli.unmount();
   });
+
+  it('emits migrate-pm with the package-manager name, not the parent toolName', async () => {
+    const wrapper = mount(ToolDetailDrawer, {
+      global: { stubs: { teleport: true } },
+      props: {
+        show: true,
+        t: (key) => key,
+        tool: {
+          name: 'pip',
+          toolName: 'python',
+          displayName: 'PIP',
+          instances: [
+            { version: '24.0', path: 'C:\\Python\\Scripts\\pip.exe', managed: false, source: 'local' },
+          ],
+        },
+      },
+    });
+    await wrapper.get('[data-action="migrate-pm"]').trigger('click');
+    expect(wrapper.emitted('migrate-pm')).toEqual([['pip']]);
+    wrapper.unmount();
+  });
+
+  it('puts package-manager enable/install/update in the drawer, not the catalog', async () => {
+    const t = (key) => key;
+    const pnpm = mount(ToolDetailDrawer, {
+      global: { stubs: { teleport: true } },
+      props: {
+        show: true, t,
+        tool: {
+          name: 'pnpm', category: 'package-manager', installed: true, canInstall: true, offerSubToolInstall: true,
+          enableCommand: 'corepack enable pnpm',
+          installMethods: [{ name: 'corepack', command: 'corepack enable pnpm' }, { name: 'npm', command: 'npm install -g pnpm' }],
+        },
+      },
+    });
+    expect(pnpm.find('[data-action="package-manager"]').exists()).toBe(true);
+    expect(pnpm.find('[data-action="package-manager"]').text()).toBe('btn.install');
+    expect(pnpm.text()).not.toContain('detail.available_versions');
+    expect(pnpm.text()).not.toContain('detail.install_custom');
+    await pnpm.get('[data-action="package-manager"]').trigger('click');
+    expect(pnpm.emitted('install-package-manager')[0][0].name).toBe('pnpm');
+    pnpm.unmount();
+
+    const pipx = mount(ToolDetailDrawer, {
+      global: { stubs: { teleport: true } },
+      props: { show: true, t, tool: { name: 'pipx', category: 'package-manager', installed: true, canInstall: true, installMethods: [{ name: 'pip', command: 'pip install pipx' }] } },
+    });
+    expect(pipx.find('[data-action="package-manager"]').exists()).toBe(false);
+    pipx.unmount();
+
+    const scoop = mount(ToolDetailDrawer, {
+      global: { stubs: { teleport: true } },
+      props: { show: true, t, tool: { name: 'scoop', category: 'package-manager', installed: false, canInstall: true } },
+    });
+    expect(scoop.get('[data-action="package-manager"]').text()).toBe('btn.install');
+    scoop.unmount();
+  });
 });

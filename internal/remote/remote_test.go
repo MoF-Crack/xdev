@@ -1626,7 +1626,9 @@ func TestDiscoverVersions_NPM(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(registry)
+	var gotAccept string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAccept = r.Header.Get("Accept")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(body)
 	}))
@@ -1640,6 +1642,9 @@ func TestDiscoverVersions_NPM(t *testing.T) {
 		Type:    "npm",
 		Package: "typescript",
 	})
+	if gotAccept != "application/vnd.npm.install-v1+json" {
+		t.Errorf("Accept = %q, want abbreviated npm document", gotAccept)
+	}
 	if err != nil {
 		t.Fatalf("DiscoverVersions npm: %v", err)
 	}

@@ -183,6 +183,71 @@ func TestLuaPluginProperties(t *testing.T) {
 	}
 }
 
+func TestLuaEngineLoadPlugin_NestedPLUGINFunctions(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTempLua(t, dir, "nested.lua", `
+PLUGIN = {
+    name = "nestedtool",
+    display_name = "Nested Tool",
+    category = "build",
+    shims = {"nestedtool"},
+    available = function()
+        return {"1.0.0", "2.0.0"}
+    end,
+    archive = function(version, os, arch)
+        return {
+            url = "https://example.com/nested/" .. version .. "/tool.tar.gz",
+            format = "tar.gz",
+            strip = 1
+        }
+    end,
+    env_vars = function(install_path)
+        return { LUA_HOME = install_path }
+    end
+}
+`)
+	engine := NewLuaEngine()
+	p, err := engine.LoadPlugin(path)
+	if err != nil {
+		t.Fatalf("LoadPlugin() nested PLUGIN functions: %v", err)
+	}
+	if p.Name() != "nestedtool" {
+		t.Errorf("Name() = %q, want nestedtool", p.Name())
+	}
+	versions, err := engine.callAvailable(p.luaBasePlugin)
+	if err != nil {
+		t.Fatalf("callAvailable: %v", err)
+	}
+	if len(versions) != 2 || versions[0] != "1.0.0" {
+		t.Errorf("available() = %v, want [1.0.0 2.0.0]", versions)
+	}
+}
+
+func TestLuaSandboxBlocksLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTempLua(t, dir, "load.lua", `
+PLUGIN = { name = "loadtest", display_name = "Load", category = "build" }
+function available()
+    local f = load("return 1")
+    return {"1.0.0"}
+end
+function archive(v, o, a) return { url = "https://example.com/" .. v .. ".zip" } end
+`)
+	engine := NewLuaEngine()
+	p, err := engine.LoadPlugin(path)
+	if err != nil {
+		t.Fatalf("LoadPlugin() error: %v", err)
+	}
+	if p.luaBasePlugin == nil {
+		t.Fatal("expected luaBasePlugin to be set")
+	}
+	if _, err := engine.callAvailable(p.luaBasePlugin); err == nil {
+		t.Fatal("available() should fail when load() is invoked")
+	} else if !strings.Contains(err.Error(), "load") {
+		t.Errorf("error = %q, want it to mention load", err.Error())
+	}
+}
+
 func TestLuaPluginManifestReturnsNil(t *testing.T) {
 	dir := t.TempDir()
 	path := writeTempLua(t, dir, "manifest.lua", validPluginLua)

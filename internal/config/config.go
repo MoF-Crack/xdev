@@ -190,6 +190,12 @@ func (c *Config) GetProxyURL(scheme string) string {
 // The enabled flag acts as a global toggle; when false, GetProxyURL
 // returns "" regardless of the configured URLs.
 func (c *Config) SetProxy(http, https, noProxy string, enabled bool) error {
+	if err := util.ValidateProxyURL(http); err != nil {
+		return fmt.Errorf("http proxy: %w", err)
+	}
+	if err := util.ValidateProxyURL(https); err != nil {
+		return fmt.Errorf("https proxy: %w", err)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.Proxy.HTTP = http

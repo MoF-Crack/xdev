@@ -85,9 +85,12 @@ func (e *LuaEngine) newSandboxedVM() (*lua.LState, error) {
 		loadfile = function()
 			error("loadfile is not allowed in sandboxed plugins")
 		end
+		load = function()
+			error("load is not allowed in sandboxed plugins")
+		end
 	`); err != nil {
 		L.Close()
-		return nil, fmt.Errorf("failed to override dofile/loadfile: %w", err)
+		return nil, fmt.Errorf("failed to override dofile/loadfile/load: %w", err)
 	}
 
 	// Restrict package.loaders to only the preload loader (index 1).

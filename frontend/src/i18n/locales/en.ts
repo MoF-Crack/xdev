@@ -388,6 +388,7 @@ export default {
   'pm.install_confirm_content': 'Will execute the official install command for {name} in the background. Ensure network is available; installation may take a few minutes.',
   'pm.install_admin_required': 'Install as Admin',
   'pm.install_admin_tooltip': 'This package manager requires administrator privileges',
+  'pm.actions_title': 'Install & Enable',
   'pm.enable_button': 'Enable',
   'pm.enable_confirm_title': 'Confirm Enable {name}',
   'pm.enable_confirm_content': 'Will execute the following command to enable {name}.',
@@ -591,6 +592,7 @@ export default {
   'notifications.title': 'Notifications',
   'notifications.clear': 'Clear',
   'notifications.empty': 'No notifications',
+  'notifications.dismiss': 'Dismiss',
 
   // TOFU warning
   'install.tofu_warning_title': 'Version Verification Notice',

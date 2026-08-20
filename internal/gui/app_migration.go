@@ -154,10 +154,13 @@ func (a *App) GetLastSelection() map[string]string {
 	if err := json.Unmarshal(data, &sel); err != nil {
 		return map[string]string{}
 	}
-	// Verify HMAC if present
+	// Verify HMAC if present (constant-time via util.VerifyHMAC).
 	if sel.HMAC != "" {
-		expected := computeLastSelectionHMAC(sel.InstallDir, sel.Drive)
-		if expected != sel.HMAC {
+		data, _ := json.Marshal(struct {
+			InstallDir string `json:"installDir"`
+			Drive      string `json:"drive"`
+		}{sel.InstallDir, sel.Drive})
+		if !util.VerifyHMAC(data, sel.HMAC) {
 			// Tampered file — ignore the selection
 			return map[string]string{}
 		}
@@ -219,6 +222,9 @@ func (a *App) GetDrives() []DriveInfoJSON {
 // InitConfig sets up the config with the chosen base directory and saves it.
 func (a *App) InitConfig(baseDir string) error {
 	logInfo("[InitConfig] baseDir=%s", baseDir)
+	if err := validateInitBaseDir(baseDir); err != nil {
+		return err
+	}
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 
@@ -744,4 +750,29 @@ func (a *App) postMigrateSetup(tool env.LocalTool, cfg *config.Config) {
 	}
 
 	shim.InvalidateShimIndex()
+}
+
+// validateInitBaseDir rejects empty, relative, device, or UNC paths so
+// first-run setup cannot be pointed at an attacker-controlled location
+// that later becomes the xdev home (and therefore the install/cache root).
+func validateInitBaseDir(baseDir string) error {
+	baseDir = strings.TrimSpace(baseDir)
+	if baseDir == "" {
+		return fmt.Errorf("installation directory must not be empty")
+	}
+	if strings.ContainsRune(baseDir, '\x00') {
+		return fmt.Errorf("installation directory must not contain null bytes")
+	}
+	if !filepath.IsAbs(baseDir) {
+		return fmt.Errorf("installation directory must be an absolute path: %q", baseDir)
+	}
+	cleaned := filepath.Clean(baseDir)
+	if strings.HasPrefix(cleaned, `\\`) || strings.HasPrefix(cleaned, `//`) {
+		return fmt.Errorf("installation directory must not be a UNC/network path: %q", baseDir)
+	}
+	vol := filepath.VolumeName(cleaned)
+	if vol != "" && strings.HasPrefix(vol, `\\`) {
+		return fmt.Errorf("installation directory must not be a UNC/network path: %q", baseDir)
+	}
+	return nil
 }

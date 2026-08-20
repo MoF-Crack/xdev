@@ -278,6 +278,23 @@ func TestSniffConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestSetProxy_RejectsUnsafeScheme(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := defaults(tmp)
+	if err := cfg.SetProxy("file:///etc/passwd", "", "", true); err == nil {
+		t.Fatal("SetProxy should reject file:// scheme")
+	}
+	if err := cfg.SetProxy("http://127.0.0.1:7890", "ftp://evil", "", true); err == nil {
+		t.Fatal("SetProxy should reject ftp:// https proxy")
+	}
+	if err := cfg.SetProxy("http://127.0.0.1:7890", "socks5://127.0.0.1:1080", "localhost", true); err != nil {
+		t.Fatalf("valid proxy should be accepted: %v", err)
+	}
+	if cfg.Proxy.HTTP != "http://127.0.0.1:7890" {
+		t.Errorf("HTTP proxy not persisted: %q", cfg.Proxy.HTTP)
+	}
+}
+
 func TestSniffConfigExplicitValues(t *testing.T) {
 	tmp := t.TempDir()
 	// Config with explicit sniff section (partial)

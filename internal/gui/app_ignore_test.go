@@ -11,8 +11,23 @@ import (
 
 // ── Test: Idempotent ignore ──
 
+func TestIgnore_DoesNotWriteProductionCache(t *testing.T) {
+	app := newTestApp(t)
+	if err := app.IgnoreTool("go", "update", ""); err != nil {
+		t.Fatal(err)
+	}
+	cfg := app.getCfg()
+	if strings.EqualFold(filepath.Clean(cfg.Core.CacheDir), filepath.Clean(`E:\XDev\cache`)) {
+		t.Fatalf("test app cache dir must be isolated, got %s", cfg.Core.CacheDir)
+	}
+	got := filepath.Join(cfg.Core.CacheDir, ignoredFileName)
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("expected isolated cache file %s: %v", got, err)
+	}
+}
+
 func TestIgnore_Idempotent(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// First ignore should succeed
 	if err := app.IgnoreTool("go", "update", ""); err != nil {
@@ -39,7 +54,7 @@ func TestIgnore_Idempotent(t *testing.T) {
 // ── Test: Unignore ──
 
 func TestIgnore_Unignore(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	if err := app.IgnoreTool("java", "update", ""); err != nil {
 		t.Fatalf("ignore failed: %v", err)
@@ -61,7 +76,7 @@ func TestIgnore_Unignore(t *testing.T) {
 // ── Test: Unignore miss (not found) ──
 
 func TestIgnore_Unignore_Miss(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// Unignoring a non-existent entry should succeed silently
 	if err := app.UnignoreTool("nonexistent", "update", ""); err != nil {
@@ -72,7 +87,7 @@ func TestIgnore_Unignore_Miss(t *testing.T) {
 // ── Test: Reject bad names ──
 
 func TestIgnore_RejectBadName(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	tests := []struct {
 		name string
 		kind string
@@ -100,7 +115,7 @@ func TestIgnore_RejectBadName(t *testing.T) {
 // ── Test: Reject bad kind ──
 
 func TestIgnore_RejectBadKind(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	if err := app.IgnoreTool("go", "invalid-kind", ""); err == nil {
 		t.Error("expected error for invalid kind")
 	}
@@ -109,7 +124,7 @@ func TestIgnore_RejectBadKind(t *testing.T) {
 // ── Test: Reject NUL byte ──
 
 func TestIgnore_RejectNUL(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// NUL in name
 	if err := app.IgnoreTool("go\x00lang", "update", ""); err == nil {
@@ -125,7 +140,7 @@ func TestIgnore_RejectNUL(t *testing.T) {
 // ── Test: Reject overlong path ──
 
 func TestIgnore_RejectLongPath(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	longPath := strings.Repeat("x", 513)
 	if err := app.IgnoreTool("go", "local-scan", longPath); err == nil {
 		t.Error("expected error for path >512 chars")
@@ -135,7 +150,7 @@ func TestIgnore_RejectLongPath(t *testing.T) {
 // ── Test: Corrupt JSON → empty list, no panic ──
 
 func TestIgnore_CorruptJSON(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// Write corrupt JSON to the ignored file
 	cfg := app.getCfg()
@@ -164,7 +179,7 @@ func TestIgnore_HardCap(t *testing.T) {
 	maxIgnoredItems = 3
 	t.Cleanup(func() { maxIgnoredItems = oldMax })
 
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// Fill to cap
 	for i := 0; i < 3; i++ {
@@ -189,7 +204,7 @@ func TestIgnore_HardCap(t *testing.T) {
 // ── Test: Local-scan unique key (name+path) ──
 
 func TestIgnore_LocalScanUniqueKey(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// Same name, different paths → both stored
 	if err := app.IgnoreTool("go", "local-scan", "/path/a"); err != nil {
@@ -228,8 +243,25 @@ func TestIgnore_LocalScanUniqueKey(t *testing.T) {
 
 // ── Test: Update and local-scan are independent ──
 
+func TestUnignore_EmptyPathRemovesAllLocalScanRows(t *testing.T) {
+	app := newTestApp(t)
+	if err := app.IgnoreTool("go", "local-scan", `C:\Go`); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.IgnoreTool("go", "update", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.UnignoreTool("go", "local-scan", ""); err != nil {
+		t.Fatal(err)
+	}
+	items := app.GetIgnoredTools()
+	if len(items) != 1 || items[0].Kind != "update" {
+		t.Fatalf("expected only update row to remain, got %+v", items)
+	}
+}
+
 func TestIgnore_UpdateLocalScanIndependent(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	if err := app.IgnoreTool("go", "update", ""); err != nil {
 		t.Fatalf("ignore update failed: %v", err)
@@ -260,7 +292,7 @@ func TestIgnore_UpdateLocalScanIndependent(t *testing.T) {
 // ── Test: isIgnored helper ──
 
 func TestIgnore_IsIgnored(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	if err := app.IgnoreTool("go", "update", ""); err != nil {
 		t.Fatalf("ignore go update: %v", err)
@@ -289,7 +321,7 @@ func TestIgnore_IsIgnored(t *testing.T) {
 // ── Test: isIgnored with empty path (match all) ──
 
 func TestIgnore_IsIgnored_EmptyPath(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	// Ignore all local-scan for "node" (empty path)
 	if err := app.IgnoreTool("node", "local-scan", ""); err != nil {
@@ -308,7 +340,7 @@ func TestIgnore_IsIgnored_EmptyPath(t *testing.T) {
 // ── Test: GetIgnoredTools returns a copy ──
 
 func TestIgnore_GetIgnoredTools_Copy(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 
 	if err := app.IgnoreTool("go", "update", ""); err != nil {
 		t.Fatalf("ignore failed: %v", err)

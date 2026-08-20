@@ -203,3 +203,61 @@ func TestVersionInfo_JSONIncludesIntact(t *testing.T) {
 		t.Errorf("integrity should be omitted when empty: %s", string(data2))
 	}
 }
+
+func TestPreviewInstall_UsesInMemoryCatalog(t *testing.T) {
+	app := newTestApp(t)
+	tool := &manifest.Tool{
+		Name: "uv",
+		VersionList: []manifest.Version{
+			{Version: "0.12.5", Unverified: true, Archives: []manifest.Archive{{Form: "cli"}}},
+		},
+	}
+	app.cat = &manifest.Catalog{}
+	// Catalog.Tool looks up by name via the unexported map; register through
+	// a plugin so lookupToolManifest can still find it.
+	reg := plugin.NewRegistry()
+	reg.Register(&guiFakePlugin{name: "uv", manifest: tool})
+	app.registry = reg
+
+	preview := app.PreviewInstall("uv", "0.12.5")
+	if !preview.Unverified {
+		t.Fatal("expected sniffed version to be unverified")
+	}
+	if preview.Integrity.Reason == "" {
+		t.Error("integrity reason should be populated for a missing install")
+	}
+	if preview.Tool != "uv" || preview.Version != "0.12.5" {
+		t.Errorf("preview identity = %s@%s", preview.Tool, preview.Version)
+	}
+}
+
+func TestReloadCatalog_UpdatesGenericPlugin(t *testing.T) {
+	tmp := t.TempDir()
+	manifestDir := filepath.Join(tmp, "manifests")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("name: uv\ndisplay_name: UV\nversions:\n  - version: \"0.12.5\"\n    unverified: true\n")
+	if err := os.WriteFile(filepath.Join(manifestDir, "uv.yaml"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := newTestApp(t)
+	if err := app.mutateCfg(func(cfg *config.Config) error {
+		cfg.Core.ManifestDir = manifestDir
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g := plugin.NewGeneric(&manifest.Tool{Name: "uv", VersionList: []manifest.Version{{Version: "0.7.6"}}})
+	app.registry.Register(g)
+
+	if err := app.reloadCatalog(); err != nil {
+		t.Fatalf("reloadCatalog: %v", err)
+	}
+	if !app.IsVersionUnverified("uv", "0.12.5") {
+		t.Fatal("reloaded catalog should mark 0.12.5 unverified")
+	}
+	if _, err := g.ResolveVersion("0.12.5"); err != nil {
+		t.Fatalf("generic plugin should see sniffed version after reload: %v", err)
+	}
+}

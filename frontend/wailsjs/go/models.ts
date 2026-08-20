@@ -579,7 +579,6 @@ export namespace gui {
 	        this.command = source["command"];
 	    }
 	}
-	
 	export class IntegrityInfo {
 	    tool: string;
 	    version: string;
@@ -602,6 +601,48 @@ export namespace gui {
 	        this.missing = source["missing"];
 	    }
 	}
+	export class InstallPreview {
+	    tool: string;
+	    version: string;
+	    unverified: boolean;
+	    hasFormSpecificArchives: boolean;
+	    availableForms?: string[];
+	    integrity: IntegrityInfo;
+	
+	    static createFrom(source: any = {}) {
+	        return new InstallPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tool = source["tool"];
+	        this.version = source["version"];
+	        this.unverified = source["unverified"];
+	        this.hasFormSpecificArchives = source["hasFormSpecificArchives"];
+	        this.availableForms = source["availableForms"];
+	        this.integrity = this.convertValues(source["integrity"], IntegrityInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	export class IsolateStatus {
 	    availableModes: string[];
 	    activeMode: string;
@@ -696,10 +737,12 @@ export namespace gui {
 	    toolName: string;
 	    installHint: string;
 	    requiresAdmin: boolean;
+	    installCommand?: string;
 	    enableCommand?: string;
 	    installMethods?: InstallMethodInfo[];
 	    hasUpdate: boolean;
 	    instances?: PMInstanceInfo[];
+	    offerSubToolInstall?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PackageManagerInfo(source);
@@ -718,10 +761,12 @@ export namespace gui {
 	        this.toolName = source["toolName"];
 	        this.installHint = source["installHint"];
 	        this.requiresAdmin = source["requiresAdmin"];
+	        this.installCommand = source["installCommand"];
 	        this.enableCommand = source["enableCommand"];
 	        this.installMethods = this.convertValues(source["installMethods"], InstallMethodInfo);
 	        this.hasUpdate = source["hasUpdate"];
 	        this.instances = this.convertValues(source["instances"], PMInstanceInfo);
+	        this.offerSubToolInstall = source["offerSubToolInstall"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -889,8 +934,11 @@ export namespace gui {
 	    guiBinary?: string;
 	    hasFormSpecificArchives?: boolean;
 	    requiresAdmin?: boolean;
+	    installCommand?: string;
+	    availableForms?: string[];
 	    enableCommand?: string;
 	    installMethods?: InstallMethodInfo[];
+	    offerSubToolInstall?: boolean;
 	    instances?: PMInstanceInfo[];
 	
 	    static createFrom(source: any = {}) {
@@ -917,8 +965,11 @@ export namespace gui {
 	        this.guiBinary = source["guiBinary"];
 	        this.hasFormSpecificArchives = source["hasFormSpecificArchives"];
 	        this.requiresAdmin = source["requiresAdmin"];
+	        this.installCommand = source["installCommand"];
+	        this.availableForms = source["availableForms"];
 	        this.enableCommand = source["enableCommand"];
 	        this.installMethods = this.convertValues(source["installMethods"], InstallMethodInfo);
+	        this.offerSubToolInstall = source["offerSubToolInstall"];
 	        this.instances = this.convertValues(source["instances"], PMInstanceInfo);
 	    }
 	

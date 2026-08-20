@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/charmbracelet/x/term v0.2.1
-	github.com/klauspost/compress v1.17.11
+	github.com/klauspost/compress v1.18.7
 	github.com/spf13/cobra v1.8.1
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8

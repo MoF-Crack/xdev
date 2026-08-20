@@ -163,14 +163,28 @@ func (t *Tool) EffectiveFormFactor() []string {
 // 缺省（无 Form 标注，现有 50 个 manifest）返回 false：单包多形态工具
 // （如 VS Code 的 code.exe 既是 GUI 又是 CLI）不显示选择器，直接安装。
 func (t *Tool) HasFormSpecificArchives() bool {
+	return len(t.AvailableArchiveForms()) > 0
+}
+
+// AvailableArchiveForms 返回所有 version 的 archive.Form 去重列表（小写，
+// 保持首次出现顺序）。形态选择器应使用本列表，而不是 form_factor 声明。
+func (t *Tool) AvailableArchiveForms() []string {
+	if t == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var forms []string
 	for vi := range t.VersionList {
 		for ai := range t.VersionList[vi].Archives {
-			if t.VersionList[vi].Archives[ai].Form != "" {
-				return true
+			form := strings.ToLower(strings.TrimSpace(t.VersionList[vi].Archives[ai].Form))
+			if form == "" || seen[form] {
+				continue
 			}
+			seen[form] = true
+			forms = append(forms, form)
 		}
 	}
-	return false
+	return forms
 }
 
 // ValidateFormFactor 校验 form_factor 声明（宽松模式，仅警告不报错）：
@@ -427,13 +441,14 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 			merged.VersionList = make([]Version, len(embeddedTool.VersionList))
 			copy(merged.VersionList, embeddedTool.VersionList)
 
-			// Append disk versions not in embedded.
+			// Append disk versions not in embedded, then sort newest first.
 			for _, dv := range diskTool.VersionList {
 				if !existingVersions[dv.Version] {
 					merged.VersionList = append(merged.VersionList, dv)
 					existingVersions[dv.Version] = true
 				}
 			}
+			SortVersionsByRelease(merged.VersionList)
 			// 形态字段按 disk-override 策略合并（Spec 023 T-A6，B2-A6-04）：
 			// 运行时覆盖内置 manifest 时，磁盘声明的 form_factor / gui_binary
 			// 必须生效（与 DisplayName 等其他字段的覆盖语义一致）。
@@ -578,6 +593,42 @@ func (t *Tool) Versions() []string {
 		out = append(out, v.Version)
 	}
 	return out
+}
+
+// SortVersionsByRelease orders versions newest-first by release date,
+// falling back to semver when dates are missing or equal. Used after
+// sniff-merge so available-version lists are not YAML-append order.
+func SortVersionsByRelease(versions []Version) {
+	sort.SliceStable(versions, func(i, j int) bool {
+		return versionReleaseNewer(versions[i], versions[j])
+	})
+}
+
+func versionReleaseNewer(a, b Version) bool {
+	ta, oka := parseReleaseDate(a.Release)
+	tb, okb := parseReleaseDate(b.Release)
+	// 仅当两端都有日期且不相等时按发布时间；嗅探版本常缺日期，
+	// 不能把带日期的旧内置版本排到无日期的新版本前面。
+	if oka && okb && !ta.Equal(tb) {
+		return ta.After(tb)
+	}
+	if c := util.CompareSemver(a.Version, b.Version); c != 0 {
+		return c > 0
+	}
+	return a.Version > b.Version
+}
+
+func parseReleaseDate(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // FindVersion looks up a concrete version struct.

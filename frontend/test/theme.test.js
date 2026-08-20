@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { getNaiveThemeConfig } from '../src/theme/naive-theme.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), 'utf8');
@@ -42,8 +43,7 @@ describe('theme system', () => {
     expect(lightBlock).toContain('--xdev-accent: #2563eb');
   });
 
-  it('exposes Naive UI overrides through one theme-based interface', async () => {
-    const { getNaiveThemeConfig } = await import('../src/theme/naive-theme.js');
+  it('exposes Naive UI overrides through one theme-based interface', () => {
     const dark = getNaiveThemeConfig('dark').overrides;
     const light = getNaiveThemeConfig('light').overrides;
     const eyeCare = getNaiveThemeConfig('eye-care').overrides;
@@ -54,7 +54,7 @@ describe('theme system', () => {
     expect(dark.common.bodyColor).toBe('#0d1117');
     expect(light.common.bodyColor).toBe('#eef1f5');
     expect(getNaiveThemeConfig('unknown').overrides).toBe(dark);
-  }, 15000);
+  });
 
   it('removes the legacy neon palette from application styles', () => {
     const applicationStyles = [

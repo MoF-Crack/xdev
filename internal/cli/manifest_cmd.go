@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -344,13 +343,12 @@ func validateGitCloneURL(rawURL string) error {
 	}
 	switch u.Scheme {
 	case "https":
-		return nil
+		return util.IsSafeHTTPSExternalURL(rawURL)
 	case "http", "git":
 		// Security (N-10): http:// and git:// are unencrypted and
-		// vulnerable to MITM. Allow with a prominent warning for
-		// backward compatibility, but recommend https://.
-		log.Printf("[manifest] WARNING: %s:// URL is unencrypted — prefer https:// to prevent MITM of manifest YAML", u.Scheme)
-		return nil
+		// vulnerable to MITM. Reject them rather than trusting a
+		// warning that users may never see.
+		return fmt.Errorf("%s:// URLs are not allowed for manifest add (use https://)", u.Scheme)
 	case "ssh":
 		return fmt.Errorf("ssh:// URLs are not allowed for manifest add (use https://)")
 	case "file":

@@ -132,24 +132,31 @@ func (a *App) UnignoreTool(name, kind, path string) error {
 	a.ignoredMu.Lock()
 	defer a.ignoredMu.Unlock()
 
-	for i, item := range a.ignored {
-		if sameIgnoreKey(item, IgnoredToolInfo{Name: name, Kind: kind, Path: path}) {
-			// Remove item at index i
-			a.ignored = append(a.ignored[:i], a.ignored[i+1:]...)
-			if err := a.saveIgnored(); err != nil {
-				// Rollback: re-insert at original position
-				a.ignored = append(a.ignored, IgnoredToolInfo{})
-				copy(a.ignored[i+1:], a.ignored[i:])
-				a.ignored[i] = item
-				logError("[ignore] remove failed name=%q kind=%q: %v", name, kind, err)
-				return fmt.Errorf("failed to save ignore list: %w", err)
-			}
-			logInfo("[ignore] remove name=%q kind=%q path=%q", name, kind, path)
-			return nil
+	kept := a.ignored[:0]
+	removed := 0
+	var removedItems []IgnoredToolInfo
+	for _, item := range a.ignored {
+		// Exact key match, or same name+kind when the caller omitted the
+		// path (dashboard unignore must drop every local-scan row for the tool).
+		if sameIgnoreKey(item, IgnoredToolInfo{Name: name, Kind: kind, Path: path}) ||
+			(item.Name == name && item.Kind == kind && path == "") {
+			removed++
+			removedItems = append(removedItems, item)
+			continue
 		}
+		kept = append(kept, item)
 	}
-
-	logDebug("[ignore] remove miss name=%q kind=%q", name, kind)
+	if removed == 0 {
+		logDebug("[ignore] remove miss name=%q kind=%q", name, kind)
+		return nil
+	}
+	a.ignored = kept
+	if err := a.saveIgnored(); err != nil {
+		a.ignored = append(a.ignored, removedItems...)
+		logError("[ignore] remove failed name=%q kind=%q: %v", name, kind, err)
+		return fmt.Errorf("failed to save ignore list: %w", err)
+	}
+	logInfo("[ignore] remove name=%q kind=%q path=%q count=%d", name, kind, path, removed)
 	return nil
 }
 

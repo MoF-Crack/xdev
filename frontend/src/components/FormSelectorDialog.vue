@@ -38,9 +38,13 @@ const props = defineProps({
 });
 const emit = defineEmits(['update:show', 'confirm']);
 
-const forms = computed(() => (Array.isArray(props.tool?.formFactor) ? props.tool.formFactor : [])
-  .filter(Boolean)
-  .map(form => String(form).toLowerCase()));
+const forms = computed(() => {
+  const fromArchives = Array.isArray(props.tool?.availableForms) ? props.tool.availableForms : [];
+  const source = fromArchives.length
+    ? fromArchives
+    : (Array.isArray(props.tool?.formFactor) ? props.tool.formFactor : []);
+  return source.filter(Boolean).map(form => String(form).toLowerCase());
+});
 const displayName = computed(() => props.tool?.displayName || props.tool?.name || '');
 const selectedForm = ref('');
 

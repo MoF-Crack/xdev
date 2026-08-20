@@ -56,11 +56,13 @@ func buildArchiveTemplate(existingVersion string, existingArchives []manifest.Ar
 		// Replace the existing version string in the URL with the
 		// placeholder.  Prefer exact version occurrence to avoid
 		// false positives in repo name or path.
-		t.URL = strings.ReplaceAll(t.URL, existingVersion, versionPlaceholder)
-		// Also replace in mirror URLs.
-		t.MirrorURL = strings.ReplaceAll(t.MirrorURL, existingVersion, versionPlaceholder)
+		// Also replace "/<version>/" and "/v<version>/" so GitHub
+		// tag-only URLs (uv-x86_64-...zip under /0.12.0/) still
+		// produce a usable template.
+		t.URL = replaceVersionInArchiveURL(t.URL, existingVersion)
+		t.MirrorURL = replaceVersionInArchiveURL(t.MirrorURL, existingVersion)
 		for j := range t.MirrorURLs {
-			t.MirrorURLs[j] = strings.ReplaceAll(t.MirrorURLs[j], existingVersion, versionPlaceholder)
+			t.MirrorURLs[j] = replaceVersionInArchiveURL(t.MirrorURLs[j], existingVersion)
 		}
 		// Zero out SHA-256 and size — they will be filled with
 		// placeholders in FillArchivePlaceholders.
@@ -83,6 +85,27 @@ func buildArchiveTemplate(existingVersion string, existingArchives []manifest.Ar
 	}
 
 	return templates, true
+}
+
+// replaceVersionInArchiveURL turns a concrete download URL into a
+// template. It first replaces every occurrence of the version string,
+// then also rewrites GitHub-style "/v<ver>/" and "/<ver>/" tag segments
+// so tools whose filename does not contain the version (uv) still work.
+func replaceVersionInArchiveURL(raw, existingVersion string) string {
+	if raw == "" || existingVersion == "" {
+		return raw
+	}
+	out := strings.ReplaceAll(raw, existingVersion, versionPlaceholder)
+	// Tag-only path: /v0.12.0/asset.zip or /0.12.0/asset.zip.
+	// Keep the original tag shape (with or without the leading "v").
+	if !strings.Contains(out, versionPlaceholder) {
+		if strings.Contains(out, "/v"+existingVersion+"/") {
+			out = strings.ReplaceAll(out, "/v"+existingVersion+"/", "/v"+versionPlaceholder+"/")
+		} else if strings.Contains(out, "/"+existingVersion+"/") {
+			out = strings.ReplaceAll(out, "/"+existingVersion+"/", "/"+versionPlaceholder+"/")
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

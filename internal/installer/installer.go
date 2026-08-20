@@ -627,16 +627,17 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 
 	var err error
 	err = downloader.Download(ctx, downloader.Options{
-		URL:               url,
-		Dest:              dest,
-		ExpectedSHA:       a.SHA256,
-		URLShaMap:         urlShaMap,
-		ProgressDesc:      progressDesc,
-		Cookie:            util.CookieFromInstallArgs(a.InstallArgs),
-		ManifestSignature: manifestSig,
-		IsThirdParty:      isThirdParty,
-		ProxyURL:          i.cfg.GetProxyURL("https"),
-		FallbackURLs:      fallbackURLs,
+		URL:                  url,
+		Dest:                 dest,
+		ExpectedSHA:          a.SHA256,
+		URLShaMap:            urlShaMap,
+		ProgressDesc:         progressDesc,
+		Cookie:               util.CookieFromInstallArgs(a.InstallArgs),
+		ManifestSignature:    manifestSig,
+		IsThirdParty:         isThirdParty,
+		AllowPlaceholderTOFU: a.SHA256 == "" || util.IsAllZeroHash(a.SHA256),
+		ProxyURL:             i.cfg.GetProxyURL("https"),
+		FallbackURLs:         fallbackURLs,
 		// Surface non-byte status updates (retries, fallback switches,
 		// range restarts) through the audit log. The GUI wires its own
 		// OnStatus for live progress events.

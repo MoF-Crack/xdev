@@ -36,11 +36,11 @@ func IsSafeExternalURL(rawURL string) error {
 		return fmt.Errorf("non-localhost http URL is not allowed, use https://")
 	}
 	// Resolve the host and reject private/reserved IP ranges.
+	// Fail closed on DNS errors: an unresolvable or attacker-controlled
+	// name must not skip the private-IP check (SSRF).
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		// DNS resolution failed — allow the request to proceed and
-		// fail naturally; we cannot block what we cannot resolve.
-		return nil
+		return fmt.Errorf("URL host %s could not be resolved: %w", host, err)
 	}
 	for _, ip := range ips {
 		if isPrivateOrReservedIP(ip) {
@@ -62,7 +62,7 @@ func IsSafeHTTPSExternalURL(rawURL string) error {
 	}
 	ips, err := net.LookupIP(u.Hostname())
 	if err != nil {
-		return nil
+		return fmt.Errorf("URL host %s could not be resolved: %w", u.Hostname(), err)
 	}
 	for _, ip := range ips {
 		if isPrivateOrReservedIP(ip) {
@@ -111,6 +111,31 @@ func SanitizeURL(raw string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String()
+}
+
+// ValidateProxyURL validates a user-supplied HTTP/HTTPS/SOCKS proxy URL.
+// Empty values are allowed (proxy field not configured). Non-empty values
+// must parse as an absolute URL with scheme http, https, socks5, or socks5h
+// and a non-empty host. Userinfo is permitted (authenticated proxies) but
+// credentials must never be logged — callers should use SanitizeURL.
+func ValidateProxyURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid proxy URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return fmt.Errorf("proxy URL scheme %q is not allowed (use http, https, socks5, or socks5h)", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("proxy URL has no host")
+	}
+	return nil
 }
 
 // IsProtectedSystemEnvVar reports whether name is a Windows system

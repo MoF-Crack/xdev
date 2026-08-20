@@ -12,7 +12,7 @@ import (
 )
 
 func TestPluginToToolInfo_FormFactorFromManifest(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	p := &guiFakePlugin{
 		name:  "vscode",
 		shims: []string{"code"},
@@ -32,9 +32,31 @@ func TestPluginToToolInfo_FormFactorFromManifest(t *testing.T) {
 	}
 }
 
+func TestPluginToToolInfo_AvailableFormsFromArchives(t *testing.T) {
+	app := newTestApp(t)
+	p := &guiFakePlugin{
+		name:  "opencode",
+		shims: []string{"opencode"},
+		manifest: &manifest.Tool{
+			Name:       "opencode",
+			FormFactor: []string{"gui", "cli", "tui"},
+			VersionList: []manifest.Version{{
+				Archives: []manifest.Archive{{Form: "cli"}, {Form: "cli"}},
+			}},
+		},
+	}
+	info := app.pluginToToolInfo(p)
+	if !info.HasFormSpecificArchives {
+		t.Error("HasFormSpecificArchives = false, want true")
+	}
+	if !reflect.DeepEqual(info.AvailableForms, []string{"cli"}) {
+		t.Errorf("AvailableForms = %v, want [cli]", info.AvailableForms)
+	}
+}
+
 func TestPluginToToolInfo_FormFactorInferredCli(t *testing.T) {
 	// 无 form_factor 的 manifest（现有工具）：由 shims 推断 [cli]。
-	app := newTestApp()
+	app := newTestApp(t)
 	p := &guiFakePlugin{
 		name:  "go",
 		shims: []string{"go"},
@@ -54,7 +76,7 @@ func TestPluginToToolInfo_FormFactorInferredCli(t *testing.T) {
 
 func TestPluginToToolInfo_NilManifestSafe(t *testing.T) {
 	// manifest 为 nil（Lua 插件/测试桩）必须安全，字段留空。
-	app := newTestApp()
+	app := newTestApp(t)
 	p := &guiFakePlugin{name: "lua-tool", shims: []string{"lua-tool"}}
 	info := app.pluginToToolInfo(p)
 	if info.FormFactor != nil {

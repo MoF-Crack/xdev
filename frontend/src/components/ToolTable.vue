@@ -5,10 +5,6 @@
       <td><button class="xdev-btn xdev-btn--secondary tool-table__identity" type="button" data-action="detail" :data-tool="tool.name" @click="$emit('open-detail', tool)"><strong>{{ tool.displayName || tool.name }}</strong><span class="form-badges"><span v-for="f in tool.formFactor || []" :key="f" class="form-badge" :data-form="f">{{ t('form.' + f) }}</span></span><small>{{ tool.description }}</small></button></td>
       <td>{{ tool.activeVersion || tool.localVersion || '-' }} <span v-if="isLocal(tool)" class="tool-table__note">{{ t('catalog.local_detected') }}</span></td><td class="tool-table__path">{{ tool.localPath || '-' }}</td>
       <td><div class="tool-table__actions">
-        <button class="xdev-btn xdev-btn--secondary" v-if="category === 'package-manager' && tool.canInstall && !tool.installed && tool.enableCommand" type="button" data-action="package-manager" :aria-busy="operatingTool === (tool.toolName || tool.name)" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit('install-package-manager', tool)">{{ operatingTool === (tool.toolName || tool.name) ? t('pm.installing') : t('pm.enable_button') }}</button>
-        <button class="xdev-btn xdev-btn--secondary" v-else-if="category === 'package-manager' && tool.canInstall && !tool.installed" type="button" data-action="package-manager" :title="tool.requiresAdmin ? t('pm.install_admin_tooltip') : undefined" :aria-busy="operatingTool === (tool.toolName || tool.name)" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit('install-package-manager', tool)">{{ operatingTool === (tool.toolName || tool.name) ? t('pm.installing') : (tool.requiresAdmin ? t('pm.install_admin_required') : t('btn.install')) }}</button>
-        <button class="xdev-btn xdev-btn--secondary" v-else-if="category === 'package-manager' && tool.canInstall && tool.installed && tool.hasUpdate" type="button" data-action="package-manager" :disabled="operatingTool === (tool.toolName || tool.name)" @click="$emit('update-package-manager', tool)">{{ t('btn.update') }}</button>
-        <button class="xdev-btn xdev-btn--secondary" v-else-if="category !== 'package-manager' && canInstall(tool)" type="button" data-action="install" @click="$emit('install', tool)">{{ t('btn.install') }}</button>
         <span v-if="!tool.installed && !tool.canInstall && tool.installHint" class="tool-table__hint">{{ tool.installHint }}</span>
         <button class="xdev-btn xdev-btn--secondary" type="button" data-action="favorite" :aria-label="favoriteLabel(tool)" :title="favoriteLabel(tool)" @click="$emit('toggle-favorite', tool)">{{ tool.isFavorite ? '★' : '☆' }}</button>
       </div></td>
@@ -17,9 +13,8 @@
 </template>
 
 <script setup>
-const props = defineProps({ operatingTool: { type: String, default: '' }, tools: { type: Array, required: true }, category: { type: String, default: '' }, t: { type: Function, required: true } });
-defineEmits(['open-detail', 'install', 'install-package-manager', 'update-package-manager', 'toggle-favorite']);
-function canInstall(tool) { return !tool.installed && tool.canInstall === true; }
+const props = defineProps({ tools: { type: Array, required: true }, t: { type: Function, required: true } });
+defineEmits(['open-detail', 'toggle-favorite']);
 function isLocal(tool) { return !tool.installed && Boolean(tool.localVersion || tool.localPath); }
 function favoriteLabel(tool) { return props.t(tool.isFavorite ? 'favorites.remove' : 'favorites.add'); }
 </script>

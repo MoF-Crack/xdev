@@ -10,7 +10,7 @@ import (
 // actionable Chinese hint (Clash Verge mixed-port 7897) instead of a raw
 // dial error when the configured proxy port is closed.
 func TestProxy_DeadProxyActionableMessage(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	// 127.0.0.1:1 is a closed port — the proxy dial fails immediately.
 	res := app.TestProxy("http://127.0.0.1:1", "https://api.github.com")
 	if res.Success {
@@ -29,7 +29,7 @@ func TestProxy_DeadProxyActionableMessage(t *testing.T) {
 // TestProxy_DeadProxyMessageRawWhenNotConnRefused verifies that non-proxy
 // errors keep the raw message (no misleading hint).
 func TestProxy_DeadProxyMessageRawWhenNotConnRefused(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	res := app.TestProxy("http://invalid proxy url with spaces", "https://api.github.com")
 	if res.Success {
 		t.Fatal("Success = true, want false")
@@ -58,7 +58,7 @@ func TestProbeLocalProxy_ClosedPort(t *testing.T) {
 // every result carries a URL and a message (network outcome is not
 // asserted — the probe is offline-friendly for closed ports).
 func TestProbeLocalProxies_Shape(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	results := app.ProbeLocalProxies()
 	if len(results) < 5 {
 		t.Fatalf("len(results) = %d, want >= 5 candidates", len(results))

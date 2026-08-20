@@ -133,9 +133,9 @@ export function InstallTool(arg1:string,arg2:string):Promise<void>;
 
 export function InstallToolConfirmed(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
-export function InstallToolWithForm(arg1:string,arg2:string,arg3:string):Promise<void>;
+export function InstallToolWithForm(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<void>;
 
-export function InstallToolWithOptions(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
+export function InstallToolWithOptions(arg1:string,arg2:string,arg3:boolean,arg4:boolean,arg5:string):Promise<void>;
 
 export function InstallUpdate(arg1:string,arg2:string):Promise<void>;
 
@@ -176,6 +176,8 @@ export function MigratePackageManager(arg1:string):Promise<void>;
 export function PauseDownload(arg1:string):Promise<void>;
 
 export function PreviewCustomToolVersions(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
+
+export function PreviewInstall(arg1:string,arg2:string):Promise<gui.InstallPreview>;
 
 export function ProbeLocalProxies():Promise<Array<gui.ProxyProbeResult>>;
 

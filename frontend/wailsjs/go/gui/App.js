@@ -262,12 +262,12 @@ export function InstallToolConfirmed(arg1, arg2, arg3) {
   return window['go']['gui']['App']['InstallToolConfirmed'](arg1, arg2, arg3);
 }
 
-export function InstallToolWithForm(arg1, arg2, arg3) {
-  return window['go']['gui']['App']['InstallToolWithForm'](arg1, arg2, arg3);
+export function InstallToolWithForm(arg1, arg2, arg3, arg4) {
+  return window['go']['gui']['App']['InstallToolWithForm'](arg1, arg2, arg3, arg4);
 }
 
-export function InstallToolWithOptions(arg1, arg2, arg3, arg4) {
-  return window['go']['gui']['App']['InstallToolWithOptions'](arg1, arg2, arg3, arg4);
+export function InstallToolWithOptions(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['gui']['App']['InstallToolWithOptions'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function InstallUpdate(arg1, arg2) {
@@ -348,6 +348,10 @@ export function PauseDownload(arg1) {
 
 export function PreviewCustomToolVersions(arg1, arg2, arg3) {
   return window['go']['gui']['App']['PreviewCustomToolVersions'](arg1, arg2, arg3);
+}
+
+export function PreviewInstall(arg1, arg2) {
+  return window['go']['gui']['App']['PreviewInstall'](arg1, arg2);
 }
 
 export function ProbeLocalProxies() {

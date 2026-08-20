@@ -112,6 +112,7 @@ func (e *LuaEngine) loadLuaBase(path string, specs luaCallSpecs, vfox bool) (*lu
 		shims = []string{name}
 	}
 
+	promotePluginMethods(L, pluginTable)
 	if fn := L.GetGlobal("available"); fn.Type() != lua.LTFunction {
 		return nil, fmt.Errorf("%s plugin %s: available() function not found", pluginLabel(vfox), path)
 	}
@@ -140,6 +141,23 @@ func pluginLabel(vfox bool) string {
 	return "lua"
 }
 
+// promotePluginMethods copies PLUGIN.available / PLUGIN.archive /
+// PLUGIN.env_vars (and vfox aliases) to globals when the global is
+// missing. Some templates nest the required functions inside PLUGIN.
+func promotePluginMethods(L *lua.LState, pluginTable lua.LValue) {
+	if pluginTable == nil || pluginTable.Type() != lua.LTTable {
+		return
+	}
+	for _, name := range []string{"available", "archive", "install", "env_vars", "env_keys"} {
+		if L.GetGlobal(name).Type() == lua.LTFunction {
+			continue
+		}
+		if field := L.GetField(pluginTable, name); field.Type() == lua.LTFunction {
+			L.SetGlobal(name, field)
+		}
+	}
+}
+
 // --- LuaEngine: shared call helpers ---
 
 // callAvailable runs the Lua available() function. For vfox plugins,
@@ -154,6 +172,7 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 	if err := L.DoFile(p.path); err != nil {
 		return nil, fmt.Errorf("load %s plugin: %w", pluginLabel(p.specs.vfoxFormat), err)
 	}
+	promotePluginMethods(L, L.GetGlobal("PLUGIN"))
 
 	// Security (M-12): Add execution timeout
 	done := make(chan error, 1)
@@ -217,6 +236,7 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 	if err := L.DoFile(p.path); err != nil {
 		return nil, fmt.Errorf("load %s plugin: %w", pluginLabel(p.specs.vfoxFormat), err)
 	}
+	promotePluginMethods(L, L.GetGlobal("PLUGIN"))
 
 	fnName := p.specs.archiveFn
 	// Security (M-12): Add execution timeout
@@ -280,6 +300,7 @@ func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[strin
 	if err := L.DoFile(p.path); err != nil {
 		return nil, fmt.Errorf("load %s plugin: %w", pluginLabel(p.specs.vfoxFormat), err)
 	}
+	promotePluginMethods(L, L.GetGlobal("PLUGIN"))
 
 	fnName := p.specs.envVarsFn
 	// Security (M-12): Add execution timeout

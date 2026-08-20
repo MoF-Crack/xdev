@@ -630,6 +630,26 @@ func TestArchiveForCurrentWithForm_EmptyFilterDoesNotRequireEmptyForm(t *testing
 	}
 }
 
+func TestAvailableArchiveForms_DedupAndOrder(t *testing.T) {
+	tool := &Tool{
+		FormFactor: []string{"gui", "cli", "tui"},
+		VersionList: []Version{
+			{Archives: []Archive{
+				{Form: "cli"},
+				{Form: "CLI"},
+				{Form: ""},
+			}},
+		},
+	}
+	got := tool.AvailableArchiveForms()
+	if len(got) != 1 || got[0] != "cli" {
+		t.Errorf("AvailableArchiveForms = %v, want [cli]", got)
+	}
+	if !tool.HasFormSpecificArchives() {
+		t.Error("HasFormSpecificArchives should be true when any archive has Form")
+	}
+}
+
 func TestDefaultVersionPicksLatest(t *testing.T) {
 	t1 := &Tool{
 		Latest: "2.0.0",
@@ -1196,5 +1216,32 @@ func TestGenerateCustomManifest_TgzDetect(t *testing.T) {
 	arch := tool.VersionList[0].Archives[0]
 	if arch.Format != "tar.gz" {
 		t.Errorf("Format = %q, want %q (tgz should map to tar.gz)", arch.Format, "tar.gz")
+	}
+}
+
+func TestSortVersionsByRelease_NewestFirst(t *testing.T) {
+	versions := []Version{
+		{Version: "1.18.11", Release: "2026-08-01"},
+		{Version: "1.18.10", Release: "2026-07-30"},
+		{Version: "1.18.18"}, // sniffed, no date — still newest by semver
+		{Version: "1.1.0", Release: "2025-01-01"},
+	}
+	SortVersionsByRelease(versions)
+	want := []string{"1.18.18", "1.18.11", "1.18.10", "1.1.0"}
+	for i, v := range want {
+		if versions[i].Version != v {
+			t.Errorf("sorted[%d] = %q, want %q", i, versions[i].Version, v)
+		}
+	}
+}
+
+func TestSortVersionsByRelease_DatedNewestBeatsOlderSemver(t *testing.T) {
+	versions := []Version{
+		{Version: "2.0.0", Release: "2025-01-01"},
+		{Version: "1.9.0", Release: "2026-08-01"},
+	}
+	SortVersionsByRelease(versions)
+	if versions[0].Version != "1.9.0" {
+		t.Errorf("got %q first, want dated-newer 1.9.0", versions[0].Version)
 	}
 }

@@ -1,5 +1,6 @@
-// app_install.go implements the install/use/uninstall/download operations
-// for the GUI, with real-time progress reporting via Wails events.
+// app_install.go is the install-session module behind the Wails App
+// adapter (Spec 029 B2/B3). One InstallSpec drives catalog tools,
+// package-manager scripts, and sub-tool enable/install.
 //
 // # Install Flow
 //
@@ -36,65 +37,76 @@ import (
 	"github.com/xmdemt/xdev/internal/util"
 )
 
-// InstallTool installs a tool at the specified version.
-// Progress events are emitted as "installProgress" events.
-// If the version is sniff-discovered (Unverified: true), it
-// automatically prompts the user with a confirmation dialog
-// (FR-018).  This avoids requiring the frontend to handle the
-// unverified case.
-func (a *App) InstallTool(toolName, version string) error {
-	return a.InstallToolWithOptions(toolName, version, false, false)
-}
-
-// InstallToolWithForm installs a tool at the specified version, filtering
-// archives by form factor (Spec 025). When formFilter is non-empty (e.g.
-// "gui" or "cli"), the archive selection prefers archives whose Form
-// field matches formFilter, falling back to Form=="" (form-agnostic).
+// InstallSpec is the single install-session input (Spec 029 B3).
+// Wails wrappers (InstallTool / WithForm / Confirmed / Repair /
+// InstallPackageManager / InstallSubTool) all forward here so the
+// frontend keeps its existing bindings while the implementation has
+// one interface.
 //
-// This is used by the frontend form selector for tools that have
-// form-specific archives (HasFormSpecificArchives=true, e.g. OpenCode's
-// Desktop App vs CLI). Tools without form-specific archives ignore
-// formFilter and behave identically to InstallTool.
-func (a *App) InstallToolWithForm(toolName, version, formFilter string) error {
-	a.pendingFormFilterMu.Lock()
-	a.pendingFormFilter = formFilter
-	a.pendingFormFilterMu.Unlock()
-	// Ensure the filter is cleared after install (success or failure).
-	defer func() {
-		a.pendingFormFilterMu.Lock()
-		a.pendingFormFilter = ""
-		a.pendingFormFilterMu.Unlock()
-	}()
-	return a.InstallToolWithOptions(toolName, version, false, false)
+// Kind selects the pipeline:
+//   - "" / "tool": catalog download → extract → activate
+//   - "package-manager": official script (scoop/brew/choco) or catalog tool
+//   - "sub-tool": corepack enable / pip|uv|npm method
+type InstallSpec struct {
+	Tool      string
+	Version   string
+	Form      string
+	Confirmed bool
+	Force     bool
+	Kind      string // "", "tool", "package-manager", "sub-tool"
+	Method    string // sub-tool install method (pip / uv / corepack / npm)
 }
 
-// InstallToolConfirmed is like InstallTool but with an explicit
-// confirmed flag for sniff-discovered (unverified) versions.
-// If confirmed is false and the version is unverified, it shows a
-// Wails message dialog to ask the user for confirmation before
-// proceeding.
+// InstallTool installs a tool at the specified version.
+func (a *App) InstallTool(toolName, version string) error {
+	return a.install(InstallSpec{Tool: toolName, Version: version})
+}
+
+// InstallToolWithForm installs a tool, filtering archives by form factor.
+func (a *App) InstallToolWithForm(toolName, version, formFilter string, confirmed bool) error {
+	return a.install(InstallSpec{Tool: toolName, Version: version, Form: formFilter, Confirmed: confirmed})
+}
+
+// InstallToolConfirmed is like InstallTool with an explicit confirmed flag.
 func (a *App) InstallToolConfirmed(toolName, version string, confirmed bool) error {
-	return a.InstallToolWithOptions(toolName, version, confirmed, false)
+	return a.install(InstallSpec{Tool: toolName, Version: version, Confirmed: confirmed})
 }
 
-// RepairInstall force-reinstalls an existing installation (complete or
-// incomplete) at the same version. The frontend is responsible for
-// showing a confirmation dialog (Naive UI) before calling this method
-// with force=true — this avoids the native Wails MessageDialog which can
-// be hidden behind the window.
+// RepairInstall force-reinstalls an existing installation.
 func (a *App) RepairInstall(toolName, version string) error {
-	return a.InstallToolWithOptions(toolName, version, true, true)
+	return a.install(InstallSpec{Tool: toolName, Version: version, Confirmed: true, Force: true})
 }
 
-// InstallToolWithOptions is the shared install implementation.
+// InstallToolWithOptions is kept for older callers; prefer Install.
+func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force bool, formFilter string) error {
+	return a.install(InstallSpec{Tool: toolName, Version: version, Form: formFilter, Confirmed: confirmed, Force: force})
+}
+
+// install runs one install-session from spec (not exported: keep Wails
+// bindings on the existing string wrappers).
+func (a *App) install(spec InstallSpec) error {
+	switch spec.Kind {
+	case "", "tool":
+		if spec.Tool == "" {
+			return fmt.Errorf("install spec: tool is required")
+		}
+		return a.installWithOptions(spec.Tool, spec.Version, spec.Confirmed, spec.Force, spec.Form)
+	case "package-manager":
+		return a.installPackageManager(spec)
+	case "sub-tool":
+		return a.installSubTool(spec)
+	default:
+		return fmt.Errorf("install spec: unknown kind %q", spec.Kind)
+	}
+}
+
+// installWithOptions is the shared install implementation.
 //
 // confirmed skips the unverified-version confirmation dialog; force
 // removes any existing install directory (complete or incomplete) before
-// downloading. When the version is already installed and intact (and no
-// force is requested), the tool is only re-activated — no download
-// happens. When it is installed but incomplete, a native dialog asks the
-// user whether to repair by reinstalling the same version.
-func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force bool) error {
+// downloading. formFilter, when non-empty, selects a form-specific
+// archive and does not silently fall back to a different form.
+func (a *App) installWithOptions(toolName, version string, confirmed, force bool, formFilter string) error {
 	p, err := a.mustGetPlugin(toolName)
 	if err != nil {
 		return err
@@ -102,26 +114,19 @@ func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force 
 	cfg := a.getCfg()
 
 	// Check if this version is sniff-discovered (Unverified: true)
-	// and requires user confirmation (FR-018).
-	cat, catErr := manifest.LoadCatalog(cfg.Core.ManifestDir)
-	if catErr == nil {
-		if t, ok := cat.Tool(toolName); ok {
-			if v, found := t.FindVersion(version); found && v.Unverified {
-				if !confirmed {
-					// Show Wails dialog for user confirmation.
-					dialogOpts := wailsRuntime.MessageDialogOptions{
-						Type:          "warning",
-						Title:         "Unverified Version",
-						Message:       fmt.Sprintf("Version %s@%s was discovered by sniffing.\n\nThe archive URL has not been verified — downloads may fail.\n\nContinue with installation?", toolName, version),
-						Buttons:       []string{"Yes", "No"},
-						DefaultButton: "No",
-					}
-					choice, err := wailsRuntime.MessageDialog(a.ctx, dialogOpts)
-					if err != nil || choice != "Yes" {
-						return fmt.Errorf("installation cancelled by user")
-					}
-				}
-			}
+	// and requires user confirmation (FR-018). Use the in-memory
+	// catalog / plugin manifest — do not re-parse every YAML here.
+	if !confirmed && a.lookupVersionUnverified(toolName, version) {
+		dialogOpts := wailsRuntime.MessageDialogOptions{
+			Type:          "warning",
+			Title:         "Unverified Version",
+			Message:       fmt.Sprintf("Version %s@%s was discovered by sniffing.\n\nThe archive URL has not been verified — downloads may fail.\n\nContinue with installation?", toolName, version),
+			Buttons:       []string{"Yes", "No"},
+			DefaultButton: "No",
+		}
+		choice, err := wailsRuntime.MessageDialog(a.ctx, dialogOpts)
+		if err != nil || choice != "Yes" {
+			return fmt.Errorf("installation cancelled by user")
 		}
 	}
 
@@ -144,16 +149,10 @@ func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force 
 	if err != nil {
 		return err
 	}
-	// Spec 025: 形态筛选。InstallToolWithForm 设置 pendingFormFilter，
-	// 此处取出并在 archive 选择时应用。非空时优先匹配 Form==filter
-	// 的 archive，降级到 Form==""（form-agnostic，向后兼容）。
-	a.pendingFormFilterMu.Lock()
-	formFilter := a.pendingFormFilter
-	a.pendingFormFilterMu.Unlock()
-
 	var arch *manifest.Archive
 	if formFilter != "" {
-		// 形态筛选路径：通过 manifest.Version.ArchiveForCurrentWithForm
+		// 形态筛选路径：必须命中 Form==filter 或 Form=="" 的 archive。
+		// 找不到时直接报错，禁止静默回退到另一种形态的默认包。
 		if g, ok := p.(*plugin.Generic); ok && g.M != nil {
 			if v, found := g.M.FindVersion(ver); found {
 				if a2, ok2 := v.ArchiveForCurrentWithForm(plugin.HostOS(), plugin.HostArch(), formFilter); ok2 {
@@ -161,9 +160,10 @@ func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force 
 				}
 			}
 		}
-	}
-	if arch == nil {
-		// 无 formFilter 或 Generic 类型不匹配或筛选未命中 → 回退到默认路径
+		if arch == nil {
+			return fmt.Errorf("no archive for %s@%s with form %q on %s/%s", toolName, ver, formFilter, plugin.HostOS(), plugin.HostArch())
+		}
+	} else {
 		arch, err = p.ArchiveFor(ver)
 		if err != nil {
 			return err
@@ -229,24 +229,29 @@ func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force 
 	manifestSig, isThirdParty := ins.LoadManifestSignature(toolName)
 
 	dlOpts := downloader.Options{
-		URL:               url,
-		Dest:              dest,
-		ExpectedSHA:       arch.SHA256,
-		URLShaMap:         urlShaMap,
-		ProgressDesc:      fmt.Sprintf("%s@%s", toolName, ver),
-		Cookie:            util.CookieFromInstallArgs(arch.InstallArgs),
-		ManifestSignature: manifestSig,
-		IsThirdParty:      isThirdParty,
-		ProxyURL:          cfg.GetProxyURL("https"),
-		FallbackURLs:      fallbackURLs,
+		URL:                  url,
+		Dest:                 dest,
+		ExpectedSHA:          arch.SHA256,
+		URLShaMap:            urlShaMap,
+		ProgressDesc:         fmt.Sprintf("%s@%s", toolName, ver),
+		Cookie:               util.CookieFromInstallArgs(arch.InstallArgs),
+		ManifestSignature:    manifestSig,
+		IsThirdParty:         isThirdParty,
+		AllowPlaceholderTOFU: arch.SHA256 == "" || util.IsAllZeroHash(arch.SHA256),
+		ProxyURL:             cfg.GetProxyURL("https"),
+		FallbackURLs:         fallbackURLs,
 		OnProgress: func(downloaded, total int64, elapsed time.Duration) {
-			// 下载进度通过事件发送到前端
+			// Content-Length 缺失时 total<=0，避免进度条变成 NaN。
+			pct := -1.0
+			if total > 0 {
+				pct = float64(downloaded) / float64(total) * 100
+			}
 			wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
 				TaskID:  taskID,
 				Tool:    toolName,
 				Version: version,
 				Phase:   "Downloading...",
-				Percent: float64(downloaded) / float64(total) * 100,
+				Percent: pct,
 				Speed:   util.HumanSpeedStr(downloaded, elapsed),
 				ETA:     util.HumanETAStr(downloaded, total, elapsed),
 			})
@@ -400,17 +405,73 @@ func (a *App) InstallToolWithOptions(toolName, version string, confirmed, force 
 // InstallToolConfirmed with confirmed=true, avoiding the native Wails
 // MessageDialog which can be hidden behind the window.
 func (a *App) IsVersionUnverified(toolName, version string) bool {
-	cfg := a.getCfg()
-	cat, err := manifest.LoadCatalog(cfg.Core.ManifestDir)
-	if err != nil {
-		return false
+	return a.lookupVersionUnverified(toolName, version)
+}
+
+// PreviewInstall returns the cheap preflight the install button needs
+// (unverified flag, form choices, existing-install integrity) in one
+// round-trip. It must not scan categories or re-parse the catalog.
+func (a *App) PreviewInstall(toolName, version string) InstallPreview {
+	preview := InstallPreview{
+		Tool:      toolName,
+		Version:   version,
+		Integrity: a.CheckInstallIntegrity(toolName, version),
 	}
-	t, ok := cat.Tool(toolName)
-	if !ok {
+	if t := a.lookupToolManifest(toolName); t != nil {
+		preview.Unverified = versionUnverified(t, version)
+		preview.HasFormSpecificArchives = t.HasFormSpecificArchives()
+		preview.AvailableForms = t.AvailableArchiveForms()
+	}
+	return preview
+}
+
+func (a *App) lookupVersionUnverified(toolName, version string) bool {
+	return versionUnverified(a.lookupToolManifest(toolName), version)
+}
+
+func versionUnverified(t *manifest.Tool, version string) bool {
+	if t == nil {
 		return false
 	}
 	v, found := t.FindVersion(version)
 	return found && v.Unverified
+}
+
+func (a *App) lookupToolManifest(toolName string) *manifest.Tool {
+	if a.cat != nil {
+		if t, ok := a.cat.Tool(toolName); ok {
+			return t
+		}
+	}
+	if p, err := a.mustGetPlugin(toolName); err == nil {
+		return p.Manifest()
+	}
+	return nil
+}
+
+// reloadCatalog reloads on-disk manifests (including sniff merges) into
+// a.cat and swaps Generic plugin pointers so subsequent installs see
+// newly discovered versions without restarting.
+func (a *App) reloadCatalog() error {
+	cfg := a.getCfg()
+	cat, err := manifest.LoadCatalog(cfg.Core.ManifestDir)
+	if err != nil {
+		return err
+	}
+	a.cat = cat
+	if a.registry == nil {
+		return nil
+	}
+	for _, t := range cat.Tools() {
+		p, ok := a.registry.Get(t.Name)
+		if !ok {
+			continue
+		}
+		if setter, ok := p.(interface{ SetManifest(*manifest.Tool) }); ok {
+			setter.SetManifest(t)
+		}
+	}
+	return nil
 }
 func (a *App) UseVersion(toolName, version string) error {
 	p, err := a.mustGetPlugin(toolName)

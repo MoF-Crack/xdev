@@ -94,6 +94,15 @@ func (g *Generic) Manifest() *manifest.Tool { return g.M }
 func (g *Generic) Shims() []string          { return append([]string{}, g.M.Shims...) }
 func (g *Generic) DefaultVersion() string   { return g.M.DefaultVersion() }
 
+// SetManifest replaces the in-memory tool manifest after a sniff merge
+// so ResolveVersion / ArchiveFor see newly discovered versions without
+// restarting the process.
+func (g *Generic) SetManifest(m *manifest.Tool) {
+	if m != nil {
+		g.M = m
+	}
+}
+
 // ResolveVersion translates a user spec ("latest", "3.12", "^3.11")
 // into a concrete version string that exists in the manifest.
 func (g *Generic) ResolveVersion(spec string) (string, error) {
@@ -113,6 +122,9 @@ func (g *Generic) ArchiveFor(version string) (*manifest.Archive, error) {
 	}
 	a, ok := v.ArchiveForCurrent(HostOS(), HostArch())
 	if !ok {
+		if len(v.Archives) == 0 {
+			return nil, fmt.Errorf("no download URL for %s@%s on %s/%s — sniff found the version but could not derive an archive URL from the existing manifest (re-sniff after updating the tool, or install a pinned version)", g.Name(), version, HostOS(), HostArch())
+		}
 		return nil, fmt.Errorf("no archive for %s/%s in %s", HostOS(), HostArch(), version)
 	}
 	return a, nil

@@ -736,6 +736,10 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 		appended++
 	}
 
+	if appended > 0 {
+		manifest.SortVersionsByRelease(existing.VersionList)
+	}
+
 	// Phase 2B: auto-update latest from discovered versions.
 	// Iterate all discovered versions; if any is newer than the current
 	// latest, promote it.  Non-semver versions (e.g. "r29") are safely

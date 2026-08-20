@@ -28,11 +28,10 @@
 //
 // # Windows Considerations
 //
-// On Windows, shims are full copies of the xdev binary (both <name> and
-// <name>.exe) because Windows shells auto-append .exe. This trades disk
-// space for reliability — no Developer Mode is required for symlinks.
-// FindInDir checks for .exe, .cmd, and .bat extensions to support
-// Node.js .cmd shims and similar patterns.
+// On Windows, shims prefer a hard link to the xdev binary (same volume,
+// no Developer Mode). If CreateHardLink fails (cross-volume, privilege),
+// we copy. We also write <name>.exe so CreateProcess/Cmd PATH lookups
+// work. FindInDir checks .exe/.cmd/.bat for Node.js shims.
 package shim
 
 import (
@@ -351,19 +350,15 @@ func exeSuffix() string {
 // InstallShim creates a shim entry in shimDir pointing at selfPath.
 //
 // The behaviour depends on the OS:
-//   - Unix  : we create a symlink (one byte in size).
-//   - Windows: we copy the xdev binary. On Windows we ALSO create a copy
-//     with a `.exe` suffix so that the standard CreateProcess/Cmd API
-//     can find the shim via PATH lookups.
+//   - Unix  : symlink.
+//   - Windows: hard link to xdev.exe, falling back to a copy. Also write
+//     <name>.exe for CreateProcess/Cmd PATH lookups.
 //
 // Windows file-lock handling: a running process locks its .exe against
 // overwrite/deletion, but Windows allows **renaming** a file that is
-// open. So when the shim needs updating we rename the old one to
-// <name>.old (the OS will reclaim it when the process exits), then copy
-// the new one into place. When the shim already matches (same size as
-// the source — shims are identical copies of xdev.exe), we skip the
-// copy entirely, avoiding the lock issue in the common case where xdev
-// hasn't changed.
+// open. Updating a copy-shim: rename old to <name>.old, then
+// hardlink/copy. If dst is already a hard link to selfPath (SameFile),
+// skip.
 //
 // Security (F-08): the name is validated before any filesystem write —
 // a malicious manifest must not be able to write outside shimDir via
@@ -395,43 +390,34 @@ func InstallShim(shimDir, name, selfPath string) error {
 	return os.Symlink(selfPath, filepath.Join(shimDir, name))
 }
 
-// installShimWindows copies selfPath to dst on Windows with lock-safe
-// semantics:
-//  1. If dst doesn't exist → copy directly.
-//  2. If dst exists and has the same size as selfPath → skip (shim is
-//     already up-to-date; avoids touching a locked file).
-//  3. If dst exists and differs → rename dst to dst+".old" (Windows
-//     allows renaming open files), then copy the new file. The .old
-//     file is left behind and will be reclaimed by the OS when the
-//     process using it exits; we also try a best-effort Remove.
+// installShimWindows places a Windows shim at dst.
+// Prefer a hard link (one inode, all aliases share xdev.exe). If that
+// fails, copy. Existing dst that is already the same file is a no-op.
 func installShimWindows(selfPath, dst string) error {
 	srcInfo, err := os.Stat(selfPath)
 	if err != nil {
 		return fmt.Errorf("shim source %s: %w", selfPath, err)
 	}
 
-	// Case 1 & 2: check existing destination.
 	if dstInfo, statErr := os.Stat(dst); statErr == nil {
-		if dstInfo.Size() == srcInfo.Size() && !dstInfo.IsDir() {
-			// Same size → assume identical (shims are copies of the same
-			// binary). Skip to avoid touching a potentially-locked file.
+		if !dstInfo.IsDir() && os.SameFile(srcInfo, dstInfo) {
 			return nil
 		}
-		// Case 3: content differs — rename old out of the way.
-		// Windows allows renaming a file even while it's open/running.
 		oldPath := dst + ".old"
-		_ = os.Remove(oldPath) // clean up a previous .old if present
+		_ = os.Remove(oldPath)
 		if renameErr := os.Rename(dst, oldPath); renameErr != nil {
-			// Rename failed (extremely rare) — fall back to direct copy
-			// which will surface the sharing-violation error.
-			return util.CopyFile(selfPath, dst)
+			return placeWindowsShim(selfPath, dst)
 		}
-		// Best-effort: try to remove the renamed old file. If it's still
-		// locked by a running process, leave it — the OS reclaims it on
-		// process exit. Never fail because of this.
 		_ = os.Remove(oldPath)
 	}
 
+	return placeWindowsShim(selfPath, dst)
+}
+
+func placeWindowsShim(selfPath, dst string) error {
+	if err := createHardLink(dst, selfPath); err == nil {
+		return nil
+	}
 	return util.CopyFile(selfPath, dst)
 }
 

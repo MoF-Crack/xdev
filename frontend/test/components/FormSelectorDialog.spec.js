@@ -8,6 +8,21 @@ const modalStub = { props: ['positiveButtonProps'], emits: ['positive-click', 'n
 const checkboxStub = { props: ['checked'], emits: ['update:checked'], template: '<label><input type="checkbox" :checked="checked" @change="$emit(\'update:checked\', $event.target.checked)" /><slot /></label>' };
 
 describe('FormSelectorDialog', () => {
+  it('prefers availableForms over formFactor declarations', async () => {
+    const wrapper = mount(FormSelectorDialog, {
+      props: { show: true, tool: { name: 'opencode', displayName: 'OpenCode', formFactor: ['gui', 'cli', 'tui'], availableForms: ['cli'] }, t },
+      global: { stubs: {
+        Modal: modalStub,
+        Checkbox: checkboxStub,
+        Space: { template: '<div><slot /></div>' },
+      } },
+    });
+    expect(wrapper.findAll('input')).toHaveLength(1);
+    await wrapper.get('[data-action="confirm"]').trigger('click');
+    expect(wrapper.emitted('confirm')).toEqual([['cli']]);
+    wrapper.unmount();
+  });
+
   it('selects the first form by default and emits the selected form', async () => {
     const wrapper = mount(FormSelectorDialog, {
       props: { show: true, tool: { name: 'opencode', displayName: 'OpenCode', formFactor: ['gui', 'cli', 'tui'] }, t },

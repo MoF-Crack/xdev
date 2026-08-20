@@ -171,14 +171,47 @@ func RemoveFromUserPath(dir string) error {
 
 	parts := strings.Split(current, ";")
 	var kept []string
+	target := filepath.Clean(dir)
 	for _, p := range parts {
-		if filepath.Clean(p) != dir {
+		if !strings.EqualFold(filepath.Clean(p), target) {
 			kept = append(kept, p)
 		}
 	}
 
 	newPath := strings.Join(kept, ";")
 	if err := WriteUserPath(newPath); err != nil {
+		return fmt.Errorf("write user PATH: %w", err)
+	}
+	BroadcastEnvironmentChange()
+	return nil
+}
+
+// RemoveFromUserPathPrefix 删除用户 PATH 中所有以 prefix 开头的条目
+// （Windows 大小写不敏感）。用于清掉测试残留的 TempDir 路径。
+func RemoveFromUserPathPrefix(prefix string) error {
+	prefix = strings.ToLower(filepath.Clean(prefix))
+	if prefix == "" || prefix == "." {
+		return fmt.Errorf("refusing to remove PATH entries with empty prefix")
+	}
+	current, err := ReadUserPath()
+	if err != nil {
+		return fmt.Errorf("read user PATH: %w", err)
+	}
+	parts := strings.Split(current, ";")
+	var kept []string
+	changed := false
+	for _, p := range parts {
+		cleaned := strings.ToLower(filepath.Clean(p))
+		if cleaned == prefix || strings.HasPrefix(cleaned, prefix+string(os.PathSeparator)) {
+			changed = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if !changed {
+		return nil
+	}
+	if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
 		return fmt.Errorf("write user PATH: %w", err)
 	}
 	BroadcastEnvironmentChange()
@@ -1071,6 +1104,13 @@ func CleanupUserPath(shimDir string, pathMode string) (bool, error) {
 		// 新实现使用 current/xdev junction，不再需要根目录在 PATH 中
 		// 条件：路径以 \xdev 结尾，且不包含子目录（即恰好是根目录）
 		if isXDevRoot(normalized) {
+			changed = true
+			continue
+		}
+
+		// Skip leftover InitConfig deadlock-test TempDir entries that
+		// previous test runs wrote into the real user PATH.
+		if strings.Contains(normalized, "\\testinitconfig_nodeadlock") {
 			changed = true
 			continue
 		}

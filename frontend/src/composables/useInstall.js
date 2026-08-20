@@ -68,7 +68,7 @@ export function useInstall({ onComplete, onError: reportError, onCancel } = {}) 
     error.value = null;
     try {
       if (formFilter) {
-        await window.go.gui.App.InstallToolWithForm(tool, version, formFilter);
+        await window.go.gui.App.InstallToolWithForm(tool, version, formFilter, confirmed);
       } else if (confirmed) {
         await window.go.gui.App.InstallToolConfirmed(tool, version, true);
       } else {

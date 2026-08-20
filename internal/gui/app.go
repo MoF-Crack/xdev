@@ -3,10 +3,17 @@
 //
 // # App Struct
 //
-// The App struct is the central backend object exposed to the Vue 3 frontend
-// via Wails bindings. Every exported method on App becomes callable from
-// JavaScript as `window.go.main.App.<Method>()`. The struct holds references
-// to the config, plugin registry, manifest catalog, and runtime state.
+// App is the Wails desktop adapter (Spec 029 B2). Exported methods stay
+// on App so Wails keeps generating the same JS bindings; the
+// implementation is grouped into four modules:
+//   - catalog query  — app_tool_query.go
+//   - install session — app_install.go (InstallSpec)
+//   - host scan      — internal/hostscan + app_local_detect.go
+//   - prefs / env    — app_config.go, app_env_vars.go, app_profile.go
+//
+// Every exported method on App becomes callable from JavaScript as
+// `window.go.gui.App.<Method>()`. The struct holds references to the
+// config, plugin registry, manifest catalog, and runtime state.
 //
 // # Data Types
 //
@@ -21,12 +28,12 @@
 //
 // App methods are spread across multiple files for maintainability:
 //   - app.go: core types, startup/shutdown, caching, debug
-//   - app_tool_query.go: GetCategories, GetToolsByCategory, etc.
-//   - app_install.go: InstallTool, UseVersion, UninstallVersion, etc.
-//   - app_local_detect.go: ScanLocalEnvironments, ScanLocalTools
+//   - app_tool_query.go: catalog query (GetCategories, GetToolsByCategory)
+//   - app_install.go: install session (InstallSpec + Wails wrappers)
+//   - app_local_detect.go: host scan adapter (ScanLocalEnvironments, PMs)
 //   - app_migration.go: IsInitialized, InitConfig, MigrateLocalTool, etc.
-//   - app_config.go: GetConfig, SetMirrorConfig, GetPathMode, etc.
-//   - app_env_vars.go: GetEnvVars, SetEnvVar, DeleteEnvVar, etc.
+//   - app_config.go: prefs (GetConfig, SetMirrorConfig, GetPathMode)
+//   - app_env_vars.go: prefs (GetEnvVars, SetEnvVar, DeleteEnvVar)
 //   - app_project.go: GetProjectConfig, SetProjectTool, RunProjectTask, etc.
 //   - app_favorites.go: GetFavorites, AddFavorite, RemoveFavorite
 //   - app_profile.go: ExportProfile, ImportProfile
@@ -92,9 +99,18 @@ type ToolInfo struct {
 	// 仅对 script-installable 包管理器（choco）有意义；前端按钮文案
 	// 改为「以管理员安装」并附 tooltip。
 	RequiresAdmin bool `json:"requiresAdmin,omitempty"`
+	// InstallCommand 官方安装脚本（scoop/brew/choco），供确认对话框展示。
+	InstallCommand string `json:"installCommand,omitempty"`
+	// AvailableForms 该工具 archive 上实际标注过的形态（去重），供形态选择器
+	// 使用。与 FormFactor 声明不同：OpenCode 声明了 gui/cli/tui，但 archive
+	// 目前只有 cli，选择器应只列出 cli。
+	AvailableForms []string `json:"availableForms,omitempty"`
 	// Spec 026: 附属工具动态安装支持（与 PackageManagerInfo 对齐）。
 	EnableCommand    string              `json:"enableCommand,omitempty"`
 	InstallMethods   []InstallMethodInfo `json:"installMethods,omitempty"`
+	// OfferSubToolInstall 为 true 时，即使 Installed=true 也显示启用/安装
+	// （仅 yarn/pnpm：PATH 上有系统副本，但 xdev Node 尚未启用）。
+	OfferSubToolInstall bool `json:"offerSubToolInstall,omitempty"`
 	// Spec 027: 多实例检测（与 PackageManagerInfo 对齐）。
 	Instances []PMInstanceInfo `json:"instances,omitempty"`
 }
@@ -121,6 +137,18 @@ type IntegrityInfo struct {
 	OK      bool     `json:"ok"`
 	Reason  string   `json:"reason"`
 	Missing []string `json:"missing"`
+}
+
+// InstallPreview is a cheap preflight for the install button. The
+// frontend uses it to decide whether to show a confirmation dialog
+// without scanning every category or re-parsing the whole catalog.
+type InstallPreview struct {
+	Tool                    string        `json:"tool"`
+	Version                 string        `json:"version"`
+	Unverified              bool          `json:"unverified"`
+	HasFormSpecificArchives bool          `json:"hasFormSpecificArchives"`
+	AvailableForms          []string      `json:"availableForms,omitempty"`
+	Integrity               IntegrityInfo `json:"integrity"`
 }
 
 // CategoryInfo represents a tool category.
@@ -280,7 +308,8 @@ type PackageManagerInfo struct {
 	InstallHint string `json:"installHint"` // hint for how to install (e.g. "Install Node.js")
 	// Spec 025: script install 支持。RequiresAdmin 为 true 时，前端按钮文案
 	// 改为「以管理员安装」并提示用户。
-	RequiresAdmin bool `json:"requiresAdmin"`
+	RequiresAdmin  bool   `json:"requiresAdmin"`
+	InstallCommand string `json:"installCommand,omitempty"`
 	// Spec 026: 附属工具动态安装支持。
 	// EnableCommand 非空时，该工具是"可启用附属工具"（如 yarn/pnpm 通过
 	// corepack enable 启用）。前端显示「启用」按钮，点击后调 InstallSubTool。
@@ -295,6 +324,9 @@ type PackageManagerInfo struct {
 	// Spec 027: 多实例检测——列出所有检测到的实例（xdev 管理的 + 系统安装的）。
 	// 前端详情抽屉显示为多版本列表，非 xdev 管理实例旁显示「迁移」按钮。
 	Instances []PMInstanceInfo `json:"instances,omitempty"`
+	// OfferSubToolInstall 为 true 时，即使 Installed=true 也显示启用/安装
+	// （仅 yarn/pnpm：PATH 上有系统副本，但 xdev Node 尚未启用）。
+	OfferSubToolInstall bool `json:"offerSubToolInstall,omitempty"`
 }
 
 // PMInstanceInfo 描述包管理器的一个检测实例（Spec 027）。
@@ -352,7 +384,9 @@ type AboutInfo struct {
 // deleteWindowsEnvVar) from concurrent access during parallel migrations.
 var regMu sync.Mutex
 
-// App is the Wails backend struct that exposes methods to the frontend.
+// App is the Wails desktop adapter: a thin exported facade over catalog
+// query, install session, host scan, and prefs. New Wails bindings are
+// not added in Spec 029; existing wrappers forward into those modules.
 type App struct {
 	ctx      context.Context
 	cfg      *config.Config
@@ -411,12 +445,6 @@ type App struct {
 	isoMu       sync.Mutex
 	isoMode     isolator.IsolationMode
 	isoInstance isolator.Isolator
-
-	// Spec 025: pendingFormFilter 用于 InstallToolWithForm 传递形态筛选
-	// 到 InstallToolWithOptions 的 archive 选择点。非空时 ArchiveForWithForm
-	// 优先匹配该形态的 archive。每次安装完成后清空（一次性使用）。
-	pendingFormFilter   string
-	pendingFormFilterMu sync.Mutex
 }
 
 // toolsCacheEntry 缓存某分类的工具列表结果。
@@ -425,10 +453,12 @@ type toolsCacheEntry struct {
 	Expire  time.Time
 }
 
-// toolScanCacheFile 返回工具扫描缓存文件路径
-func toolScanCacheFile() string {
-	cfg, _ := config.Load("")
-	return filepath.Join(cfg.Core.CacheDir, "tool_scan_cache.json")
+// signalLocalReady 关闭 localReady，让 waitForLocalCache 不再空等。
+// loadLocalCache 命中磁盘缓存、以及 refreshLocalCache 完成时都要调用。
+func (a *App) signalLocalReady() {
+	a.localReadyOnce.Do(func() {
+		close(a.localReady)
+	})
 }
 
 // NewApp creates a new App instance.
@@ -482,8 +512,11 @@ func (a *App) domReady(ctx context.Context) {
 	wailsRuntime.WindowShow(ctx)
 	logInfo("[domReady] WindowShow() completed, window should now be visible")
 
-	// 先尝试从缓存加载
-	a.loadLocalCache()
+	// 先尝试从缓存加载；命中后立刻 signalLocalReady，避免
+	// waitForLocalCache 在 refresh 完成前白等 500ms。
+	if a.loadLocalCache() {
+		a.signalLocalReady()
+	}
 	a.loadFavorites()
 	a.loadIgnored()
 
@@ -507,19 +540,18 @@ func (a *App) domReady(ctx context.Context) {
 		}
 	}()
 
-	// 使用可取消的 context，在 shutdown 时取消延迟 goroutine
-	refreshCtx, cancel := context.WithCancel(context.Background())
+	// 后台立即刷新本地探测（不再等 15s）。shutdown 取消。
+	refreshCtx, cancel := context.WithCancel(a.rootContext())
 	a.cancelRefresh = cancel
 	go func() {
-		logInfo("[domReady] scheduling refreshLocalCache in 15 seconds")
 		select {
-		case <-time.After(15 * time.Second):
-			logInfo("[domReady] starting delayed refreshLocalCache")
-			a.refreshLocalCache()
-			logInfo("[domReady] refreshLocalCache completed")
 		case <-refreshCtx.Done():
-			logInfo("[domReady] delayed refreshLocalCache cancelled")
+			return
+		default:
 		}
+		logInfo("[domReady] starting refreshLocalCache")
+		a.refreshLocalCache()
+		logInfo("[domReady] refreshLocalCache completed")
 	}()
 }
 
@@ -585,6 +617,7 @@ func (a *App) loadLocalCache() bool {
 func (a *App) refreshLocalCache() {
 	tools := a.registry.All()
 	newMap := make(map[string]localInfo, len(tools))
+	shimDir := a.getCfg().Core.ShimDir
 	start := time.Now()
 	logInfo("[refreshLocalCache] scanning %d tools for local installations", len(tools))
 
@@ -602,7 +635,7 @@ func (a *App) refreshLocalCache() {
 		}
 
 		// 2. Check system-local installation.
-		path := detectLocalToolPath(t.Name(), t.Shims())
+		path := detectLocalToolPath(t.Name(), t.Shims(), shimDir)
 		if path != "" {
 			newMap[t.Name()] = localInfo{Version: "", Path: path, Source: "local"}
 			found++
@@ -615,21 +648,15 @@ func (a *App) refreshLocalCache() {
 	a.localMu.Unlock()
 	a.saveLocalCache() // 保存缓存到文件
 	logInfo("[refreshLocalCache] done in %v: found %d/%d tools locally", time.Since(start), found, len(tools))
-
-	// Signal that the local cache has been populated
-	a.localReadyOnce.Do(func() {
-		close(a.localReady)
-	})
+	a.signalLocalReady()
 }
 
 // waitForLocalCache waits until the local cache has been populated
 // (at least once) or a short timeout expires.
 //
-// 优化（工具列表加载提速）：原实现最长阻塞 5 秒，而 domReady 延迟
-// 15 秒才触发 refreshLocalCache——用户在这期间打开「编程语言/包管理器」
-// 页面会白等 5 秒。改为快速路径：localMap 未填充时最多等 500ms，
-// 未就绪则直接返回（localVersion/localPath 暂缺，由后台刷新补充，
-// 前端 refreshTools 可手动刷新）。
+// 优化（工具列表加载提速）：localMap 已有缓存则立即返回；否则最多等
+// 500ms 等 refreshLocalCache / loadLocalCache 的 signalLocalReady。
+// 未就绪则直接返回（localVersion/localPath 暂缺，由后台刷新补充）。
 func (a *App) waitForLocalCache() {
 	// Quick check: already populated?
 	a.localMu.RLock()
@@ -676,6 +703,9 @@ func (a *App) currentLink(toolName string) string {
 // saveJSONToCache marshals v as JSON and writes it to a file in the cache directory.
 func (a *App) saveJSONToCache(filename string, v any) error {
 	cfg := a.getCfg()
+	if err := os.MkdirAll(cfg.Core.CacheDir, 0o755); err != nil {
+		return err
+	}
 	path := filepath.Join(cfg.Core.CacheDir, filename)
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

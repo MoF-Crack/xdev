@@ -142,6 +142,10 @@ export function createInitializedWailsBrowserMocks() {
     RemoveCustomTool: async (...args) => { window.__wailsCalls.RemoveCustomTool.push(args); },
     CheckToolDependencies: async (name) => (name === 'node' ? [{ tool: 'npm', requiredVersion: '>=9.0.0', currentVersion: '10.9.0', satisfied: true, reason: '', installPath: '' }] : []),
     IsVersionUnverified: async () => false,
+    PreviewInstall: async (tool, version) => ({
+      tool, version, unverified: false, hasFormSpecificArchives: false, availableForms: [],
+      integrity: { tool, version, path: '', ok: false, reason: 'not installed', missing: [] },
+    }),
     LaunchTool: async (...args) => { window.__wailsCalls.LaunchTool.push(args); },
     ToolCommand: async (...args) => { window.__wailsCalls.ToolCommand.push(args); return args[0] === 'node' ? 'node' : ''; },
   };

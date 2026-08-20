@@ -320,3 +320,25 @@ func TestDownloadAllZeroSHA_SidecarPinEnforced(t *testing.T) {
 		t.Error("final file should not exist after pin mismatch")
 	}
 }
+
+func TestVerifyManifestSignature_PlaceholderSHAIsNotTampering(t *testing.T) {
+	zero := strings.Repeat("0", 64)
+	sigJSON := []byte(`{"tool":"uv","sha256_map":"{\"0.7.6\":{\"windows/amd64\":\"abc\"}}","timestamp":"2026-07-08T12:35:12Z","signature":"AAAA"}`)
+	err := verifyManifestSignature(Options{
+		ExpectedSHA:       zero,
+		ManifestSignature: sigJSON,
+	})
+	if err != nil {
+		t.Fatalf("placeholder SHA should skip signed-map membership check when no root key is embedded: %v", err)
+	}
+}
+
+func TestVerifySHAInMap_DoesNotMatchZeroPlaceholder(t *testing.T) {
+	zero := strings.Repeat("0", 64)
+	if verifySHAInMap(`{"0.7.6":{"windows/amd64":"abc123"}}`, zero) {
+		t.Fatal("all-zero placeholder must not match a signed real hash")
+	}
+	if !verifySHAInMap(`{"0.7.6":{"windows/amd64":"abc123"}}`, "abc123") {
+		t.Fatal("real hash should be found in the signed map")
+	}
+}

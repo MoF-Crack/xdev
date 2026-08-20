@@ -23,6 +23,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
 )
 
@@ -242,10 +243,18 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 		}
 	}
 
-	// Set environment variables
+	// Set environment variables. Profiles are untrusted user-supplied
+	// JSON: only syntactically valid, non-protected names may be written.
 	for _, e := range profile.EnvVars {
-		if e.Level == "user" {
-			env.SetUserEnvVar(e.Name, e.Value)
+		if e.Level != "user" {
+			continue
+		}
+		if err := util.ValidateEnvVarName(e.Name); err != nil {
+			errors = append(errors, fmt.Sprintf("env %s: %v", e.Name, err))
+			continue
+		}
+		if err := env.SetUserEnvVar(e.Name, e.Value); err != nil {
+			errors = append(errors, fmt.Sprintf("env %s: %v", e.Name, err))
 		}
 	}
 

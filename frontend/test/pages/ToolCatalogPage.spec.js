@@ -14,15 +14,14 @@ describe('ToolCatalogPage', () => {
     await wrapper.get('[data-testid="tool-search"]').setValue('node');
     await wrapper.get('[data-testid="hide-unavailable"]').setValue(false);
     await wrapper.get('[data-action="detail"]').trigger('click');
-    await wrapper.get('[data-action="install"]').trigger('click');
     expect(wrapper.emitted('update:searchQuery')).toEqual([['node']]);
     expect(wrapper.emitted('update:hideUnavailable')).toEqual([[false]]);
     expect(wrapper.emitted('open-detail')).toEqual([[tools[0]]]);
-    expect(wrapper.emitted('install')).toEqual([[tools[0]]]);
+    expect(wrapper.find('[data-action="install"]').exists()).toBe(false);
     expect(wrapper.get('[data-testid="tool-search"]').attributes('aria-label')).toBe('search.label');
   });
 
-  it.each([false, true])('preserves package manager and favorite contracts in %s narrow mode', async (narrow) => {
+  it.each([false, true])('keeps package-manager catalog rows to detail and favorite only in %s narrow mode', async (narrow) => {
     vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: narrow, addEventListener: vi.fn(), removeEventListener: vi.fn() });
     const rows = [
       { name: 'npm', toolName: 'npm', displayName: 'npm', installed: false, canInstall: true, isFavorite: false },
@@ -30,14 +29,25 @@ describe('ToolCatalogPage', () => {
     ];
     const wrapper = mount(ToolCatalogPage, { props: { t, tools: rows, category: 'package-manager' } });
     await wrapper.vm.$nextTick();
-    await wrapper.findAll('[data-action="package-manager"]')[0].trigger('click');
-    await wrapper.findAll('[data-action="package-manager"]')[1].trigger('click');
+    expect(wrapper.findAll('[data-action="package-manager"]')).toHaveLength(0);
+    expect(wrapper.findAll('[data-action="install"]')).toHaveLength(0);
     await wrapper.findAll('[data-action="favorite"]')[0].trigger('click');
-    expect(wrapper.emitted('install-package-manager')).toEqual([[rows[0]]]);
-    expect(wrapper.emitted('update-package-manager')).toEqual([[rows[1]]]);
     expect(wrapper.emitted('toggle-favorite')).toEqual([[rows[0]]]);
     expect(wrapper.findAll('[data-action="favorite"]')[1].attributes('aria-label')).toBe('favorites.remove');
     expect(wrapper.findAll('[data-action="favorite"]')[1].attributes('title')).toBe('favorites.remove');
+  });
+
+  it.each([false, true])('never shows catalog Install for already-installed language/build/IDE tools in %s narrow mode', async (narrow) => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: narrow, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const rows = [
+      { name: 'go', displayName: 'Go', category: 'language', installed: true, localVersion: '1.26.5', localPath: 'E:\\XDev\\install\\go' },
+      { name: 'gradle', displayName: 'Gradle', category: 'build', installed: true, localVersion: '8.14' },
+      { name: 'vscode', displayName: 'VS Code', category: 'development_tools', installed: true, localPath: 'E:\\XDev\\install\\vscode' },
+    ];
+    const wrapper = mount(ToolCatalogPage, { props: { t, tools: rows, category: 'language' } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll('[data-action="install"]')).toHaveLength(0);
+    expect(wrapper.findAll('[data-action="package-manager"]')).toHaveLength(0);
   });
 
   it.each([false, true])('shows install hints without install actions and never installs local-only tools in %s narrow mode', async (narrow) => {

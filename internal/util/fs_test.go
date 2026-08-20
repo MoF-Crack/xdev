@@ -94,3 +94,34 @@ func TestActiveInstallPathNotFound(t *testing.T) {
 		t.Errorf("ActiveInstallPath() = %q, want ''", got)
 	}
 }
+
+func TestCopyDirFollowsSymlinkedDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink/junction creation is environment-dependent on Windows")
+	}
+	src := t.TempDir()
+	realApps := filepath.Join(src, "apps-real")
+	if err := os.MkdirAll(filepath.Join(realApps, "scoop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realApps, "scoop", "scoop.ps1"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "apps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realApps, filepath.Join(src, "apps", "current")); err != nil {
+		t.Skipf("symlink failed: %v", err)
+	}
+	dst := filepath.Join(t.TempDir(), "copy")
+	if err := CopyDir(src, dst); err != nil {
+		t.Fatalf("CopyDir: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "apps", "current", "scoop", "scoop.ps1"))
+	if err != nil {
+		t.Fatalf("copied junction target missing: %v", err)
+	}
+	if string(got) != "hi" {
+		t.Errorf("copied content = %q, want hi", got)
+	}
+}

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -14,16 +15,18 @@ import (
 // 与之前 map[string]interface{} 版本保持兼容
 // ──────────────────────────────────────────────────────
 
-func newTestApp() *App {
+func newTestApp(t *testing.T) *App {
+	t.Helper()
+	tmp := t.TempDir()
 	cfg := &config.Config{
 		Core: config.CoreConfig{
-			XMDevDir:    "E:\\XDev",
-			DownloadDir: "E:\\XDev\\download",
-			InstallDir:  "E:\\XDev\\install",
-			ShimDir:     "E:\\XDev\\shims",
-			CacheDir:    "E:\\XDev\\cache",
-			EnvDir:      "E:\\XDev\\env",
-			ManifestDir: "E:\\XDev\\manifests",
+			XMDevDir:    tmp,
+			DownloadDir: filepath.Join(tmp, "download"),
+			InstallDir:  filepath.Join(tmp, "install"),
+			ShimDir:     filepath.Join(tmp, "shims"),
+			CacheDir:    filepath.Join(tmp, "cache"),
+			EnvDir:      filepath.Join(tmp, "env"),
+			ManifestDir: filepath.Join(tmp, "manifests"),
 		},
 		Path: config.PathConfig{
 			Mode: "shim",
@@ -80,7 +83,7 @@ func keysOf(m map[string]interface{}) []string {
 // ──────────────────────────────────────────────────────
 
 func TestGetDebugInfo_JSONFormat(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	result := app.GetDebugInfo()
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -303,7 +306,7 @@ func mustMarshal(t *testing.T, v interface{}) []byte {
 // ──────────────────────────────────────────────────────
 
 func TestGetConfig_JSONFormat(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	result := app.GetConfig()
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -388,7 +391,7 @@ func TestMigrateAllLocalTools_Success_JSONFormat(t *testing.T) {
 // ──────────────────────────────────────────────────────
 
 func TestGetProxyConfig_JSONFormat(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	result := app.GetProxyConfig()
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -515,7 +518,7 @@ func TestImportProfile_Success_JSONFormat(t *testing.T) {
 // ──────────────────────────────────────────────────────
 
 func TestGetProxyConfig_MatchesGetConfigProxy(t *testing.T) {
-	app := newTestApp()
+	app := newTestApp(t)
 	proxyConfig := app.GetProxyConfig()
 	fullConfig := app.GetConfig()
 

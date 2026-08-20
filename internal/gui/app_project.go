@@ -73,8 +73,13 @@ func (a *App) IsolateSetup(mode string) (string, error) {
 	return fmt.Sprintf("Isolation environment set up with mode: %s", mode), nil
 }
 
-// IsolateExec 在隔离环境中执行命令
+// IsolateExec 在隔离环境中执行命令。
+// 命令必须通过 allowlist：仅允许已安装工具的 shim 名或常见只读探测命令
+// （node/python/go 等 --version），拒绝任意 shell / 解释器入口。
 func (a *App) IsolateExec(cmd []string) (string, error) {
+	if err := validateIsolateCommand(cmd); err != nil {
+		return "", err
+	}
 	a.isoMu.Lock()
 	iso := a.isoInstance
 	a.isoMu.Unlock()
@@ -285,8 +290,11 @@ func (a *App) DestroyRemoteInstance(adapter, id string) error {
 	return adapterImpl.Destroy(context.Background(), id)
 }
 
-// ExecRemoteInstance 在远程环境中执行命令
+// ExecRemoteInstance 在远程环境中执行命令（与 IsolateExec 共用命令白名单）。
 func (a *App) ExecRemoteInstance(adapter, id string, cmd []string) (string, error) {
+	if err := validateIsolateCommand(cmd); err != nil {
+		return "", err
+	}
 	adapterImpl, err := orchestrator.NewAdapter(orchestrator.AdapterType(adapter))
 	if err != nil {
 		return "", err
@@ -304,8 +312,13 @@ func (a *App) ExecRemoteInstance(adapter, id string, cmd []string) (string, erro
 
 // ========== cd hook ==========
 
-// ActivateHook 激活 cd hook
+// ActivateHook 激活 cd hook。shell 必须是已知 shell 名，防止任意参数注入。
 func (a *App) ActivateHook(shell string) error {
+	switch strings.ToLower(strings.TrimSpace(shell)) {
+	case "powershell", "pwsh", "cmd", "bash", "zsh", "fish", "nu":
+	default:
+		return fmt.Errorf("unsupported shell %q", shell)
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -326,4 +339,111 @@ func (a *App) DeactivateHook() error {
 	util.HideWindow(cmd)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// isolateDeniedBins are interpreters / shells that must never be invoked
+// via IsolateExec / ExecRemoteInstance, even if they appear as a shim.
+var isolateDeniedBins = map[string]struct{}{
+	"cmd": {}, "cmd.exe": {}, "powershell": {}, "powershell.exe": {},
+	"pwsh": {}, "pwsh.exe": {}, "bash": {}, "sh": {}, "zsh": {},
+	"fish": {}, "csh": {}, "tcsh": {}, "ksh": {},
+	"wsl": {}, "wsl.exe": {}, "cmd.com": {},
+	"python": {}, "python.exe": {}, "python3": {}, "pythonw.exe": {},
+	"py": {}, "py.exe": {}, "ruby": {}, "ruby.exe": {},
+	"perl": {}, "perl.exe": {}, "php": {}, "php.exe": {},
+	"lua": {}, "lua.exe": {}, "node": {}, "node.exe": {},
+	"deno": {}, "deno.exe": {}, "bun": {}, "bun.exe": {},
+	"osascript": {}, "osascript.exe": {},
+}
+
+// isolateSafeVersionBins are well-known toolchain binaries that may be
+// invoked only with a single --version / -version / version argument.
+var isolateSafeVersionBins = map[string]struct{}{
+	"node": {}, "node.exe": {}, "python": {}, "python.exe": {},
+	"python3": {}, "go": {}, "go.exe": {}, "java": {}, "java.exe": {},
+	"rustc": {}, "rustc.exe": {}, "cargo": {}, "cargo.exe": {},
+	"dotnet": {}, "dotnet.exe": {}, "php": {}, "php.exe": {},
+	"ruby": {}, "ruby.exe": {}, "kotlin": {}, "kotlinc": {},
+	"scala": {}, "swift": {}, "dart": {}, "flutter": {},
+	"gcc": {}, "g++": {}, "clang": {}, "clang++": {},
+	"cmake": {}, "cmake.exe": {}, "make": {}, "ninja": {},
+	"git": {}, "git.exe": {}, "mvn": {}, "mvn.exe": {},
+	"gradle": {}, "gradle.exe": {},
+}
+
+var isolateSafeVersionArgs = map[string]struct{}{
+	"--version": {}, "-version": {}, "version": {}, "-v": {},
+	"--help": {}, "-help": {}, "help": {}, "-h": {},
+}
+
+func isolateCommandBase(name string) string {
+	return strings.ToLower(filepath.Base(strings.TrimSpace(name)))
+}
+
+func isolateArgLooksUnsafe(arg string) bool {
+	if arg == "" {
+		return true
+	}
+	if strings.ContainsAny(arg, ";&|`$<>\n\r") {
+		return true
+	}
+	if strings.Contains(arg, "..") {
+		return true
+	}
+	return false
+}
+
+// validateIsolateCommand rejects empty commands, path-qualified binaries,
+// shell metacharacters, and any interpreter/shell that is not a registered
+// xdev shim (except a small --version allowlist used by the GUI probe).
+func validateIsolateCommand(cmd []string) error {
+	if len(cmd) == 0 {
+		return fmt.Errorf("empty command")
+	}
+	name := strings.TrimSpace(cmd[0])
+	if name == "" {
+		return fmt.Errorf("empty command")
+	}
+	if strings.ContainsAny(name, `/\`) || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return fmt.Errorf("command must be a bare executable name, not a path")
+	}
+	base := isolateCommandBase(name)
+	if base == "" || base == "." || base == ".." {
+		return fmt.Errorf("invalid command name")
+	}
+	for _, arg := range cmd[1:] {
+		if isolateArgLooksUnsafe(arg) {
+			return fmt.Errorf("command argument contains unsafe characters")
+		}
+	}
+
+	for _, arg := range cmd[1:] {
+		if _, ok := isolateSafeVersionArgs[arg]; !ok {
+			return fmt.Errorf("command argument %q is not allowed (only version/help probes)", arg)
+		}
+	}
+
+	if _, denied := isolateDeniedBins[base]; denied {
+		if len(cmd) == 2 {
+			if _, ok := isolateSafeVersionArgs[cmd[1]]; ok {
+				if _, allowed := isolateSafeVersionBins[base]; allowed {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("command %q is not allowed in isolate/remote exec", base)
+	}
+
+	// Common toolchain probes (g++/clang++ etc.) may contain characters
+	// that SafeName rejects; they are still limited to version/help args.
+	if _, ok := isolateSafeVersionBins[base]; ok {
+		return nil
+	}
+
+	// Allow registered xdev shims as a bare name. Extra arguments are
+	// already restricted to version/help.
+	if err := util.ValidateShimName(base); err != nil {
+		return fmt.Errorf("command %q is not a valid tool name: %w", base, err)
+	}
+	return nil
 }

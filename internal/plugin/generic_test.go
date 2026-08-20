@@ -56,6 +56,24 @@ func TestGenericExposesManifestFields(t *testing.T) {
 	}
 }
 
+func TestGenericSetManifestSwapsVersionList(t *testing.T) {
+	p := NewGeneric(sampleTool())
+	p.SetManifest(&manifest.Tool{
+		Name:   "demo",
+		Latest: "9.9.9",
+		VersionList: []manifest.Version{
+			{Version: "9.9.9", Unverified: true},
+		},
+	})
+	got, err := p.ResolveVersion("9.9.9")
+	if err != nil {
+		t.Fatalf("ResolveVersion after SetManifest: %v", err)
+	}
+	if got != "9.9.9" {
+		t.Errorf("ResolveVersion = %q, want 9.9.9", got)
+	}
+}
+
 func TestGenericInstallDir(t *testing.T) {
 	p := NewGeneric(sampleTool())
 	got := p.InstallDir("/opt/xdev/install", "1.2.0")
@@ -89,6 +107,23 @@ func TestGenericArchiveForUnknownVersion(t *testing.T) {
 	_, err := p.ArchiveFor("9.9.9")
 	if err == nil {
 		t.Errorf("expected error for unknown version")
+	}
+}
+
+func TestGenericArchiveForSniffedVersionWithoutArchives(t *testing.T) {
+	m := sampleTool()
+	m.VersionList = append(m.VersionList, manifest.Version{
+		Version:    "9.9.9",
+		Unverified: true,
+		Discovered: true,
+	})
+	p := NewGeneric(m)
+	_, err := p.ArchiveFor("9.9.9")
+	if err == nil {
+		t.Fatal("expected error when sniffed version has no archives")
+	}
+	if !strings.Contains(err.Error(), "could not derive an archive URL") {
+		t.Errorf("error = %q, want archive-derivation hint", err)
 	}
 }
 

@@ -27,11 +27,14 @@ func IsProxyError(err error) bool {
 }
 
 // SecureRedirectCheck returns an http.Client CheckRedirect callback that
-// limits the number of redirects and blocks HTTPS→HTTP downgrades.
+// limits the number of redirects, blocks HTTPS→HTTP downgrades, and
+// re-validates every hop against IsSafeExternalURL.
 //
 // Security (H-8 / N-6 / N-9): an HTTPS URL that redirects to HTTP would
 // expose the request to MITM attacks even though the original URL was
-// secure, so the downgrade is rejected.
+// secure, so the downgrade is rejected. An otherwise-safe public HTTPS
+// URL that later redirects to a private/reserved IP would otherwise
+// bypass the initial SSRF check (open-redirect SSRF).
 func SecureRedirectCheck(maxRedirects int) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
@@ -39,6 +42,18 @@ func SecureRedirectCheck(maxRedirects int) func(*http.Request, []*http.Request) 
 		}
 		if len(via) > 0 && via[0].URL.Scheme == "https" && req.URL.Scheme != "https" {
 			return fmt.Errorf("insecure redirect: %s → %s (HTTPS downgrade blocked)", via[0].URL, req.URL)
+		}
+		if req.URL != nil {
+			if err := IsSafeExternalURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect target blocked: %w", err)
+			}
+			// A public origin that later hops to localhost/loopback is
+			// classic open-redirect SSRF. Localhost is allowed as an
+			// *initial* URL (Ollama etc.) but not as a later hop.
+			if len(via) > 0 && via[0].URL != nil && !IsLocalhost(via[0].URL.Hostname()) &&
+				IsLocalhost(req.URL.Hostname()) {
+				return fmt.Errorf("redirect target blocked: hop to localhost %q", req.URL.Hostname())
+			}
 		}
 		return nil
 	}

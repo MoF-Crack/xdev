@@ -8,8 +8,8 @@
       <template #loading>{{ t('catalog.loading') }}</template>
       <template #empty><EmptyState :title="t('no_tools_found')" /></template>
       <ResponsiveDataTable :columns="contractColumns" :data="tools" row-key="name" :breakpoint="760">
-        <template #default><ToolTable :tools="tools" :category="category" :operating-tool="operatingTool" :t="t" @open-detail="$emit('open-detail', $event)" @install="$emit('install', $event)" @install-package-manager="$emit('install-package-manager', $event)" @update-package-manager="$emit('update-package-manager', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
-        <template #card="{ row }"><ToolCard :tool="row" :category="category" :operating-tool="operatingTool" :t="t" @open-detail="$emit('open-detail', $event)" @install="$emit('install', $event)" @install-package-manager="$emit('install-package-manager', $event)" @update-package-manager="$emit('update-package-manager', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
+        <template #default><ToolTable :tools="tools" :t="t" @open-detail="$emit('open-detail', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
+        <template #card="{ row }"><ToolCard :tool="row" :t="t" @open-detail="$emit('open-detail', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
       </ResponsiveDataTable>
     </AsyncState>
   </section>
@@ -21,8 +21,8 @@ import EmptyState from '../components/EmptyState.vue';
 import ResponsiveDataTable from '../components/ResponsiveDataTable.vue';
 import ToolCard from '../components/ToolCard.vue';
 import ToolTable from '../components/ToolTable.vue';
-defineProps({ operatingTool: { type: String, default: '' }, tools: { type: Array, default: () => [] }, category: { type: String, default: '' }, loading: Boolean, error: { type: [String, Error], default: null }, searchQuery: { type: String, default: '' }, hideUnavailable: { type: Boolean, default: true }, t: { type: Function, required: true } });
-defineEmits(['update:searchQuery', 'update:hideUnavailable', 'open-detail', 'install', 'install-package-manager', 'update-package-manager', 'toggle-favorite', 'retry']);
+defineProps({ tools: { type: Array, default: () => [] }, category: { type: String, default: '' }, loading: Boolean, error: { type: [String, Error], default: null }, searchQuery: { type: String, default: '' }, hideUnavailable: { type: Boolean, default: true }, t: { type: Function, required: true } });
+defineEmits(['update:searchQuery', 'update:hideUnavailable', 'open-detail', 'toggle-favorite', 'retry']);
 const contractColumns = [{ key: 'identity', contract: 'identity' }, { key: 'status', contract: 'status' }, { key: 'actions', contract: 'actions' }];
 </script>
 

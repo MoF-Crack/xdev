@@ -173,6 +173,29 @@ func TestGetToolsByCategoryDevTools(t *testing.T) {
 	}
 }
 
+// TestCatalogInstallButtonOnlyForUninstalledPackageManagers verifies
+// language/build/IDE tools never set CanInstall. Catalog Install is
+// gated on canInstall===true, so a local Go/VS Code/Gradle copy must
+// not show an Install button the way yarn/pnpm/pipx did.
+func TestCatalogInstallButtonOnlyForUninstalledPackageManagers(t *testing.T) {
+	app := catTestApp(t,
+		&catFakePlugin{name: "go", category: "language"},
+		&catFakePlugin{name: "gradle", category: "build"},
+		&catFakePlugin{name: "vscode", category: "ide"},
+	)
+	app.InvalidateToolsCache()
+	for _, category := range []string{"language", "build", "development_tools"} {
+		for _, ti := range app.GetToolsByCategory(category) {
+			if ti.CanInstall {
+				t.Errorf("%s/%s CanInstall=true; catalog would show Install for a non-PM tool", category, ti.Name)
+			}
+			if ti.OfferSubToolInstall {
+				t.Errorf("%s/%s OfferSubToolInstall=true; that flag is yarn/pnpm-only", category, ti.Name)
+			}
+		}
+	}
+}
+
 // TestDevToolsCategoryResidualFallback verifies the merge layer tolerates
 // disk manifests that still carry old category fields (ide/agent/harness).
 // This is the core safety guarantee of the Spec 024 migration.

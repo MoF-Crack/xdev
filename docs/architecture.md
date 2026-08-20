@@ -7,11 +7,11 @@
 
 # XDev 架构文档
 
-> 版本: 1.2.2-alpha | 最后更新: 2026-07-10
+> 版本: 0.3.1 | 最后更新: 2026-08-20
 
 ## 1. 项目概览
 
-XDev 是一个跨平台开发环境版本管理器，用 Go 1.23 编写。它提供三种交互模式：
+XDev 是一个跨平台开发环境版本管理器，用 Go 1.25 编写。它提供三种交互模式：
 
 - **CLI** — 基于 Cobra 的命令行界面
 - **TUI** — 基于 Bubble Tea 的终端用户界面
@@ -25,13 +25,13 @@ XDev 是一个跨平台开发环境版本管理器，用 Go 1.23 编写。它提
 xmdevenvmt/
 ├── cmd/xmdevenvmt/          # 入口点 (main.go, main_bindings.go)
 ├── internal/                 # 内部包（不可外部导入）
-│   ├── ai/                   # AI 助手 (Ollama 集成)
 │   ├── cli/                  # CLI 命令定义 (Cobra)
 │   ├── config/               # 配置加载/保存/迁移
 │   ├── downloader/           # HTTP 下载器 (带进度/断点续传)
 │   ├── env/                  # 环境变量操作 (Windows 注册表/Shell RC)
 │   ├── extractor/            # 归档解压 (zip/tar.gz/7z/zstd)
-│   ├── gui/                  # GUI 后端 (Wails App 方法)
+│   ├── gui/                  # GUI 后端 (Wails App adapter)
+│   ├── hostscan/             # Host-scan：PATH 上全部实例（跳过 xdev shim）
 │   ├── installer/            # 安装/激活/卸载核心工作流
 │   ├── integration/          # L2 集成测试
 │   ├── isolator/             # 环境隔离 (none/container/nix)
@@ -60,7 +60,7 @@ xmdevenvmt/
 ├── frontend/                 # Vue 3 前端 (Wails GUI)
 │   └── src/
 │       ├── App.vue           # 根组件
-│       ├── AppContent.vue    # 主布局 (3000+ 行)
+│       ├── AppContent.vue    # 主布局（shell + 安装/PM/环境编排）
 │       └── SetupWizard.vue   # 首次运行向导
 ├── docs/                     # 文档
 ├── build.sh                  # Unix 构建脚本
@@ -82,7 +82,7 @@ xmdevenvmt/
 ├─────────────────────────────────────────────┤
 │  plugin  │  manifest  │  config  │  lockfile │  ← 核心抽象层
 ├─────────────────────────────────────────────┤
-│  downloader │ extractor │ env │ shim │ mirror│  ← 基础设施层
+│  downloader │ extractor │ env │ shim │ hostscan │ mirror│  ← 基础设施层
 ├─────────────────────────────────────────────┤
 │  util  │  version  │  resolver  │  signer    │  ← 工具层
 └─────────────────────────────────────────────┘
@@ -92,16 +92,17 @@ xmdevenvmt/
 
 | 包 | 依赖的内部包 | 角色 |
 |---|---|---|
-| `cli` | ai, config, env, gui, installer, isolator, lockfile, manifest, orchestrator, plugin, project, remote, service, shim, signer, task, tui, update, util, version | 命令路由与编排 |
+| `cli` | config, env, gui, installer, isolator, lockfile, manifest, orchestrator, plugin, project, remote, service, shim, signer, task, tui, update, util, version | 命令路由与编排 |
 | `installer` | config, downloader, env, extractor, manifest, mirror, plugin, shim, signer, util, version | 安装工作流核心 |
-| `gui` | ai, config, downloader, env, extractor, installer, isolator, lockfile, manifest, orchestrator, plugin, project, service, shim, task, update, util, version | GUI 后端 (65+ 导出方法) |
+| `gui` | config, downloader, env, extractor, installer, isolator, lockfile, manifest, orchestrator, plugin, project, remote, discovery, hostscan, shim, update, util, version | Wails desktop adapter：catalog / install-session / host-scan / prefs（约 120 个导出方法，现有绑定不增） |
+| `hostscan` | — | PATH 全量扫描（跳过 shimDir）；GUI 探测委托它 |
 | `plugin` | manifest, resolver | 插件抽象 |
 | `config` | env, util | 配置管理 |
 | `shim` | config, project, util | Shim 调度 |
 
 ### 叶子包（无内部依赖）
 
-`ai`, `e2e`, `extractor`, `i18n`, `integration`, `lockfile`, `manifest`, `project`, `resolver`, `signer`, `util`, `version`
+`e2e`, `extractor`, `hostscan`, `i18n`, `integration`, `lockfile`, `manifest`, `project`, `resolver`, `signer`, `util`, `version`
 
 ## 4. 启动流程
 

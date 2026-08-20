@@ -1,4 +1,4 @@
-﻿package util
+package util
 
 import (
 	"crypto/sha256"
@@ -44,7 +44,8 @@ func CopyFile(src, dst string) error {
 
 // CopyDir recursively copies a directory tree from src to dst.
 // It uses concurrent file copying for improved throughput.
-// Symlinks/junctions are skipped.
+// Symlinks/junctions are resolved to their targets and copied as real
+// files/directories (needed for Scoop apps/*/current junctions).
 func CopyDir(src, dst string) error {
 	return copyDir(src, dst, nil)
 }
@@ -82,13 +83,29 @@ func copyDir(src, dst string, onProgress func(copied, total int)) error {
 		}
 		target := filepath.Join(dst, rel)
 
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Junction / symlink：解析到实体后再拷，避免 scoop apps/*/current
+			// 这类目录 junction 被整棵跳过。
+			real, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return nil
+			}
+			fi, err := os.Stat(real)
+			if err != nil {
+				return nil
+			}
+			if fi.IsDir() {
+				if err := copyDir(real, target, onProgress); err != nil {
+					return err
+				}
+				return filepath.SkipDir
+			}
+			tasks = append(tasks, copyTask{src: real, dst: target})
+			return nil
+		}
 		if info.IsDir() {
 			dirs = append(dirs, target)
 		} else {
-			// Skip symlinks/junctions
-			if info.Mode()&os.ModeSymlink != 0 {
-				return nil
-			}
 			tasks = append(tasks, copyTask{src: path, dst: target})
 		}
 		return nil

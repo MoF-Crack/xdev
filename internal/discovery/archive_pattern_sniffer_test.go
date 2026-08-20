@@ -142,6 +142,30 @@ func TestBuildArchiveTemplate(t *testing.T) {
 	}
 }
 
+func TestBuildArchiveTemplate_TagOnlyFilename(t *testing.T) {
+	// uv-style: version lives only in the GitHub tag path, not the filename.
+	archives := []manifest.Archive{
+		{
+			OS:     "windows",
+			Arch:   "amd64",
+			Format: "zip",
+			URL:    "https://github.com/astral-sh/uv/releases/download/0.12.0/uv-x86_64-pc-windows-msvc.zip",
+		},
+	}
+	template, ok := buildArchiveTemplate("0.12.0", archives)
+	if !ok {
+		t.Fatal("expected template for tag-only URL")
+	}
+	want := "https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-pc-windows-msvc.zip"
+	if template[0].URL != want {
+		t.Errorf("URL = %q, want %q", template[0].URL, want)
+	}
+	filled := FillArchivePlaceholders(&manifest.Tool{Name: "uv"}, "0.12.2", template)
+	if filled[0].URL != "https://github.com/astral-sh/uv/releases/download/0.12.2/uv-x86_64-pc-windows-msvc.zip" {
+		t.Errorf("filled URL = %q", filled[0].URL)
+	}
+}
+
 func TestBuildArchiveTemplate_NoVersionInURL(t *testing.T) {
 	// If the version string doesn't appear in the URL, the template
 	// should fail (return false).

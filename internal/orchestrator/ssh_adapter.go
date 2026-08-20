@@ -22,6 +22,9 @@ type SSHAdapter struct {
 // NewSSHAdapter creates an SSH adapter. Returns an error if the
 // SSH client is not available on the system.
 func NewSSHAdapter(target SSHTarget) (*SSHAdapter, error) {
+	if err := validateSSHTarget(target); err != nil {
+		return nil, err
+	}
 	if target.Host == "" {
 		return nil, fmt.Errorf("SSH target host is required")
 	}
@@ -55,8 +58,11 @@ func (s *SSHAdapter) runSSH(ctx context.Context, args ...string) ([]byte, error)
 		if _, err := exec.LookPath("sshpass"); err != nil {
 			return nil, fmt.Errorf("密码登录需要 sshpass（未在 PATH 中找到）。请安装 sshpass 或改用密钥登录")
 		}
-		full := append([]string{"-p", s.target.Password, sshBinary()}, args...)
+		// Prefer env-file style (-e) so the password is not visible in
+		// the process argument list (ps / Task Manager).
+		full := append([]string{"-e", "SSHPASS", sshBinary()}, args...)
 		cmd := exec.CommandContext(ctx, "sshpass", full...)
+		cmd.Env = append(os.Environ(), "SSHPASS="+s.target.Password)
 		util.HideWindow(cmd)
 		return cmd.Output()
 	}
@@ -160,6 +166,39 @@ func (s *SSHAdapter) instanceID() string {
 }
 
 // sshBinary returns the name of the SSH executable.
+func sshFieldLooksUnsafe(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.ContainsAny(value, " \t\n\r;&|`$<>\"'") || strings.HasPrefix(value, "-") {
+		return fmt.Errorf("SSH %s contains unsafe characters", name)
+	}
+	return nil
+}
+
+func validateSSHTarget(target SSHTarget) error {
+	if err := sshFieldLooksUnsafe("host", target.Host); err != nil {
+		return err
+	}
+	if err := sshFieldLooksUnsafe("user", target.User); err != nil {
+		return err
+	}
+	if target.Port < 0 || target.Port > 65535 {
+		return fmt.Errorf("SSH port %d is out of range", target.Port)
+	}
+	if target.KeyPath != "" {
+		if strings.ContainsAny(target.KeyPath, "\n\r;&|`$<>\"'") {
+			return fmt.Errorf("SSH key path contains unsafe characters")
+		}
+	}
+	if target.KnownHosts != "" {
+		if strings.ContainsAny(target.KnownHosts, "\n\r;&|`$<>\"'") {
+			return fmt.Errorf("SSH known_hosts path contains unsafe characters")
+		}
+	}
+	return nil
+}
+
 func sshBinary() string {
 	if runtime.GOOS == "windows" {
 		return "ssh.exe"

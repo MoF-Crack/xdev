@@ -382,3 +382,32 @@ func TestInstallShim_AcceptsValidName(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallShimWindows_HardLinkWhenPossible(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows hard-link shim")
+	}
+	tmp := t.TempDir()
+	src := filepath.Join(tmp, "xdev.exe")
+	dst := filepath.Join(tmp, "go.exe")
+	if err := os.WriteFile(src, []byte("shim-payload-0123456789"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := installShimWindows(src, dst); err != nil {
+		t.Fatalf("installShimWindows: %v", err)
+	}
+	si, err := os.Stat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	di, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(si, di) {
+		t.Fatal("expected hard link (SameFile) when src and dst share a volume")
+	}
+	if err := installShimWindows(src, dst); err != nil {
+		t.Fatalf("second installShimWindows (already linked): %v", err)
+	}
+}

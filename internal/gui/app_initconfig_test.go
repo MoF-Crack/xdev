@@ -3,6 +3,7 @@
 package gui
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,10 +26,16 @@ func TestInitConfig_NoDeadlock(t *testing.T) {
 	// 测试结束前必须关闭日志句柄，否则 TempDir 清理会失败（句柄占用）。
 	t.Cleanup(CloseLogger)
 
-	// InitConfig 会把 <tmp>/current/xdev 追加到真实用户 PATH（Windows），
-	// 测试结束前撤销该副作用。
+	// InitConfig 会把 <tmp>/current/xdev 和 <tmp>/shims 追加到真实用户
+	// PATH（Windows）。测试结束前按大小写不敏感匹配撤销这两类副作用，
+	// 并顺带清掉历史死锁测试残留的同名 Temp 目录。
 	xdevBinDir := filepath.Join(tmp, "current", "xdev")
-	t.Cleanup(func() { _ = env.RemoveFromUserPath(xdevBinDir) })
+	shimDir := filepath.Join(tmp, "shims")
+	t.Cleanup(func() {
+		_ = env.RemoveFromUserPath(xdevBinDir)
+		_ = env.RemoveFromUserPath(shimDir)
+		_ = env.RemoveFromUserPathPrefix(filepath.Join(os.TempDir(), "TestInitConfig_NoDeadlock"))
+	})
 
 	done := make(chan error, 1)
 	go func() { done <- app.InitConfig(tmp) }()

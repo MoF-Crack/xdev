@@ -430,12 +430,16 @@ func discoverNPM(ctx context.Context, r manifest.RemoteSource) ([]string, error)
 	}
 
 	// 固定 registry 基址（不经 manifest 控制）。
+	// Prefer the abbreviated document: it still contains dist-tags +
+	// version keys but omits per-version tarball metadata, so packages
+	// with hundreds of versions (opencode-ai) stay under the body cap.
 	u := npmRegistryBase + "/" + url.PathEscape(pkg)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("npm remote: build request: %w", err)
 	}
+	req.Header.Set("Accept", "application/vnd.npm.install-v1+json")
 	resp, err := doWithProxyFallback(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("npm remote: fetch %s: %w", u, err)

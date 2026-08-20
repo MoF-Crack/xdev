@@ -1,4 +1,5 @@
-// app_config.go implements configuration management methods for the GUI.
+// app_config.go is the prefs module behind the Wails App adapter
+// (Spec 029 B2). It implements configuration management for the GUI.
 //
 // Provides:
 //   - GetConfig: returns the full configuration as JSON
@@ -337,6 +338,10 @@ func (a *App) TestProxy(proxyURL, testURL string) ProxyTestResult {
 		Latency: 0,
 	}
 
+	if err := util.ValidateProxyURL(proxyURL); err != nil {
+		result.Message = fmt.Sprintf("无效的代理地址: %v", err)
+		return result
+	}
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
 		result.Message = fmt.Sprintf("无效的代理地址: %v", err)

@@ -29,6 +29,11 @@ func RemoveFromUserPath(dir string) error {
 	return nil
 }
 
+// RemoveFromUserPathPrefix is a no-op on non-Windows platforms.
+func RemoveFromUserPathPrefix(prefix string) error {
+	return nil
+}
+
 // AddCurrentBinPaths is a no-op on non-Windows platforms.
 func AddCurrentBinPaths(binPaths []string) error {
 	return nil

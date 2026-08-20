@@ -384,6 +384,9 @@ func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
 }
 
 func (a *App) SetEnvVar(toolName, name, value, level string) error {
+	if err := util.ValidateEnvVarName(name); err != nil && !strings.EqualFold(name, "path") {
+		return err
+	}
 	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
 		return fmt.Errorf("cannot modify protected system env var: %s", name)
 	}

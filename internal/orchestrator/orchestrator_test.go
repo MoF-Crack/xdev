@@ -127,3 +127,21 @@ func TestSSHAdapterExecNoHost(t *testing.T) {
 		t.Errorf("error %q should mention host", err.Error())
 	}
 }
+
+func TestValidateSSHTarget_RejectsInjection(t *testing.T) {
+	cases := []SSHTarget{
+		{Host: "evil;id"},
+		{Host: "example.com", User: "root;id"},
+		{Host: "-oProxyCommand=evil"},
+		{Host: "example.com", User: "dev", KeyPath: "/tmp/id\n-oSendEnv=evil"},
+		{Host: "example.com", Port: 70000},
+	}
+	for _, c := range cases {
+		if err := validateSSHTarget(c); err == nil {
+			t.Errorf("validateSSHTarget(%+v) should be rejected", c)
+		}
+	}
+	if err := validateSSHTarget(SSHTarget{Host: "example.com", User: "dev", Port: 22, KeyPath: `/home/dev/.ssh/id_ed25519`}); err != nil {
+		t.Errorf("valid target rejected: %v", err)
+	}
+}

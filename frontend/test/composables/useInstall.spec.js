@@ -9,7 +9,7 @@ afterEach(cleanupWailsMocks);
 function setup(overrides = {}) {
   const listeners = {};
   const app = {
-    InstallTool: vi.fn(async () => null), InstallToolWithForm: vi.fn(async () => null), PauseDownload: vi.fn(async () => null),
+    InstallTool: vi.fn(async () => null), InstallToolWithForm: vi.fn(async () => null), InstallToolConfirmed: vi.fn(async () => null), PauseDownload: vi.fn(async () => null),
     ResumeDownload: vi.fn(async () => null), CancelDownload: vi.fn(async () => null), ...overrides,
   };
   const runtime = {
@@ -69,8 +69,16 @@ describe('useInstall', () => {
     const { app } = setup();
     const state = useInstall();
     await expect(state.install('opencode', '1.2.3', 'gui')).resolves.toBe(true);
-    expect(app.InstallToolWithForm).toHaveBeenCalledWith('opencode', '1.2.3', 'gui');
+    expect(app.InstallToolWithForm).toHaveBeenCalledWith('opencode', '1.2.3', 'gui', false);
     expect(app.InstallTool).not.toHaveBeenCalled();
+  });
+
+  it('forwards confirmed=true through the form-specific install API', async () => {
+    const { app } = setup();
+    const state = useInstall();
+    await expect(state.installConfirmed('opencode', '1.2.3', 'cli')).resolves.toBe(true);
+    expect(app.InstallToolWithForm).toHaveBeenCalledWith('opencode', '1.2.3', 'cli', true);
+    expect(app.InstallToolConfirmed).not.toHaveBeenCalled();
   });
 
   it('reports completion, event errors, and cancellation with the current task payload', async () => {

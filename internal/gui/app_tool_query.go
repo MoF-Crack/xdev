@@ -1,18 +1,14 @@
-// app_tool_query.go implements tool browsing and version query methods
-// for the GUI frontend.
+// app_tool_query.go is the catalog-query module behind the Wails App
+// adapter (Spec 029 B2). It implements tool browsing and version query.
 //
 // Provides:
 //   - GetCategories: list all tool categories with counts
 //   - GetToolsByCategory: list tools in a category with install status
 //   - GetInstalledVersions: list installed versions for a tool
-//   - GetAvailableVersions: list remote versions for a tool (with caching)
-//   - SearchTools: search tools by name/description
-//   - GetToolDetail: get detailed info for a single tool
-//   - RefreshToolVersions: force-refresh remote version list
+//   - GetAvailableVersions: list manifest versions for a tool (sorted newest-first)
 //
-// Version queries are cached in-memory (cacheVersions) with a TTL from
-// config.Core.ManifestTTL (default 24h). This avoids hitting remote APIs
-// on every panel switch.
+// GetToolsByCategory is cached in-memory per category (toolListCacheTTL).
+// Available versions come from the in-memory catalog, not a remote TTL cache.
 package gui
 
 import (
@@ -23,6 +19,7 @@ import (
 	"time"
 
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
 )
 
@@ -66,6 +63,7 @@ func (a *App) pluginToToolInfo(p plugin.Plugin) ToolInfo {
 		info.GUIBinary = m.GUIBinary
 		// Spec 025：是否需要按形态区分下载（多形态独立 archive 工具才为 true）。
 		info.HasFormSpecificArchives = m.HasFormSpecificArchives()
+		info.AvailableForms = m.AvailableArchiveForms()
 	}
 	return info
 }
@@ -278,7 +276,9 @@ func (a *App) computeToolsByCategory(category string) []ToolInfo {
 					InstallHint:             pm.InstallHint,
 					HasUpdate:               pm.HasUpdate,
 					RequiresAdmin:           pm.RequiresAdmin, // Spec 025 L3 阻塞项3
+					InstallCommand:          pm.InstallCommand,
 					EnableCommand:           pm.EnableCommand, // Spec 026: 附属工具启用命令
+					OfferSubToolInstall:     pm.OfferSubToolInstall,
 				}
 				// Spec 026: 传递可用安装方式（pipx 的 pip/uv 选项）
 				if len(pm.InstallMethods) > 0 {
@@ -391,8 +391,11 @@ func (a *App) GetAvailableVersions(toolName string) []VersionInfo {
 		installedSet[v] = true
 	}
 
+	versions := append([]manifest.Version(nil), t.VersionList...)
+	manifest.SortVersionsByRelease(versions)
+
 	var result []VersionInfo
-	for _, v := range t.VersionList {
+	for _, v := range versions {
 		result = append(result, VersionInfo{
 			Version:   v.Version,
 			Installed: installedSet[v.Version],

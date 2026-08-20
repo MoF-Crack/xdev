@@ -1,4 +1,4 @@
-﻿export default {
+export default {
   // Navigation
   'nav.dashboard': '仪表盘',
   'nav.settings': '设置',
@@ -372,6 +372,7 @@
   'pm.install_confirm_content': '将后台执行官方安装命令安装 {name}。请确认网络可用，安装可能需要数分钟。',
   'pm.install_admin_required': '以管理员安装',
   'pm.install_admin_tooltip': '此包管理器需要管理员权限',
+  'pm.actions_title': '安装与启用',
   'pm.enable_button': '启用',
   'pm.enable_confirm_title': '确认启用 {name}',
   'pm.enable_confirm_content': '将执行以下命令启用 {name}。',
@@ -591,6 +592,7 @@
   'notifications.title': '通知中心',
   'notifications.clear': '清空',
   'notifications.empty': '暂无通知',
+  'notifications.dismiss': '关闭',
 
   // TOFU warning
   'install.tofu_warning_title': '版本校验提示',

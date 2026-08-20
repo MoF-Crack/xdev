@@ -158,7 +158,12 @@ func (a *App) SniffNow(tool string) error {
 	scheduler := a.sniffScheduler()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	return scheduler.SniffNow(ctx, tool)
+	err := scheduler.SniffNow(ctx, tool)
+	if reloadErr := a.reloadCatalog(); reloadErr != nil {
+		logWarn("[sniff] reload catalog after SniffNow: %v", reloadErr)
+	}
+	a.InvalidateToolsCache()
+	return err
 }
 
 // SniffAll triggers a full sniff for all tools.
@@ -166,7 +171,12 @@ func (a *App) SniffAll() error {
 	scheduler := a.sniffScheduler()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	return scheduler.SniffAll(ctx)
+	err := scheduler.SniffAll(ctx)
+	if reloadErr := a.reloadCatalog(); reloadErr != nil {
+		logWarn("[sniff] reload catalog after SniffAll: %v", reloadErr)
+	}
+	a.InvalidateToolsCache()
+	return err
 }
 
 // InstallSniffService installs the platform scheduled sniff service.
@@ -287,6 +297,13 @@ func (a *App) InstallUpdate(toolName, version string) error {
 	return a.InstallToolConfirmed(toolName, version, false)
 }
 
+// allowedXdevSubcommands is the closed set of CLI verbs that the GUI
+// may invoke via runXdevCommand. Anything else is treated as injection.
+var allowedXdevSubcommands = map[string]struct{}{
+	"sniff": {}, "list": {}, "use": {}, "install": {}, "uninstall": {},
+	"current": {}, "env": {}, "version": {}, "doctor": {},
+}
+
 // runXdevCommand executes a raw xdev command string and returns its output.
 // Used by update actions that need to invoke the CLI.
 func (a *App) runXdevCommand(args string) (string, error) {
@@ -298,6 +315,17 @@ func (a *App) runXdevCommand(args string) (string, error) {
 		}
 	}
 	parts := strings.Fields(args)
+	if len(parts) == 0 {
+		return "", fmt.Errorf("empty xdev command")
+	}
+	if _, ok := allowedXdevSubcommands[parts[0]]; !ok {
+		return "", fmt.Errorf("xdev subcommand %q is not allowed", parts[0])
+	}
+	for _, p := range parts {
+		if strings.ContainsAny(p, ";&|`$<>\n\r") {
+			return "", fmt.Errorf("xdev command contains unsafe characters")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, parts...)
