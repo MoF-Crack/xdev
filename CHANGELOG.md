@@ -18,9 +18,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 - Local-scan ready signal fires after disk cache load; host scan starts immediately instead of waiting 15s
 - Local PATH detection uses the App config shim dir (no extra `config.Load("")`)
 - Windows shims recopy when size matches but mtime differs (upgrade no longer skipped)
-- Host-scan module (`internal/hostscan`) skips xdev shim copies on PATH and returns every PATH instance (not just `LookPath` first hit)
+- Host-scan module (`internal/hostscan`) skips xdev shim copies on PATH and returns every PATH instance (not just `LookPath` first hit); LookPath walks past a leading shim-dir hit instead of giving up
 - Windows shims prefer a hard link to xdev.exe (fallback copy)
 - GUI install wrappers share one `InstallSpec` (`tool` / `package-manager` / `sub-tool`); App stays a Wails adapter over catalog, install-session, host-scan, prefs
+- AppContent is a desktop shell: package-manager / sniff / window chrome / notifications live in composables
+- Leftover `one-api/` working-tree copy is not part of the product (`THIRD_PARTY.md`)
 
 ## [0.3.1] - 2026-08-18
 

@@ -60,7 +60,7 @@ xmdevenvmt/
 ├── frontend/                 # Vue 3 前端 (Wails GUI)
 │   └── src/
 │       ├── App.vue           # 根组件
-│       ├── AppContent.vue    # 主布局（shell + 安装/PM/环境编排）
+│       ├── AppContent.vue    # 桌面 shell（路由 + 对话框）；session 在 composables/
 │       └── SetupWizard.vue   # 首次运行向导
 ├── docs/                     # 文档
 ├── build.sh                  # Unix 构建脚本

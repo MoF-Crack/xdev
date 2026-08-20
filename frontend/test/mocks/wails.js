@@ -80,7 +80,7 @@ export function createInitializedWailsBrowserMocks() {
   const methods = {
     IsInitialized: async () => true,
     GetCategories: async () => [{ name: 'language', displayName: 'Languages' }, { name: 'package-manager', displayName: 'Package Managers' }],
-    GetToolsByCategory: async (category) => category === 'package-manager' ? [{ name: 'npm', toolName: 'npm', displayName: 'npm', installed: false, canInstall: true, isFavorite: false }, { name: 'pnpm', toolName: 'pnpm', displayName: 'pnpm', installed: true, canInstall: true, isFavorite: true, hasUpdate: true }, { name: 'manual-pm', toolName: 'manual-pm', displayName: 'Manual PM', installed: false, canInstall: false, installHint: 'Install from vendor site' }] : tools,
+    GetToolsByCategory: async (category) => category === 'package-manager' ? [{ name: 'npm', toolName: 'npm', displayName: 'npm', category: 'package-manager', installed: false, canInstall: true, isFavorite: false }, { name: 'pnpm', toolName: 'pnpm', displayName: 'pnpm', category: 'package-manager', installed: true, canInstall: true, isFavorite: true, hasUpdate: true }, { name: 'manual-pm', toolName: 'manual-pm', displayName: 'Manual PM', category: 'package-manager', installed: false, canInstall: false, installHint: 'Install from vendor site' }] : tools,
     GetDashboardStats: async () => ({
       totalTools: 24,
       installedCount: 3,

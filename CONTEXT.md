@@ -33,4 +33,4 @@ Single-context vocabulary for architecture skills. Prefer these names over synon
 
 - Do not call host-scan a “service” or “API”.
 - Do not treat yarn/pnpm as standalone catalog tools.
-- `one-api/` is vendored third-party and not part of this glossary (Spec 029 B5, needs a separate decision).
+- `one-api/` is not part of XDev. It is gitignored leftover from an older checkout; Spec 029 B5 evicts it from the working tree. See `THIRD_PARTY.md`.

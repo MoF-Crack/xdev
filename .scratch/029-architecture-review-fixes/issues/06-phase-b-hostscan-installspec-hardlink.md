@@ -9,4 +9,4 @@ Type: task
 - B2: App 仍是 Wails adapter（不增绑定）；实现按 catalog / install-session / host-scan / prefs 分组；`CONTEXT.md` 记下术语。
 - B3: `InstallSpec.Kind` = tool / package-manager / sub-tool；`InstallPackageManager` / `InstallSubTool` 转发 `App.install`。
 - B4: Windows CreateHardLink，失败 copy。
-- B5: 未做（one-api / AppContent 需单独确认）。
+- B5: AppContent session composable + 删除 one-api 工作副本。

@@ -12,7 +12,6 @@ package hostscan
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -39,17 +38,14 @@ type Query struct {
 
 // LookPath finds cmd on PATH, skipping any hit inside shimDir (those
 // are xdev dispatcher copies, not the real tool). Empty shimDir
-// disables the skip. Only the first exec.LookPath hit is returned —
-// use Scan / ScanPATH when every instance matters (D: leftover plus E: XDev).
+// disables the skip. Unlike exec.LookPath, a shim-dir hit does not
+// hide a later real binary (shimDir is typically first on PATH).
 func LookPath(cmd, shimDir string) (string, bool) {
-	path, err := exec.LookPath(cmd)
-	if err != nil {
+	hits := Scan(Query{Names: []string{cmd}, ShimDir: shimDir})
+	if len(hits) == 0 {
 		return "", false
 	}
-	if shimDir != "" && InsideDir(path, shimDir) {
-		return "", false
-	}
-	return path, true
+	return hits[0].Path, true
 }
 
 // FirstOnPATH returns the first of names that resolves outside shimDir.
@@ -173,6 +169,10 @@ func expandNames(names []string) []string {
 			continue
 		}
 		for _, ext := range exts {
+			// Prefer the caller-supplied basename casing (codex.cmd)
+			// over PATHEXT's typical .CMD — Stat is case-insensitive
+			// on Windows but the returned path should match the file.
+			add(n + strings.ToLower(ext))
 			add(n + ext)
 		}
 	}

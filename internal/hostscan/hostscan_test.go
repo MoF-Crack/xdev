@@ -62,6 +62,17 @@ func TestLookPathSkipsShimDir(t *testing.T) {
 	if !InsideDir(got, realDir) {
 		t.Errorf("got %q, want under %q", got, realDir)
 	}
+
+	// Production PATH puts shimDir first. Skipping the shim must still
+	// return the later real binary — not "not found".
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+realDir+string(os.PathListSeparator)+orig)
+	got, ok = LookPath(name, shimDir)
+	if !ok {
+		t.Fatal("LookPath should walk past the shim-dir hit")
+	}
+	if !InsideDir(got, realDir) {
+		t.Errorf("got %q, want under %q after skipping shim", got, realDir)
+	}
 }
 
 func writeBin(t *testing.T, dir, name string, body string) string {

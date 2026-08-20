@@ -52,8 +52,8 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted, h } from 'vue';
-import { NIcon, NButton, NSpace, NRadio, NRadioGroup, useMessage, useDialog } from 'naive-ui';
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
+import { NIcon, NButton, NSpace, useMessage, useDialog } from 'naive-ui';
 import {
   SearchOutline,
   HomeOutline, SettingsOutline, CodeOutline, PhonePortraitOutline, ConstructOutline,
@@ -77,49 +77,23 @@ import FormSelectorDialog from './components/FormSelectorDialog.vue';
 import EnvVarEditorDialog from './components/EnvVarEditorDialog.vue';
 import { useInstall } from './composables/useInstall.js';
 import { useTools } from './composables/useTools.js';
+import { useNotifications } from './composables/useNotifications.js';
+import { usePackageManagers } from './composables/usePackageManagers.js';
+import { useWindowChrome } from './composables/useWindowChrome.js';
+import { useSniffSession } from './composables/useSniffSession.js';
 import AppShell from './layouts/AppShell.vue';
 import PageToolbar from './layouts/PageToolbar.vue';
 import { commandPaletteEntries, createNavigationGroups, findPageDefinition } from './navigation/navigation.js';
 import { sameEnvIdentity } from './pages/envIdentity.js';
 import { createLatestRequestController } from './pages/settingsState.js';
-import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '../wailsjs/runtime/runtime';
 
 const { t, locale, setLocale } = useI18n();
 
 const message = useMessage();
 const dialog = useDialog();
+const { isMaximized, minimizeWindow, toggleMaximize, closeWindow } = useWindowChrome();
 
-// Window control for frameless mode
-const isMaximized = ref(false);
-
-function minimizeWindow() {
-  WindowMinimise();
-}
-
-async function toggleMaximize() {
-  WindowToggleMaximise();
-  try {
-    isMaximized.value = await WindowIsMaximised();
-  } catch (error) {
-    console.warn('[XDev] Failed to read maximized window state:', error);
-  }
-}
-
-function closeWindow() {
-  Quit();
-}
-
-// Poll maximized state (Wails v2 doesn't have event for this)
-let maximizePollTimer = null;
-onMounted(() => {
-  maximizePollTimer = setInterval(() => {
-    WindowIsMaximised()
-      .then(v => { isMaximized.value = v; })
-      .catch(error => console.warn('[XDev] Failed to poll maximized window state:', error));
-  }, 500);
-});
 onUnmounted(() => {
-  if (maximizePollTimer) clearInterval(maximizePollTimer);
   window.runtime?.EventsOff?.('dashboardStatsUpdated');
 });
 
@@ -250,9 +224,6 @@ const envAllLevel = ref('user'); // 环境变量级别
 const allEnvVars = ref([]); // 全部环境变量
 const envValidationStats = ref(null); // { valid: number, partial: number, invalid: number }
 
-// Package manager install/update state
-const pmOperating = ref('');
-
 // 旧版目录迁移状态
 const migratingLegacy = ref(false);
 const legacyMigrateProgress = ref('');
@@ -267,43 +238,20 @@ const migrationMode = ref('junction');
 // About page state
 const aboutInfo = ref({});
 
-// Updates & sniff state
-const availableUpdates = ref([]);
-const updatesLoading = ref(false);
-const sniffOperating = ref(false);
-const updateInstalling = ref({});
 const scanOperating = ref(false);
 const updateOperating = ref(false);
-const sniffConfig = ref({});
-const serviceStatus = ref(null);
-const notifications = ref([]);
+const { notifications, addNotification, clearNotifications, dismissNotification } = useNotifications();
 const scanResults = ref([]);
 const scanAttempted = ref(false);
 const ignoredTools = ref([]);
-
-function addNotification(title, type = 'info') {
-  notifications.value.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, title, type, time: new Date().toLocaleTimeString() });
-  if (notifications.value.length > 50) {
-    notifications.value = notifications.value.slice(0, 50);
-  }
-}
-function clearNotifications() {
-  notifications.value = [];
-}
-function dismissNotification(id) {
-  notifications.value = notifications.value.filter((item) => item.id !== id);
-}
-
-async function loadUpdates() {
-  updatesLoading.value = true;
-  try {
-    availableUpdates.value = await window.go.gui.App.GetAvailableUpdates() || [];
-  } catch (e) {
-    console.error('Failed to load updates:', e);
-  } finally {
-    updatesLoading.value = false;
-  }
-}
+const {
+  availableUpdates, updatesLoading, sniffOperating, updateInstalling, sniffConfig, serviceStatus,
+  loadUpdates, loadSniffConfig, loadSniffServiceStatus, sniffAll, installUpdate,
+  saveSniffStrategy, installSniffService, uninstallSniffService,
+} = useSniffSession({ t, message, addNotification, doInstall: (...args) => doInstall(...args) });
+const { pmOperating, installPackageManager, updatePackageManager, migratePackageManager } = usePackageManagers({
+  t, message, dialog, refreshTools: (...args) => refreshTools(...args), selectedTool,
+});
 
 
 async function loadIgnoredTools() {
@@ -313,85 +261,6 @@ async function loadIgnoredTools() {
 async function ignoreUpdate(update) {
   try { await window.go.gui.App.IgnoreTool(update.tool, "update", ""); message.success(t("updates.ignored_ok")); await loadUpdates(); await loadIgnoredTools(); } catch (e) { message.error(t("ignore.add_failed") + ": " + e); }
 }
-async function loadSniffConfig() {
-  try {
-    sniffConfig.value = await window.go.gui.App.GetSniffConfig() || {};
-  } catch (e) {
-    console.error('Failed to load sniff config:', e);
-  }
-}
-
-async function loadSniffServiceStatus() {
-  try {
-    serviceStatus.value = await window.go.gui.App.SniffServiceStatus();
-  } catch (e) {
-    console.error('Failed to load sniff service status:', e);
-  }
-}
-
-async function sniffAll() {
-  sniffOperating.value = true;
-  try {
-    await window.go.gui.App.SniffAll();
-    addNotification(t('updates.sniff_completed'), 'success');
-    await loadUpdates();
-  } catch (e) {
-    console.error('Sniff all failed:', e);
-    addNotification(`${t('updates.sniff_failed')}: ${e}`, 'error');
-  } finally {
-    sniffOperating.value = false;
-  }
-}
-
-async function sniffTool(tool) {
-  try {
-    await window.go.gui.App.SniffNow(tool);
-    addNotification(`Sniffed ${tool}`, 'success');
-    await loadUpdates();
-  } catch (e) {
-    console.error('Sniff tool failed:', e);
-    addNotification('Sniff failed: ' + e, 'error');
-  }
-}
-
-async function installUpdate(update) {
-  await doInstall(update.tool, update.latestVersion);
-  await loadUpdates();
-}
-
-async function saveSniffStrategy(strategy) {
-  try {
-    await window.go.gui.App.SetSniffStrategy(strategy);
-    sniffConfig.value.strategy = strategy;
-    message.success(t('settings.saved'));
-  } catch (e) {
-    message.error('Failed to save sniff strategy: ' + e);
-  }
-}
-
-async function installSniffService(schedule) {
-  try {
-    await window.go.gui.App.InstallSniffService(schedule);
-    message.success('Sniff service installed');
-    await loadSniffServiceStatus();
-  } catch (e) {
-    message.error('Failed to install sniff service: ' + e);
-  }
-}
-
-async function uninstallSniffService() {
-  try {
-    await window.go.gui.App.UninstallSniffService();
-    message.success('Sniff service uninstalled');
-    await loadSniffServiceStatus();
-  } catch (e) {
-    message.error('Failed to uninstall sniff service: ' + e);
-  }
-}
-
-// Old AI state removed - AIAssistantPage now manages its own state
-// Dashboard and settings pass through sniff/update data
-
 
 // Isolate state
 const isolateStatus = ref(null);
@@ -956,101 +825,6 @@ async function copyToolCommand(name) {
   }
 }
 
-function installPackageManager(tool) {
-  const toolName = tool?.name;
-  const displayName = tool?.displayName || tool?.name;
-  if (!toolName) return;
-
-  // Spec 026: 附属工具动态安装——三种路径。
-  // 1. enableCommand 非空（yarn/pnpm）→ 调 InstallSubTool(toolName, "")
-  // 2. installMethods 长度>1（pipx 同时有 pip+uv）→ 弹选项对话框
-  // 3. installMethods 长度==1 → 直接调 InstallSubTool(toolName, onlyMethod)
-  // 4. installCommand 非空（brew/scoop/choco）→ 现有 script install 路径
-  // 5. toolName 在 registry → 现有 InstallTool 路径
-  if (tool?.installMethods?.length > 1) {
-    // 路径2: 多方法 → 弹选项对话框（需用 dynamic render）
-    showPmMethodSelector(tool);
-    return;
-  }
-
-  if (tool?.installMethods?.length === 1) {
-    // 路径3: 单一方法 → 直接安装
-    installSubTool(toolName, displayName, tool.installMethods[0].name);
-    return;
-  }
-
-  if (tool?.enableCommand) {
-    // 路径1: 仅 corepack enable（无其他安装方式可选时）
-    dialog.warning({
-      title: t('pm.enable_confirm_title', { name: displayName }),
-      content: `${t('pm.enable_confirm_content', { name: displayName })}\n\n${t('pm.install_command_summary')}\n${tool.enableCommand}`,
-      positiveText: t('pm.enable_button'),
-      negativeText: t('btn.cancel'),
-      ariaLabel: t('pm.enable_confirm_title', { name: displayName }),
-      onPositiveClick: () => { installSubTool(tool.name, displayName, ''); },
-    });
-    return;
-  }
-
-  // 路径4/5: 现有 script install 或 InstallTool 路径
-  const command = tool?.installCommand || tool?.installHint || t('pm.install_command_unavailable');
-  const commandSummary = `${t('pm.install_command_summary')}\n${command}`;
-  dialog.warning({
-    title: t('pm.install_confirm_title', { name: displayName }),
-    content: `${t('pm.install_confirm_content', { name: displayName })}\n\n${commandSummary}`,
-    positiveText: tool?.requiresAdmin ? t('pm.install_admin_required') : t('btn.install'),
-    negativeText: t('btn.cancel'),
-    ariaLabel: t('pm.install_confirm_title', { name: displayName }),
-    onPositiveClick: () => installPm(toolName, displayName),
-  });
-}
-
-// showPmMethodSelector 弹出包管理器安装方式选项对话框（Spec 026）。
-// 使用 NRadioGroup 让用户真正选择 pip 或 uv 安装方式。
-function showPmMethodSelector(tool) {
-  const toolName = tool?.name;
-  const displayName = tool?.displayName || tool?.name;
-  const methods = tool?.installMethods || [];
-  if (methods.length < 2) return;
-
-  // 用 ref 跟踪用户选择的 method（通过 h 渲染函数创建交互式 radio）
-  const selectedMethod = ref(methods[0].name);
-  dialog.warning({
-    title: t('pm.install_method_selector_title', { name: displayName }),
-    content: () => h(NRadioGroup, {
-      value: selectedMethod.value,
-      'onUpdate:value': (v) => { selectedMethod.value = v; },
-    }, {
-      default: () => methods.map(m => h(NRadio, { value: m.name, key: m.name }, { default: () => `[${m.name}] ${m.command}` })),
-    }),
-    positiveText: t('btn.install'),
-    negativeText: t('btn.cancel'),
-    ariaLabel: t('pm.install_method_selector_title', { name: displayName }),
-    onPositiveClick: () => {
-      installSubTool(toolName, displayName, selectedMethod.value);
-    },
-  });
-}
-
-// installSubTool 调后端 InstallSubTool API 并处理结果（Spec 026）。
-async function installSubTool(toolName, displayName, method) {
-  if (!toolName) return;
-  pmOperating.value = toolName;
-  try {
-    await window.go.gui.App.InstallSubTool(toolName, method);
-    message.success(t('pm.install_success', { name: displayName }));
-    await refreshTools();
-  } catch (e) {
-    message.error(t('pm.install_failed', { name: displayName }) + ': ' + e);
-  } finally {
-    pmOperating.value = '';
-  }
-}
-
-function updatePackageManager(tool) {
-  updatePm(tool?.name, tool?.displayName || tool?.name);
-}
-
 async function toggleCatalogFavorite(tool) {
   if (!tool?.name) return;
   if (tool.isFavorite) await removeFavorite(tool.name);
@@ -1508,21 +1282,6 @@ async function migrateTool(toolName, localPath) {
   }
 }
 
-// migratePackageManager 迁移系统安装的包管理器到 xdev 管理目录（Spec 027）。
-async function migratePackageManager(toolName) {
-  const displayName = selectedTool.value?.displayName || toolName;
-  pmOperating.value = toolName;
-  try {
-    await window.go.gui.App.MigratePackageManager(toolName);
-    message.success(t('pm.migrate_success', { name: displayName }));
-    await refreshTools();
-  } catch (e) {
-    message.error(t('pm.migrate_failed', { name: displayName }) + ': ' + e);
-  } finally {
-    pmOperating.value = '';
-  }
-}
-
 async function switchToLocal(toolName) {
   try {
     await window.go.gui.App.SwitchToLocalVersion(toolName);
@@ -1777,35 +1536,6 @@ async function browseEnvDir() {
     return '';
   }
 }
-
-async function installPm(toolName, displayName) {
-  if (!toolName) return;
-  pmOperating.value = toolName;
-  try {
-    await window.go.gui.App.InstallPackageManager(toolName);
-    message.success(t('pm.install_success', { name: displayName }));
-    await refreshTools();
-  } catch (e) {
-    message.error(t('pm.install_failed', { name: displayName }) + ': ' + e);
-  } finally {
-    pmOperating.value = '';
-  }
-}
-
-async function updatePm(toolName, displayName) {
-  if (!toolName) return;
-  pmOperating.value = toolName;
-  try {
-    await window.go.gui.App.UpdatePackageManager(toolName);
-    message.success(t('pm.update_success', { name: displayName }));
-    await refreshTools();
-  } catch (e) {
-    message.error(t('pm.update_failed') + ': ' + e);
-  } finally {
-    pmOperating.value = '';
-  }
-}
-
 
 async function refreshTools() {
   if (selectedView.value && selectedView.value !== 'dashboard' && selectedView.value !== 'settings') {

@@ -1,6 +1,6 @@
 # Spec 029 — 架构审查修复方案
 
-Status: phase-b-complete (B5 deferred)
+Status: phase-b-complete
 Source: `C:\Users\xinyan\AppData\Local\Temp\architecture-review-2026-08-20.html`
 
 ## 目标
@@ -25,10 +25,10 @@ Source: `C:\Users\xinyan\AppData\Local\Temp\architecture-review-2026-08-20.html`
 | B2 | **落地（不增绑定）** | App 仍是 Wails 宽 facade（不改 JS 绑定面）；实现按 catalog / install-session / host-scan / prefs 分组。`CONTEXT.md` 记下术语 |
 | B3 | **落地** | `InstallSpec` 增加 Kind/Method；`App.install` 分发 tool / package-manager / sub-tool。Wails `InstallTool*` / `InstallPackageManager` / `InstallSubTool` / `RepairInstall` 转发 |
 | B4 | **落地** | Windows `CreateHardLink`，失败再 copy；SameFile 则跳过 |
-| B5 | **未做（需确认）** | AppContent 拆 view / one-api 移仓。不删除 `one-api/` |
+| B5 | **落地** | AppContent 拆 session composable（PM / sniff / notifications / window chrome）；`one-api/` 工作副本删除，gitignored + `THIRD_PARTY.md`。不改 ADR-0002 绑定面 |
 
 ## 非目标
 
 - 不在本轮引入新 Wails 绑定或重写绑定面
 - 不改 ADR-0002（Wails）/ ADR-0003（Windows 主平台）
-- 不删除 `one-api/`（B5，需单独确认）
+- 不把 `one-api/` 加进 git（本就不跟踪；工作副本已删）

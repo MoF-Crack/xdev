@@ -4,7 +4,7 @@
 
 审查报告：`C:\Users\xinyan\AppData\Local\Temp\architecture-review-2026-08-20.html`
 
-Phase A 落地。Phase B：hostscan 全量扫描 + InstallSpec Kind 分发 + hardlink + App-as-adapter 注释/CONTEXT 已落地。B5 one-api / AppContent 拆分未做（需确认）。
+Phase A 落地。Phase B 全部落地：hostscan 全量扫描 + LookPath 走过前置 shim、InstallSpec Kind 分发、hardlink、App-as-adapter、AppContent session composable、one-api 工作副本删除。
 
 ## Decisions-so-far
 
@@ -13,8 +13,9 @@ Phase A 落地。Phase B：hostscan 全量扫描 + InstallSpec Kind 分发 + har
 - Shim 本轮不改 hardlink（B4），只修 size 误判 → 后一轮 B4 已落地 CreateHardLink
 - detectLocalToolPath 增加 shimDir 参数，删除 resolveShimDir
 - Phase B deepening（2026-08-21）：hostscan.Scan 返回全部 PATH Hit；InstallSpec.Kind 收口 PM/SubTool；App 不增 Wails 绑定；CONTEXT.md 增加 Host-scan / InstallSpec / Desktop adapter
+- LookPath 原先在 shim 排 PATH 最前时直接放弃 → 改为 Scan，走过 shim 取后续真实二进制
+- B5：AppContent 拆 usePackageManagers / useSniffSession / useNotifications / useWindowChrome；one-api 工作副本删除（本就不跟踪）
 
 ## Fog
 
-- one-api 是否移仓需用户确认（B5）
-- AppContent 拆 view modules 仍是 Speculative，未开工
+- AppContent 仍持有 env / isolate / remote / settings handler；再拆 page-level session 是后续 deepening，不是 B5 出口
