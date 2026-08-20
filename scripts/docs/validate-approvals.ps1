@@ -214,10 +214,13 @@ function LoadApprovals {
 
 # ---- doc meta extraction ----
 function DocVersion { param([string]$C)
-    if ($C -match '^\*\*Version\*\*:\s*`([^`]+)`') { return $Matches[1].Trim() }
-    if ($C -match '\*\*version\*\*:\s*`?([0-9][0-9rc.-]+)`?') { return $Matches[1].Trim() }
-    if ($C -match '\| [^|]*\u7248\u672C[^|]*\| `([^`]+)`') { return $Matches[1].Trim() }
-    if ($C -match '\*\*\u7248\u672C\*\*[：:]\s*`?([0-9][^`\s\n]*)`?') { return $Matches[1].Trim() }
+    # Only search the first 10 lines (metadata block) so table cells that
+    # mention 版本 (version) later in the spec cannot steal the document version.
+    $header = (($C -split "`n")[0..9]) -join "`n"
+    if ($header -match '^\*\*Version\*\*:\s*`([^`]+)`') { return $Matches[1].Trim() }
+    if ($header -match '\*\*version\*\*:\s*`?([0-9][0-9rc.-]+)`?') { return $Matches[1].Trim() }
+    if ($header -match '\| [^|]*\u7248\u672C[^|]*\| `([^`]+)`') { return $Matches[1].Trim() }
+    if ($header -match '\*\*\u7248\u672C\*\*[：:]\s*`?([0-9][^`\s\n]*)`?') { return $Matches[1].Trim() }
     return ''
 }
 function DocState { param([string]$C)

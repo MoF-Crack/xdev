@@ -97,11 +97,12 @@ func TestFindPMDefByToolName_PipParent(t *testing.T) {
 
 func TestInferIndependentPMRoot_ScoopShims(t *testing.T) {
 	t.Setenv("SCOOP", "")
-	root, err := inferIndependentPMRoot(pmDef{name: "scoop", displayName: "Scoop"}, `C:\Users\demo\scoop\shims\scoop.cmd`)
+	exe := filepath.Join(`C:\Users\demo\scoop`, "shims", "scoop.cmd")
+	root, err := inferIndependentPMRoot(pmDef{name: "scoop", displayName: "Scoop"}, exe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Clean(`C:\Users\demo\scoop`)
+	want := filepath.Clean(filepath.Join(`C:\Users\demo\scoop`))
 	if root != want {
 		t.Errorf("scoop shim root = %q, want %q", root, want)
 	}
@@ -109,7 +110,8 @@ func TestInferIndependentPMRoot_ScoopShims(t *testing.T) {
 
 func TestInferIndependentPMRoot_ChocoBin(t *testing.T) {
 	t.Setenv("ChocolateyInstall", "")
-	root, err := inferIndependentPMRoot(pmDef{name: "choco", displayName: "Chocolatey"}, `C:\ProgramData\chocolatey\bin\choco.exe`)
+	exe := filepath.Join(`C:\ProgramData\chocolatey`, "bin", "choco.exe")
+	root, err := inferIndependentPMRoot(pmDef{name: "choco", displayName: "Chocolatey"}, exe)
 	if err != nil {
 		t.Fatal(err)
 	}

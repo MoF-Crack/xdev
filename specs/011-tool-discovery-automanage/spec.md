@@ -1,7 +1,7 @@
 # Feature Specification: 所有支持工具的新版本嗅探发现及自动纳入管理范围
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
+> **状态**：Approved
 > **文档版本**：0.2.0
 > **创建日期**：2026-07-26
 > **最后更新**：2026-07-26
@@ -11,7 +11,7 @@
 
 **Feature Branch**: `011-tool-discovery-automanage`
 **Created**: 2026-07-26
-**Status**: Draft
+**Status**: Approved
 **Input**: 用户需求"所有支持工具的新版本嗅探发现及自动加入管理范围功能"+ 修订一"嗅探触发应为用户可选策略：周期后下次启动嗅探 / 每次启动后台嗅探 / 系统服务自动嗅探 / 用户主动开启"+ 修订二"sniff-local 与现有 `internal/env/scan_local.go` 的 ScanLocalTools 重叠，应复用而非重做"
 
 ---
@@ -317,6 +317,7 @@ xdev sniff --all --headless（系统服务调用）
 |---|---|---|---|---|---|
 | Draft 创建 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.1.0` | `2026-07-26-spec-011-draft-001` 创建初稿 |
 | Draft 修订 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.2.0` | 采纳"嗅探触发应为用户可选策略（interval/startup/service/manual 四种）"修订；采纳"sniff-local 与现有 internal/env/scan_local.go 重叠，复用而非重做"修订；新增 unverified 标记；Sniffer 不可外部扩展 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-08-20 | `0.2.0` | `2026-08-20-spec-011-approved-001` 嗅探功能已落地，元数据对齐为 Approved |
 
 ---
 

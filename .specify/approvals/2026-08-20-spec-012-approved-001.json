@@ -1,0 +1,18 @@
+{
+    "schema_version":  1,
+    "approval_id":  "2026-08-20-spec-012-approved-001",
+    "asset_type":  "spec",
+    "target_path":  "specs/012-remove-ai-project-task-service/spec.md",
+    "decision":  "approve-state-transition",
+    "target_version":  "1.0.0",
+    "target_state":  "Approved",
+    "scope":  "Align Spec 012 metadata for governance validator",
+    "approved_by":  "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "approved_at":  "2026-08-20",
+    "authorization_text":  "v0.3.2 governance metadata alignment for specs/012-remove-ai-project-task-service/spec.md",
+    "recorded_at":  "2026-08-20",
+    "recorded_by":  "XDev Agent",
+    "supersedes":  [
+
+                   ]
+}

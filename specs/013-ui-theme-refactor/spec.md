@@ -1,7 +1,13 @@
 # Spec 013: UI 主题重构——三套配色方案
 
-> **状态**：待用户批准
-> **类型**：UI 重构
+> **文档类型**：Feature Spec
+> **状态**：Approved
+> **文档版本**：1.0.0
+> **创建日期**：2026-08-08
+> **最后更新**：2026-08-20
+> **所有者**：xinyan <zuijiuhjd@foxmail.com>
+> **权威范围**：三套 UI 主题重构的目标、范围和验收
+> **替代文档**：无
 
 ## 背景与动机
 
@@ -163,4 +169,6 @@ ThemeSettings.vue 从 checkbox 改为三选一按钮组（`n-radio-group` 或 `n
 
 ## 批准记录 (Approval History)
 
-> **批准ID**: `2026-08-08-spec-013-draft-001`
+| 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
+|---|---|---|---|---|---|
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-08-08 | `1.0.0` | `2026-08-20-spec-013-approved-001` 三套 UI 主题重构的目标、范围和验收 |

@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -15,7 +16,11 @@ func TestValidateInitBaseDir(t *testing.T) {
 	if err := validateInitBaseDir(`\\server\share\xdev`); err == nil {
 		t.Fatal("UNC base dir should be rejected")
 	}
-	if err := validateInitBaseDir("C:\\XDev"); err != nil {
+	abs := "C:\\XDev"
+	if runtime.GOOS != "windows" {
+		abs = "/opt/xdev"
+	}
+	if err := validateInitBaseDir(abs); err != nil {
 		t.Fatalf("absolute local path should be accepted: %v", err)
 	}
 }

@@ -215,7 +215,7 @@ func TestLoadMigrationModeDefault(t *testing.T) {
 	noMigrationYAML := `core:
   xmdevenv_dir: ` + tmp + `
 `
-	if err := os.WriteFile(tmp+"\\config.yaml", []byte(noMigrationYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config.yaml"), []byte(noMigrationYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	cfg, err := Load(tmp)
@@ -234,7 +234,7 @@ func TestLoadMigrationModeExplicit(t *testing.T) {
 migration:
   migration_mode: move
 `
-	if err := os.WriteFile(tmp+"\\config.yaml", []byte(migrationYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config.yaml"), []byte(migrationYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	cfg, err := Load(tmp)
@@ -254,7 +254,7 @@ func TestSniffConfigDefaults(t *testing.T) {
 	noSniffYAML := `core:
   xmdevenv_dir: ` + tmp + `
 `
-	if err := os.WriteFile(tmp+"\\config.yaml", []byte(noSniffYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config.yaml"), []byte(noSniffYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	cfg, err := Load(tmp)
@@ -304,7 +304,7 @@ sniff:
   strategy: startup
   auto_archive_fill: false
 `
-	if err := os.WriteFile(tmp+"\\config.yaml", []byte(sniffYAML), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, "config.yaml"), []byte(sniffYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	cfg, err := Load(tmp)

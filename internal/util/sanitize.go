@@ -153,14 +153,14 @@ func ValidateSubPath(parent, child string) error {
 	}
 
 	// Resolve symlinks on both sides if possible.
-	// EvalSymlinks requires the path to exist; if it doesn't yet,
-	// we fall back to the cleaned absolute path.
-	if evParent, err := filepath.EvalSymlinks(absParent); err == nil {
-		absParent = evParent
-	}
-	if evChild, err := filepath.EvalSymlinks(absChild); err == nil {
-		absChild = evChild
-	}
+	// EvalSymlinks requires the path to exist. When only the parent exists
+	// (typical for shimDir/<name> before the shim is created), resolving
+	// the parent through a Darwin /var -> /private/var link while leaving
+	// the child on the lexical path makes Rel() look like an escape.
+	// Walk the child up until a real prefix exists, then stitch the
+	// remaining components onto the resolved prefix.
+	absParent = evalExistingPrefix(absParent)
+	absChild = evalExistingPrefix(absChild)
 
 	// Check via Rel that child does not escape parent
 	rel, err := filepath.Rel(absParent, absChild)
@@ -185,6 +185,32 @@ func ValidateSubPath(parent, child string) error {
 	}
 
 	return nil
+}
+
+// evalExistingPrefix follows symlinks for the longest existing prefix of
+// path, then appends any remaining (not-yet-created) components. This
+// keeps ValidateSubPath correct when parent is a Darwin /var symlink and
+// child is a not-yet-created file under it.
+func evalExistingPrefix(path string) string {
+	var missing []string
+	cur := path
+	for {
+		if ev, err := filepath.EvalSymlinks(cur); err == nil {
+			if len(missing) == 0 {
+				return ev
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				ev = filepath.Join(ev, missing[i])
+			}
+			return ev
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return path
+		}
+		missing = append(missing, filepath.Base(cur))
+		cur = parent
+	}
 }
 
 // IsValidEnvVarName checks whether a string is a valid environment

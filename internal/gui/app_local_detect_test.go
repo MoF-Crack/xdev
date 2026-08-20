@@ -18,10 +18,10 @@ func TestIsLocalInstallForScan(t *testing.T) {
 	}{
 		{"empty path excluded", localInfo{Path: "", Source: "local"}, false},
 		{"xdev managed source excluded", localInfo{Path: `C:\Program Files\Go\bin\go.exe`, Source: "xdev"}, false},
-		{"path inside XMDevDir excluded", localInfo{Path: `C:\XDev\current\go`, Source: "local"}, false},
-		{"path inside InstallDir excluded", localInfo{Path: `C:\XDev\install\go\1.22.0\bin\go.exe`, Source: "local"}, false},
-		{"path inside ShimDir excluded", localInfo{Path: `C:\XDev\shims\go.exe`, Source: "local"}, false},
-		{"genuine local install kept", localInfo{Path: `D:\Env\Go\bin\go.exe`, Source: "local"}, true},
+		{"path inside XMDevDir excluded", localInfo{Path: filepath.Join(`C:\XDev`, "current", "go"), Source: "local"}, false},
+		{"path inside InstallDir excluded", localInfo{Path: filepath.Join(`C:\XDev`, "install", "go", "1.22.0", "bin", "go.exe"), Source: "local"}, false},
+		{"path inside ShimDir excluded", localInfo{Path: filepath.Join(`C:\XDev`, "shims", "go.exe"), Source: "local"}, false},
+		{"genuine local install kept", localInfo{Path: filepath.Join(`D:\Env`, "Go", "bin", "go.exe"), Source: "local"}, true},
 		{"unix local install kept", localInfo{Path: `/usr/local/go/bin/go`, Source: "local"}, true},
 	}
 

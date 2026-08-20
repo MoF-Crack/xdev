@@ -3,6 +3,7 @@
 package util
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -91,5 +92,23 @@ func TestValidateAbsPathUnder(t *testing.T) {
 		if err := ValidateAbsPathUnder(base, p); err == nil {
 			t.Errorf("ValidateAbsPathUnder(%q, %q) should be rejected", base, p)
 		}
+	}
+}
+
+func TestValidateSubPath_UncreatedChildUnderExistingParent(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "fakego")
+	if err := ValidateSubPath(parent, child); err != nil {
+		t.Fatalf("uncreated child under existing parent should pass: %v", err)
+	}
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSubPath(parent, child); err != nil {
+		t.Fatalf("still-uncreated child after MkdirAll parent should pass: %v", err)
+	}
+	escape := filepath.Join(parent, "..", "outside")
+	if err := ValidateSubPath(parent, escape); err == nil {
+		t.Fatal("child that walks out of parent should be rejected")
 	}
 }

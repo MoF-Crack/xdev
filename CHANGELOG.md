@@ -9,6 +9,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ### Changed
 - README rewritten for 0.3.2: current CLI, 51 catalog tools, GitHub Releases download links, retired AI/task/lockfile commands removed
+- Specs 010–028 metadata aligned to the governance validator (English states, SemVer, Approval History)
 
 ### Fixed
 - Ignore-list tests no longer write into the real `$XMDEV_HOME/cache/ignored_tools.json` (Go reappearing after `go test`)
@@ -32,6 +33,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 - Updating a sniff-discovered package-manager version confirms in the frontend (no hidden native dialog / "cancelled by user")
 - Install paths copy on click; the separate Copy button is gone
 - Package-manager instance rows with more than one copy offer Switch to xdev / Switch to local
+- Config tests write `config.yaml` with `filepath.Join` so explicit YAML loads on Unix
+- `ValidateSubPath` resolves Darwin `/var` → `/private/var` for not-yet-created children (shim install no longer false-escapes)
+- GUI tests that used Windows-only paths (`C:\XDev`, `/bin/true`) now pass on macOS/Linux
 
 ## [0.3.1] - 2026-08-18
 

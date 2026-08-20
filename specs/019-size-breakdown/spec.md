@@ -1,8 +1,13 @@
 # Spec 019: 安装/缓存磁盘占用明细
 
-> **状态**：已完成
-> **类型**：功能新增 + 优化
-> **日期**：2026-08-01
+> **文档类型**：Feature Spec
+> **状态**：Approved
+> **文档版本**：1.0.0
+> **创建日期**：2026-08-01
+> **最后更新**：2026-08-20
+> **所有者**：xinyan <zuijiuhjd@foxmail.com>
+> **权威范围**：安装/缓存磁盘占用明细的目标、范围和验收
+> **替代文档**：无
 
 ## 问题
 
@@ -70,7 +75,7 @@ func (a *App) GetCacheSizeBreakdown() []DiskUsageEntry
 - `DashboardPage.vue`：
   - 「安装大小」「缓存大小」两张卡片绑定点击事件，其他卡片不可点
   - 点击后调用 `window.go.gui.App.GetInstallSizeBreakdown()` / `GetCacheSizeBreakdown()`
-  - 用 Naive UI `n-drawer`（右侧抽屉）或 `n-modal` 展示明细表格：`工具` | `版本` | `路径` | `大小`，按大小降序，顶部显示合计
+  - 用 Naive UI `n-drawer`（右侧抽屉）或 `n-modal` 展示明细表格（列：工具、版本、路径、大小），按大小降序，顶部显示合计
   - 缓存抽屉中 `IsStale` 行加「未安装」小标记
   - 空结果时显示空状态；加载中显示 loading
   - 抽屉可关闭（ESC/遮罩/关闭按钮）
@@ -146,4 +151,6 @@ func (a *App) CleanCacheCategory(category string) error
 
 ## 批准记录 (Approval History)
 
-> **批准ID**: `2026-08-08-spec-019-draft-001`
+| 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
+|---|---|---|---|---|---|
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-08-08 | `1.0.0` | `2026-08-20-spec-019-approved-001` 安装/缓存磁盘占用明细的目标、范围和验收 |

@@ -22,7 +22,13 @@ func dummyGUIBinary(t *testing.T, path string) {
 	if runtime.GOOS == "windows" {
 		src = `C:\Windows\System32\where.exe`
 	} else {
-		src = "/bin/true"
+		src = "/usr/bin/true"
+		if _, err := os.Stat(src); err != nil {
+			src = "/bin/true"
+		}
+		if _, err := os.Stat(src); err != nil {
+			src = os.Args[0]
+		}
 	}
 	data, err := os.ReadFile(src)
 	if err != nil {

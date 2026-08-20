@@ -1,9 +1,13 @@
-﻿# Spec 023: IDE / Agent / Harness 管理支持
+# Spec 023: IDE / Agent / Harness 管理支持
 
-> **状态**：已完成
-> **类型**：功能新增
-> **日期**：2026-08-02
-> **遵循**：SDD + LOOP（本文档获批后 → plan → task → checklist → 全部获批才实施）
+> **文档类型**：Feature Spec
+> **状态**：Approved
+> **文档版本**：1.0.0
+> **创建日期**：2026-08-02
+> **最后更新**：2026-08-20
+> **所有者**：xinyan <zuijiuhjd@foxmail.com>
+> **权威范围**：IDE/Agent/Harness 管理支持的目标、范围和验收
+> **替代文档**：无
 
 ## 一、目标
 
@@ -182,4 +186,6 @@ gui_binary: bin/code.exe    # GUI 主二进制（相对 install 根；供启动/
 
 ## 批准记录 (Approval History)
 
-> **批准ID**: `2026-08-08-spec-023-draft-001`
+| 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
+|---|---|---|---|---|---|
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-08-08 | `1.0.0` | `2026-08-20-spec-023-approved-001` IDE/Agent/Harness 管理支持的目标、范围和验收 |

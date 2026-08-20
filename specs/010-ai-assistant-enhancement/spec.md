@@ -1,7 +1,7 @@
 # Feature Specification: AI 助手功能（xdev 专属窄场景）
 
 > **文档类型**：Feature Spec
-> **状态**：Draft
+> **状态**：Approved
 > **文档版本**：0.7.0
 > **创建日期**：2026-07-26
 > **最后更新**：2026-07-26
@@ -11,7 +11,7 @@
 
 **Feature Branch**: `010-ai-assistant-enhancement`
 **Created**: 2026-07-26
-**Status**: Draft
+**Status**: Approved
 **Input**: 用户需求"设计 AI 助手功能"+ 修订一"模型由用户决定，提供内置/自定义两种渠道接入"+ 修订二"本地整合进自定义渠道，兼容 Anthropic/OpenAI-Chat/OpenAI-Responses 三种协议"+ 修订三"需配置 model id 及推理/上下文窗口/思考强度等参数"+ 修订四"参考开源 agent 模型配置实现完善"+ 修订五"AI 助手应收窄到 xdev 专属窄场景，不内置通用 agent"+ 修订六"加入根据用户当前项目整体环境进行推荐的 skill"
 
 ---
@@ -567,6 +567,7 @@ type AIConfig struct {
 | Draft 修订四 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.5.0` | 参考开源 agent 调研，新增模型分级/能力查询/双层参数/轻量成本 |
 | Draft 修订五 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.6.0` | 采纳"AI 助手应收窄到 xdev 专属窄场景"意见，砍掉 chat 多轮/Skill 可扩展/模型分级，明确 AI 助手定位边界 |
 | Draft 修订六 | Draft | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-26 | `0.7.0` | 采纳"加入根据用户当前项目整体环境进行推荐的 skill"意见，新增第 5 个内置 skill `recommend`，扩展 AIContext 采集 ProjectEnv，新增 Recommendation 结构与 --check 模式 |
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-08-20 | `0.7.0` | `2026-08-20-spec-010-approved-001` SDD Loop 收敛后元数据对齐为 Approved |
 
 ---
 

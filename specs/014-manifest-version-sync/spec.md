@@ -1,7 +1,13 @@
 # Spec 014: Manifest 版本同步——数据更新 + sniff 自动更新 latest
 
-> **状态**：待用户批准
-> **类型**：数据修复 + 架构修复
+> **文档类型**：Feature Spec
+> **状态**：Approved
+> **文档版本**：1.0.0
+> **创建日期**：2026-08-08
+> **最后更新**：2026-08-20
+> **所有者**：xinyan <zuijiuhjd@foxmail.com>
+> **权威范围**：manifest latest 同步与 sniff 写回的目标、范围和验收
+> **替代文档**：无
 
 ## 背景与动机
 
@@ -199,4 +205,6 @@ if a.SHA256 == "" || util.IsAllZeroHash(a.SHA256) {
 
 ## 批准记录 (Approval History)
 
-> **批准ID**: `2026-08-08-spec-014-draft-001`
+| 阶段 | 状态 | 批准者 | 日期 | 文档版本 | 批准范围 |
+|---|---|---|---|---|---|
+| Spec 批准 | Approved | `xinyan <zuijiuhjd@foxmail.com>` | 2026-08-08 | `1.0.0` | `2026-08-20-spec-014-approved-001` manifest latest 同步与 sniff 写回的目标、范围和验收 |
