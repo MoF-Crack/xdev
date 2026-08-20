@@ -81,8 +81,34 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
     }
   }
 
-  function updatePackageManager(tool) {
-    updatePm(tool?.name, tool?.displayName || tool?.name);
+  async function updatePackageManager(tool) {
+    const toolName = tool?.name;
+    const displayName = tool?.displayName || tool?.name;
+    if (!toolName) return;
+    const catalogName = tool?.toolName || toolName;
+    let latest = '';
+    let unverified = false;
+    try {
+      const versions = await window.go.gui.App.GetAvailableVersions(catalogName);
+      latest = versions?.[0]?.version || '';
+      if (latest && window.go.gui.App.PreviewInstall) {
+        const preview = await window.go.gui.App.PreviewInstall(catalogName, latest);
+        unverified = Boolean(preview?.unverified);
+      }
+    } catch (e) {
+      console.error('Preview PM update failed:', e);
+    }
+    if (unverified && latest) {
+      dialog.warning({
+        title: t('install.unverified_title') || 'Unverified Version',
+        content: t('install.unverified_content', { tool: catalogName, version: latest }) || `Version ${catalogName}@${latest} was discovered by sniffing. Continue?`,
+        positiveText: t('btn.update'),
+        negativeText: t('btn.cancel'),
+        onPositiveClick: () => updatePm(toolName, displayName),
+      });
+      return;
+    }
+    await updatePm(toolName, displayName);
   }
 
   async function installPm(toolName, displayName) {

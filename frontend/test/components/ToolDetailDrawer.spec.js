@@ -83,6 +83,29 @@ describe('ToolDetailDrawer', () => {
     wrapper.unmount();
   });
 
+  it('offers switch-to-xdev / switch-to-local on non-current package-manager instances', async () => {
+    const t = (key) => key;
+    const wrapper = mount(ToolDetailDrawer, {
+      global: { stubs: { teleport: true } },
+      props: {
+        show: true, t,
+        tool: {
+          name: 'uv',
+          category: 'package-manager',
+          localPath: 'D:\\Env\\uv\\uv.exe',
+          instances: [
+            { version: '0.7.0', path: 'D:\\Env\\uv\\uv.exe', managed: false, source: 'local' },
+            { version: '0.9.0', path: 'E:\\XDev\\install\\uv\\0.9.0', managed: true, source: 'xdev' },
+          ],
+        },
+      },
+    });
+    expect(wrapper.findAll('[data-action="switch-instance"]')).toHaveLength(1);
+    await wrapper.get('[data-action="switch-instance"]').trigger('click');
+    expect(wrapper.emitted('switch-xdev')).toEqual([['uv', '0.9.0']]);
+    wrapper.unmount();
+  });
+
   it('puts package-manager enable/install/update in the drawer, not the catalog', async () => {
     const t = (key) => key;
     const pnpm = mount(ToolDetailDrawer, {

@@ -1,7 +1,6 @@
 <template>
   <span class="copyable-value">
-    <code class="xdev-mono" :title="value">{{ displayValue }}</code>
-    <button type="button" class="xdev-btn xdev-btn--secondary xdev-btn--sm" :aria-label="copyLabel" :disabled="copying" @click="copy"><slot name="icon">Copy</slot></button>
+    <button type="button" class="copyable-value__path xdev-mono" :aria-label="copyLabel" :title="hoverTitle" :disabled="copying" @click="copy">{{ displayValue }}</button>
     <span v-if="feedback" class="copyable-value__feedback" role="status" :data-announcement="announcement">{{ feedback }}</span>
   </span>
 </template>
@@ -18,6 +17,7 @@ const displayValue = computed(() => {
   const side = Math.floor((props.maxLength - 1) / 2);
   return `${props.value.slice(0, side)}…${props.value.slice(-side)}`;
 });
+const hoverTitle = computed(() => `${props.value}\n${props.copyLabel}`);
 async function copy() {
   if (copying.value) return;
   copying.value = true;
@@ -40,8 +40,8 @@ async function copy() {
 
 <style scoped>
 .copyable-value { display: inline-flex; align-items: center; gap: var(--xdev-space-2); min-width: 0; }
-code { overflow: hidden; color: var(--xdev-text-secondary); white-space: nowrap; }
-button { padding: var(--xdev-space-1) var(--xdev-space-2); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-sm); background: transparent; color: var(--xdev-text-muted); cursor: pointer; }
-button:hover { color: var(--xdev-text-primary); border-color: var(--xdev-border-strong); }
+.copyable-value__path { overflow: hidden; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--xdev-text-secondary); white-space: nowrap; text-overflow: ellipsis; cursor: pointer; text-align: left; }
+.copyable-value__path:hover { color: var(--xdev-text-primary); text-decoration: underline; text-underline-offset: 2px; }
+.copyable-value__path:disabled { cursor: wait; }
 .copyable-value__feedback { color: var(--xdev-text-muted); font-size: var(--xdev-font-size-xs); }
 </style>

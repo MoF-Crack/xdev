@@ -474,12 +474,16 @@ func (a *App) GetOSEnvVars(level string) []EnvVarInfo {
 	return result
 }
 
-func (a *App) SwitchToLocalVersion(toolName string) error {
+func (a *App) SwitchToLocalVersion(toolName, localPath string) error {
 	logInfo("[SwitchToLocalVersion] switching %s to local version", toolName)
 	cfg := a.getCfg()
 
-	_, localPath, _ := a.getLocalCached(toolName)
-	if localPath == "" {
+	path := strings.TrimSpace(localPath)
+	if path == "" {
+		_, cached, _ := a.getLocalCached(toolName)
+		path = cached
+	}
+	if path == "" {
 		return fmt.Errorf("no local installation found for %s", toolName)
 	}
 
@@ -487,7 +491,7 @@ func (a *App) SwitchToLocalVersion(toolName string) error {
 	if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {
 		logWarn("[SwitchToLocalVersion] removing current link %s: %v", currentLink, err)
 	}
-	if err := util.CreateJunction(currentLink, localPath); err != nil {
+	if err := util.CreateJunction(currentLink, path); err != nil {
 		logWarn("[SwitchToLocalVersion] creating junction failed: %v, falling back", err)
 	}
 
@@ -511,7 +515,7 @@ func (a *App) SwitchToLocalVersion(toolName string) error {
 	}
 
 	a.refreshAndSaveLocalCache()
-	logInfo("[SwitchToLocalVersion] %s switched to local version at %s", toolName, localPath)
+	logInfo("[SwitchToLocalVersion] %s switched to local version at %s", toolName, path)
 	return nil
 }
 

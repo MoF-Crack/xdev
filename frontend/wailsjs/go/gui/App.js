@@ -442,8 +442,8 @@ export function SniffServiceStatus() {
   return window['go']['gui']['App']['SniffServiceStatus']();
 }
 
-export function SwitchToLocalVersion(arg1) {
-  return window['go']['gui']['App']['SwitchToLocalVersion'](arg1);
+export function SwitchToLocalVersion(arg1, arg2) {
+  return window['go']['gui']['App']['SwitchToLocalVersion'](arg1, arg2);
 }
 
 export function SwitchToXdevVersion(arg1, arg2) {

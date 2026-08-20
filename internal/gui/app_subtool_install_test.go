@@ -374,6 +374,60 @@ func TestInstallPackageManagerAndSubToolForwardToSpec(t *testing.T) {
 	}
 }
 
+func TestIndependentPMOverlaysXdevWhenPATHHasLeftover(t *testing.T) {
+	app := newTestApp(t)
+	cfg := app.getCfg()
+	uvDir := filepath.Join(cfg.Core.InstallDir, "uv", "0.9.0")
+	if err := os.MkdirAll(uvDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkCurrent(t, cfg.Core.XMDevDir, cfg.Core.InstallDir, "uv", "0.9.0")
+
+	tmp := t.TempDir()
+	dDrive := filepath.Join(tmp, "D-Env-uv")
+	if err := os.MkdirAll(dDrive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "uv"
+	if runtime.GOOS == "windows" {
+		name = "uv.exe"
+	}
+	if err := os.WriteFile(filepath.Join(dDrive, name), []byte("echo 0.7.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dDrive)
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+	}
+
+	pm, ok := findPMDefByName("uv")
+	if !ok {
+		t.Fatal("uv pmDef missing")
+	}
+	info := app.detectPackageManager(pm)
+	if !hostscan.InsideDir(info.LocalPath, cfg.Core.InstallDir) && !hostscan.InsideDir(info.LocalPath, filepath.Join(cfg.Core.XMDevDir, "current")) {
+		t.Fatalf("primary LocalPath = %q, want xdev-managed overlay over D: leftover", info.LocalPath)
+	}
+	var sawD, sawE bool
+	for _, inst := range info.Instances {
+		if hostscan.InsideDir(inst.Path, dDrive) {
+			sawD = true
+			if inst.Managed {
+				t.Errorf("D: leftover marked Managed: %+v", inst)
+			}
+		}
+		if hostscan.InsideDir(inst.Path, cfg.Core.InstallDir) || hostscan.InsideDir(inst.Path, filepath.Join(cfg.Core.XMDevDir, "current")) {
+			sawE = true
+			if !inst.Managed {
+				t.Errorf("xdev uv not marked Managed: %+v", inst)
+			}
+		}
+	}
+	if !sawD || !sawE {
+		t.Fatalf("want D: leftover and E: xdev instances, got %+v (localPath=%q)", info.Instances, info.LocalPath)
+	}
+}
+
 func TestCollectPMInstancesWalksEveryPATHHit(t *testing.T) {
 	app := newTestApp(t)
 	tmp := t.TempDir()

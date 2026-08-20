@@ -27,19 +27,22 @@
           <section v-if="tool.localVersion || tool.localPath" class="detail-section">
             <h3>{{ t('detail.local_env') }}</h3>
             <n-tag v-if="tool.localVersion" type="warning">{{ tool.localVersion }}</n-tag>
-            <CopyableValue v-if="tool.localPath" :value="tool.localPath" />
+            <CopyableValue v-if="tool.localPath" :value="tool.localPath" :copy-label="t('btn.copy')" :success-label="t('detail.copied')" :failure-label="t('detail.copy_failed')" />
             <n-space>
               <n-button v-if="tool.localPath && !tool.installed" data-action="migrate" size="tiny" @click="$emit('migrate', tool.name, tool.localPath)">{{ t('detail.migrate_to_xdev') }}</n-button>
               <n-button v-if="tool.localPath && tool.installed" data-action="switch-local" size="tiny" @click="$emit('switch-local', tool.name)">{{ t('detail.switch_to_local') }}</n-button>
             </n-space>
           </section>
-          <section v-if="tool.instances?.length >= 1 && tool.instances.some(i => !i.managed)" class="detail-section" data-action="pm-instances">
+          <section v-if="showPmInstances" class="detail-section" data-action="pm-instances">
             <h3>{{ t('pm.instances_title') }}</h3>
             <div v-for="(inst, idx) in tool.instances" :key="idx" class="pm-instance-row">
               <n-tag :type="inst.managed ? 'success' : 'default'" size="small">{{ inst.managed ? t('pm.instance_xdev') : t('pm.instance_local') }}</n-tag>
               <span class="pm-instance-version">{{ inst.version }}</span>
-              <CopyableValue :value="inst.path" />
-              <n-button v-if="!inst.managed" data-action="migrate-pm" size="tiny" @click="$emit('migrate-pm', tool.name)">{{ t('pm.migrate') }}</n-button>
+              <CopyableValue :value="inst.path" :copy-label="t('btn.copy')" :success-label="t('detail.copied')" :failure-label="t('detail.copy_failed')" />
+              <n-space size="small">
+                <n-button v-if="canSwitchInstance(inst)" data-action="switch-instance" size="tiny" :disabled="pmBusy" @click="emitSwitchInstance(inst)">{{ switchLabel(inst) }}</n-button>
+                <n-button v-if="!inst.managed" data-action="migrate-pm" size="tiny" @click="$emit('migrate-pm', tool.name)">{{ t('pm.migrate') }}</n-button>
+              </n-space>
             </div>
           </section>
           <section v-if="deps.length" class="detail-section" data-action="tool-deps">
@@ -92,7 +95,7 @@ const props = defineProps({
   deps: { type: Array, default: () => [] },
   t: { type: Function, required: true },
 });
-defineEmits(['update:show', 'toggle-favorite', 'migrate', 'switch-local', 'use-version', 'uninstall-version', 'install', 'repair', 'show-more', 'launch', 'copy-command', 'migrate-pm', 'install-package-manager', 'update-package-manager']);
+const emit = defineEmits(['update:show', 'toggle-favorite', 'migrate', 'switch-local', 'switch-xdev', 'use-version', 'uninstall-version', 'install', 'repair', 'show-more', 'launch', 'copy-command', 'migrate-pm', 'install-package-manager', 'update-package-manager']);
 const hasGui = computed(() => Array.isArray(props.tool?.formFactor) && props.tool.formFactor.includes('gui'));
 const hasCli = computed(() => Array.isArray(props.tool?.formFactor) && (props.tool.formFactor.includes('cli') || props.tool.formFactor.includes('tui')));
 const isPackageManager = computed(() => props.tool?.category === 'package-manager');
@@ -102,7 +105,27 @@ const showPmInstall = computed(() => isPackageManager.value && props.tool?.canIn
 const showPmUpdate = computed(() => isPackageManager.value && props.tool?.canInstall && props.tool?.installed && props.tool?.hasUpdate);
 const showPmActionButton = computed(() => showPmEnable.value || showPmInstall.value || showPmUpdate.value);
 const showPmAction = computed(() => showPmActionButton.value || Boolean(props.tool?.installHint));
+const showPmInstances = computed(() => Array.isArray(props.tool?.instances) && (props.tool.instances.length > 1 || props.tool.instances.some((i) => !i.managed)));
 const customVersion = ref('');
+function normalizePath(path) {
+  return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+function isCurrentInstance(inst) {
+  const current = normalizePath(props.tool?.localPath);
+  return current !== '' && current === normalizePath(inst?.path);
+}
+function canSwitchInstance(inst) {
+  if (!inst?.path || isCurrentInstance(inst)) return false;
+  if (inst.managed) return Boolean(inst.version);
+  return true;
+}
+function switchLabel(inst) {
+  return inst.managed ? props.t('pm.switch_to_xdev') : props.t('detail.switch_to_local');
+}
+function emitSwitchInstance(inst) {
+  if (inst.managed) emit('switch-xdev', props.tool.name, inst.version);
+  else emit('switch-local', props.tool.name, inst.path);
+}
 watch(() => props.tool?.name, () => { customVersion.value = ''; });
 watch(() => props.show, async (show, was) => {
   if (!show) customVersion.value = '';

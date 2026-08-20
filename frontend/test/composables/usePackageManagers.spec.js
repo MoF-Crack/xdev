@@ -11,6 +11,8 @@ function setup(appOverrides = {}) {
     InstallPackageManager: vi.fn(async () => null),
     UpdatePackageManager: vi.fn(async () => null),
     MigratePackageManager: vi.fn(async () => null),
+    GetAvailableVersions: vi.fn(async () => [{ version: '0.12.5' }]),
+    PreviewInstall: vi.fn(async () => ({ unverified: false })),
     ...appOverrides,
   };
   installWailsMocks(app);
@@ -68,5 +70,16 @@ describe('usePackageManagers', () => {
     expect(dialog.warning).toHaveBeenCalledOnce();
     await dialog.warning.mock.calls[0][0].onPositiveClick();
     expect(app.InstallPackageManager).toHaveBeenCalledWith('scoop');
+  });
+
+  it('confirms sniff-discovered updates before calling UpdatePackageManager', async () => {
+    const { app, dialog, pm } = setup({
+      PreviewInstall: vi.fn(async () => ({ unverified: true })),
+    });
+    await pm.updatePackageManager({ name: 'uv', toolName: 'uv', displayName: 'UV' });
+    expect(dialog.warning).toHaveBeenCalledOnce();
+    expect(app.UpdatePackageManager).not.toHaveBeenCalled();
+    await dialog.warning.mock.calls[0][0].onPositiveClick();
+    expect(app.UpdatePackageManager).toHaveBeenCalledWith('uv');
   });
 });

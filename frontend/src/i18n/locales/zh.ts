@@ -382,6 +382,7 @@ export default {
   'pm.instance_xdev': 'xdev 管理',
   'pm.instance_local': '系统安装',
   'pm.migrate': '迁移',
+  'pm.switch_to_xdev': '切换到 xdev',
   'pm.migrate_success': '{name} 迁移成功',
   'pm.migrate_failed': '{name} 迁移失败',
   'pm.install_command_summary': '安装命令摘要：',

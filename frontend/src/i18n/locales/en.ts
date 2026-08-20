@@ -398,6 +398,7 @@ export default {
   'pm.instance_xdev': 'xdev Managed',
   'pm.instance_local': 'System',
   'pm.migrate': 'Migrate',
+  'pm.switch_to_xdev': 'Switch to xdev',
   'pm.migrate_success': '{name} migrated successfully',
   'pm.migrate_failed': '{name} migration failed',
   'pm.install_command_summary': 'Install command summary:',

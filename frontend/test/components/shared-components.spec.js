@@ -96,16 +96,16 @@ describe('StatusBadge', () => {
 });
 
 describe('CopyableValue', () => {
-  it('copies the complete value and emits success from its keyboard-accessible button', async () => {
+  it('copies the complete value when the path itself is clicked', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     const value = 'C:\\Users\\developer\\.xdev\\install\\node\\22.0.0';
     const wrapper = mount(CopyableValue, { props: { value, copyLabel: 'Copy path' } });
-    const button = wrapper.get('button');
+    const button = wrapper.get('button.copyable-value__path');
     expect(button.attributes('aria-label')).toBe('Copy path');
-    expect(wrapper.get('code').attributes('title')).toBe(value);
-    expect(wrapper.get('code').classes()).toContain('xdev-mono');
-    expect(button.attributes()).not.toHaveProperty('onkeydown');
+    expect(button.attributes('title')).toContain(value);
+    expect(button.classes()).toContain('xdev-mono');
+    expect(wrapper.findAll('button')).toHaveLength(1);
     await button.trigger('click');
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(value));
     expect(wrapper.emitted('success')).toEqual([[value]]);
@@ -115,7 +115,7 @@ describe('CopyableValue', () => {
     const error = new Error('permission denied');
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockRejectedValue(error) } });
     const wrapper = mount(CopyableValue, { props: { value: 'secret', failureLabel: 'Copy failed' } });
-    await wrapper.get('button').trigger('click');
+    await wrapper.get('button.copyable-value__path').trigger('click');
     await vi.waitFor(() => expect(wrapper.emitted('failure')).toEqual([[error]]));
     expect(wrapper.get('[role="status"]').text()).toBe('Copy failed');
   });
@@ -125,9 +125,9 @@ describe('CopyableValue', () => {
     const writeText = vi.fn(() => new Promise((done) => { resolve = done; }));
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     const wrapper = mount(CopyableValue, { props: { value: 'value' } });
-    await wrapper.get('button').trigger('click');
+    await wrapper.get('button.copyable-value__path').trigger('click');
     expect(wrapper.get('button').attributes('disabled')).toBeDefined();
-    await wrapper.get('button').trigger('click');
+    await wrapper.get('button.copyable-value__path').trigger('click');
     expect(writeText).toHaveBeenCalledOnce();
     resolve();
     await vi.waitFor(() => expect(wrapper.emitted('success')).toHaveLength(1));
@@ -136,10 +136,10 @@ describe('CopyableValue', () => {
   it('recreates live feedback for repeated successful copies', async () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
     const wrapper = mount(CopyableValue, { props: { value: 'value' } });
-    await wrapper.get('button').trigger('click');
+    await wrapper.get('button.copyable-value__path').trigger('click');
     await vi.waitFor(() => expect(wrapper.find('[role="status"]').exists()).toBe(true));
     const first = wrapper.get('[role="status"]').attributes('data-announcement');
-    await wrapper.get('button').trigger('click');
+    await wrapper.get('button.copyable-value__path').trigger('click');
     await vi.waitFor(() => expect(wrapper.get('[role="status"]').attributes('data-announcement')).not.toBe(first));
   });
 });

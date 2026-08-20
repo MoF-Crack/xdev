@@ -5,6 +5,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-20
+
+### Changed
+- README rewritten for 0.3.2: current CLI, 51 catalog tools, GitHub Releases download links, retired AI/task/lockfile commands removed
+
 ### Fixed
 - Ignore-list tests no longer write into the real `$XMDEV_HOME/cache/ignored_tools.json` (Go reappearing after `go test`)
 - Sniff-discovered versions (all-zero SHA-256) no longer fail install with "hash tampering" against the signed manifest
@@ -23,6 +28,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 - GUI install wrappers share one `InstallSpec` (`tool` / `package-manager` / `sub-tool`); App stays a Wails adapter over catalog, install-session, host-scan, prefs
 - AppContent is a desktop shell: package-manager / sniff / window chrome / notifications live in composables
 - Leftover `one-api/` working-tree copy is not part of the product (`THIRD_PARTY.md`)
+- Independent package managers (uv) overlay the xdev current install even when PATH still points at a D: leftover; both instances are listed
+- Updating a sniff-discovered package-manager version confirms in the frontend (no hidden native dialog / "cancelled by user")
+- Install paths copy on click; the separate Copy button is gone
+- Package-manager instance rows with more than one copy offer Switch to xdev / Switch to local
 
 ## [0.3.1] - 2026-08-18
 

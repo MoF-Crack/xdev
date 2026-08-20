@@ -223,7 +223,7 @@ export function SniffNow(arg1:string):Promise<void>;
 
 export function SniffServiceStatus():Promise<gui.ServiceStatusInfo>;
 
-export function SwitchToLocalVersion(arg1:string):Promise<void>;
+export function SwitchToLocalVersion(arg1:string,arg2:string):Promise<void>;
 
 export function SwitchToXdevVersion(arg1:string,arg2:string):Promise<void>;
 

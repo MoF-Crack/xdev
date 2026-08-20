@@ -35,7 +35,7 @@
         <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
   </AppShell>
 
-  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
+  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
@@ -1282,10 +1282,20 @@ async function migrateTool(toolName, localPath) {
   }
 }
 
-async function switchToLocal(toolName) {
+async function switchToLocal(toolName, localPath = '') {
   try {
-    await window.go.gui.App.SwitchToLocalVersion(toolName);
+    await window.go.gui.App.SwitchToLocalVersion(toolName, localPath || '');
     message.success(t('detail.switched_to_local', { name: toolName }));
+    await refreshTools();
+  } catch (e) {
+    message.error(t('detail.switch_failed') + ': ' + e);
+  }
+}
+
+async function switchToXdev(toolName, version) {
+  try {
+    await window.go.gui.App.SwitchToXdevVersion(toolName, version);
+    message.success(t('detail.switched_to_xdev', { name: toolName, version }));
     await refreshTools();
   } catch (e) {
     message.error(t('detail.switch_failed') + ': ' + e);

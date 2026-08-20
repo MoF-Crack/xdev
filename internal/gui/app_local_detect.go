@@ -745,7 +745,10 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 	if effectiveParent == "" && pm.name == "pipx" {
 		effectiveParent = "python"
 	}
-	checkXdevManaged := effectiveParent != "" && (!info.Installed || pm.detectCmd != effectiveParent)
+	// Independent PMs (uv: detectCmd == toolName) used to skip the xdev
+	// lookup once PATH found a D: leftover. Always overlay the xdev
+	// current link when it exists so E:\XDev wins the primary row.
+	checkXdevManaged := effectiveParent != ""
 	if checkXdevManaged {
 		if activeVer, installed := a.currentVersion(effectiveParent); installed {
 			if pm.detectCmd != effectiveParent {
@@ -768,6 +771,8 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 				link := a.currentLink(effectiveParent)
 				if target, err := os.Readlink(link); err == nil {
 					info.LocalPath = target
+				} else {
+					info.LocalPath = link
 				}
 			}
 		}
@@ -878,15 +883,31 @@ func (a *App) collectPMInstances(pm pmDef, info PackageManagerInfo) []PMInstance
 	if parentToolName == "" && pm.detectCmd != "python" && pm.name == "pipx" {
 		parentToolName = "python"
 	}
-	if parentToolName != "" && pm.detectCmd != parentToolName {
-		if _, installed := a.currentVersion(parentToolName); installed {
+	if parentToolName != "" {
+		if activeVer, installed := a.currentVersion(parentToolName); installed {
 			parentDir := a.currentLink(parentToolName)
-			if target, ok := shim.FindInDir(parentDir, pm.detectCmd); ok {
+			var target string
+			if pm.detectCmd != parentToolName {
+				if found, ok := shim.FindInDir(parentDir, pm.detectCmd); ok {
+					target = found
+				}
+			} else if parentDir != "" {
+				if resolved, err := os.Readlink(parentDir); err == nil {
+					target = resolved
+				} else {
+					target = parentDir
+				}
+			}
+			if target != "" {
 				normalized := filepath.Clean(strings.ToLower(target))
 				if !seenPaths[normalized] {
-					ver := a.getSubToolVersion(pm.detectCmd, parentToolName)
-					if ver == "" {
-						ver = info.Version
+					ver := activeVer
+					if pm.detectCmd != parentToolName {
+						if actual := a.getSubToolVersion(pm.detectCmd, parentToolName); actual != "" {
+							ver = actual
+						} else if info.Version != "" {
+							ver = info.Version
+						}
 					}
 					instances = append(instances, PMInstanceInfo{
 						Version: ver,
@@ -1661,7 +1682,10 @@ func (a *App) UpdatePackageManager(toolName string) error {
 	}
 
 	latestVer := versions[0].Version // first is latest after SortVersionsByRelease
-	return a.install(InstallSpec{Tool: installName, Version: latestVer})
+	// Frontend already confirmed sniff-discovered versions (Naive dialog).
+	// Passing Confirmed skips the native Wails MessageDialog, which is
+	// hidden behind the frameless window and looks like "cancelled by user".
+	return a.install(InstallSpec{Tool: installName, Version: latestVer, Confirmed: true})
 }
 
 // ---- Local environment detection helpers ----
