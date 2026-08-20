@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义 2026-08-01 代码审查与安全审计的范围、发现项和后续修复边界
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 详细发现项与任务拆分见同目录 `report.md` 与 `checklist.md`。本文件是活跃规格目录要求的 `spec.md` 权威入口。
 
 ## 目标

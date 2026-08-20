@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义 xdev 对全部支持工具的新版本嗅探发现与纳入管理范围（含用户可选触发策略）的目标、范围、需求和验收标准
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 **Feature Branch**: `011-tool-discovery-automanage`
 **Created**: 2026-07-26
 **Status**: Approved

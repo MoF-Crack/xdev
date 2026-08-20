@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义 xdev AI 助手能力（Provider 接入层 + xdev 专属窄场景 skill）的目标、范围、需求和验收标准
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 **Feature Branch**: `010-ai-assistant-enhancement`
 **Created**: 2026-07-26
 **Status**: Approved

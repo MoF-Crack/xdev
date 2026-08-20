@@ -1,4 +1,4 @@
-﻿# Feature Specification: 下载源 Mirror 智能选择
+# Feature Specification: 下载源 Mirror 智能选择
 
 > **文档类型**：Feature Spec
 > **状态**：Approved
@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义下载源 mirror 智能选择策略的目标、范围、需求和验收标准
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 **Feature Branch**: `009-mirror-smart-selection`
 **Created**: 2026-07-26
 **Status**: Approved

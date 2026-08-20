@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：manifest latest 同步与 sniff 写回的目标、范围和验收
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 ## 背景与动机
 
 xdev 的 manifest YAML 文件中 `latest` 字段和 `versions` 列表是静态编写的，与上游真实最新版本严重偏差。32 个工具中 24 个落后，部分跨大版本落后（如 node 20→26、rust 1.82→1.97、cmake 3.31→4.4、typescript 5.7→7.0）。

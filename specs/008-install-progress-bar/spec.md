@@ -1,4 +1,4 @@
-﻿# Feature Specification: 工具安装进度条优化
+# Feature Specification: 工具安装进度条优化
 
 > **文档类型**：Feature Spec
 > **状态**：Approved
@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：定义工具安装下载进度显示优化的目标、范围、需求和验收标准
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 **Feature Branch**: `008-install-progress-bar`
 **Created**: 2026-07-26
 **Status**: Approved

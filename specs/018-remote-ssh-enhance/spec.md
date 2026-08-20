@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：远程开发 SSH 增强的目标、范围和验收
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 ## 问题
 
 远程开发页面缺少：

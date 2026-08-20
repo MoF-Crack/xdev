@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：附属工具动态安装的目标、范围和验收
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 ## 一、目标
 
 ### 1.1 需求 1：yarn/pnpm 动态启用提示

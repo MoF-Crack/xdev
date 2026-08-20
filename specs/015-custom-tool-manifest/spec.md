@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：用户自定义工具自动发现与动态 manifest 的目标、范围和验收
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 ## 背景与动机
 
 xdev 的工具列表完全由内置 manifest YAML 驱动。用户无法添加自定义工具（如仓颉、内部工具链、私有 SDK），必须手动编写 YAML。

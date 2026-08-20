@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：IDE/Agent/Harness 管理支持的目标、范围和验收
 > **替代文档**：无
-
+> **Constitution**：`1.0.0`
 ## 一、目标
 
 xdev 新增对 **IDE / Agent / Harness** 三类开发工具的管理支持：
