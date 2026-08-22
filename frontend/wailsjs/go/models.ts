@@ -67,6 +67,152 @@ export namespace gui {
 	        this.license = source["license"];
 	    }
 	}
+	export class FavoriteInfo {
+	    name: string;
+	    displayName: string;
+	    category: string;
+	    addedAt: string;
+	    activeVersion: string;
+	    installed: boolean;
+	    localVersion: string;
+	    localPath: string;
+	    source: string;
+	    formFactor?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FavoriteInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.displayName = source["displayName"];
+	        this.category = source["category"];
+	        this.addedAt = source["addedAt"];
+	        this.activeVersion = source["activeVersion"];
+	        this.installed = source["installed"];
+	        this.localVersion = source["localVersion"];
+	        this.localPath = source["localPath"];
+	        this.source = source["source"];
+	        this.formFactor = source["formFactor"];
+	    }
+	}
+	export class InstalledToolInfo {
+	    name: string;
+	    displayName: string;
+	    version: string;
+	    category: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InstalledToolInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.displayName = source["displayName"];
+	        this.version = source["version"];
+	        this.category = source["category"];
+	    }
+	}
+	export class DashboardStats {
+	    totalTools: number;
+	    installedCount: number;
+	    installSize: number;
+	    cacheSize: number;
+	    shimCount: number;
+	    xmdevDir: string;
+	    installDir: string;
+	    shimDir: string;
+	    cacheDir: string;
+	    downloadDir: string;
+	    installedTools: InstalledToolInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DashboardStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.totalTools = source["totalTools"];
+	        this.installedCount = source["installedCount"];
+	        this.installSize = source["installSize"];
+	        this.cacheSize = source["cacheSize"];
+	        this.shimCount = source["shimCount"];
+	        this.xmdevDir = source["xmdevDir"];
+	        this.installDir = source["installDir"];
+	        this.shimDir = source["shimDir"];
+	        this.cacheDir = source["cacheDir"];
+	        this.downloadDir = source["downloadDir"];
+	        this.installedTools = this.convertValues(source["installedTools"], InstalledToolInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CategoryInfo {
+	    name: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CategoryInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.count = source["count"];
+	    }
+	}
+	export class BootstrapState {
+	    categories: CategoryInfo[];
+	    stats: DashboardStats;
+	    favorites: FavoriteInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new BootstrapState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.categories = this.convertValues(source["categories"], CategoryInfo);
+	        this.stats = this.convertValues(source["stats"], DashboardStats);
+	        this.favorites = this.convertValues(source["favorites"], FavoriteInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class CacheBreakdown {
 	    archives: number;
 	    shaFiles: number;
@@ -89,20 +235,7 @@ export namespace gui {
 	        this.totalCount = source["totalCount"];
 	    }
 	}
-	export class CategoryInfo {
-	    name: string;
-	    count: number;
 	
-	    static createFrom(source: any = {}) {
-	        return new CategoryInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.count = source["count"];
-	    }
-	}
 	export class CleanResult {
 	    name: string;
 	    action: string;
@@ -213,74 +346,7 @@ export namespace gui {
 	        this.versions = source["versions"];
 	    }
 	}
-	export class InstalledToolInfo {
-	    name: string;
-	    displayName: string;
-	    version: string;
-	    category: string;
 	
-	    static createFrom(source: any = {}) {
-	        return new InstalledToolInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.displayName = source["displayName"];
-	        this.version = source["version"];
-	        this.category = source["category"];
-	    }
-	}
-	export class DashboardStats {
-	    totalTools: number;
-	    installedCount: number;
-	    installSize: number;
-	    cacheSize: number;
-	    shimCount: number;
-	    xmdevDir: string;
-	    installDir: string;
-	    shimDir: string;
-	    cacheDir: string;
-	    downloadDir: string;
-	    installedTools: InstalledToolInfo[];
-	
-	    static createFrom(source: any = {}) {
-	        return new DashboardStats(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.totalTools = source["totalTools"];
-	        this.installedCount = source["installedCount"];
-	        this.installSize = source["installSize"];
-	        this.cacheSize = source["cacheSize"];
-	        this.shimCount = source["shimCount"];
-	        this.xmdevDir = source["xmdevDir"];
-	        this.installDir = source["installDir"];
-	        this.shimDir = source["shimDir"];
-	        this.cacheDir = source["cacheDir"];
-	        this.downloadDir = source["downloadDir"];
-	        this.installedTools = this.convertValues(source["installedTools"], InstalledToolInfo);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class DebugInfo {
 	    xmdevDir: string;
 	    manifestDir: string;
@@ -481,36 +547,7 @@ export namespace gui {
 		    return a;
 		}
 	}
-	export class FavoriteInfo {
-	    name: string;
-	    displayName: string;
-	    category: string;
-	    addedAt: string;
-	    activeVersion: string;
-	    installed: boolean;
-	    localVersion: string;
-	    localPath: string;
-	    source: string;
-	    formFactor?: string[];
 	
-	    static createFrom(source: any = {}) {
-	        return new FavoriteInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.displayName = source["displayName"];
-	        this.category = source["category"];
-	        this.addedAt = source["addedAt"];
-	        this.activeVersion = source["activeVersion"];
-	        this.installed = source["installed"];
-	        this.localVersion = source["localVersion"];
-	        this.localPath = source["localPath"];
-	        this.source = source["source"];
-	        this.formFactor = source["formFactor"];
-	    }
-	}
 	export class FixedVersion {
 	    tool: string;
 	    oldVer: string;

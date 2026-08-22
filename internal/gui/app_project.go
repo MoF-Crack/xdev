@@ -55,7 +55,7 @@ func (a *App) GetIsolateStatus() *IsolateStatus {
 
 // IsolateSetup 设置隔离环境
 func (a *App) IsolateSetup(mode string) (string, error) {
-	iso, err := isolator.NewIsolator(isolator.IsolationMode(mode))
+	iso, err := isolator.NewIsolator(isolator.IsolationMode(mode), a.getCfg().Core.XMDevDir)
 	if err != nil {
 		return "", err
 	}

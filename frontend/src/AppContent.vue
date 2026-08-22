@@ -52,7 +52,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted } from 'vue';
 import { NIcon, NButton, NSpace, useMessage, useDialog } from 'naive-ui';
 import {
   SearchOutline,
@@ -63,18 +63,18 @@ import { useI18n } from './i18n/index';
 import CommandPalette from './components/CommandPalette.vue';
 import DashboardPage from './pages/DashboardPage.vue';
 import ToolCatalogPage from './pages/ToolCatalogPage.vue';
-import FavoritesPage from './pages/FavoritesPage.vue';
-import SettingsPage from './pages/SettingsPage.vue';
-import EnvironmentVariablesPage from './pages/EnvironmentVariablesPage.vue';
 import UpdateBadge from './components/UpdateBadge.vue';
 import NotificationCenter from './components/NotificationCenter.vue';
-import IsolationPage from './pages/IsolationPage.vue';
-import RemoteDevelopmentPage from './pages/RemoteDevelopmentPage.vue';
-import AboutPage from './pages/AboutPage.vue';
 import ToolDetailDrawer from './components/ToolDetailDrawer.vue';
 import InstallProgressDialog from './components/InstallProgressDialog.vue';
 import FormSelectorDialog from './components/FormSelectorDialog.vue';
 import EnvVarEditorDialog from './components/EnvVarEditorDialog.vue';
+const FavoritesPage = defineAsyncComponent(() => import('./pages/FavoritesPage.vue'));
+const SettingsPage = defineAsyncComponent(() => import('./pages/SettingsPage.vue'));
+const EnvironmentVariablesPage = defineAsyncComponent(() => import('./pages/EnvironmentVariablesPage.vue'));
+const IsolationPage = defineAsyncComponent(() => import('./pages/IsolationPage.vue'));
+const RemoteDevelopmentPage = defineAsyncComponent(() => import('./pages/RemoteDevelopmentPage.vue'));
+const AboutPage = defineAsyncComponent(() => import('./pages/AboutPage.vue'));
 import { useInstall } from './composables/useInstall.js';
 import { useTools } from './composables/useTools.js';
 import { useNotifications } from './composables/useNotifications.js';
@@ -95,13 +95,23 @@ const { isMaximized, minimizeWindow, toggleMaximize, closeWindow } = useWindowCh
 
 onUnmounted(() => {
   window.runtime?.EventsOff?.('dashboardStatsUpdated');
+  window.runtime?.EventsOff?.('localCacheUpdated');
 });
 
 onMounted(async () => {
-  await loadCategories();
-  const dashboardLoaded = await loadDashboard();
-  if (dashboardLoaded) prefetchSizeBreakdowns();
-  await loadFavorites();
+  // Spec 032: one bootstrap round-trip replaces the categories +
+  // dashboard + favorites waterfall.
+  try {
+    const boot = await window.go.gui.App.GetBootstrapState();
+    if (boot?.categories) categories.value = boot.categories;
+    if (boot?.stats) stats.value = boot.stats;
+    if (boot?.favorites) favorites.value = boot.favorites;
+  } catch (e) {
+    console.error('Bootstrap failed, falling back to individual loads:', e);
+    await loadCategories();
+    await loadDashboard();
+    await loadFavorites();
+  }
   await loadUpdates();
   await loadIgnoredTools();
   await loadSniffConfig();
@@ -156,6 +166,11 @@ async function setCommandPaletteVisible(visible) {
 }
 const categories = ref([]);
 const { tools, loading: toolsLoading, error: toolsError, searchQuery, hideUnavailable, activeCategory, filteredTools, loadTools, retry: retryTools } = useTools();
+onMounted(() => {
+  window.runtime?.EventsOn?.('localCacheUpdated', () => {
+    if (activeCategory.value) retryTools();
+  });
+});
 const selectedTool = ref(null);
 const showDrawer = ref(false);
 const drawerTrigger = ref(null);
@@ -675,24 +690,6 @@ async function loadDashboard() {
     dashboardLoading.value = false;
   }
   return loaded;
-}
-
-async function prefetchSizeBreakdowns() {
-  const prefetchInstall = async () => {
-    try {
-      installSizeEntries.value = await window.go.gui.App.GetInstallSizeBreakdown() || [];
-    } catch {
-      // Size details are optional during initial dashboard loading.
-    }
-  };
-  const prefetchCache = async () => {
-    try {
-      cacheSizeEntries.value = await window.go.gui.App.GetCacheSizeBreakdown() || [];
-    } catch {
-      // Size details are optional during initial dashboard loading.
-    }
-  };
-  await Promise.all([prefetchInstall(), prefetchCache()]);
 }
 
 async function showInstallSize() {

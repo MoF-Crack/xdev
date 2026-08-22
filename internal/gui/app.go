@@ -59,6 +59,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/downloader"
+	"github.com/xmdemt/xdev/internal/hostscan"
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/isolator"
 	"github.com/xmdemt/xdev/internal/manifest"
@@ -106,8 +107,8 @@ type ToolInfo struct {
 	// 目前只有 cli，选择器应只列出 cli。
 	AvailableForms []string `json:"availableForms,omitempty"`
 	// Spec 026: 附属工具动态安装支持（与 PackageManagerInfo 对齐）。
-	EnableCommand    string              `json:"enableCommand,omitempty"`
-	InstallMethods   []InstallMethodInfo `json:"installMethods,omitempty"`
+	EnableCommand  string              `json:"enableCommand,omitempty"`
+	InstallMethods []InstallMethodInfo `json:"installMethods,omitempty"`
 	// OfferSubToolInstall 为 true 时，即使 Installed=true 也显示启用/安装
 	// （仅 yarn/pnpm：PATH 上有系统副本，但 xdev Node 尚未启用）。
 	OfferSubToolInstall bool `json:"offerSubToolInstall,omitempty"`
@@ -615,40 +616,56 @@ func (a *App) loadLocalCache() bool {
 
 // refreshLocalCache scans all tools and caches local detection results.
 func (a *App) refreshLocalCache() {
+	if a.registry == nil {
+		a.signalLocalReady()
+		return
+	}
 	tools := a.registry.All()
 	newMap := make(map[string]localInfo, len(tools))
-	shimDir := a.getCfg().Core.ShimDir
+	cfg := a.getCfg()
+	shimDir := cfg.Core.ShimDir
 	start := time.Now()
 	logInfo("[refreshLocalCache] scanning %d tools for local installations", len(tools))
 
-	found := 0
+	var names []string
 	for _, t := range tools {
-		// 1. Check xdev-managed installation first.
 		if activeVer, installed := a.currentVersion(t.Name()); installed {
 			link := a.currentLink(t.Name())
 			if target, err := os.Readlink(link); err == nil {
 				newMap[t.Name()] = localInfo{Version: activeVer, Path: target, Source: "xdev"}
-				found++
-				logDebug("[refreshLocalCache] xdev %s v%s at %s", t.Name(), activeVer, target)
 				continue
 			}
 		}
+		search := t.Shims()
+		if len(search) == 0 {
+			search = []string{t.Name()}
+		}
+		names = append(names, search...)
+	}
+	byBase := hostscan.IndexByBasename(hostscan.Scan(hostscan.Query{Names: names, ShimDir: shimDir}))
 
-		// 2. Check system-local installation.
-		path := detectLocalToolPath(t.Name(), t.Shims(), shimDir)
+	found := len(newMap)
+	for _, t := range tools {
+		if _, ok := newMap[t.Name()]; ok {
+			continue
+		}
+		path := detectLocalToolPathIndexed(t.Name(), t.Shims(), shimDir, byBase)
 		if path != "" {
 			newMap[t.Name()] = localInfo{Version: "", Path: path, Source: "local"}
 			found++
-			logDebug("[refreshLocalCache] local %s at %s", t.Name(), path)
 		}
 	}
 
 	a.localMu.Lock()
 	a.localMap = newMap
 	a.localMu.Unlock()
-	a.saveLocalCache() // 保存缓存到文件
+	a.saveLocalCache()
 	logInfo("[refreshLocalCache] done in %v: found %d/%d tools locally", time.Since(start), found, len(tools))
 	a.signalLocalReady()
+	a.InvalidateToolsCache()
+	if a.ctx != nil {
+		wailsRuntime.EventsEmit(a.ctx, "localCacheUpdated", len(newMap))
+	}
 }
 
 // waitForLocalCache waits until the local cache has been populated
@@ -815,7 +832,7 @@ func (a *App) GetAboutInfo() AboutInfo {
 		WailsVersion: "v2.12.0",
 		Platform:     runtime.GOOS,
 		Arch:         runtime.GOARCH,
-		RepoURL:      "https://github.com/xmdemt/xdev",
+		RepoURL:      "https://github.com/MoF-Crack/xdev",
 		License:      "MIT",
 	}
 }

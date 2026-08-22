@@ -68,6 +68,27 @@ func (a *App) pluginToToolInfo(p plugin.Plugin) ToolInfo {
 	return info
 }
 
+// BootstrapState bundles the data the GUI needs on first paint into
+// one IPC round-trip (Spec 032): categories, dashboard stats, and
+// favorites. The frontend calls GetBootstrapState once instead of
+// sequentially awaiting GetCategories + GetDashboardStats + GetFavorites.
+type BootstrapState struct {
+	Categories []CategoryInfo `json:"categories"`
+	Stats      DashboardStats `json:"stats"`
+	Favorites  []FavoriteInfo `json:"favorites"`
+}
+
+// GetBootstrapState returns categories + dashboard stats + favorites
+// in a single call so the dashboard can paint without a startup
+// waterfall (Spec 032).
+func (a *App) GetBootstrapState() BootstrapState {
+	return BootstrapState{
+		Categories: a.GetCategories(),
+		Stats:      a.GetDashboardStats(),
+		Favorites:  a.GetFavorites(),
+	}
+}
+
 // GetCategories returns all tool categories with counts.
 func (a *App) GetCategories() []CategoryInfo {
 	tools := a.registry.All()
@@ -258,44 +279,44 @@ func (a *App) computeToolsByCategory(category string) []ToolInfo {
 		return result
 	}
 
-		// Handle "package-manager" category - return as ToolInfo for compatibility
-		if category == "package-manager" {
-			pms := a.GetPackageManagers()
-			var result []ToolInfo
-			for _, pm := range pms {
-				ti := ToolInfo{
-					Name:                    pm.Name,
-					DisplayName:             pm.DisplayName,
-					Category:                "package-manager",
-					Description:             pm.Description,
-					Installed:               pm.Installed,
-					LocalVersion:            pm.Version,
-					LocalPath:               pm.LocalPath,
-					CanInstall:              pm.CanInstall,
-					ToolName:                pm.ToolName,
-					InstallHint:             pm.InstallHint,
-					HasUpdate:               pm.HasUpdate,
-					RequiresAdmin:           pm.RequiresAdmin, // Spec 025 L3 阻塞项3
-					InstallCommand:          pm.InstallCommand,
-					EnableCommand:           pm.EnableCommand, // Spec 026: 附属工具启用命令
-					OfferSubToolInstall:     pm.OfferSubToolInstall,
-				}
-				// Spec 026: 传递可用安装方式（pipx 的 pip/uv 选项）
-				if len(pm.InstallMethods) > 0 {
-					ti.InstallMethods = make([]InstallMethodInfo, len(pm.InstallMethods))
-					for j, m := range pm.InstallMethods {
-						ti.InstallMethods[j] = InstallMethodInfo{Name: m.Name, Command: m.Command}
-					}
-				}
-				// Spec 027: 传递多实例列表（pip 的 xdev 管理 + 系统安装）
-				if len(pm.Instances) > 0 {
-					ti.Instances = make([]PMInstanceInfo, len(pm.Instances))
-					copy(ti.Instances, pm.Instances)
-				}
-				result = append(result, ti)
+	// Handle "package-manager" category - return as ToolInfo for compatibility
+	if category == "package-manager" {
+		pms := a.GetPackageManagers()
+		var result []ToolInfo
+		for _, pm := range pms {
+			ti := ToolInfo{
+				Name:                pm.Name,
+				DisplayName:         pm.DisplayName,
+				Category:            "package-manager",
+				Description:         pm.Description,
+				Installed:           pm.Installed,
+				LocalVersion:        pm.Version,
+				LocalPath:           pm.LocalPath,
+				CanInstall:          pm.CanInstall,
+				ToolName:            pm.ToolName,
+				InstallHint:         pm.InstallHint,
+				HasUpdate:           pm.HasUpdate,
+				RequiresAdmin:       pm.RequiresAdmin, // Spec 025 L3 阻塞项3
+				InstallCommand:      pm.InstallCommand,
+				EnableCommand:       pm.EnableCommand, // Spec 026: 附属工具启用命令
+				OfferSubToolInstall: pm.OfferSubToolInstall,
 			}
-			return result
+			// Spec 026: 传递可用安装方式（pipx 的 pip/uv 选项）
+			if len(pm.InstallMethods) > 0 {
+				ti.InstallMethods = make([]InstallMethodInfo, len(pm.InstallMethods))
+				for j, m := range pm.InstallMethods {
+					ti.InstallMethods[j] = InstallMethodInfo{Name: m.Name, Command: m.Command}
+				}
+			}
+			// Spec 027: 传递多实例列表（pip 的 xdev 管理 + 系统安装）
+			if len(pm.Instances) > 0 {
+				ti.Instances = make([]PMInstanceInfo, len(pm.Instances))
+				copy(ti.Instances, pm.Instances)
+			}
+			result = append(result, ti)
 		}
+		return result
+	}
 
 	// Handle "language" category
 	if category == "language" {

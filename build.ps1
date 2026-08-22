@@ -84,7 +84,7 @@ if (-not $SkipGUI) {
     Write-Host "[2/2] Building GUI: xdev-gui-$version.exe ..." -ForegroundColor Yellow
 
     # Build with wails (outputfilename stays as xdev-gui)
-    wails build -ldflags $ldflags 2>&1 | ForEach-Object { Write-Host "  $_" }
+    wails build -tags gui -ldflags $ldflags 2>&1 | ForEach-Object { Write-Host "  $_" }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: GUI build failed" -ForegroundColor Red
         exit 1

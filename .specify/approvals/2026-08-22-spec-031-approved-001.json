@@ -1,0 +1,16 @@
+{
+    "schema_version": 1,
+    "approval_id": "2026-08-22-spec-031-approved-001",
+    "asset_type": "spec",
+    "target_path": "specs/031-gui-hostscan-perf/spec.md",
+    "decision": "approve-state-transition",
+    "target_version": "1.0.0",
+    "target_state": "Approved",
+    "scope": "Submit Spec 031 with governance approval record (retroactive on commit)",
+    "approved_by": "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "approved_at": "2026-08-22",
+    "authorization_text": "用户 2026-08-22 提交 Spec 031（GUI 启动与 Host-scan 性能）时补录治理批准记录",
+    "recorded_at": "2026-08-22",
+    "recorded_by": "XDev Agent",
+    "supersedes": []
+}

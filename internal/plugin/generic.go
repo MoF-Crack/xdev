@@ -174,11 +174,18 @@ func (g *Generic) InstallDir(installRoot, version string) string {
 }
 
 // EnvVars interpolates {{install}} placeholders in the manifest's
-// env_vars map.
+// env_vars map. Backslashes in manifest values are treated as path
+// separators and converted to the OS separator (Spec 032): manifests
+// are authored on Windows and write `{{install}}\..\gopath`, which
+// would otherwise leak literal backslashes into GOPATH on Unix.
 func (g *Generic) EnvVars(installPath string) map[string]string {
 	out := map[string]string{}
 	for k, v := range g.M.EnvVars {
-		out[k] = strings.ReplaceAll(v, "{{install}}", installPath)
+		v = strings.ReplaceAll(v, "{{install}}", installPath)
+		if strings.ContainsRune(v, '\\') {
+			v = filepath.FromSlash(strings.ReplaceAll(v, "\\", "/"))
+		}
+		out[k] = v
 	}
 	return out
 }

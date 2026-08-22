@@ -16,6 +16,7 @@ type nixIsolator struct {
 	flakeDir   string
 	spec       *EnvironmentSpec
 	projectDir string
+	xmdeDir    string
 }
 
 func newNixIsolator() (*nixIsolator, error) {
@@ -23,6 +24,14 @@ func newNixIsolator() (*nixIsolator, error) {
 		return nil, fmt.Errorf("nix not found: install Nix (https://nixos.org/download) to use nix isolation")
 	}
 	return &nixIsolator{}, nil
+}
+
+func (n *nixIsolator) loadSaved() {
+	s := loadState(n.xmdeDir, string(ModeNix))
+	if s.FlakeDir != "" {
+		n.flakeDir = s.FlakeDir
+		n.projectDir = s.ProjectDir
+	}
 }
 
 func (n *nixIsolator) Mode() IsolationMode { return ModeNix }
@@ -45,6 +54,10 @@ func (n *nixIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) error {
 		return fmt.Errorf("generate flake.nix: %w", err)
 	}
 
+	saveState(n.xmdeDir, string(ModeNix), persistedState{
+		FlakeDir:   n.flakeDir,
+		ProjectDir: n.projectDir,
+	})
 	return nil
 }
 
@@ -56,6 +69,7 @@ func (n *nixIsolator) Teardown(ctx context.Context) error {
 		lockPath := filepath.Join(n.flakeDir, "flake.lock")
 		os.Remove(lockPath)
 	}
+	clearState(n.xmdeDir, string(ModeNix))
 	return nil
 }
 

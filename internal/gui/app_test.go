@@ -1,6 +1,10 @@
 package gui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/xmdemt/xdev/internal/toolmeta"
+)
 
 func TestExtractVersion(t *testing.T) {
 	tests := []struct {
@@ -22,9 +26,9 @@ func TestExtractVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := extractVersion(tt.input)
+			got := toolmeta.ExtractVersion(tt.input)
 			if got != tt.expected {
-				t.Errorf("extractVersion(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("toolmeta.ExtractVersion(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -44,9 +48,9 @@ func TestStripWindowsSuffix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := stripWindowsSuffix(tt.input)
+			got := toolmeta.StripWindowsSuffix(tt.input)
 			if got != tt.expected {
-				t.Errorf("stripWindowsSuffix(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("toolmeta.StripWindowsSuffix(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -73,9 +77,9 @@ func TestIsVersionLike(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := isVersionLike(tt.input)
+			got := toolmeta.IsVersionLike(tt.input)
 			if got != tt.expected {
-				t.Errorf("isVersionLike(%q) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("toolmeta.IsVersionLike(%q) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}

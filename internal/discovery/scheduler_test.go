@@ -581,6 +581,65 @@ func TestSchedulerOnStartup_Startup(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+func TestSchedulerOnStartup_IntervalExpiredIsAsync(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.SniffConfig{
+		Strategy:       "interval",
+		Interval:       "1h",
+		Concurrency:    1,
+		RateLimitPerHr: 60,
+	}
+	s := NewScheduler(cfg, dir, dir)
+	s.SaveCache(&SniffCache{
+		Tools:       make(map[string]ToolSniffResult),
+		LastSniffAt: time.Now().Add(-2 * time.Hour),
+	})
+	s.loadCatalog = func(string) (*manifest.Catalog, error) {
+		time.Sleep(2 * time.Second)
+		return &manifest.Catalog{}, nil
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		s.OnStartup(context.Background())
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("interval OnStartup blocked after cache expiry (Spec 030)")
+	}
+	s.Shutdown()
+}
+
+func TestSniffAll_LoadsCatalogOnceWithTools(t *testing.T) {
+	dir := t.TempDir()
+	writeTool := func(name string) {
+		t.Helper()
+		body := "name: " + name + "\nauto_sniff: false\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeTool("alpha")
+	writeTool("beta")
+	writeTool("gamma")
+
+	cfg := &config.SniffConfig{Strategy: "manual", Concurrency: 3, RateLimitPerHr: 60}
+	s := NewScheduler(cfg, dir, dir)
+	loads := 0
+	s.loadCatalog = func(d string) (*manifest.Catalog, error) {
+		loads++
+		return manifest.LoadCatalog(d)
+	}
+	if err := s.SniffAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if loads != 1 {
+		t.Errorf("SniffAll catalog loads = %d, want 1 (Spec 030)", loads)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Scheduler NewScheduler
 // ---------------------------------------------------------------------------

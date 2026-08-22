@@ -68,3 +68,7 @@ HANDOFF.md
 # Stray artifacts
 one-api/
 test-results/
+
+# DSH internal session metadata (not part of the repo)
+.omo/
+

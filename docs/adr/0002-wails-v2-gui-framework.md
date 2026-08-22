@@ -1,4 +1,4 @@
-﻿# ADR-0002: Wails v2 作为 GUI 框架
+# ADR-0002: Wails v2 作为 GUI 框架
 
 > **状态**：Accepted
 > **日期**：2026-07-25
@@ -15,8 +15,8 @@ XDev 需要提供 GUI 操作模式（除 CLI/TUI 外）。候选框架包括：
 采用 Wails v2 作为 GUI 框架：
 - Go 后端通过 `main_bindings.go`（build tag `bindings`）提供 API
 - 前端使用 Vite + Vue.js，通过 `//go:embed all:dist` 嵌入二进制
-- GUI 变体通过 `go build -tags bindings` 编译，产出 `xdev-gui`
-- CLI 变体通过默认 `go build` 编译，不含 Wails 依赖
+- GUI 变体通过 `wails build -tags gui`（绑定生成仍用 `-tags bindings`）产出 `xdev-gui`
+- CLI 变体通过默认 `go build` 编译，不含 Wails 依赖（Spec 030 兑现：`internal/cli` 不再 import `internal/gui`）
 
 ## 后果
 

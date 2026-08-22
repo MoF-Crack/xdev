@@ -1,0 +1,16 @@
+{
+    "schema_version": 1,
+    "approval_id": "2026-08-22-spec-030-approved-001",
+    "asset_type": "spec",
+    "target_path": "specs/030-perf-shim-cli-split/spec.md",
+    "decision": "approve-state-transition",
+    "target_version": "1.0.0",
+    "target_state": "Approved",
+    "scope": "Submit Spec 030 with governance approval record (retroactive on commit)",
+    "approved_by": "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "approved_at": "2026-08-22",
+    "authorization_text": "用户 2026-08-22 提交 Spec 030（Shim 热路径与 CLI/GUI 分离）时补录治理批准记录",
+    "recorded_at": "2026-08-22",
+    "recorded_by": "XDev Agent",
+    "supersedes": []
+}

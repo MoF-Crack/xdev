@@ -131,6 +131,28 @@ func (s *SSHAdapter) Exec(ctx context.Context, id string, cmd []string) (*ExecRe
 	return &result, nil
 }
 
+// ConnectInteractive runs `ssh -t` with stdin/stdout/stderr wired to
+// the terminal (Spec 032). Password auth still uses sshpass.
+func (s *SSHAdapter) ConnectInteractive(ctx context.Context, id string, shell []string) error {
+	args := append([]string{"-t"}, s.sshArgs(shell...)...)
+	var c *exec.Cmd
+	if s.target.Password != "" {
+		c = exec.CommandContext(ctx, "sshpass", append([]string{"-p", s.target.Password, sshBinary()}, args...)...)
+	} else {
+		c = exec.CommandContext(ctx, sshBinary(), args...)
+	}
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		return err
+	}
+	return nil
+}
+
 // sshArgs builds the SSH command-line arguments.
 func (s *SSHAdapter) sshArgs(cmd ...string) []string {
 	args := []string{}

@@ -57,7 +57,7 @@ func newIsolateSetupCmd() *cobra.Command {
 		Use:   "setup",
 		Short: "Create an isolated environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			iso, err := isolator.NewIsolator(isolator.IsolationMode(isolateMode))
+			iso, err := isolator.NewIsolator(isolator.IsolationMode(isolateMode), Cfg().Core.XMDevDir)
 			if err != nil {
 				return err
 			}
@@ -76,7 +76,7 @@ func newIsolateTeardownCmd() *cobra.Command {
 		Use:   "teardown",
 		Short: "Destroy the isolated environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			iso, err := isolator.NewIsolator(isolator.IsolationMode(isolateMode))
+			iso, err := isolator.NewIsolator(isolator.IsolationMode(isolateMode), Cfg().Core.XMDevDir)
 			if err != nil {
 				return err
 			}
@@ -104,7 +104,7 @@ Examples:
 			if len(args) == 0 {
 				return fmt.Errorf("specify a command to execute (use -- to separate flags)")
 			}
-			iso, err := isolator.NewIsolator(isolator.IsolationMode(isolateMode))
+			iso, err := isolator.NewIsolator(isolator.IsolationMode(isolateMode), Cfg().Core.XMDevDir)
 			if err != nil {
 				return err
 			}
@@ -113,10 +113,10 @@ Examples:
 				return err
 			}
 			forwardExecResult(result)
-				if result.ExitCode != 0 {
-					return &shim.ExitCodeError{Code: result.ExitCode}
-				}
-				return nil
+			if result.ExitCode != 0 {
+				return &shim.ExitCodeError{Code: result.ExitCode}
+			}
+			return nil
 		},
 	}
 }

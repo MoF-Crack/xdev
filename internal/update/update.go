@@ -7,6 +7,9 @@
 package update
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,7 +26,7 @@ import (
 )
 
 const (
-	githubOwner = "xmdemt"
+	githubOwner = "MoF-Crack"
 	githubRepo  = "xdev"
 )
 
@@ -87,7 +90,7 @@ func Apply(ctx context.Context, result *CheckResult) error {
 		return fmt.Errorf("no release info available")
 	}
 
-	assetName := assetNameForPlatform()
+	assetName := assetNameForPlatform(result.LatestVersion)
 	asset, ok := findAsset(result.Release, assetName)
 	if !ok {
 		return fmt.Errorf("no matching asset found for platform %s/%s (looked for %q)",
@@ -114,8 +117,8 @@ func Apply(ctx context.Context, result *CheckResult) error {
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	archivePath := tmpFile.Name()
+	defer os.Remove(archivePath)
 
 	if err := downloadAsset(ctx, asset.BrowserDownloadURL, tmpFile); err != nil {
 		tmpFile.Close()
@@ -123,20 +126,23 @@ func Apply(ctx context.Context, result *CheckResult) error {
 	}
 	tmpFile.Close()
 
-	// Verify SHA256 checksum of the downloaded binary.
-	if err := verifySHA256(ctx, result.Release, asset.Name, tmpPath); err != nil {
+	if err := verifySHA256(ctx, result.Release, asset.Name, archivePath); err != nil {
 		return fmt.Errorf("SHA256 verification failed: %w", err)
 	}
 
-	// Make the new binary executable (Unix)
+	binPath, err := extractUpdateBinary(archivePath, asset.Name, tmpDir)
+	if err != nil {
+		return fmt.Errorf("extract update binary: %w", err)
+	}
+	defer os.Remove(binPath)
+
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(tmpPath, 0o755); err != nil {
+		if err := os.Chmod(binPath, 0o755); err != nil {
 			return fmt.Errorf("chmod new binary: %w", err)
 		}
 	}
 
-	// Replace the running binary.
-	if err := replaceBinary(exe, tmpPath); err != nil {
+	if err := replaceBinary(exe, binPath); err != nil {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
@@ -178,14 +184,119 @@ func fetchLatestRelease(ctx context.Context) (*ReleaseInfo, error) {
 	return &release, nil
 }
 
-// assetNameForPlatform returns the expected asset filename for the
-// current OS/architecture.
-func assetNameForPlatform() string {
-	ext := ""
+// assetNameForPlatform is the CI archive name for this OS/arch and version.
+// Windows: xdev-windows-amd64-v0.3.2.zip
+// Unix:    xdev-linux-amd64-v0.3.2.tar.gz
+func assetNameForPlatform(version string) string {
+	ver := strings.TrimPrefix(version, "v")
+	base := fmt.Sprintf("xdev-%s-%s-v%s", runtime.GOOS, runtime.GOARCH, ver)
 	if runtime.GOOS == "windows" {
-		ext = ".exe"
+		return base + ".zip"
 	}
-	return fmt.Sprintf("xdev-%s-%s%s", runtime.GOOS, runtime.GOARCH, ext)
+	return base + ".tar.gz"
+}
+
+func binaryNameInArchive() string {
+	if runtime.GOOS == "windows" {
+		return "xdev.exe"
+	}
+	return "xdev"
+}
+
+// extractUpdateBinary unpacks the CLI binary from a zip or tar.gz.
+// Only a root-level xdev / xdev.exe is accepted (zip-slip: no "..", no dirs).
+func extractUpdateBinary(archivePath, archiveName, destDir string) (string, error) {
+	want := binaryNameInArchive()
+	out := filepath.Join(destDir, ".xdev-update-bin")
+	lower := strings.ToLower(archiveName)
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		if err := extractNamedZipMember(archivePath, want, out); err != nil {
+			return "", err
+		}
+	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
+		if err := extractNamedTarGzMember(archivePath, want, out); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("unsupported update archive %q", archiveName)
+	}
+	return out, nil
+}
+
+func extractNamedZipMember(zipPath, wantName, dest string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		name := filepath.ToSlash(f.Name)
+		if !safeArchiveMember(name, wantName) {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		err = writeUpdateFile(dest, rc)
+		rc.Close()
+		return err
+	}
+	return fmt.Errorf("archive missing %q", wantName)
+}
+
+func extractNamedTarGzMember(tarPath, wantName, dest string) error {
+	f, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := filepath.ToSlash(hdr.Name)
+		if !safeArchiveMember(name, wantName) {
+			continue
+		}
+		return writeUpdateFile(dest, tr)
+	}
+	return fmt.Errorf("archive missing %q", wantName)
+}
+
+func safeArchiveMember(name, want string) bool {
+	name = strings.TrimPrefix(name, "./")
+	if name != want {
+		return false
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return false
+	}
+	return true
+}
+
+func writeUpdateFile(dest string, r io.Reader) error {
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, io.LimitReader(r, 200<<20)) // 200 MiB cap
+	return err
 }
 
 // findAsset searches for an asset matching the given name pattern.

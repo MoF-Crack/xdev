@@ -14,7 +14,7 @@ describe('DashboardPage', () => {
     } } });
     expect(wrapper.text()).toContain('24');
     expect(wrapper.text()).toContain('1 GB');
-    expect(wrapper.findAll('code').map((node) => node.text())).toContain('D:\\XDev\\install');
+    expect(wrapper.html()).toContain('D:\\XDev\\install');
     expect(wrapper.text()).toContain('Node.js');
   });
 

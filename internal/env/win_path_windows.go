@@ -51,13 +51,13 @@ import (
 )
 
 var (
-	advapi32              = syscall.NewLazyDLL("advapi32.dll")
-	procRegOpenKeyExW     = advapi32.NewProc("RegOpenKeyExW")
-	procRegQueryValueExW  = advapi32.NewProc("RegQueryValueExW")
-	procRegSetValueExW    = advapi32.NewProc("RegSetValueExW")
-	procRegCloseKey       = advapi32.NewProc("RegCloseKey")
-	procRegEnumValueW     = advapi32.NewProc("RegEnumValueW")
-	procRegDeleteValueW   = advapi32.NewProc("RegDeleteValueW")
+	advapi32             = syscall.NewLazyDLL("advapi32.dll")
+	procRegOpenKeyExW    = advapi32.NewProc("RegOpenKeyExW")
+	procRegQueryValueExW = advapi32.NewProc("RegQueryValueExW")
+	procRegSetValueExW   = advapi32.NewProc("RegSetValueExW")
+	procRegCloseKey      = advapi32.NewProc("RegCloseKey")
+	procRegEnumValueW    = advapi32.NewProc("RegEnumValueW")
+	procRegDeleteValueW  = advapi32.NewProc("RegDeleteValueW")
 )
 
 const (
@@ -518,94 +518,94 @@ func SetUserEnvVarTrusted(name, value string) error {
 	if ret != 0 {
 		return fmt.Errorf("RegSetValueExW (env var %s) failed: error %d", name, ret)
 	}
-		return nil
+	return nil
+}
+
+// GetUserEnvVar reads a user-level environment variable from HKCU\Environment.
+// Returns the value as a string, or ("", error) if the variable doesn't exist
+// or cannot be read. Only variable names in the allowed whitelist are accepted.
+// Security (H-10): Used by the installer to save original values for rollback.
+// Use GetUserEnvVarTrusted for installer-managed vars from manifests.
+func GetUserEnvVar(name string) (string, error) {
+	if !util.IsAllowedEnvVarName(name) {
+		return "", fmt.Errorf("env var %q is not in the allowed whitelist — refusing to read from registry", name)
+	}
+	return GetUserEnvVarTrusted(name)
+}
+
+// GetUserEnvVarTrusted reads a user-level env var without the whitelist check.
+// Used by the installer for env vars declared in tool manifests.
+func GetUserEnvVarTrusted(name string) (string, error) {
+	all := GetAllUserEnvVars()
+	v, ok := all[name]
+	if !ok {
+		return "", fmt.Errorf("env var %q not found", name)
+	}
+	return v, nil
+}
+
+// GetUserEnvVarsBatch reads a subset of user environment variables in a
+// single registry open/close cycle (SC-004 optimization for hostsnapshot).
+func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
+	all := GetAllUserEnvVars()
+	result := make(map[string]string, len(names))
+	for _, n := range names {
+		if util.IsAllowedEnvVarName(n) {
+			result[n] = all[n]
+		}
+	}
+	return result, nil
+}
+
+// DeleteUserEnvVar deletes a user-level environment variable from HKCU\Environment.
+// Only variable names in the allowed whitelist are accepted.
+// Security (M-1): Used by the installer to clean up env vars when the last
+// version of a tool is uninstalled (e.g., removing JAVA_HOME when no Java remains).
+func DeleteUserEnvVar(name string) error {
+	if !util.IsAllowedEnvVarName(name) {
+		return fmt.Errorf("env var %q is not in the allowed whitelist — refusing to delete from registry", name)
+	}
+	return DeleteUserEnvVarTrusted(name)
+}
+
+// DeleteUserEnvVarTrusted deletes a user-level env var without the whitelist check.
+// Used by the installer for env vars declared in tool manifests.
+func DeleteUserEnvVarTrusted(name string) error {
+	var key uintptr
+	envName, err := syscall.UTF16PtrFromString(`Environment`)
+	if err != nil {
+		return err
 	}
 
-	// GetUserEnvVar reads a user-level environment variable from HKCU\Environment.
-	// Returns the value as a string, or ("", error) if the variable doesn't exist
-	// or cannot be read. Only variable names in the allowed whitelist are accepted.
-	// Security (H-10): Used by the installer to save original values for rollback.
-	// Use GetUserEnvVarTrusted for installer-managed vars from manifests.
-	func GetUserEnvVar(name string) (string, error) {
-		if !util.IsAllowedEnvVarName(name) {
-			return "", fmt.Errorf("env var %q is not in the allowed whitelist — refusing to read from registry", name)
-		}
-		return GetUserEnvVarTrusted(name)
+	ret, _, _ := procRegOpenKeyExW.Call(
+		_HKEY_CURRENT_USER,
+		uintptr(unsafe.Pointer(envName)),
+		0,
+		_KEY_SET_VALUE,
+		uintptr(unsafe.Pointer(&key)),
+	)
+	if ret != 0 {
+		return fmt.Errorf("RegOpenKeyExW (delete env var) failed: error %d", ret)
+	}
+	defer procRegCloseKey.Call(key)
+
+	valueName, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return err
 	}
 
-	// GetUserEnvVarTrusted reads a user-level env var without the whitelist check.
-	// Used by the installer for env vars declared in tool manifests.
-	func GetUserEnvVarTrusted(name string) (string, error) {
-		all := GetAllUserEnvVars()
-		v, ok := all[name]
-		if !ok {
-			return "", fmt.Errorf("env var %q not found", name)
-		}
-		return v, nil
+	ret, _, _ = procRegDeleteValueW.Call(
+		key,
+		uintptr(unsafe.Pointer(valueName)),
+	)
+
+	const _ERROR_FILE_NOT_FOUND = 2
+	if ret != 0 && ret != _ERROR_FILE_NOT_FOUND {
+		return fmt.Errorf("RegDeleteValueW (env var %s) failed: error %d", name, ret)
 	}
 
-	// GetUserEnvVarsBatch reads a subset of user environment variables in a
-	// single registry open/close cycle (SC-004 optimization for hostsnapshot).
-	func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
-		all := GetAllUserEnvVars()
-		result := make(map[string]string, len(names))
-		for _, n := range names {
-			if util.IsAllowedEnvVarName(n) {
-				result[n] = all[n]
-			}
-		}
-		return result, nil
-	}
-
-	// DeleteUserEnvVar deletes a user-level environment variable from HKCU\Environment.
-	// Only variable names in the allowed whitelist are accepted.
-	// Security (M-1): Used by the installer to clean up env vars when the last
-	// version of a tool is uninstalled (e.g., removing JAVA_HOME when no Java remains).
-	func DeleteUserEnvVar(name string) error {
-		if !util.IsAllowedEnvVarName(name) {
-			return fmt.Errorf("env var %q is not in the allowed whitelist — refusing to delete from registry", name)
-		}
-		return DeleteUserEnvVarTrusted(name)
-	}
-
-	// DeleteUserEnvVarTrusted deletes a user-level env var without the whitelist check.
-	// Used by the installer for env vars declared in tool manifests.
-	func DeleteUserEnvVarTrusted(name string) error {
-		var key uintptr
-		envName, err := syscall.UTF16PtrFromString(`Environment`)
-		if err != nil {
-			return err
-		}
-
-		ret, _, _ := procRegOpenKeyExW.Call(
-			_HKEY_CURRENT_USER,
-			uintptr(unsafe.Pointer(envName)),
-			0,
-			_KEY_SET_VALUE,
-			uintptr(unsafe.Pointer(&key)),
-		)
-		if ret != 0 {
-			return fmt.Errorf("RegOpenKeyExW (delete env var) failed: error %d", ret)
-		}
-		defer procRegCloseKey.Call(key)
-
-		valueName, err := syscall.UTF16PtrFromString(name)
-		if err != nil {
-			return err
-		}
-
-		ret, _, _ = procRegDeleteValueW.Call(
-			key,
-			uintptr(unsafe.Pointer(valueName)),
-		)
-
-		const _ERROR_FILE_NOT_FOUND = 2
-		if ret != 0 && ret != _ERROR_FILE_NOT_FOUND {
-			return fmt.Errorf("RegDeleteValueW (env var %s) failed: error %d", name, ret)
-		}
-
-		return nil
-	}
+	return nil
+}
 
 // getRegKey returns the root HKEY and sub-key path for the given level.
 func getRegKey(level string) (rootKey uintptr, subKey string, err error) {
@@ -857,7 +857,7 @@ func EnumEnvVars(level string) ([]EnvPair, error) {
 	return pairs, nil
 }
 
-	// ReadSystemPath reads the "Path" value from HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment.
+// ReadSystemPath reads the "Path" value from HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment.
 // Returns "" if the value does not exist. Requires admin privileges for write access.
 func ReadSystemPath() (string, error) {
 	var key uintptr
@@ -1373,24 +1373,36 @@ func EnrichFromRegistry(envSlice []string) []string {
 		existing[strings.ToUpper(pair[:idx])] = i
 	}
 
-	// Read each whitelisted var from the registry and merge.
+	// One HKCU\Environment enumeration (Spec 030) instead of
+	// opening the key once per whitelist name.
+	all := GetAllUserEnvVars()
 	for name := range util.AllowedEnvVarNames {
-		regVal, err := readRegistryEnvVarRaw(name)
-		if err != nil {
-			// Variable doesn't exist in registry — skip.
+		regVal, ok := lookupUserEnv(all, name)
+		if !ok || regVal == "" {
 			continue
 		}
 		key := strings.ToUpper(name)
 		if idx, ok := existing[key]; ok {
-			// Override existing value with registry value.
 			envSlice[idx] = name + "=" + regVal
 		} else {
-			// Append new entry.
 			envSlice = append(envSlice, name+"="+regVal)
 		}
 	}
 
 	return envSlice
+}
+
+func lookupUserEnv(all map[string]string, name string) (string, bool) {
+	if v, ok := all[name]; ok {
+		return v, true
+	}
+	want := strings.ToUpper(name)
+	for k, v := range all {
+		if strings.ToUpper(k) == want {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // readRegistryEnvVarRaw reads a single environment variable from HKCU\Environment

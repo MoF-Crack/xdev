@@ -6,7 +6,7 @@
 // concern; this module only reports where each binary actually lives.
 //
 // Two adapters at this seam:
-//   - production: os.Getenv("PATH") + os.Stat
+//   - production: os.Getenv("PATH") + os.ReadDir
 //   - tests: Scan with an explicit PathList that points at a temp tree
 package hostscan
 
@@ -36,6 +36,9 @@ type Query struct {
 	PathList []string
 }
 
+// readDir lists a directory. Tests may replace it to count calls.
+var readDir = os.ReadDir
+
 // LookPath finds cmd on PATH, skipping any hit inside shimDir (those
 // are xdev dispatcher copies, not the real tool). Empty shimDir
 // disables the skip. Unlike exec.LookPath, a shim-dir hit does not
@@ -49,13 +52,28 @@ func LookPath(cmd, shimDir string) (string, bool) {
 }
 
 // FirstOnPATH returns the first of names that resolves outside shimDir.
+// Alias order is preserved. PATH directories are ReadDir once (Spec 031).
 func FirstOnPATH(names []string, shimDir string) (string, bool) {
-	for _, n := range names {
-		if path, ok := LookPath(n, shimDir); ok {
+	if len(names) == 0 {
+		return "", false
+	}
+	hits := Scan(Query{Names: names, ShimDir: shimDir})
+	if len(hits) == 0 {
+		return "", false
+	}
+	byBase := make(map[string]string, len(hits))
+	for _, h := range hits {
+		key := lookupKey(filepath.Base(h.Path))
+		if _, ok := byBase[key]; !ok {
+			byBase[key] = h.Path
+		}
+	}
+	for _, n := range expandNames(names) {
+		if path, ok := byBase[lookupKey(filepath.Base(n))]; ok {
 			return path, true
 		}
 	}
-	return "", false
+	return hits[0].Path, true
 }
 
 // ScanPATH returns every distinct hit for names on the process PATH,
@@ -64,10 +82,36 @@ func ScanPATH(names []string, shimDir string) []Hit {
 	return Scan(Query{Names: names, ShimDir: shimDir})
 }
 
+// IndexByBasename maps lookupKey(basename) → first PATH-order Hit.
+func IndexByBasename(hits []Hit) map[string]Hit {
+	out := make(map[string]Hit, len(hits))
+	for _, h := range hits {
+		key := lookupKey(filepath.Base(h.Path))
+		if _, ok := out[key]; !ok {
+			out[key] = h
+		}
+	}
+	return out
+}
+
+// FirstInIndex returns the first of names present in a basename index.
+func FirstInIndex(names []string, byBase map[string]Hit) (string, bool) {
+	if len(byBase) == 0 {
+		return "", false
+	}
+	for _, n := range expandNames(names) {
+		if h, ok := byBase[lookupKey(filepath.Base(n))]; ok {
+			return h.Path, true
+		}
+	}
+	return "", false
+}
+
 // Scan walks Query.PathList (or the process PATH) and returns every
 // distinct file that matches Names, skipping ShimDir. Order is PATH
 // order; duplicate paths (case-insensitive on Windows) are dropped.
 //
+// Each directory is ReadDir once and matched in memory (Spec 031).
 // On Windows each name is also tried with PATHEXT (or .exe/.cmd/.bat)
 // so "pnpm" finds pnpm.exe and pnpm.cmd without the caller expanding.
 func Scan(q Query) []Hit {
@@ -78,7 +122,7 @@ func Scan(q Query) []Hit {
 	if len(dirs) == 0 {
 		dirs = filepath.SplitList(os.Getenv("PATH"))
 	}
-	candidates := expandNames(q.Names)
+	want := candidateSet(q.Names)
 	var hits []Hit
 	seen := make(map[string]bool)
 	for _, dir := range dirs {
@@ -88,15 +132,19 @@ func Scan(q Query) []Hit {
 		if q.ShimDir != "" && InsideDir(dir, q.ShimDir) {
 			continue
 		}
-		for _, name := range candidates {
-			if name == "" {
+		entries, err := readDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if !want[lookupKey(name)] {
 				continue
 			}
 			cand := filepath.Join(dir, name)
-			fi, err := os.Stat(cand)
-			if err != nil || fi.IsDir() {
-				continue
-			}
 			if q.ShimDir != "" && InsideDir(cand, q.ShimDir) {
 				continue
 			}
@@ -148,6 +196,24 @@ func normalizeKey(path string) string {
 	return clean
 }
 
+func lookupKey(name string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(name)
+	}
+	return name
+}
+
+func candidateSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names)*4)
+	for _, n := range expandNames(names) {
+		if n == "" {
+			continue
+		}
+		set[lookupKey(n)] = true
+	}
+	return set
+}
+
 func expandNames(names []string) []string {
 	if runtime.GOOS != "windows" {
 		return names
@@ -169,11 +235,9 @@ func expandNames(names []string) []string {
 			continue
 		}
 		for _, ext := range exts {
-			// Prefer the caller-supplied basename casing (codex.cmd)
-			// over PATHEXT's typical .CMD — Stat is case-insensitive
-			// on Windows but the returned path should match the file.
+			// One casing per extension: NTFS is case-insensitive.
+			// Prefer lowercase so the returned ReadDir name still matches.
 			add(n + strings.ToLower(ext))
-			add(n + ext)
 		}
 	}
 	return out

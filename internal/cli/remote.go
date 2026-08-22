@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -124,15 +125,23 @@ func newRemoteListCmd() *cobra.Command {
 func newRemoteConnectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "connect <id>",
-		Short: "Connect to a remote environment",
+		Short: "Connect to a remote environment (interactive TTY)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			adapter, err := createAdapter()
 			if err != nil {
 				return err
 			}
-
-			// Start an interactive shell in the remote environment
+			// Interactive shell with a real TTY (Spec 032).
+			if ic, ok := adapter.(interface {
+				ConnectInteractive(ctx context.Context, id string, shell []string) error
+			}); ok {
+				if err := ic.ConnectInteractive(cmd.Context(), args[0], []string{"/bin/bash"}); err != nil {
+					return fmt.Errorf("connect to %s: %w", args[0], err)
+				}
+				return nil
+			}
+			// Fallback: captured exec for adapters without a TTY path.
 			result, err := adapter.Exec(cmd.Context(), args[0], []string{"/bin/bash"})
 			if err != nil {
 				return fmt.Errorf("connect to %s: %w", args[0], err)

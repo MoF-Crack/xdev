@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	lua "github.com/yuin/gopher-lua"
 	"github.com/xmdemt/xdev/internal/util"
+	lua "github.com/yuin/gopher-lua"
 )
 
 // VfoxPlugin is a vfox-format Lua plugin. It embeds luaBasePlugin
@@ -163,37 +163,31 @@ func promotePluginMethods(L *lua.LState, pluginTable lua.LValue) {
 // callAvailable runs the Lua available() function. For vfox plugins,
 // each entry may be a string or a table with a "version" field.
 func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
-	L, err := e.newSandboxedVM()
+	L, done, err := e.vmFor(p.path, p.specs.vfoxFormat)
 	if err != nil {
 		return nil, err
 	}
-	defer L.Close()
-
-	if err := L.DoFile(p.path); err != nil {
-		return nil, fmt.Errorf("load %s plugin: %w", pluginLabel(p.specs.vfoxFormat), err)
-	}
-	promotePluginMethods(L, L.GetGlobal("PLUGIN"))
+	defer done()
 
 	// Security (M-12): Add execution timeout
-	done := make(chan error, 1)
+	doneCh := make(chan error, 1)
 	go func() {
 		if err := L.CallByParam(lua.P{
 			Fn:      L.GetGlobal("available"),
 			NRet:    1,
 			Protect: true,
 		}); err != nil {
-			done <- fmt.Errorf("available(): %w", err)
+			doneCh <- fmt.Errorf("available(): %w", err)
 			return
 		}
-		done <- nil
+		doneCh <- nil
 	}()
 	select {
-	case err := <-done:
+	case err := <-doneCh:
 		if err != nil {
 			return nil, err
 		}
 	case <-time.After(30 * time.Second):
-		L.Close()
 		return nil, fmt.Errorf("available() timed out after 30s for plugin %s", p.name)
 	}
 
@@ -227,38 +221,32 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 
 // callArchive runs the Lua archive() or install() function (based on specs).
 func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*LuaArchive, error) {
-	L, err := e.newSandboxedVM()
+	L, done, err := e.vmFor(p.path, p.specs.vfoxFormat)
 	if err != nil {
 		return nil, err
 	}
-	defer L.Close()
-
-	if err := L.DoFile(p.path); err != nil {
-		return nil, fmt.Errorf("load %s plugin: %w", pluginLabel(p.specs.vfoxFormat), err)
-	}
-	promotePluginMethods(L, L.GetGlobal("PLUGIN"))
+	defer done()
 
 	fnName := p.specs.archiveFn
 	// Security (M-12): Add execution timeout
-	done := make(chan error, 1)
+	doneCh := make(chan error, 1)
 	go func() {
 		if err := L.CallByParam(lua.P{
 			Fn:      L.GetGlobal(fnName),
 			NRet:    1,
 			Protect: true,
 		}, lua.LString(version), lua.LString(goos), lua.LString(arch)); err != nil {
-			done <- fmt.Errorf("%s(%s,%s,%s): %w", fnName, version, goos, arch, err)
+			doneCh <- fmt.Errorf("%s(%s,%s,%s): %w", fnName, version, goos, arch, err)
 			return
 		}
-		done <- nil
+		doneCh <- nil
 	}()
 	select {
-	case err := <-done:
+	case err := <-doneCh:
 		if err != nil {
 			return nil, err
 		}
 	case <-time.After(60 * time.Second):
-		L.Close()
 		return nil, fmt.Errorf("%s() timed out after 60s for plugin %s", fnName, p.name)
 	}
 
@@ -275,54 +263,48 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 		Strip:  getFieldInt(L, result, "strip"),
 	}
 	if a.URL == "" {
-			return nil, fmt.Errorf("%s() result missing 'url' field", fnName)
-		}
-		// Security (H-4): Validate that the plugin-returned URL uses HTTPS.
-		// A malicious plugin could return an HTTP URL, making the download
-		// vulnerable to MITM attacks, or a file:// URL for SSRF.
-		if !strings.HasPrefix(a.URL, "https://") {
-			return nil, fmt.Errorf("%s() returned non-HTTPS URL %q — only HTTPS URLs are allowed for security", fnName, a.URL)
-		}
-		if a.Format == "" {
-			a.Format = "zip"
-		}
-		return a, nil
+		return nil, fmt.Errorf("%s() result missing 'url' field", fnName)
+	}
+	// Security (H-4): Validate that the plugin-returned URL uses HTTPS.
+	// A malicious plugin could return an HTTP URL, making the download
+	// vulnerable to MITM attacks, or a file:// URL for SSRF.
+	if !strings.HasPrefix(a.URL, "https://") {
+		return nil, fmt.Errorf("%s() returned non-HTTPS URL %q — only HTTPS URLs are allowed for security", fnName, a.URL)
+	}
+	if a.Format == "" {
+		a.Format = "zip"
+	}
+	return a, nil
 }
 
 // callEnvVars runs the optional Lua env_vars() or env_keys() function.
 func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[string]string, error) {
-	L, err := e.newSandboxedVM()
+	L, done, err := e.vmFor(p.path, p.specs.vfoxFormat)
 	if err != nil {
 		return nil, err
 	}
-	defer L.Close()
-
-	if err := L.DoFile(p.path); err != nil {
-		return nil, fmt.Errorf("load %s plugin: %w", pluginLabel(p.specs.vfoxFormat), err)
-	}
-	promotePluginMethods(L, L.GetGlobal("PLUGIN"))
+	defer done()
 
 	fnName := p.specs.envVarsFn
 	// Security (M-12): Add execution timeout
-	done := make(chan error, 1)
+	doneCh := make(chan error, 1)
 	go func() {
 		if err := L.CallByParam(lua.P{
 			Fn:      L.GetGlobal(fnName),
 			NRet:    1,
 			Protect: true,
 		}, lua.LString(installPath)); err != nil {
-			done <- fmt.Errorf("%s(%s): %w", fnName, installPath, err)
+			doneCh <- fmt.Errorf("%s(%s): %w", fnName, installPath, err)
 			return
 		}
-		done <- nil
+		doneCh <- nil
 	}()
 	select {
-	case err := <-done:
+	case err := <-doneCh:
 		if err != nil {
 			return nil, err
 		}
 	case <-time.After(10 * time.Second):
-		L.Close()
 		return nil, fmt.Errorf("%s() timed out after 10s for plugin %s", fnName, p.name)
 	}
 
@@ -334,20 +316,20 @@ func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[strin
 	}
 
 	out := map[string]string{}
-		L.ForEach(result.(*lua.LTable), func(k lua.LValue, v lua.LValue) {
-			ks, kok := k.(lua.LString)
-			vs, vok := v.(lua.LString)
-			if kok && vok {
-				key := string(ks)
-				// Security (H-4): Only allow env var names in the whitelist.
-				// A malicious plugin could return arbitrary keys like "Path"
-				// or "SystemRoot" that would corrupt the user's environment.
-				if !util.IsAllowedEnvVarName(key) {
-					log.Printf("[plugin] WARNING: Lua plugin %q returned env var %q not in whitelist — skipping", p.name, key)
-					return
-				}
-				out[key] = string(vs)
+	L.ForEach(result.(*lua.LTable), func(k lua.LValue, v lua.LValue) {
+		ks, kok := k.(lua.LString)
+		vs, vok := v.(lua.LString)
+		if kok && vok {
+			key := string(ks)
+			// Security (H-4): Only allow env var names in the whitelist.
+			// A malicious plugin could return arbitrary keys like "Path"
+			// or "SystemRoot" that would corrupt the user's environment.
+			if !util.IsAllowedEnvVarName(key) {
+				log.Printf("[plugin] WARNING: Lua plugin %q returned env var %q not in whitelist — skipping", p.name, key)
+				return
 			}
-		})
+			out[key] = string(vs)
+		}
+	})
 	return out, nil
 }

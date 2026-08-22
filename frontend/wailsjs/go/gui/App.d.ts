@@ -67,6 +67,8 @@ export function GetAvailableUpdates():Promise<Array<gui.UpdateInfo>>;
 
 export function GetAvailableVersions(arg1:string):Promise<Array<gui.VersionInfo>>;
 
+export function GetBootstrapState():Promise<gui.BootstrapState>;
+
 export function GetCacheBreakdown():Promise<gui.CacheBreakdown>;
 
 export function GetCacheSizeBreakdown():Promise<Array<gui.DiskUsageEntry>>;

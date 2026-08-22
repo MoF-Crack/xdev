@@ -1,9 +1,14 @@
 // app_version_output_test.go tests extractVersionFromOutput — the
 // multi-line version parser used by getVersion during migration/refresh
-// (gradle "unsafe-version-blocked" fix).
+// (gradle "unsafe-version-blocked" fix). Spec 033: 实现收口到
+// internal/toolmeta，测试改调 toolmeta.ExtractVersionFromOutput。
 package gui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/xmdemt/xdev/internal/toolmeta"
+)
 
 func TestExtractVersionFromOutput(t *testing.T) {
 	cases := []struct {
@@ -46,15 +51,15 @@ func TestExtractVersionFromOutput(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		if got := extractVersionFromOutput(c.output); got != c.want {
-			t.Errorf("%s: extractVersionFromOutput(%q) = %q, want %q", c.name, c.output, got, c.want)
+		if got := toolmeta.ExtractVersionFromOutput(c.output); got != c.want {
+			t.Errorf("%s: toolmeta.ExtractVersionFromOutput(%q) = %q, want %q", c.name, c.output, got, c.want)
 		}
 	}
 
 	// 超长首行回退时截断（前 60 字符 + "..."）——期望值程序化计算，避免手数出错。
 	longLine := "this-is-a-very-long-tool-output-line-without-any-version-numbers-in-it-at-all-0123456789"
 	wantTruncated := longLine[:60] + "..."
-	if got := extractVersionFromOutput(longLine); got != wantTruncated {
+	if got := toolmeta.ExtractVersionFromOutput(longLine); got != wantTruncated {
 		t.Errorf("long line truncation: got %q, want %q", got, wantTruncated)
 	}
 }

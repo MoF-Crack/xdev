@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -239,6 +240,48 @@ func TestLookup_DirectTool(t *testing.T) {
 	}
 	if len(args) != 0 {
 		t.Errorf("args = %v, want empty", args)
+	}
+}
+
+func TestDiskShimIndex_RoundTripAndLookup(t *testing.T) {
+	home := t.TempDir()
+	curDir := filepath.Join(home, "current", "node", "bin")
+	if err := os.MkdirAll(curDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nodeExe := filepath.Join(curDir, "node"+testExeSuffix())
+	npmName := "npm"
+	if runtime.GOOS == "windows" {
+		npmName = "npm.cmd"
+	}
+	npmExe := filepath.Join(curDir, npmName)
+	if err := os.WriteFile(nodeExe, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(npmExe, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XMDEV_HOME", home)
+	config.ResetHomeDirForTest()
+
+	// InvalidateShimIndex now also writes the on-disk index.
+	InvalidateShimIndex()
+
+	// Clear the in-process index so Lookup must use the disk file.
+	shimIndexMu.Lock()
+	shimIndex = nil
+	shimIndexOnce = sync.Once{}
+	shimIndexMu.Unlock()
+
+	target, toolName, _, err := Lookup("npm", nil)
+	if err != nil {
+		t.Fatalf("Lookup via disk index: %v", err)
+	}
+	if toolName != "node" {
+		t.Errorf("toolName = %q, want node", toolName)
+	}
+	if target != npmExe {
+		t.Errorf("target = %q, want %q", target, npmExe)
 	}
 }
 

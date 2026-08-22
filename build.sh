@@ -31,7 +31,7 @@ if [ "$SKIP_AUDIT" != "1" ]; then
 fi
 
 echo "Building xdev-gui v${VERSION}..."
-wails build -ldflags "$LDFLAGS" -o build/bin/xdev-gui
+wails build -tags gui -ldflags "$LDFLAGS" -o build/bin/xdev-gui
 
 cp build/bin/xdev "build/bin/xdev-${VERSION}"
 cp build/bin/xdev-gui "build/bin/xdev-gui-${VERSION}"

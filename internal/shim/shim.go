@@ -14,10 +14,12 @@
 // # Shim Resolution Order
 //
 // When a shim alias is invoked, Lookup resolves it in this order:
-//  1. Project-level version from .xdev.toml (if a project config is found)
-//  2. Direct match: current/<alias>/ directory contains the executable
-//  3. Cross-tool scan: all current/*/ directories are searched for the alias
+//  1. Direct match: current/<alias>/ directory contains the executable
+//  2. Cross-tool scan: all current/*/ directories are searched for the alias
 //     (e.g. `npm` resolves to current/node/bin/npm)
+//
+// Project-level .xdev.toml override was removed in Spec 012. Unix run
+// uses unix.Exec (Spec 030) so the shim does not stay resident.
 //
 // # Reverse Index
 //
@@ -36,14 +38,14 @@ package shim
 
 import (
 	"fmt"
+	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/xmdemt/xdev/internal/config"
-	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -202,21 +204,107 @@ type shimEntry struct {
 
 // InvalidateShimIndex clears the reverse index so it will be
 // rebuilt on the next Lookup.  Call this after installing,
-// uninstalling, or activating a tool.
+// uninstalling, or activating a tool.  It also rewrites the on-disk
+// shim index (Spec 032) so short shim processes can mmap it instead
+// of walking current/*.
 func InvalidateShimIndex() {
 	shimIndexMu.Lock()
-	defer shimIndexMu.Unlock()
 	shimIndexOnce = sync.Once{}
 	shimIndex = nil
+	shimIndexMu.Unlock()
+	writeDiskShimIndex(config.ResolveHomeDir())
+}
+
+// diskShimIndexName is the on-disk reverse index consumed by short
+// shim processes (Spec 032). Format: one "alias<TAB>toolName<TAB>path"
+// per line, sorted by alias, terminated by a blank line. The header
+// line is "xdev-shim-index\tv1".
+const diskShimIndexName = "shim-index.v1"
+
+func diskShimIndexPath(xmdeHome string) string {
+	return filepath.Join(xmdeHome, "cache", diskShimIndexName)
+}
+
+// writeDiskShimIndex serialises the current reverse index to disk.
+// Best-effort: missing cache dir or write failure is logged, not fatal.
+func writeDiskShimIndex(xmdeHome string) {
+	shimIndexMu.RLock()
+	idx := shimIndex
+	shimIndexMu.RUnlock()
+	if idx == nil {
+		// Rebuild in-memory first so the on-disk file is authoritative.
+		idx = buildShimIndexMap(xmdeHome)
+		shimIndexMu.Lock()
+		shimIndex = idx
+		shimIndexMu.Unlock()
+	}
+	path := diskShimIndexPath(xmdeHome)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Printf("[shim] write disk index: mkdir: %v", err)
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("xdev-shim-index\tv1\n")
+	names := make([]string, 0, len(idx))
+	for k := range idx {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		e := idx[k]
+		sb.WriteString(k)
+		sb.WriteByte('\t')
+		sb.WriteString(e.toolName)
+		sb.WriteByte('\t')
+		sb.WriteString(e.path)
+		sb.WriteByte('\n')
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		log.Printf("[shim] write disk index %s: %v", path, err)
+	}
+}
+
+// loadDiskShimIndex reads the on-disk reverse index. Returns nil on
+// any error (caller falls back to the in-process build).
+func loadDiskShimIndex(xmdeHome string) map[string]shimEntry {
+	data, err := os.ReadFile(diskShimIndexPath(xmdeHome))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "xdev-shim-index\tv1") {
+		return nil
+	}
+	idx := make(map[string]shimEntry, len(lines)-1)
+	for _, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		idx[parts[0]] = shimEntry{toolName: parts[1], path: parts[2]}
+	}
+	return idx
 }
 
 // buildShimIndex reads all current/* directories and their
 // executables, populating shimIndex with a shimName -> entry mapping.
 func buildShimIndex(xmdeHome string) {
+	idx := buildShimIndexMap(xmdeHome)
+	shimIndexMu.Lock()
+	shimIndex = idx
+	shimIndexMu.Unlock()
+}
+
+// buildShimIndexMap is the pure scan that produces the reverse index
+// without touching the package-level shimIndex.
+func buildShimIndexMap(xmdeHome string) map[string]shimEntry {
 	currentDir := filepath.Join(xmdeHome, "current")
 	entries, err := os.ReadDir(currentDir)
 	if err != nil {
-		return
+		return make(map[string]shimEntry)
 	}
 	idx := make(map[string]shimEntry)
 	for _, e := range entries {
@@ -231,9 +319,7 @@ func buildShimIndex(xmdeHome string) {
 		// each one in the reverse index.
 		scanDirForIndex(idx, full, toolName)
 	}
-	shimIndexMu.Lock()
-	shimIndex = idx
-	shimIndexMu.Unlock()
+	return idx
 }
 
 // scanDirForIndex walks a single tool directory and adds every
@@ -295,7 +381,12 @@ func addExecutables(idx map[string]shimEntry, dir, toolName string) {
 }
 
 func scanFor(xmdeHome, alias string) (string, string, bool) {
-	// Build the index lazily on first call via sync.Once.
+	// Spec 032: prefer the on-disk reverse index so short shim
+	// processes do not re-walk current/*. The in-process sync.Once
+	// build is the fallback for long-lived CLI/GUI processes.
+	if entry, ok := lookupDiskShimIndex(xmdeHome, alias); ok {
+		return entry.path, entry.toolName, true
+	}
 	shimIndexOnce.Do(func() {
 		buildShimIndex(xmdeHome)
 	})
@@ -308,6 +399,15 @@ func scanFor(xmdeHome, alias string) (string, string, bool) {
 	return "", "", false
 }
 
+func lookupDiskShimIndex(xmdeHome, alias string) (shimEntry, bool) {
+	idx := loadDiskShimIndex(xmdeHome)
+	if idx == nil {
+		return shimEntry{}, false
+	}
+	e, ok := idx[alias]
+	return e, ok
+}
+
 // ExitCodeError carries a child process exit code to the top-level
 // caller, which can then call os.Exit() after running deferred cleanup.
 type ExitCodeError struct {
@@ -318,27 +418,8 @@ func (e *ExitCodeError) Error() string {
 	return fmt.Sprintf("exit code %d", e.Code)
 }
 
-func run(target string, args []string) error {
-	cmd := exec.Command(target, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// Security (M-14): Inherit process env vars AND inject registry-level
-	// env vars that may have been set by xdev but not yet picked up by the
-	// current shell (e.g., JAVA_HOME set via Activate but current terminal
-	// hasn't received WM_SETTINGCHANGE). This ensures shims always run with
-	// the correct tool environment regardless of when the shell was started.
-	cmd.Env = os.Environ()
-	cmd.Env = env.EnrichFromRegistry(cmd.Env)
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return &ExitCodeError{Code: exitErr.ExitCode()}
-		}
-		return fmt.Errorf("run %s: %w", target, err)
-	}
-	return nil
-}
+// run is implemented in run_unix.go (unix.Exec) and run_windows.go
+// (CreateProcess + EnrichFromRegistry).
 
 func exeSuffix() string {
 	if os.PathSeparator == '\\' {

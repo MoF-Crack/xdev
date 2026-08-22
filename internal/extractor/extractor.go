@@ -258,19 +258,19 @@ func extractZip(src, dst string, strip int) error {
 		}
 		out := filepath.Join(dst, rel)
 		if !isSafePath(dst, out) {
-					_ = os.RemoveAll(dst)
-					return fmt.Errorf("zip slip: path %q escapes destination %q", f.Name, dst)
-				}
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("zip slip: path %q escapes destination %q", f.Name, dst)
+		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(out, 0o755); err != nil {
+			if err := os.MkdirAll(util.ToLongPath(out), 0o755); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		if err := os.MkdirAll(util.ToLongPath(filepath.Dir(out)), 0o755); err != nil {
 			return err
 		}
-		n, err := unzipFile(f, out)
+		n, err := unzipFile(f, util.ToLongPath(out))
 		if err != nil {
 			return err
 		}
@@ -493,7 +493,7 @@ func extractViaCommand(cmdName string, args []string, src, dst string, strip int
 	return err
 }
 
-	// extractTarFromReader reads tar data from r and extracts to dst.
+// extractTarFromReader reads tar data from r and extracts to dst.
 //
 // Security (H-1): Before writing each entry, we check that no parent
 // directory of the output path is a symlink. This prevents cross-entry
@@ -516,47 +516,47 @@ func extractTarFromReader(r io.Reader, dst string, strip int) error {
 		}
 		out := filepath.Join(dst, rel)
 		if !isSafePath(dst, out) {
-					_ = os.RemoveAll(dst)
-					return fmt.Errorf("tar slip: path %q escapes destination %q", hdr.Name, dst)
-				}
-			// Security (H-1): Check that no ancestor of out is a symlink.
-			// A previous tar entry could have created a symlink at a parent
-			// directory, causing this write to land outside dst even though
-			// the lexical path appears safe.
-			if err := checkNoSymlinkAncestor(dst, out); err != nil {
-				return fmt.Errorf("tar slip: cannot write %q: %w", hdr.Name, err)
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("tar slip: path %q escapes destination %q", hdr.Name, dst)
+		}
+		// Security (H-1): Check that no ancestor of out is a symlink.
+		// A previous tar entry could have created a symlink at a parent
+		// directory, causing this write to land outside dst even though
+		// the lexical path appears safe.
+		if err := checkNoSymlinkAncestor(dst, out); err != nil {
+			return fmt.Errorf("tar slip: cannot write %q: %w", hdr.Name, err)
+		}
+		mode := hdr.FileInfo().Mode()
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(util.ToLongPath(out), mode.Perm()); err != nil {
+				return err
 			}
-			mode := hdr.FileInfo().Mode()
-			switch hdr.Typeflag {
-			case tar.TypeDir:
-				if err := os.MkdirAll(out, mode.Perm()); err != nil {
-					return err
-				}
-			case tar.TypeReg, tar.TypeRegA:
-				if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-					return err
-				}
-				w, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-				if err != nil {
-					return err
-				}
-				n, err := io.Copy(w, io.LimitReader(tr, maxDecompressSize+1))
-				if err != nil {
-					w.Close()
-					return err
-				}
-				if n > maxDecompressSize {
-					w.Close()
-					return fmt.Errorf("file %s exceeds max decompression size (%d bytes)", hdr.Name, maxDecompressSize)
-				}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(util.ToLongPath(filepath.Dir(out)), 0o755); err != nil {
+				return err
+			}
+			w, err := os.OpenFile(util.ToLongPath(out), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+			if err != nil {
+				return err
+			}
+			n, err := io.Copy(w, io.LimitReader(tr, maxDecompressSize+1))
+			if err != nil {
 				w.Close()
-				totalExtracted += n
-				// Security (M-11): Check total extraction size
-				if totalExtracted > maxTotalExtractSize {
-					_ = os.RemoveAll(dst)
-					return fmt.Errorf("total extraction size exceeds %d bytes limit (zip bomb protection)", maxTotalExtractSize)
-				}
-			case tar.TypeSymlink:
+				return err
+			}
+			if n > maxDecompressSize {
+				w.Close()
+				return fmt.Errorf("file %s exceeds max decompression size (%d bytes)", hdr.Name, maxDecompressSize)
+			}
+			w.Close()
+			totalExtracted += n
+			// Security (M-11): Check total extraction size
+			if totalExtracted > maxTotalExtractSize {
+				_ = os.RemoveAll(dst)
+				return fmt.Errorf("total extraction size exceeds %d bytes limit (zip bomb protection)", maxTotalExtractSize)
+			}
+		case tar.TypeSymlink:
 			// Validate symlink target stays within dst
 			linkTarget := hdr.Linkname
 			if filepath.IsAbs(linkTarget) {
@@ -575,7 +575,7 @@ func extractTarFromReader(r io.Reader, dst string, strip int) error {
 			}
 		}
 	}
-		return nil
+	return nil
 }
 
 // checkNoSymlinkAncestor verifies that no component of the output path

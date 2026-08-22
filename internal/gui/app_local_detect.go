@@ -29,6 +29,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/hostscan"
 	"github.com/xmdemt/xdev/internal/shim"
+	"github.com/xmdemt/xdev/internal/toolmeta"
 	"github.com/xmdemt/xdev/internal/update"
 	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
@@ -424,9 +425,9 @@ type pmDef struct {
 // installMethod 描述附属工具的一种安装方式（Spec 026）。
 // 例如 pipx 可通过 pip install pipx 或 uv tool install pipx 安装。
 type installMethod struct {
-	name       string // 方法标识（如 "pip" / "uv"），前端用于选项对话框
-	command    string // 执行命令（如 "pip install pipx"）
-	detectCmd  string // 检测该方法前置工具是否可用的命令名（如 "pip" / "uv"）
+	name      string // 方法标识（如 "pip" / "uv"），前端用于选项对话框
+	command   string // 执行命令（如 "pip install pipx"）
+	detectCmd string // 检测该方法前置工具是否可用的命令名（如 "pip" / "uv"）
 }
 
 // GetPackageManagers returns available package managers with their status.
@@ -607,30 +608,7 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 						if target, ok := shim.FindInDir(parentDir, pm.detectCmd); ok {
 							info.Installed = true
 							info.LocalPath = target
-							// 尝试获取附属工具的实际版本号
-							actualVer := a.getSubToolVersion(pm.detectCmd, pm.toolName)
-							if actualVer != "" {
-								info.Version = actualVer
-							} else {
-								// getSubToolVersion 失败时，尝试直接执行工具获取版本
-								ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-								cmd := exec.CommandContext(ctx, pm.detectCmd, pm.detectArgs...)
-								util.HideWindow(cmd)
-								if output, err := cmd.CombinedOutput(); err == nil {
-									line := strings.TrimSpace(string(output))
-									if idx := strings.Index(line, "\n"); idx > 0 {
-										line = line[:idx]
-									}
-									if v := extractVersion(line); v != "" {
-										info.Version = v
-									} else {
-										info.Version = "随 " + pm.toolName + " " + activeVer + " 附带"
-									}
-								} else {
-									info.Version = "随 " + pm.toolName + " " + activeVer + " 附带"
-								}
-								cancel()
-							}
+							info.Version = "随 " + pm.toolName + " " + activeVer + " 附带"
 						} else {
 							// 附属工具可执行文件不存在，不标记为已安装
 							// （例如 yarn/pnpm 未通过 corepack enable 启用）
@@ -666,7 +644,7 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 					} else {
 						info.Installed = true
 						info.LocalPath = path
-						if v := extractVersion(outputStr); v != "" {
+						if v := toolmeta.ExtractVersion(outputStr); v != "" {
 							info.Version = v
 						} else {
 							info.Version = "随 Node.js 附带"
@@ -694,7 +672,7 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 					} else {
 						info.Installed = true
 						info.LocalPath = path
-						if v := extractVersion(outputStr); v != "" {
+						if v := toolmeta.ExtractVersion(outputStr); v != "" {
 							info.Version = v
 						} else {
 							info.Version = outputStr
@@ -702,34 +680,9 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 					}
 				}
 			} else {
+				// Spec 031: list path only; do not exec --version on the catalog row.
 				info.Installed = true
 				info.LocalPath = path
-				// Get version (with short timeout)
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				cmd := exec.CommandContext(ctx, path, pm.detectArgs...)
-				util.HideWindow(cmd)
-				if output, err := cmd.CombinedOutput(); err == nil {
-					outputStr := strings.TrimSpace(string(output))
-					if pm.name == "gradle" {
-						for _, line := range strings.Split(outputStr, "\n") {
-							line = strings.TrimSpace(line)
-							if strings.HasPrefix(line, "Gradle ") {
-								info.Version = strings.TrimPrefix(line, "Gradle ")
-								break
-							}
-						}
-					} else {
-						line := outputStr
-						if idx := strings.Index(line, "\n"); idx > 0 {
-							line = line[:idx]
-						}
-						info.Version = extractVersion(line)
-						if info.Version == "" {
-							info.Version = line
-						}
-					}
-				}
-				cancel()
 			}
 		}
 	}
@@ -757,13 +710,7 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 				if target, ok := shim.FindInDir(parentDir, pm.detectCmd); ok {
 					info.Installed = true
 					info.LocalPath = target
-					// 尝试获取版本号
-					actualVer := a.getSubToolVersion(pm.detectCmd, effectiveParent)
-					if actualVer != "" {
-						info.Version = actualVer
-					} else {
-						info.Version = "随 " + effectiveParent + " " + activeVer + " 附带"
-					}
+					info.Version = "随 " + effectiveParent + " " + activeVer + " 附带"
 				}
 			} else {
 				info.Installed = true
@@ -902,12 +849,8 @@ func (a *App) collectPMInstances(pm pmDef, info PackageManagerInfo) []PMInstance
 				normalized := filepath.Clean(strings.ToLower(target))
 				if !seenPaths[normalized] {
 					ver := activeVer
-					if pm.detectCmd != parentToolName {
-						if actual := a.getSubToolVersion(pm.detectCmd, parentToolName); actual != "" {
-							ver = actual
-						} else if info.Version != "" {
-							ver = info.Version
-						}
+					if pm.detectCmd != parentToolName && info.Version != "" {
+						ver = info.Version
 					}
 					instances = append(instances, PMInstanceInfo{
 						Version: ver,
@@ -931,7 +874,7 @@ func (a *App) collectPMInstances(pm pmDef, info PackageManagerInfo) []PMInstance
 		if seenPaths[normalized] {
 			continue
 		}
-		ver := probePMVersion(path, pm.detectArgs)
+		ver := info.Version
 		if ver == "" {
 			ver = "unknown"
 		}
@@ -951,75 +894,6 @@ func (a *App) collectPMInstances(pm pmDef, info PackageManagerInfo) []PMInstance
 	}
 
 	return instances
-}
-
-func probePMVersion(path string, detectArgs []string) string {
-	if path == "" {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, detectArgs...)
-	util.HideWindow(cmd)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	line := strings.TrimSpace(string(output))
-	if idx := strings.Index(line, "\n"); idx > 0 {
-		line = line[:idx]
-	}
-	if v := extractVersion(line); v != "" {
-		return v
-	}
-	return line
-}
-
-// getSubToolVersion 在父工具安装目录里找附属工具并读 --version。
-// 例如 yarn/pnpm 在 node 安装目录内，尝试执行该工具获取版本号。
-func (a *App) getSubToolVersion(subToolCmd, parentToolName string) string {
-	parentDir := a.currentLink(parentToolName)
-
-	// 在父工具目录中查找子工具可执行文件
-	var subToolPath string
-	if target, ok := shim.FindInDir(parentDir, subToolCmd); ok {
-		subToolPath = target
-	}
-
-	if subToolPath == "" {
-		// Windows: check Scripts subdirectory (pip, pipx, etc.)
-		if runtime.GOOS == "windows" {
-			scriptsDir := filepath.Join(parentDir, "Scripts")
-			if target, ok := shim.FindInDir(scriptsDir, subToolCmd); ok {
-				subToolPath = target
-			}
-		}
-		// Unix: check bin subdirectory
-		if subToolPath == "" {
-			binDir := filepath.Join(parentDir, "bin")
-			if target, ok := shim.FindInDir(binDir, subToolCmd); ok {
-				subToolPath = target
-			}
-		}
-	}
-
-	if subToolPath == "" {
-		return ""
-	}
-
-	// 执行子工具获取版本号
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, subToolPath, "--version")
-	util.HideWindow(cmd)
-	if output, err := cmd.CombinedOutput(); err == nil {
-		line := strings.TrimSpace(string(output))
-		if idx := strings.Index(line, "\n"); idx > 0 {
-			line = line[:idx]
-		}
-		return extractVersion(line)
-	}
-	return ""
 }
 
 // InstallPackageManager installs a package manager via xdev.
@@ -1410,7 +1284,7 @@ func (a *App) migrateIndependentPMToXdev(pm pmDef, systemPath string) error {
 		if idx := strings.Index(line, "\n"); idx > 0 {
 			line = line[:idx]
 		}
-		ver = extractVersion(line)
+		ver = toolmeta.ExtractVersion(line)
 	}
 	cancel()
 	if ver == "" {
@@ -1564,13 +1438,13 @@ func packageManagerDefs() []pmDef {
 		{"maven", "Maven", "Java 构建自动化工具", "mvn", []string{"--version"}, "maven", "随 Maven 自动安装", "", false, "", "", "", "", nil},
 		{name: "brew", displayName: "Homebrew", description: "macOS/Linux 包管理器", detectCmd: "brew", detectArgs: []string{"--version"}, installHint: "访问 https://brew.sh 安装",
 			installCommand: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`,
-			requiresAdmin: false, executionEnv: "bash", platform: "unix"}, // darwin/linux/WSL，非 windows
+			requiresAdmin:  false, executionEnv: "bash", platform: "unix"}, // darwin/linux/WSL，非 windows
 		{name: "scoop", displayName: "Scoop", description: "Windows 命令行安装器", detectCmd: "scoop", detectArgs: []string{"--version"}, installHint: "访问 https://scoop.sh 安装",
 			installCommand: "irm get.scoop.sh | iex",
-			requiresAdmin: false, executionEnv: "powershell", platform: "windows"},
+			requiresAdmin:  false, executionEnv: "powershell", platform: "windows"},
 		{name: "choco", displayName: "Chocolatey", description: "Windows 包管理器", detectCmd: "choco", detectArgs: []string{"--version"}, installHint: "访问 https://chocolatey.org 安装",
 			installCommand: `Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`,
-			requiresAdmin: true, executionEnv: "powershell", platform: "windows"},
+			requiresAdmin:  true, executionEnv: "powershell", platform: "windows"},
 	}
 }
 
@@ -1708,6 +1582,10 @@ func (a *App) detectToolVersion(name, path string) string {
 // common install directories WITHOUT spawning any subprocesses.
 // It returns the path to the tool binary, or "" if not found.
 func detectLocalToolPath(name string, shims []string, shimDir string) string {
+	return detectLocalToolPathIndexed(name, shims, shimDir, nil)
+}
+
+func detectLocalToolPathIndexed(name string, shims []string, shimDir string, byBase map[string]hostscan.Hit) string {
 	searchNames := shims
 	if len(searchNames) == 0 {
 		searchNames = []string{name}
@@ -1721,19 +1599,23 @@ func detectLocalToolPath(name string, shims []string, shimDir string) string {
 	}
 
 	// 1. Check environment variables first.
-	if envPath := checkEnvVars(name); envPath != "" {
+	if envPath := toolmeta.CheckEnvVars(name); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
 			return envPath
 		}
 	}
 
 	// 2. PATH lookup via hostscan (skips xdev shim copies).
-	if path, ok := hostscan.FirstOnPATH(searchNames, shimDir); ok {
+	if byBase != nil {
+		if path, ok := hostscan.FirstInIndex(searchNames, byBase); ok {
+			return path
+		}
+	} else if path, ok := hostscan.FirstOnPATH(searchNames, shimDir); ok {
 		return path
 	}
 
 	// 3. Check common install directories.
-	commonPaths := getCommonInstallPaths(name)
+	commonPaths := toolmeta.CommonInstallPaths(name)
 	for _, p := range commonPaths {
 		if _, err := os.Stat(p); err == nil {
 			return p
@@ -1791,151 +1673,11 @@ func isInsideDir(path, dir string) bool {
 
 // checkEnvVars checks well-known environment variables for tool locations.
 // Returns the path to the tool binary if found.
-func checkEnvVars(name string) string {
-	envMap := map[string][]string{
-		"go":                     {"GOROOT"},
-		"java":                   {"JAVA_HOME"},
-		"dotnet":                 {"DOTNET_ROOT"},
-		"android-platform-tools": {"ANDROID_HOME", "ANDROID_SDK_ROOT"},
-		"android-build-tools":    {"ANDROID_HOME", "ANDROID_SDK_ROOT"},
-		"android-platform":       {"ANDROID_HOME", "ANDROID_SDK_ROOT"},
-		"android-ndk":            {"ANDROID_NDK_HOME", "NDK_HOME"},
-		"android-cmdline-tools":  {"ANDROID_HOME", "ANDROID_SDK_ROOT"},
-		"android-emulator":       {"ANDROID_HOME", "ANDROID_SDK_ROOT"},
-		"node":                   {"NVM_HOME"},
-		"python":                 {"PYTHON_HOME"},
-		"rust":                   {"RUSTUP_HOME"},
-		"flutter":                {"FLUTTER_ROOT"},
-		"dart":                   {"DART_SDK"},
-		"gradle":                 {"GRADLE_HOME"},
-		"maven":                  {"MAVEN_HOME", "M2_HOME"},
-		"cmake":                  {"CMAKE_ROOT"},
-		"llvm":                   {"LLVM_HOME"},
-		"typescript":             {"TYPESCRIPT_HOME"},
-	}
+//（Spec 033：实现移入 internal/toolmeta.CheckEnvVars，此包裹函数已删除）
 
-	envVars, ok := envMap[name]
-	if !ok {
-		return ""
-	}
-
-	for _, envVar := range envVars {
-		val := os.Getenv(envVar)
-		if val == "" {
-			continue
-		}
-		// Try to find the binary within the env var directory
-		binNames := getBinNamesForTool(name)
-		for _, bin := range binNames {
-			candidate := filepath.Join(val, "bin", bin)
-			if runtime.GOOS == "windows" {
-				candidateExe := candidate + ".exe"
-				if _, err := os.Stat(candidateExe); err == nil {
-					return candidateExe
-				}
-			}
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-			// Also try directly in the env var directory
-			candidate = filepath.Join(val, bin)
-			if runtime.GOOS == "windows" {
-				candidateExe := candidate + ".exe"
-				if _, err := os.Stat(candidateExe); err == nil {
-					return candidateExe
-				}
-			}
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-		// For Android tools, check subdirectories
-		if name == "android-platform-tools" {
-			candidate := filepath.Join(val, "platform-tools")
-			if runtime.GOOS == "windows" {
-				if _, err := os.Stat(filepath.Join(candidate, "adb.exe")); err == nil {
-					return filepath.Join(candidate, "adb.exe")
-				}
-			} else {
-				if _, err := os.Stat(filepath.Join(candidate, "adb")); err == nil {
-					return filepath.Join(candidate, "adb")
-				}
-			}
-		}
-		if name == "android-build-tools" {
-			candidate := filepath.Join(val, "build-tools")
-			if entries, err := os.ReadDir(candidate); err == nil {
-				for _, e := range entries {
-					if e.IsDir() {
-						return filepath.Join(candidate, e.Name())
-					}
-				}
-			}
-		}
-		if name == "android-ndk" {
-			candidate := filepath.Join(val, "ndk")
-			if entries, err := os.ReadDir(candidate); err == nil {
-				for _, e := range entries {
-					if e.IsDir() {
-						return filepath.Join(candidate, e.Name())
-					}
-				}
-			}
-			// Also check ANDROID_NDK_HOME directly
-			if fi, err := os.Stat(val); err == nil && fi.IsDir() {
-				return val
-			}
-		}
-		if name == "android-emulator" {
-			candidate := filepath.Join(val, "emulator")
-			if runtime.GOOS == "windows" {
-				if _, err := os.Stat(filepath.Join(candidate, "emulator.exe")); err == nil {
-					return filepath.Join(candidate, "emulator.exe")
-				}
-			} else {
-				if _, err := os.Stat(filepath.Join(candidate, "emulator")); err == nil {
-					return filepath.Join(candidate, "emulator")
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// getBinNamesForTool returns the binary names to look for when checking
-// environment variables for a tool.
-func getBinNamesForTool(name string) []string {
-	switch name {
-	case "go":
-		return []string{"go"}
-	case "java":
-		return []string{"java", "javac"}
-	case "dotnet":
-		return []string{"dotnet"}
-	case "node":
-		return []string{"node"}
-	case "python":
-		return []string{"python", "python3"}
-	case "rust":
-		return []string{"rustc", "cargo"}
-	case "flutter":
-		return []string{"flutter"}
-	case "dart":
-		return []string{"dart"}
-	case "gradle":
-		return []string{"gradle"}
-	case "maven":
-		return []string{"mvn"}
-	case "cmake":
-		return []string{"cmake"}
-	case "llvm":
-		return []string{"clang"}
-	case "typescript":
-		return []string{"tsc"}
-	default:
-		return []string{name}
-	}
-}
+// getBinNamesForTool / checkEnvVars 已收口到 internal/toolmeta
+// （Spec 033 R1 / R4）：查询走 toolmeta.BinNames / toolmeta.CheckEnvVars，
+// android-* 子目录特判逻辑在 toolmeta/paths.go。
 
 // getVersion attempts to get the version string from a tool binary.
 // Uses a 2-second timeout to prevent hanging on unresponsive tools (e.g. Java).
@@ -1956,50 +1698,8 @@ func getVersion(name, path string) string {
 		return ""
 	}
 
-	versionFlags := map[string][]string{
-		"python":  {"--version"},
-		"python3": {"--version"},
-		"node":    {"--version"},
-		"go":      {"version"},
-		"java":    {"--version"},
-		"rustc":   {"--version"},
-		"cargo":   {"--version"},
-		"dotnet":  {"--version"},
-		"php":     {"--version"},
-		"ruby":    {"--version"},
-		"lua":     {"-v"},
-		"perl":    {"--version"},
-		"dart":    {"--version"},
-		"kotlin":  {"--version"},
-		"bun":     {"--version"},
-		"deno":    {"--version"},
-		"zig":     {"version"},
-		"julia":   {"--version"},
-		"ghc":     {"--version"},
-		"scala":   {"--version"},
-		"cmake":   {"--version"},
-		"tsc":     {"--version"},
-		"gcc":     {"--version"},
-		"clang":   {"--version"},
-		"cjc":     {"--version"},
-		"make":    {"--version"},
-		"ninja":   {"--version"},
-		"gradle":  {"-version"},
-		"mvn":     {"-version"},
-		"maven":   {"-version"},
-		"ant":     {"-version"},
-		"haskell": {"--version"},
-		"erl":     {"-version"},
-		"adb":     {"version"},
-		"flutter": {"--version"},
-		"git":     {"--version"},
-		"mingw":   {"--version"},
-	}
-
-	flags, ok := versionFlags[name]
-	if !ok {
-		flags = []string{"--version"}
-	}
+	// 版本参数查 toolmeta 表（Spec 033 R2 收口）
+	flags := toolmeta.VersionArg(name)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -2021,83 +1721,21 @@ func getVersion(name, path string) string {
 	// "------------------------------------------------------------" first,
 	// then "Gradle 9.4.1") — previously the raw separator became the version
 	// and later failed SafeName during migration ("unsafe-version-blocked").
-	ver := extractVersionFromOutput(string(output))
+	ver := toolmeta.ExtractVersionFromOutput(string(output))
 	logDebug("[getVersion] %s → %q (in %v)", name, ver, time.Since(start))
 	return ver
 }
 
-// extractVersionFromOutput 从工具输出中解析版本号：
-//  1. 逐行尝试 extractVersion，返回第一个成功提取的版本（跳过空行）；
-//  2. 没有任何行可提取时，回退到旧行为：整个输出的首行原文（截断 60）。
-//
-// 该函数独立以便单元测试；被 getVersion 及迁移/刷新路径共用。
-func extractVersionFromOutput(output string) string {
-	text := strings.TrimSpace(output)
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if ver := extractVersion(line); ver != "" {
-			return ver
-		}
-	}
-	// 回退：首行原文（截断 60）
-	first := text
-	if idx := strings.Index(first, "\n"); idx > 0 {
-		first = first[:idx]
-	}
-	first = strings.TrimSpace(first)
-	if len(first) > 60 {
-		first = first[:60] + "..."
-	}
-	return first
-}
+// extractVersionFromOutput / extractVersion / stripWindowsSuffix / isVersionLike
+// 已收口到 internal/toolmeta（Spec 033 R3）：gui 侧统一调用
+// toolmeta.ExtractVersionFromOutput / toolmeta.ExtractVersion /
+// toolmeta.StripWindowsSuffix / toolmeta.IsVersionLike。
 
 // findBinaryInDir finds the executable binary for a tool inside a directory.
 // It checks bin/, the root directory, and common naming patterns.
 func findBinaryInDir(name, dir string) string {
-	// Map tool names to their binary names
-	binaryNames := map[string][]string{
-		"java":       {"java", "javac"},
-		"node":       {"node", "npm"},
-		"python":     {"python", "python3"},
-		"go":         {"go"},
-		"dotnet":     {"dotnet"},
-		"rust":       {"rustc", "cargo"},
-		"flutter":    {"flutter"},
-		"dart":       {"dart"},
-		"gradle":     {"gradle"},
-		"maven":      {"mvn"},
-		"cmake":      {"cmake"},
-		"llvm":       {"clang"},
-		"ruby":       {"ruby"},
-		"php":        {"php"},
-		"perl":       {"perl"},
-		"git":        {"git"},
-		"deno":       {"deno"},
-		"bun":        {"bun"},
-		"zig":        {"zig"},
-		"lua":        {"lua"},
-		"make":       {"make"},
-		"ninja":      {"ninja"},
-		"mingw":      {"gcc", "g++"},
-		"erlang":     {"erl"},
-		"haskell":    {"ghc"},
-		"julia":      {"julia"},
-		"kotlin":     {"kotlinc"},
-		"scala":      {"scala"},
-		"sbt":        {"sbt"},
-		"ant":        {"ant"},
-		"adb":        {"adb"},
-		"uv":         {"uv"},
-		"typescript": {"tsc"},
-	}
-
-	binNames, ok := binaryNames[name]
-	if !ok {
-		binNames = []string{name}
-	}
+	// 二进制名查 toolmeta 表（Spec 033 R1 收口）
+	binNames := toolmeta.BinNames(name)
 
 	for _, binName := range binNames {
 		candidates := []string{
@@ -2121,60 +1759,6 @@ func findBinaryInDir(name, dir string) string {
 	return ""
 }
 
-// extractVersion tries to extract a version number from a string.
-func extractVersion(s string) string {
-	// Look for patterns like "3.12.7", "v18.0.0", "go1.22.0"
-	s = strings.TrimSpace(s)
-	// Remove common prefixes
-	for _, prefix := range []string{"v", "go", "yarn ", "pnpm ", "gradle ", "npm ", "pip ", "cmake version ", "gnu make ", "apache maven ", "apache ant(tm) version ", "dart sdk version: ", "git version ", "(gcc) ", "version "} {
-		if strings.HasPrefix(strings.ToLower(s), prefix) && len(s) > len(prefix) {
-			rest := s[len(prefix):]
-			if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
-				s = rest
-				break
-			}
-		}
-	}
-
-	// Find the first semver-like pattern (e.g. 3.12.7, 18.0.0, 1.22)
-	parts := strings.Fields(s)
-	for _, p := range parts {
-		if isVersionLike(p) {
-			// Strip Windows-style suffix like ".windows.1" from "2.47.0.windows.1"
-			if stripped := stripWindowsSuffix(p); stripped != "" {
-				return stripped
-			}
-			return p
-		}
-	}
-	return ""
-}
-
-// stripWindowsSuffix removes Windows-specific version suffixes like ".windows.1"
-// from strings like "2.47.0.windows.1", returning "2.47.0".
-func stripWindowsSuffix(s string) string {
-	idx := strings.Index(s, ".windows.")
-	if idx > 0 {
-		return s[:idx]
-	}
-	return s
-}
-
-// isVersionLike checks if a string looks like a version number.
-func isVersionLike(s string) bool {
-	s = strings.TrimPrefix(s, "v")
-	s = strings.TrimPrefix(strings.ToLower(s), "go")
-	// Strip Windows-style suffix like ".windows.1" before counting dots
-	if idx := strings.Index(s, ".windows."); idx > 0 {
-		s = s[:idx]
-	}
-	if len(s) == 0 || s[0] < '0' || s[0] > '9' {
-		return false
-	}
-	dots := strings.Count(s, ".")
-	return dots >= 1 && dots <= 3
-}
-
 // dirSizeFast recursively calculates directory size using os.ReadDir,
 // which is faster than filepath.Walk because it reads directory entries
 // in bulk rather than calling os.Lstat on every file individually.
@@ -2195,146 +1779,8 @@ func dirSizeFast(path string, size *int64) {
 	}
 }
 
-// getCommonInstallPaths returns platform-specific common install paths for a tool.
-func getCommonInstallPaths(name string) []string {
-	var paths []string
-	home, _ := os.UserHomeDir()
-
-	if runtime.GOOS == "windows" {
-		programFiles := os.Getenv("ProgramFiles")
-		programFilesX86 := os.Getenv("ProgramFiles(x86)")
-		localAppData := os.Getenv("LOCALAPPDATA")
-
-		switch name {
-		case "python", "python3":
-			paths = append(paths,
-				filepath.Join(localAppData, "Programs", "Python"),
-			)
-		case "node":
-			paths = append(paths,
-				filepath.Join(programFiles, "nodejs"),
-				filepath.Join(localAppData, "nvm"),
-			)
-		case "go":
-			paths = append(paths,
-				filepath.Join(programFiles, "Go"),
-				filepath.Join(home, "go"),
-				filepath.Join(home, "sdk", "go"),
-			)
-		case "java":
-			paths = append(paths,
-				filepath.Join(programFiles, "Java"),
-				filepath.Join(programFilesX86, "Java"),
-			)
-		case "dotnet":
-			paths = append(paths,
-				filepath.Join(programFiles, "dotnet"),
-			)
-		case "ruby":
-			paths = append(paths,
-				filepath.Join(programFiles, "Ruby"),
-			)
-		case "git":
-			paths = append(paths,
-				filepath.Join(programFiles, "Git"),
-			)
-		case "mingw":
-			paths = append(paths,
-				filepath.Join(localAppData, "Programs", "mingw64"),
-				filepath.Join(localAppData, "Programs", "mingw32"),
-				filepath.Join(programFiles, "mingw64"),
-				filepath.Join(programFiles, "mingw32"),
-				filepath.Join(home, "scoop", "apps", "mingw"),
-				filepath.Join("C:", "msys64", "mingw64"),
-				filepath.Join("C:", "msys64", "mingw32"),
-			)
-		case "flutter":
-			paths = append(paths,
-				filepath.Join(localAppData, "flutter"),
-			)
-		case "android-platform-tools":
-			paths = append(paths,
-				filepath.Join(home, "AppData", "Local", "Android", "Sdk", "platform-tools"),
-			)
-		case "typescript":
-			// npm global install paths
-			paths = append(paths,
-				filepath.Join(localAppData, "npm", "node_modules", "typescript", "bin"),
-				filepath.Join(programFiles, "nodejs", "node_modules", "typescript", "bin"),
-			)
-		}
-	} else if runtime.GOOS == "darwin" {
-		switch name {
-		case "python", "python3":
-			paths = append(paths,
-				"/usr/local/bin/python3",
-				"/opt/homebrew/bin/python3",
-			)
-		case "node":
-			paths = append(paths,
-				"/usr/local/bin/node",
-				"/opt/homebrew/bin/node",
-			)
-		case "go":
-			paths = append(paths,
-				"/usr/local/go/bin/go",
-				"/opt/homebrew/bin/go",
-			)
-		case "java":
-			paths = append(paths,
-				"/usr/local/opt/openjdk/bin/java",
-				"/Library/Java/JavaVirtualMachines",
-			)
-		case "flutter":
-			paths = append(paths,
-				filepath.Join(home, "development", "flutter"),
-			)
-		case "typescript":
-			paths = append(paths,
-				"/usr/local/lib/node_modules/typescript/bin",
-				"/opt/homebrew/lib/node_modules/typescript/bin",
-			)
-		}
-	} else {
-		// Linux
-		switch name {
-		case "python", "python3":
-			paths = append(paths, "/usr/bin/python3", "/usr/local/bin/python3")
-		case "node":
-			paths = append(paths, "/usr/bin/node", "/usr/local/bin/node")
-		case "go":
-			paths = append(paths, "/usr/local/go/bin/go", "/usr/bin/go")
-		case "java":
-			paths = append(paths, "/usr/bin/java", "/usr/local/bin/java")
-		case "typescript":
-			paths = append(paths,
-				"/usr/local/lib/node_modules/typescript/bin",
-				"/usr/lib/node_modules/typescript/bin",
-			)
-		}
-	}
-
-	// NVM / pyenv / sdkman etc.
-	switch name {
-	case "node":
-		nvmDir := filepath.Join(home, ".nvm")
-		if _, err := os.Stat(nvmDir); err == nil {
-			paths = append(paths, nvmDir)
-		}
-	case "python", "python3":
-		pyenvDir := filepath.Join(home, ".pyenv")
-		if _, err := os.Stat(pyenvDir); err == nil {
-			paths = append(paths, pyenvDir)
-		}
-	case "java":
-		sdkmanDir := filepath.Join(home, ".sdkman")
-		if _, err := os.Stat(sdkmanDir); err == nil {
-			paths = append(paths, sdkmanDir)
-		}
-	}
-
-	return paths
-}
+// getCommonInstallPaths 已收口到 internal/toolmeta.CommonInstallPaths
+// （Spec 033 R4）：Windows/darwin/linux + nvm/pyenv/sdkman 探测逻辑在 toolmeta/paths.go。
 
 // sanitizeVersionStr 清理版本号字符串，使其适合作为目录名
 func sanitizeVersionStr(ver string) string {
@@ -2396,7 +1842,7 @@ func extractVersionFromPath(path string) string {
 	dir := path
 	for {
 		base := filepath.Base(dir)
-		if ver := extractVersion(base); ver != "" {
+		if ver := toolmeta.ExtractVersion(base); ver != "" {
 			return ver
 		}
 		// Try special patterns before going up
@@ -2440,7 +1886,7 @@ func extractSpecialVersionPattern(s string) string {
 		rest = strings.TrimPrefix(rest, "-")
 		rest = strings.TrimPrefix(rest, "_")
 		if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
-			if ver := extractVersion(rest); ver != "" {
+			if ver := toolmeta.ExtractVersion(rest); ver != "" {
 				return ver
 			}
 			// jdk17 → 17
@@ -2453,14 +1899,14 @@ func extractSpecialVersionPattern(s string) string {
 		rest := s[4:]
 		rest = strings.TrimPrefix(rest, "-")
 		rest = strings.TrimPrefix(rest, "v")
-		if ver := extractVersion(rest); ver != "" {
+		if ver := toolmeta.ExtractVersion(rest); ver != "" {
 			return ver
 		}
 	}
 
 	// Pattern: go1.22.0 → 1.22.0
 	if strings.HasPrefix(sLower, "go") && len(s) > 2 && s[2] >= '0' && s[2] <= '9' {
-		if ver := extractVersion(s[2:]); ver != "" {
+		if ver := toolmeta.ExtractVersion(s[2:]); ver != "" {
 			return ver
 		}
 	}

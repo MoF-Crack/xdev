@@ -10,6 +10,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { NConfigProvider, NDialogProvider, NMessageProvider } from 'naive-ui';
 import SetupWizard from './SetupWizard.vue';
 import AppContent from './AppContent.vue';
 import { getNaiveThemeConfig } from './theme/naive-theme.js';

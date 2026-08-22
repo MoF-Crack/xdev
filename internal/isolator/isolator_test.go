@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewIsolatorNone(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -18,7 +18,7 @@ func TestNewIsolatorNone(t *testing.T) {
 }
 
 func TestNewIsolatorEmptyString(t *testing.T) {
-	iso, err := NewIsolator("")
+	iso, err := NewIsolator("", "")
 	if err != nil {
 		t.Fatalf("NewIsolator('') error: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestNewIsolatorEmptyString(t *testing.T) {
 }
 
 func TestNewIsolatorInvalid(t *testing.T) {
-	_, err := NewIsolator(IsolationMode("bogus"))
+	_, err := NewIsolator(IsolationMode("bogus"), "")
 	if err == nil {
 		t.Fatal("expected error for invalid isolation mode")
 	}
@@ -38,7 +38,7 @@ func TestNewIsolatorInvalid(t *testing.T) {
 }
 
 func TestNoneIsolatorSetupTeardown(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestNoneIsolatorSetupTeardown(t *testing.T) {
 }
 
 func TestNoneIsolatorSetupTeardownOverwrite(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestNoneIsolatorSetupTeardownOverwrite(t *testing.T) {
 }
 
 func TestNoneIsolatorExec(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestNoneIsolatorExec(t *testing.T) {
 }
 
 func TestNoneIsolatorExecEmpty(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestNoneIsolatorExecEmpty(t *testing.T) {
 }
 
 func TestNoneIsolatorExecWithWorkingDir(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestNoneIsolatorExecWithWorkingDir(t *testing.T) {
 }
 
 func TestNoneIsolatorTeardownWithoutSetup(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestNoneIsolatorTeardownWithoutSetup(t *testing.T) {
 }
 
 func TestNoneIsolatorDoubleTeardown(t *testing.T) {
-	iso, err := NewIsolator(ModeNone)
+	iso, err := NewIsolator(ModeNone, "")
 	if err != nil {
 		t.Fatalf("NewIsolator(ModeNone) error: %v", err)
 	}

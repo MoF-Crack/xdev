@@ -5,6 +5,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-22
+
+### Changed
+- Spec 033: tool metadata unified into the single source of truth `internal/toolmeta` — five duplicated maps/functions removed across `internal/env` and `internal/gui`:
+  - tool→binary-name maps (`scanRules` / `getBinNamesForTool` / `findBinaryInDir` inline map) merged into one table (`ToolMeta.BinNames`)
+  - `--version` flag tables (env 24 keys vs gui 36 keys) merged into `ToolMeta.VersionArg`; gradle now consistently uses `-version`
+  - version extraction (`extractVersionFromOutput` variants) merged into `toolmeta.ExtractVersion*` (prefix union: env `java ` / `Python ` + gui `yarn ` / `cmake version ` etc.)
+  - common install paths (`getCommonInstallPaths` env 12-tool subset vs gui superset) merged into `toolmeta.CommonInstallPaths`
+  - "inside xdev dir" judgment: `env.isInsideXdevDir` removed, now delegates to `hostscan.InsideDir`
+- Env local scan now covers the union of both sides (23 → 41 scan targets) — a correctness improvement, not a regression
+- Version bumped to 0.3.3; local tag `v0.3.3` created (not pushed)
+
 ## [0.3.2] - 2026-08-20
 
 ### Changed

@@ -5,78 +5,81 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xmdemt/xdev/internal/hostscan"
+	"github.com/xmdemt/xdev/internal/toolmeta"
 )
 
-// --- extractVersionFromOutput tests ---
+// --- extractVersionFromOutput tests（Spec 033 R3：收口到 toolmeta） ---
 
 func TestExtractVersionFromOutput_Node(t *testing.T) {
-	got := extractVersionFromOutput("v20.18.0")
+	got := toolmeta.ExtractVersionFromOutput("v20.18.0")
 	if got != "20.18.0" {
 		t.Errorf("got %q, want %q", got, "20.18.0")
 	}
 }
 
 func TestExtractVersionFromOutput_Python(t *testing.T) {
-	got := extractVersionFromOutput("Python 3.12.7")
+	got := toolmeta.ExtractVersionFromOutput("Python 3.12.7")
 	if got != "3.12.7" {
 		t.Errorf("got %q, want %q", got, "3.12.7")
 	}
 }
 
 func TestExtractVersionFromOutput_Yarn(t *testing.T) {
-	got := extractVersionFromOutput("1.22.22")
+	got := toolmeta.ExtractVersionFromOutput("1.22.22")
 	if got != "1.22.22" {
 		t.Errorf("got %q, want %q", got, "1.22.22")
 	}
 }
 
 func TestExtractVersionFromOutput_Pnpm(t *testing.T) {
-	got := extractVersionFromOutput("9.1.2")
+	got := toolmeta.ExtractVersionFromOutput("9.1.2")
 	if got != "9.1.2" {
 		t.Errorf("got %q, want %q", got, "9.1.2")
 	}
 }
 
 func TestExtractVersionFromOutput_Gradle(t *testing.T) {
-	got := extractVersionFromOutput("Gradle 9.4.1")
+	got := toolmeta.ExtractVersionFromOutput("Gradle 9.4.1")
 	if got != "9.4.1" {
 		t.Errorf("got %q, want %q", got, "9.4.1")
 	}
 }
 
 func TestExtractVersionFromOutput_Java(t *testing.T) {
-	got := extractVersionFromOutput("java 25.0.3")
+	got := toolmeta.ExtractVersionFromOutput("java 25.0.3")
 	if got != "25.0.3" {
 		t.Errorf("got %q, want %q", got, "25.0.3")
 	}
 }
 
 func TestExtractVersionFromOutput_Empty(t *testing.T) {
-	got := extractVersionFromOutput("")
+	got := toolmeta.ExtractVersionFromOutput("")
 	if got != "" {
 		t.Errorf("got %q, want %q", got, "")
 	}
 }
 
-// --- isInsideXdevDir tests ---
+// --- isInsideXdevDir tests（Spec 033 R5：委托 hostscan.InsideDir） ---
 
 func TestIsInsideXdevDir_True(t *testing.T) {
 	xdevDir := filepath.Join("C:", "Users", "dev", ".xmdev")
 	path := filepath.Join("C:", "Users", "dev", ".xmdev", "install", "node", "v20")
-	if !isInsideXdevDir(path, xdevDir) {
-		t.Errorf("isInsideXdevDir(%q, %q) = false, want true", path, xdevDir)
+	if !hostscan.InsideDir(path, xdevDir) {
+		t.Errorf("hostscan.InsideDir(%q, %q) = false, want true", path, xdevDir)
 	}
 }
 
 func TestIsInsideXdevDir_False(t *testing.T) {
 	xdevDir := filepath.Join("C:", "Users", "dev", ".xmdev")
 	path := filepath.Join("C:", "Program Files", "nodejs")
-	if isInsideXdevDir(path, xdevDir) {
-		t.Errorf("isInsideXdevDir(%q, %q) = true, want false", path, xdevDir)
+	if hostscan.InsideDir(path, xdevDir) {
+		t.Errorf("hostscan.InsideDir(%q, %q) = true, want false", path, xdevDir)
 	}
 }
 
-// --- isVersionLike tests ---
+// --- isVersionLike tests（Spec 033 R3：收口到 toolmeta） ---
 
 func TestIsVersionLike_Valid(t *testing.T) {
 	cases := []struct {
@@ -88,8 +91,8 @@ func TestIsVersionLike_Valid(t *testing.T) {
 		{"9.4.1"},
 	}
 	for _, tc := range cases {
-		if !isVersionLike(tc.input) {
-			t.Errorf("isVersionLike(%q) = false, want true", tc.input)
+		if !toolmeta.IsVersionLike(tc.input) {
+			t.Errorf("toolmeta.IsVersionLike(%q) = false, want true", tc.input)
 		}
 	}
 }
@@ -103,8 +106,8 @@ func TestIsVersionLike_Invalid(t *testing.T) {
 		{""},
 	}
 	for _, tc := range cases {
-		if isVersionLike(tc.input) {
-			t.Errorf("isVersionLike(%q) = true, want false", tc.input)
+		if toolmeta.IsVersionLike(tc.input) {
+			t.Errorf("toolmeta.IsVersionLike(%q) = true, want false", tc.input)
 		}
 	}
 }

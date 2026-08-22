@@ -326,7 +326,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           # Build the GUI variant (Wails bindings) for amd64
-          GOARCH=amd64 go build -tags bindings -ldflags="-s -w" -o xdev-gui .
+          GOARCH=amd64 go build -tags gui -ldflags="-s -w" -o xdev-gui .
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
@@ -380,7 +380,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           # Cross-compile GUI variant for arm64
-          GOARCH=arm64 go build -tags bindings -ldflags="-s -w" -o xdev-gui-arm64 .
+          GOARCH=arm64 go build -tags gui -ldflags="-s -w" -o xdev-gui-arm64 .
 
           # Assemble AppDir
           APPDIR="XDev-arm64.AppDir"
@@ -561,7 +561,7 @@ jobs:
 
           # Create DMG for GUI (arm64)
           if [ $SKIP_GUI_ARM64_DMG -ne 1 ]; then
-            GOARCH=arm64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
+            GOARCH=arm64 go build -tags gui -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
             STAGING="xdev-dmg-staging"
             mkdir -p "$STAGING"
             cp xdev-gui-arm64 "$STAGING/xdev-gui"
@@ -575,7 +575,7 @@ jobs:
 
           # Create DMG for GUI (amd64)
           if [ $SKIP_GUI_AMD64_DMG -ne 1 ]; then
-            GOARCH=amd64 go build -tags bindings -ldflags="$LDFLAGS" -o xdev-gui-amd64 .
+            GOARCH=amd64 go build -tags gui -ldflags="$LDFLAGS" -o xdev-gui-amd64 .
             STAGING="xdev-dmg-staging"
             mkdir -p "$STAGING"
             cp xdev-gui-amd64 "$STAGING/xdev-gui"
@@ -673,7 +673,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          go build -tags bindings -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev-gui .
+          go build -tags gui -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev-gui .
 
           APPDIR="XDev.AppDir"
           rm -rf "$APPDIR"

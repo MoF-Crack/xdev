@@ -426,6 +426,49 @@ func TestIndependentPMOverlaysXdevWhenPATHHasLeftover(t *testing.T) {
 	if !sawD || !sawE {
 		t.Fatalf("want D: leftover and E: xdev instances, got %+v (localPath=%q)", info.Instances, info.LocalPath)
 	}
+	for _, inst := range info.Instances {
+		if hostscan.InsideDir(inst.Path, dDrive) && inst.Version != "unknown" && inst.Version != "0.9.0" && inst.Version != info.Version {
+			// Spec 031: PATH leftovers must not exec --version; unknown is OK,
+			// inheriting the xdev current version string is also OK.
+			if inst.Version == "0.7.0" {
+				t.Errorf("D: leftover version probed via exec: %+v", inst)
+			}
+		}
+	}
+}
+
+func TestDetectIndependentPM_DoesNotExecPATHVersion(t *testing.T) {
+	app := newTestApp(t)
+	tmp := t.TempDir()
+	name := "uv"
+	if runtime.GOOS == "windows" {
+		name = "uv.exe"
+	}
+	// A PATH binary that would hang or fail if executed.
+	if err := os.WriteFile(filepath.Join(tmp, name), []byte("not-a-real-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tmp)
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+	}
+	pm, ok := findPMDefByName("uv")
+	if !ok {
+		t.Fatal("uv pmDef missing")
+	}
+	done := make(chan PackageManagerInfo, 1)
+	go func() { done <- app.detectPackageManager(pm) }()
+	select {
+	case info := <-done:
+		if !info.Installed {
+			t.Fatalf("expected PATH uv marked installed, got %+v", info)
+		}
+		if info.Version == "0.7.0" {
+			t.Fatal("PATH uv version was exec-probed")
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("detectPackageManager blocked on --version (Spec 031)")
+	}
 }
 
 func TestCollectPMInstancesWalksEveryPATHHit(t *testing.T) {

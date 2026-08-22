@@ -44,17 +44,30 @@ type Isolator interface {
 	Exec(ctx context.Context, cmd []string) (*ExecResult, error)
 }
 
-// NewIsolator creates an Isolator for the given mode.
-// Returns an error if the requested mode is not available
-// (e.g. Docker not installed for container mode).
-func NewIsolator(mode IsolationMode) (Isolator, error) {
+// NewIsolator creates an Isolator for the given mode. xmdeDir is the
+// xdev home directory; isolators persist their session (container ID /
+// flake dir) under <xmdeDir>/isolate/ so setup/exec share state across
+// processes (Spec 032).
+func NewIsolator(mode IsolationMode, xmdeDir string) (Isolator, error) {
 	switch mode {
 	case ModeNone, "":
 		return newNoneIsolator(), nil
 	case ModeContainer:
-		return newContainerIsolator()
+		c, err := newContainerIsolator()
+		if err != nil {
+			return nil, err
+		}
+		c.xmdeDir = xmdeDir
+		c.loadSaved()
+		return c, nil
 	case ModeNix:
-		return newNixIsolator()
+		n, err := newNixIsolator()
+		if err != nil {
+			return nil, err
+		}
+		n.xmdeDir = xmdeDir
+		n.loadSaved()
+		return n, nil
 	default:
 		return nil, fmt.Errorf("unsupported isolation mode %q", mode)
 	}

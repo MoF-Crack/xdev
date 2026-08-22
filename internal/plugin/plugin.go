@@ -32,6 +32,7 @@ package plugin
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/xmdemt/xdev/internal/manifest"
@@ -148,14 +149,7 @@ func (r *Registry) All() []Plugin {
 	for _, p := range r.plugins {
 		out = append(out, p)
 	}
-	// Sort by name for predictable listing.
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].Name() < out[i].Name() {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
 	return out
 }
 

@@ -120,6 +120,23 @@ func (d *DockerAdapter) Exec(ctx context.Context, id string, cmd []string) (*Exe
 	return &result, nil
 }
 
+// ConnectInteractive runs `docker exec -it` with stdin/stdout/stderr
+// wired to the terminal so the user gets a real shell (Spec 032).
+func (d *DockerAdapter) ConnectInteractive(ctx context.Context, id string, shell []string) error {
+	args := append([]string{"exec", "-it", id}, shell...)
+	c := exec.CommandContext(ctx, "docker", args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		return err
+	}
+	return nil
+}
+
 // getContainerIP returns the IP address of a running container.
 func (d *DockerAdapter) getContainerIP(ctx context.Context, containerID string) string {
 	cmd := exec.CommandContext(ctx, "docker", "inspect",

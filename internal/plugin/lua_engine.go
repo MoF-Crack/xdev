@@ -25,16 +25,58 @@ package plugin
 
 import (
 	"fmt"
+	"sync"
 
 	lua "github.com/yuin/gopher-lua"
 )
 
-// LuaEngine manages Lua VM creation and plugin loading.
-type LuaEngine struct{}
+// LuaEngine manages Lua VM creation and plugin loading. It caches one
+// sandboxed VM per loaded plugin path (Spec 032) so available() /
+// archive() / env_vars() do not spawn a fresh VM and re-DoFile on
+// every call. VMs are serialised per plugin by a mutex.
+type LuaEngine struct {
+	mu  sync.Mutex
+	vms map[string]*cachedVM
+}
+
+type cachedVM struct {
+	L  *lua.LState
+	mu sync.Mutex
+}
 
 // NewLuaEngine creates a new Lua engine.
 func NewLuaEngine() *LuaEngine {
-	return &LuaEngine{}
+	return &LuaEngine{vms: make(map[string]*cachedVM)}
+}
+
+// vmFor returns the cached VM for the plugin path, creating and
+// DoFile-ing it on first use. The returned VM is locked for the
+// caller's exclusive use until done() is called.
+func (e *LuaEngine) vmFor(path string, vfox bool) (*lua.LState, func(), error) {
+	e.mu.Lock()
+	cv, ok := e.vms[path]
+	if !ok {
+		L, err := e.newSandboxedVM()
+		if err != nil {
+			e.mu.Unlock()
+			return nil, nil, err
+		}
+		if err := L.DoFile(path); err != nil {
+			L.Close()
+			e.mu.Unlock()
+			label := "lua"
+			if vfox {
+				label = "vfox"
+			}
+			return nil, nil, fmt.Errorf("load %s plugin %s: %w", label, path, err)
+		}
+		promotePluginMethods(L, L.GetGlobal("PLUGIN"))
+		cv = &cachedVM{L: L}
+		e.vms[path] = cv
+	}
+	e.mu.Unlock()
+	cv.mu.Lock()
+	return cv.L, cv.mu.Unlock, nil
 }
 
 // newSandboxedVM creates a Lua VM with restricted access to

@@ -1128,6 +1128,12 @@ func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manife
 // the junction has been created, the previous junction is restored and
 // environment variables are rolled back to their original values.
 func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
+	lock, err := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("activate lock %s: %w", p.Name(), err)
+	}
+	defer lock.Release()
+
 	currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current")
 	if err := os.MkdirAll(currentDir, 0o755); err != nil {
 		log.Printf("[install] ERROR: failed to create current dir %s: %v", currentDir, err)
@@ -1430,6 +1436,11 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	if ver == "" {
 		return fmt.Errorf("uninstall requires an explicit version")
 	}
+	lock, err := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("uninstall lock %s: %w", p.Name(), err)
+	}
+	defer lock.Release()
 
 	// Check if any other installed tool depends on this one
 	for _, other := range i.reg.All() {

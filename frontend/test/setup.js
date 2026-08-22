@@ -3,7 +3,7 @@ import { config } from '@vue/test-utils';
 
 config.global.stubs.NDataTable = {
   props: ['columns', 'data'],
-  template: '<div class="n-data-table"><slot /></div>',
+  template: '<div class="n-data-table" data-testid="data-table"><slot /></div>',
 };
 
 // In-memory localStorage polyfill for the jsdom test environment.

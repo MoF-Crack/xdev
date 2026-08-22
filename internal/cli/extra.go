@@ -22,15 +22,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
-	"github.com/xmdemt/xdev/internal/gui"
-	"github.com/xmdemt/xdev/internal/manifest"
-	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/tui"
 	"github.com/xmdemt/xdev/internal/update"
 	"github.com/xmdemt/xdev/internal/util"
@@ -53,10 +51,10 @@ func newSelfCmd() *cobra.Command {
 				fmt.Println("Checking for updates...")
 
 				result, err := update.Check(ctx, v)
-					if err != nil {
-						fmt.Printf("Error checking for updates: %v\n", err)
-						return fmt.Errorf("update check failed: %w", err)
-					}
+				if err != nil {
+					fmt.Printf("Error checking for updates: %v\n", err)
+					return fmt.Errorf("update check failed: %w", err)
+				}
 
 				if !result.HasUpdate {
 					fmt.Printf("Already up to date (v%s)\n", result.LatestVersion)
@@ -170,25 +168,48 @@ func newGuiCmd() *cobra.Command {
 		Use:   "gui",
 		Short: "Launch the cross-platform desktop GUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cat, reg := loadCatalogAndRegistry()
-			cfg := Cfg()
-			app := gui.NewApp(cfg, cat, reg)
-			webviewDir := filepath.Join(cfg.Core.XMDevDir, "cache", "webview2")
-			return gui.Run(app, webviewDir)
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("locate CLI binary: %w", err)
+			}
+			guiPath, err := locateGUIBinary(filepath.Dir(exe), exe)
+			if err != nil {
+				return err
+			}
+			c := exec.Command(guiPath, args...)
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			if err := c.Run(); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					os.Exit(exitErr.ExitCode())
+				}
+				return fmt.Errorf("launch GUI: %w", err)
+			}
+			return nil
 		},
 	}
 }
 
-// NewGUIApp creates a GUI App instance.  Exported so main.go can
-// use it when launching the GUI directly (binary named xdev-gui*).
-func NewGUIApp(cfg *config.Config, cat *manifest.Catalog, reg *plugin.Registry) *gui.App {
-	return gui.NewApp(cfg, cat, reg)
+// locateGUIBinary finds xdev-gui in dir (typically next to the CLI binary).
+func locateGUIBinary(dir, cliPath string) (string, error) {
+	candidates := []string{
+		filepath.Join(dir, "xdev-gui"+exeSuffix()),
+		filepath.Join(dir, "xdev-gui"),
+	}
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("xdev-gui not found next to %s — install the GUI build (wails build -tags gui) or run xdev-gui directly", cliPath)
 }
 
-// RunGUI starts the Wails GUI application.  Exported so main.go can
-// use it when launching the GUI directly.
-func RunGUI(app *gui.App, webviewDir string) error {
-	return gui.Run(app, webviewDir)
+func exeSuffix() string {
+	if os.PathSeparator == '\\' {
+		return ".exe"
+	}
+	return ""
 }
 
 // forwardExecResult writes the stdout/stderr of an ExecResult to the

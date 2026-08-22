@@ -139,8 +139,79 @@ func TestScanDedupesCaseOnWindows(t *testing.T) {
 	}
 }
 
+func TestIndexByBasenameAndFirstInIndex(t *testing.T) {
+	hits := []Hit{
+		{Path: filepath.Join("tmp", "left", "pnpm.cmd"), Dir: filepath.Join("tmp", "left")},
+		{Path: filepath.Join("tmp", "right", "pnpm.cmd"), Dir: filepath.Join("tmp", "right")},
+	}
+	idx := IndexByBasename(hits)
+	got, ok := FirstInIndex([]string{"missing", "pnpm"}, idx)
+	if !ok {
+		t.Fatal("expected FirstInIndex hit")
+	}
+	if got != hits[0].Path {
+		t.Errorf("got %q, want first PATH hit %q", got, hits[0].Path)
+	}
+	if _, ok := FirstInIndex([]string{"nope"}, idx); ok {
+		t.Fatal("missing name should not hit")
+	}
+}
+
 func TestScanEmptyNames(t *testing.T) {
 	if hits := Scan(Query{}); hits != nil {
 		t.Fatalf("empty Names should be a no-op, got %v", hits)
+	}
+}
+
+func TestScanReadDirOncePerDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "bin")
+	nameA := "alpha"
+	nameB := "beta"
+	if runtime.GOOS == "windows" {
+		nameA += ".exe"
+		nameB += ".exe"
+	}
+	writeBin(t, dir, nameA, "a")
+	writeBin(t, dir, nameB, "b")
+
+	calls := 0
+	orig := readDir
+	t.Cleanup(func() { readDir = orig })
+	readDir = func(path string) ([]os.DirEntry, error) {
+		calls++
+		return orig(path)
+	}
+
+	hits := Scan(Query{
+		Names:    []string{"alpha", "beta"},
+		PathList: []string{dir},
+	})
+	if len(hits) != 2 {
+		t.Fatalf("hits = %d (%v), want 2", len(hits), hits)
+	}
+	if calls != 1 {
+		t.Fatalf("ReadDir calls = %d, want 1 per directory (Spec 031)", calls)
+	}
+}
+
+func TestFirstOnPATH_PrefersEarlierAlias(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "bin")
+	first := "onlyone"
+	if runtime.GOOS == "windows" {
+		first += ".exe"
+	}
+	writeBin(t, dir, first, "x")
+	t.Setenv("PATH", dir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+	}
+	got, ok := FirstOnPATH([]string{"missing", "onlyone", "also-missing"}, "")
+	if !ok {
+		t.Fatal("expected a hit")
+	}
+	if !InsideDir(got, dir) {
+		t.Errorf("got %q, want under %q", got, dir)
 	}
 }

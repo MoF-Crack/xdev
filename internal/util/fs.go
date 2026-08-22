@@ -192,6 +192,10 @@ func IsAllZeroHash(s string) bool {
 
 // CreateJunction creates a Windows junction (directory symlink) from
 // link to target. On non-Windows platforms it creates a symlink.
+// On Windows it uses `cmd /c mklink /J` (reliable). A native
+// DeviceIoControl implementation was prototyped (Spec 032) but
+// reverted because the hand-built REPARSE_DATA_BUFFER was fragile
+// across path lengths; mklink remains the supported path.
 func CreateJunction(link, target string) error {
 	if runtime.GOOS != "windows" {
 		return os.Symlink(target, link)

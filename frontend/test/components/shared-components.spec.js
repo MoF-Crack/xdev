@@ -178,7 +178,6 @@ describe('ResponsiveDataTable', () => {
   it('requires identity, status, and actions columns to remain in the responsive contract', () => {
     expect(() => mount(ResponsiveDataTable, {
       props: { columns: [{ key: 'details', title: 'Details', secondary: true }], data: [] },
-      global: { stubs: { NDataTable: true } },
     })).toThrow(/identity, status, and actions/i);
   });
 
@@ -187,9 +186,7 @@ describe('ResponsiveDataTable', () => {
       { key: 'name', contract: 'identity' }, { key: 'status', contract: 'status' }, { key: 'actions', contract: 'actions' },
     ];
     const errorHandler = vi.fn();
-    const wrapper = mount(ResponsiveDataTable, { props: { columns, data: [] }, global: { config: { errorHandler }, stubs: {
-      NDataTable: { props: ['columns'], template: '<div data-testid="column-keys">{{ columns.map(column => column.key).join(",") }}</div>' },
-    } } });
+    const wrapper = mount(ResponsiveDataTable, { props: { columns, data: [] }, global: { config: { errorHandler } } });
     await wrapper.setProps({ columns: [{ key: 'name', contract: 'identity' }] });
     expect(errorHandler.mock.calls[0][0].message).toMatch(/identity, status, and actions/i);
     expect(wrapper.get('[data-testid="column-keys"]').text()).toBe('name,status,actions');
@@ -213,7 +210,7 @@ describe('ResponsiveDataTable', () => {
     vi.spyOn(window, 'matchMedia').mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() });
     const wrapper = mount(ResponsiveDataTable, { props: { columns: [
       { key: 'name', contract: 'identity' }, { key: 'status', contract: 'status' }, { key: 'actions', contract: 'actions' },
-    ], data: [{ id: 1 }] }, slots: { empty: 'No rows' }, global: { stubs: { NDataTable: { template: '<div data-testid="data-table"><slot name="empty" /></div>' } } } });
+    ], data: [] }, slots: { empty: 'No rows' } });
     await wrapper.vm.$nextTick();
     expect(wrapper.get('[data-testid="data-table"]').text()).toContain('No rows');
   });

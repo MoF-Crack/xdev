@@ -130,6 +130,10 @@ export function GetAvailableVersions(arg1) {
   return window['go']['gui']['App']['GetAvailableVersions'](arg1);
 }
 
+export function GetBootstrapState() {
+  return window['go']['gui']['App']['GetBootstrapState']();
+}
+
 export function GetCacheBreakdown() {
   return window['go']['gui']['App']['GetCacheBreakdown']();
 }

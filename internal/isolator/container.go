@@ -19,6 +19,7 @@ type containerIsolator struct {
 	image       string
 	spec        *EnvironmentSpec
 	projectDir  string
+	xmdeDir     string
 }
 
 func newContainerIsolator() (*containerIsolator, error) {
@@ -32,6 +33,16 @@ func newContainerIsolator() (*containerIsolator, error) {
 		return nil, fmt.Errorf("docker daemon is not running: start Docker and try again")
 	}
 	return &containerIsolator{}, nil
+}
+
+// loadSaved restores a previously persisted container session.
+func (c *containerIsolator) loadSaved() {
+	s := loadState(c.xmdeDir, string(ModeContainer))
+	if s.ContainerID != "" {
+		c.containerID = s.ContainerID
+		c.image = s.Image
+		c.projectDir = s.ProjectDir
+	}
 }
 
 func (c *containerIsolator) Mode() IsolationMode { return ModeContainer }
@@ -85,6 +96,11 @@ func (c *containerIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) er
 		return fmt.Errorf("docker run: %w", err)
 	}
 	c.containerID = strings.TrimSpace(string(out))
+	saveState(c.xmdeDir, string(ModeContainer), persistedState{
+		ContainerID: c.containerID,
+		Image:       c.image,
+		ProjectDir:  c.projectDir,
+	})
 	return nil
 }
 
@@ -99,6 +115,7 @@ func (c *containerIsolator) Teardown(ctx context.Context) error {
 		return fmt.Errorf("docker rm: %w", err)
 	}
 	c.containerID = ""
+	clearState(c.xmdeDir, string(ModeContainer))
 	return nil
 }
 

@@ -29,7 +29,7 @@ echo.
 
 :build_cli
 echo --- Building Wails GUI binary ---
-wails build -trimpath
+wails build -tags gui -trimpath
 if %errorlevel% neq 0 (
     echo [ERROR] GUI build failed!
     exit /b 1
@@ -49,7 +49,7 @@ if %errorlevel% neq 0 (
 echo [OK] CLI binary: xdev.exe
 
 echo --- Building Wails GUI binary ---
-wails build -trimpath
+wails build -tags gui -trimpath
 if %errorlevel% neq 0 (
     echo [ERROR] GUI build failed!
     exit /b 1

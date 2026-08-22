@@ -1,6 +1,11 @@
 package update
 
 import (
+	"archive/zip"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/util"
@@ -216,6 +221,100 @@ func TestParseSHA256SUMS_EmptyContent(t *testing.T) {
 	_, err := parseSHA256SUMS("", "xdev-linux-amd64")
 	if err == nil {
 		t.Error("parseSHA256SUMS: expected error for empty content")
+	}
+}
+
+func TestAssetNameForPlatform_VersionedArchive(t *testing.T) {
+	got := assetNameForPlatform("0.3.2")
+	wantPrefix := "xdev-" + runtime.GOOS + "-" + runtime.GOARCH + "-v0.3.2"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Errorf("assetNameForPlatform = %q, want prefix %q", got, wantPrefix)
+	}
+	if runtime.GOOS == "windows" {
+		if !strings.HasSuffix(got, ".zip") {
+			t.Errorf("windows asset should be .zip, got %q", got)
+		}
+	} else if !strings.HasSuffix(got, ".tar.gz") {
+		t.Errorf("unix asset should be .tar.gz, got %q", got)
+	}
+	if got2 := assetNameForPlatform("v0.3.2"); got2 != got {
+		t.Errorf("v-prefix should be stripped: %q vs %q", got2, got)
+	}
+}
+
+func TestGithubOwnerIsReleaseRepo(t *testing.T) {
+	if githubOwner != "MoF-Crack" {
+		t.Errorf("githubOwner = %q, want MoF-Crack", githubOwner)
+	}
+}
+
+func TestSafeArchiveMember(t *testing.T) {
+	if !safeArchiveMember("xdev.exe", "xdev.exe") {
+		t.Error("root xdev.exe should be accepted")
+	}
+	if safeArchiveMember("../xdev.exe", "xdev.exe") {
+		t.Error("zip-slip path must be rejected")
+	}
+	if safeArchiveMember("bin/xdev.exe", "xdev.exe") {
+		t.Error("nested member must be rejected")
+	}
+	if safeArchiveMember("xdev", "xdev.exe") {
+		t.Error("wrong basename must be rejected")
+	}
+}
+
+func TestExtractNamedZipMember_RootBinary(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "upd.zip")
+	zf, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(zf)
+	w, err := zw.Create("xdev.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zf.Close()
+
+	dest := filepath.Join(dir, "out.bin")
+	if err := extractNamedZipMember(zipPath, "xdev.exe", dest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "payload" {
+		t.Errorf("extracted %q", got)
+	}
+}
+
+func TestExtractNamedZipMember_RejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "bad.zip")
+	zf, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(zf)
+	w, err := zw.Create("../xdev.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("nope"))
+	zw.Close()
+	zf.Close()
+
+	dest := filepath.Join(dir, "out.bin")
+	if err := extractNamedZipMember(zipPath, "xdev.exe", dest); err == nil {
+		t.Fatal("expected error for zip-slip member")
 	}
 }
 

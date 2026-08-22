@@ -7,7 +7,7 @@
 
 # XDev 架构文档
 
-> 版本: 0.3.2 | 最后更新: 2026-08-20
+> 版本: 0.3.2 | 最后更新: 2026-08-21
 
 ## 1. 项目概览
 
@@ -17,40 +17,37 @@ XDev 是一个跨平台开发环境版本管理器，用 Go 1.25 编写。它提
 - **TUI** — 基于 Bubble Tea 的终端用户界面
 - **GUI** — 基于 Wails v2 + Vue 3 的桌面图形界面
 
-核心设计理念：**单一二进制多入口**（Shim Dispatch）—— xdev 二进制同时充当 CLI 和所有托管工具的 shim。
+核心设计理念：**CLI 二进制多入口**（Shim Dispatch）—— `xdev` 同时充当 CLI/TUI 和所有托管工具的 shim。GUI 是独立的 `xdev-gui`（`-tags gui`），默认 `go build` 不链接 Wails（Spec 030 / ADR-0002）。
 
 ## 2. 目录结构
 
 ```
 xmdevenvmt/
-├── cmd/xmdevenvmt/          # 入口点 (main.go, main_bindings.go)
+├── cmd/xmdevenvmt/          # CLI 入口（遗留；生产用根 main.go，Spec 030）
 ├── internal/                 # 内部包（不可外部导入）
 │   ├── cli/                  # CLI 命令定义 (Cobra)
 │   ├── config/               # 配置加载/保存/迁移
+│   ├── discovery/            # 工具版本嗅探（SniffAll 单次 catalog，Spec 030）
 │   ├── downloader/           # HTTP 下载器 (带进度/断点续传)
 │   ├── env/                  # 环境变量操作 (Windows 注册表/Shell RC)
-│   ├── extractor/            # 归档解压 (zip/tar.gz/7z/zstd)
-│   ├── gui/                  # GUI 后端 (Wails App adapter)
-│   ├── hostscan/             # Host-scan：PATH 上全部实例（跳过 xdev shim）
-│   ├── installer/            # 安装/激活/卸载核心工作流
+│   ├── extractor/            # 归档解压 (zip/tar.gz/7z/zstd；\\?\ 长路径，Spec 032)
+│   ├── gui/                  # GUI 后端 (Wails App adapter；GetBootstrapState 合并 IPC，Spec 032)
+│   ├── hostscan/             # Host-scan：PATH 上全部实例（每目录一次 ReadDir，Spec 031）
+│   ├── installer/            # 安装/激活/卸载核心工作流（Activate/Uninstall 跨进程锁，Spec 032）
 │   ├── integration/          # L2 集成测试
-│   ├── isolator/             # 环境隔离 (none/container/nix)
-│   ├── lockfile/             # .xdev.lock 锁文件管理
+│   ├── isolator/             # 环境隔离 (none/container/nix；会话持久化，Spec 032)
 │   ├── manifest/             # 工具清单 YAML 加载/缓存
 │   ├── mirror/               # 镜像源配置与选择
-│   ├── orchestrator/         # 远程编排 (Docker/SSH)
-│   ├── plugin/               # 插件接口 + Generic/Lua/Vfox 实现
+│   ├── orchestrator/         # 远程编排 (Docker/SSH；ConnectInteractive TTY，Spec 032)
+│   ├── plugin/               # 插件接口 + Generic/Lua/Vfox（Lua VM 复用，Spec 032）
 │   ├── plugins/java/         # Java 插件 (自定义 ArchiveFor)
-│   ├── project/              # .xdev.toml 项目配置
 │   ├── remote/               # 远程版本发现
 │   ├── resolver/             # 版本规范解析 (^, ~, >=)
-│   ├── service/              # 长运行服务管理 (数据库/缓存等)
-│   ├── shim/                 # Shim 调度与安装
+│   ├── shim/                 # Shim 调度与安装（Unix execve；磁盘 shim 索引，Spec 032）
 │   ├── signer/               # Ed25519 清单签名验证
-│   ├── task/                 # 项目任务运行器
 │   ├── tui/                  # TUI 界面 (Bubble Tea)
-│   ├── update/               # 自更新机制
-│   ├── util/                 # 通用工具函数
+│   ├── update/               # 自更新机制（MoF-Crack 归档，Spec 030）
+│   ├── util/                 # 通用工具函数（原生 junction，Spec 032）
 │   └── version/              # 版本常量
 ├── manifests/                # 工具清单 YAML 文件
 │   ├── index.yaml            # 分类索引
@@ -78,9 +75,9 @@ xmdevenvmt/
 ├─────────────────────────────────────────────┤
 │  cli  │  gui  │  tui                        │  ← 表示层
 ├─────────────────────────────────────────────┤
-│  installer  │  service  │  task  │  update   │  ← 业务逻辑层
+│  installer  │  isolator  │  update          │  ← 业务逻辑层
 ├─────────────────────────────────────────────┤
-│  plugin  │  manifest  │  config  │  lockfile │  ← 核心抽象层
+│  plugin  │  manifest  │  config  │  discovery │  ← 核心抽象层
 ├─────────────────────────────────────────────┤
 │  downloader │ extractor │ env │ shim │ hostscan │ mirror│  ← 基础设施层
 ├─────────────────────────────────────────────┤
@@ -102,7 +99,7 @@ xmdevenvmt/
 
 ### 叶子包（无内部依赖）
 
-`e2e`, `extractor`, `hostscan`, `i18n`, `integration`, `lockfile`, `manifest`, `project`, `resolver`, `signer`, `util`, `version`
+`e2e`, `extractor`, `hostscan`, `i18n`, `integration`, `manifest`, `resolver`, `signer`, `util`, `version`
 
 ## 4. 启动流程
 
@@ -112,31 +109,30 @@ xmdevenvmt/
 main.go:init()
   └── manifest.InitEmbedded(manifestFS)  // 嵌入清单 YAML
 
-main.go:main()
-  ├── 检查 os.Args[0] basename
-  │   ├── "xdev-gui*" → runGUI()
-  │   └── 其他 → CLI 路径
+main.go:main()                         // tag !bindings && !gui
   └── cli.NewRootCommand()
       ├── shim.MaybeExec(basename)        // Shim 调度 (优先!)
       │   ├── 是 xdev/xdev-gui → 返回, 继续 CLI
-      │   └── 是工具别名 → 查找并执行真实工具, os.Exit
+      │   └── 是工具别名 → Lookup + run (Unix: unix.Exec)
       ├── cobra.OnInitialize → initContext()
-      │   └── config.Load(xmdeDir)       // 加载配置
+      │   └── config.Load(xmdeDir)       // 加载配置；嗅探 OnStartup 异步
       └── 注册 30+ 子命令
-          └── 无子命令 → 启动 TUI
+          ├── 无子命令 → 启动 TUI
+          └── xdev gui → exec 同目录 xdev-gui
 ```
 
 ### GUI 启动
 
 ```
-main.go:runGUI()
-  ├── config.Load("")
-  ├── manifest.LoadCatalogCached()
-  ├── plugin.RegisterAll()
-  └── gui.Run(app, webviewDir)
-      └── wails.Run()
-          ├── App.startup(ctx)            // 存储 Wails 上下文
-          └── App.domReady()              // WindowShow(), 刷新缓存
+main_gui.go:main()                     // tag gui && !bindings
+  └── runGUI()
+      ├── config.Load("")
+      ├── manifest.LoadCatalogCached()
+      ├── plugin.RegisterAll()
+      └── gui.Run(app, webviewDir)
+          └── wails.Run()
+              ├── App.startup(ctx)
+              └── App.domReady()              // WindowShow(), 刷新缓存
 ```
 
 ## 5. 核心工作流
@@ -164,7 +160,7 @@ CLI: newInstallCmd()
       │   ├── 创建 shims/go.exe (复制 xdev 二进制)
       │   ├── setUserEnvVars({GOROOT, GOPATH})  // Windows 注册表
       │   └── BroadcastEnvironmentChange()      // WM_SETTINGCHANGE
-      └── 9. updateLockfile()              // 更新 .xdev.lock
+      └── 8. Activate 完成（Spec 012 移除 lockfile 步骤）
 ```
 
 ### 5.2 Shim 调度流程
@@ -177,12 +173,12 @@ shims/go.exe build ./...
   ├── main.go → cli.NewRootCommand()
   │   └── shim.MaybeExec("go")
   │       └── shim.Lookup("go", args)
-  │           ├── 1. 检查 .xdev.toml 项目级版本覆盖
-  │           ├── 2. 查找 current/go/bin/go.exe
-  │           └── 3. 跨工具扫描 (shim 反向索引)
+  │           ├── 1. 查找 current/go/ 下的可执行文件
+  │           └── 2. 跨工具扫描 (shim 反向索引，如 npm→node)
   │
-  └── exec.Command(realGo, "build", "./...").Run()
-      └── 传播子进程退出码 via ExitCodeError
+  └── run(realGo, args)
+      ├── Unix: unix.Exec（进程覆盖）
+      └── Windows: exec.Command + EnrichFromRegistry（一次 HKCU 枚举）
 ```
 
 ### 5.3 Shell Hook 流程
@@ -405,8 +401,8 @@ manifest.LoadCatalogCached()
 
 ### 11.3 输出
 
-- `build/bin/xdev.exe` — CLI 二进制 (约 20MB)
-- `build/bin/xdev-gui.exe` — GUI 二进制 (约 17MB，嵌入前端资源)
+- `build/bin/xdev.exe` — CLI/TUI/shim（默认 `go build`，不含 Wails；Spec 030）
+- `build/bin/xdev-gui.exe` — GUI（`wails build -tags gui`，嵌入前端资源）
 
 ## 12. GUI 架构
 
@@ -475,19 +471,10 @@ name: flutter
 required_plugins: [java, android-sdk-tools]
 ```
 
-### 13.3 Lockfile 命令接口
+### 13.3 ~~Lockfile 命令接口~~（Spec 012 已移除）
 
-```go
-func newLockCmd() *cobra.Command // internal/cli/lock.go
-```
-
-| 子命令/标志 | 行为 |
-|-----------|------|
-| `xdev lock` | 读取 .xdev.toml → 解析版本 → 写入 .xdev.lock |
-| `xdev lock go python` | 仅重新生成指定工具条目 |
-| `xdev lock --check` | 校验 .xdev.lock 与 .xdev.toml 的一致性 |
-| `xdev lock --json` | JSON 格式输出检测结果 |
+`xdev lock` / `.xdev.lock` / `internal/lockfile` 已在 Spec 012 删除。本节保留为历史说明。可复现安装的后续方案见 roadmap。
 
 ---
 
-> **文档版本**: 2026-07-08 | **覆盖代码版本**: 1.2.2-alpha commit（本次会话所有改动）
+> **文档版本**: 2026-08-21 | **覆盖代码版本**: Spec 030/031/032（CLI/GUI 分离 + host-scan/Naive 性能 + shim/extractor/isolate/remote 收口）

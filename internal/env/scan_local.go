@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/hostscan"
+	"github.com/xmdemt/xdev/internal/toolmeta"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -23,49 +25,25 @@ type LocalTool struct {
 	EnvVars  map[string]string `json:"envVars"`  // 关联的环境变量
 }
 
-// toolScanRule 定义工具的扫描规则
+// toolScanRule 是扫描规则的桥接结构，由 toolmeta 表构造（Spec 033 R1 收口：
+// 工具→二进制名映射的单一权威来源在 internal/toolmeta）。
 type toolScanRule struct {
 	name       string   // 工具名
 	binNames   []string // 可执行文件名（不含扩展名）
 	envVarKeys []string // 关联的环境变量名
 }
 
-// scanRules 定义所有需要扫描的工具规则
-var scanRules = []toolScanRule{
-	{name: "java", binNames: []string{"java", "javac"}, envVarKeys: []string{"JAVA_HOME"}},
-	{name: "node", binNames: []string{"node", "npm"}, envVarKeys: []string{"NODE_PATH", "NVM_HOME"}},
-	{name: "python", binNames: []string{"python", "python3"}, envVarKeys: []string{"PYTHON_HOME", "PYTHONPATH", "CONDA_PREFIX"}},
-	{name: "go", binNames: []string{"go"}, envVarKeys: []string{"GOROOT", "GOPATH"}},
-	{name: "dotnet", binNames: []string{"dotnet"}, envVarKeys: []string{"DOTNET_ROOT"}},
-	{name: "rust", binNames: []string{"rustc", "cargo"}, envVarKeys: []string{"RUSTUP_HOME", "CARGO_HOME"}},
-	{name: "flutter", binNames: []string{"flutter"}, envVarKeys: []string{"FLUTTER_ROOT"}},
-	{name: "dart", binNames: []string{"dart"}, envVarKeys: []string{"DART_SDK"}},
-	{name: "gradle", binNames: []string{"gradle"}, envVarKeys: []string{"GRADLE_HOME"}},
-	{name: "maven", binNames: []string{"mvn"}, envVarKeys: []string{"MAVEN_HOME", "M2_HOME"}},
-	{name: "cmake", binNames: []string{"cmake"}, envVarKeys: []string{"CMAKE_ROOT"}},
-	{name: "llvm", binNames: []string{"clang"}, envVarKeys: []string{"LLVM_HOME"}},
-	{name: "ruby", binNames: []string{"ruby"}, envVarKeys: []string{}},
-	{name: "php", binNames: []string{"php"}, envVarKeys: []string{}},
-	{name: "perl", binNames: []string{"perl"}, envVarKeys: []string{}},
-	{name: "git", binNames: []string{"git"}, envVarKeys: []string{"GIT_HOME"}},
-	{name: "deno", binNames: []string{"deno"}, envVarKeys: []string{}},
-	{name: "bun", binNames: []string{"bun"}, envVarKeys: []string{}},
-	{name: "zig", binNames: []string{"zig"}, envVarKeys: []string{}},
-	{name: "android-platform-tools", binNames: []string{"adb"}, envVarKeys: []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"}},
-	{name: "android-ndk", binNames: []string{"ndk-build"}, envVarKeys: []string{"ANDROID_NDK_HOME", "NDK_HOME"}},
-	{name: "yarn", binNames: []string{"yarn"}, envVarKeys: []string{}},
-	{name: "pnpm", binNames: []string{"pnpm"}, envVarKeys: []string{}},
-}
-
 // ScanLocalTools 扫描系统中已安装的开发工具
 // xdevDir 用于排除 xdev 自身管理的目录
 func ScanLocalTools(xdevDir string) []LocalTool {
-	results := make([]LocalTool, len(scanRules))
+	metas := toolmeta.ScanTargets()
+	results := make([]LocalTool, len(metas))
 	seen := make(map[string]bool)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for i, rule := range scanRules {
+	for i, m := range metas {
+		rule := toolScanRule{name: m.Name, binNames: m.BinNames, envVarKeys: m.EnvVarKeys}
 		wg.Add(1)
 		go func(idx int, rule toolScanRule) {
 			defer wg.Done()
@@ -121,7 +99,7 @@ func scanByEnvVars(rule toolScanRule, xdevDir string) *LocalTool {
 		}
 
 		// 排除 xdev 管理的目录
-		if isInsideXdevDir(val, xdevDir) {
+		if hostscan.InsideDir(val, xdevDir) {
 			continue
 		}
 
@@ -153,19 +131,18 @@ func scanByEnvVars(rule toolScanRule, xdevDir string) *LocalTool {
 
 // scanByPath 通过 PATH 环境变量检测工具
 func scanByPath(rule toolScanRule, xdevDir string) *LocalTool {
+	shimDir := ""
+	if xdevDir != "" {
+		shimDir = filepath.Join(xdevDir, "shims")
+	}
 	for _, binName := range rule.binNames {
-		searchName := binName
-		if runtime.GOOS == "windows" {
-			searchName = binName + ".exe"
-		}
-
-		path, err := exec.LookPath(searchName)
-		if err != nil {
+		path, ok := hostscan.LookPath(binName, shimDir)
+		if !ok {
 			continue
 		}
 
 		// 排除 xdev shim 目录和 install 目录
-		if isInsideXdevDir(path, xdevDir) {
+		if hostscan.InsideDir(path, xdevDir) {
 			continue
 		}
 
@@ -192,9 +169,9 @@ func scanByPath(rule toolScanRule, xdevDir string) *LocalTool {
 
 // scanByCommonDirs 通过常见安装目录检测工具
 func scanByCommonDirs(rule toolScanRule, xdevDir string) *LocalTool {
-	commonPaths := getCommonInstallPaths(rule.name)
+	commonPaths := toolmeta.CommonInstallPaths(rule.name)
 	for _, p := range commonPaths {
-		if isInsideXdevDir(p, xdevDir) {
+		if hostscan.InsideDir(p, xdevDir) {
 			continue
 		}
 
@@ -359,7 +336,7 @@ func findInstallInDir(parentDir string, rule toolScanRule) string {
 
 // verifyToolBinaries 验证安装路径下是否有对应的可执行文件
 func verifyToolBinaries(installPath string, rule toolScanRule) bool {
-	for _, binName := range rule.binNames {
+	for _, binName := range toolmeta.BinNames(rule.name) {
 		candidates := []string{
 			filepath.Join(installPath, "bin", binName),
 			filepath.Join(installPath, binName),
@@ -413,38 +390,8 @@ func getToolVersion(rule toolScanRule, installPath string) string {
 		return ""
 	}
 
-	// 执行版本命令
-	versionFlags := map[string][]string{
-		"java":    {"--version"},
-		"node":    {"--version"},
-		"python":  {"--version"},
-		"python3": {"--version"},
-		"go":      {"version"},
-		"dotnet":  {"--version"},
-		"rustc":   {"--version"},
-		"cargo":   {"--version"},
-		"flutter": {"--version"},
-		"dart":    {"--version"},
-		"gradle":  {"--version"},
-		"mvn":     {"--version"},
-		"cmake":   {"--version"},
-		"clang":   {"--version"},
-		"ruby":    {"--version"},
-		"php":     {"--version"},
-		"perl":    {"--version"},
-		"git":     {"--version"},
-		"deno":    {"--version"},
-		"bun":     {"--version"},
-		"zig":     {"version"},
-		"adb":     {"version"},
-		"yarn":    {"--version"},
-		"pnpm":    {"--version"},
-	}
-
-	flags, ok := versionFlags[rule.binNames[0]]
-	if !ok {
-		flags = []string{"--version"}
-	}
+	// 执行版本命令（版本参数查 toolmeta 表，Spec 033 R2 收口）
+	flags := toolmeta.VersionArg(rule.binNames[0])
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -462,78 +409,16 @@ func getToolVersion(rule toolScanRule, installPath string) string {
 	if idx := strings.Index(line, "\n"); idx > 0 {
 		line = line[:idx]
 	}
-	return extractVersionFromOutput(line)
+	return toolmeta.ExtractVersionFromOutput(line)
 }
 
-// extractVersionFromOutput 从命令输出中提取版本号
-func extractVersionFromOutput(s string) string {
-	s = strings.TrimSpace(s)
-	// 移除常见前缀
-	for _, prefix := range []string{"v", "go", "java ", "javac ", "Python ", "node ", "npm ", "yarn ", "pnpm ", "gradle ", "pip "} {
-		if strings.HasPrefix(strings.ToLower(s), strings.ToLower(prefix)) && len(s) > len(prefix) {
-			rest := s[len(prefix):]
-			if len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
-				s = rest
-				break
-			}
-		}
-	}
-
-	// 查找第一个版本号模式
-	parts := strings.Fields(s)
-	for _, p := range parts {
-		p = strings.TrimPrefix(p, "v")
-		if isVersionLike(p) {
-			// 去除 Windows 后缀如 .windows.1
-			if idx := strings.Index(p, ".windows."); idx > 0 {
-				p = p[:idx]
-			}
-			return p
-		}
-	}
-	return s
-}
-
-// collectEnvVars 收集工具关联的环境变量
+// collectEnvVars 收集工具关联的环境变量（键查 toolmeta 表，Spec 033 R1 收口）
 func collectEnvVars(rule toolScanRule, installPath string) map[string]string {
 	vars := make(map[string]string)
-
-	// 环境变量名到其应指向的子目录映射
-	envVarMap := map[string]map[string]string{
-		"java":    {"JAVA_HOME": ""},
-		"node":    {"NODE_PATH": ""},
-		"python":  {"PYTHON_HOME": ""},
-		"go":      {"GOROOT": ""},
-		"dotnet":  {"DOTNET_ROOT": ""},
-		"rust":    {"RUSTUP_HOME": "", "CARGO_HOME": ""},
-		"flutter": {"FLUTTER_ROOT": ""},
-		"dart":    {"DART_SDK": ""},
-		"gradle":  {"GRADLE_HOME": ""},
-		"maven":   {"MAVEN_HOME": "", "M2_HOME": ""},
-		"cmake":   {"CMAKE_ROOT": ""},
-		"llvm":    {"LLVM_HOME": ""},
+	for _, envKey := range toolmeta.EnvVarKeys(rule.name) {
+		vars[envKey] = installPath
 	}
-
-	if envMap, ok := envVarMap[rule.name]; ok {
-		for envKey := range envMap {
-			vars[envKey] = installPath
-		}
-	}
-
 	return vars
-}
-
-// isInsideXdevDir 检查路径是否在 xdev 管理的目录内
-func isInsideXdevDir(path, xdevDir string) bool {
-	if xdevDir == "" {
-		return false
-	}
-	cleanPath := strings.ToLower(filepath.Clean(path))
-	cleanXdev := strings.ToLower(filepath.Clean(xdevDir))
-	if !strings.HasSuffix(cleanXdev, string(os.PathSeparator)) {
-		cleanXdev += string(os.PathSeparator)
-	}
-	return strings.HasPrefix(cleanPath, cleanXdev)
 }
 
 // MigrateLocalTool 将本地工具迁移到 xdev 管理

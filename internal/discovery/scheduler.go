@@ -47,10 +47,14 @@ type Scheduler struct {
 	limiter     *rateLimiter
 	mu          sync.Mutex // protects cache read/write (NFR-004)
 
-	// shutdown management for startup strategy (SC-002).
+	// shutdown management for startup / interval background sniff (SC-002, Spec 030).
 	startupCtx    context.Context
 	startupCancel context.CancelFunc
 	startupDone   chan struct{}
+
+	// loadCatalog is the catalog loader used by SniffNow / SniffAll.
+	// Tests replace it to assert a single load per SniffAll.
+	loadCatalog func(dir string) (*manifest.Catalog, error)
 }
 
 // NewScheduler creates a ready-to-use Scheduler.
@@ -75,6 +79,7 @@ func NewScheduler(cfg *config.SniffConfig, cacheDir, manifestDir string) *Schedu
 		cachePath:   filepath.Join(cacheDir, "sniff-cache.json"),
 		manifestDir: manifestDir,
 		limiter:     newRateLimiter(cfg.RateLimitPerHr),
+		loadCatalog: manifest.LoadCatalog,
 	}
 
 	// Load rate limit state from cache so the token bucket is
@@ -104,7 +109,8 @@ func NewScheduler(cfg *config.SniffConfig, cacheDir, manifestDir string) *Schedu
 // OnStartup implements the four trigger strategies (FR-006):
 //
 //   - interval:  Loads the cache; if LastSniffAt is older than cfg.Interval,
-//     runs SniffAll synchronously with a 60-second context timeout.
+//     launches an async SniffAll with a 60-second timeout (Spec 030: never
+//     block CLI OnInitialize).
 //   - startup:   Launches an async goroutine that runs SniffAll; the caller
 //     should cancel ctx on process exit so partial results are saved.
 //   - service:   No automatic trigger — the system scheduler calls
@@ -135,10 +141,12 @@ func (s *Scheduler) onStartupInterval(ctx context.Context) {
 		}
 	}
 
-	sniffCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	_ = s.sniffAllWithForce(sniffCtx, false) // auto: respect per-tool TTL
+	s.startupCtx, s.startupCancel = context.WithTimeout(ctx, 60*time.Second)
+	s.startupDone = make(chan struct{})
+	go func() {
+		defer close(s.startupDone)
+		_ = s.sniffAllWithForce(s.startupCtx, false) // auto: respect per-tool TTL
+	}()
 }
 
 func (s *Scheduler) onStartupStartup(ctx context.Context) {
@@ -198,11 +206,7 @@ func (s *Scheduler) SniffNow(ctx context.Context, tool string) error {
 //     is temporarily empty (e.g. after a full SniffAll consumed all 300
 //     tokens).  The remote GitHub API rate limit is still enforced server-side.
 func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force bool) error {
-	if !force && !s.limiter.acquire() {
-		return fmt.Errorf("rate limit exceeded for %q — try again later", tool)
-	}
-
-	cat, err := manifest.LoadCatalog(s.manifestDir)
+	cat, err := s.catalog()
 	if err != nil {
 		return fmt.Errorf("load catalog: %w", err)
 	}
@@ -210,9 +214,30 @@ func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force boo
 	if !ok {
 		return fmt.Errorf("tool %q not found in catalog", tool)
 	}
+	return s.sniffNowTool(ctx, t, force)
+}
 
+func (s *Scheduler) catalog() (*manifest.Catalog, error) {
+	load := s.loadCatalog
+	if load == nil {
+		load = manifest.LoadCatalog
+	}
+	return load(s.manifestDir)
+}
+
+// sniffNowTool sniffs one already-loaded tool. SniffAll must pass the
+// snapshot *Tool so the catalog is not re-parsed per worker (Spec 030).
+func (s *Scheduler) sniffNowTool(ctx context.Context, t *manifest.Tool, force bool) error {
+	if t == nil {
+		return fmt.Errorf("nil tool")
+	}
+	if !force && !s.limiter.acquire() {
+		return fmt.Errorf("rate limit exceeded for %q — try again later", t.Name)
+	}
+
+	name := t.Name
 	if !t.ShouldAutoSniff() {
-		log.Printf("[discovery] sniff %q: auto_sniff disabled, skipping", tool)
+		log.Printf("[discovery] sniff %q: auto_sniff disabled, skipping", name)
 		return nil
 	}
 
@@ -223,21 +248,21 @@ func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force boo
 	if !force {
 		existingCache, _ := s.LoadCache()
 		if existingCache != nil {
-			if r, ok := existingCache.Tools[tool]; ok && !r.LastSniff.IsZero() {
+			if r, ok := existingCache.Tools[name]; ok && !r.LastSniff.IsZero() {
 				interval, err := time.ParseDuration(s.cfg.Interval)
 				if err != nil || interval <= 0 {
 					interval = 24 * time.Hour
 				}
 				if time.Since(r.LastSniff) < interval {
 					log.Printf("[discovery] sniff %q: skipped (last sniff %s, interval %s)",
-						tool, r.LastSniff.Format(time.RFC3339), s.cfg.Interval)
+						name, r.LastSniff.Format(time.RFC3339), s.cfg.Interval)
 					return nil
 				}
 			}
 		}
 	}
 
-	log.Printf("[discovery] sniff %q: starting...", tool)
+	log.Printf("[discovery] sniff %q: starting...", name)
 	start := time.Now()
 
 	// Exponential backoff loop.
@@ -247,7 +272,7 @@ func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force boo
 	for attempt := 0; attempt <= len(backoff); attempt++ {
 		if attempt > 0 {
 			log.Printf("[discovery] sniff %q: retry attempt %d/%d after %v",
-				tool, attempt, len(backoff), backoff[attempt-1])
+				name, attempt, len(backoff), backoff[attempt-1])
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -262,9 +287,9 @@ func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force boo
 
 		errStr := sniffErr.Error()
 		if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "403") {
-			log.Printf("[discovery] sniff %q: rate limited, persisting to cache", tool)
+			log.Printf("[discovery] sniff %q: rate limited, persisting to cache", name)
 			s.mu.Lock()
-			_ = s.updateCacheEntryLocked(tool, ToolSniffResult{
+			_ = s.updateCacheEntryLocked(name, ToolSniffResult{
 				LastSniff: time.Now(),
 				Error:     sniffErr.Error(),
 			})
@@ -288,19 +313,19 @@ func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force boo
 	}
 
 	if sniffErr != nil {
-		log.Printf("[discovery] sniff %q: error after %v: %v", tool, elapsed, sniffErr)
+		log.Printf("[discovery] sniff %q: error after %v: %v", name, elapsed, sniffErr)
 		result.Error = sniffErr.Error()
 		s.mu.Lock()
-		_ = s.updateCacheEntryLocked(tool, result)
+		_ = s.updateCacheEntryLocked(name, result)
 		s.mu.Unlock()
 		return sniffErr
 	}
 
 	if versions == nil {
-		log.Printf("[discovery] sniff %q: unsupported (no matching sniffer)", tool)
+		log.Printf("[discovery] sniff %q: unsupported (no matching sniffer)", name)
 		result.Unsupported = true
 		s.mu.Lock()
-		_ = s.updateCacheEntryLocked(tool, result)
+		_ = s.updateCacheEntryLocked(name, result)
 		s.mu.Unlock()
 		return nil
 	}
@@ -329,20 +354,20 @@ func (s *Scheduler) sniffNowInternal(ctx context.Context, tool string, force boo
 		result.Versions = append(result.Versions, dv.Version)
 	}
 
-	log.Printf("[discovery] sniff %q: found %d new version(s) in %v", tool, len(versions), elapsed)
+	log.Printf("[discovery] sniff %q: found %d new version(s) in %v", name, len(versions), elapsed)
 
 	if err := mergeIntoManifest(t, versions, s.manifestDir); err != nil {
-		log.Printf("[discovery] sniff %q: merge into manifest failed: %v", tool, err)
+		log.Printf("[discovery] sniff %q: merge into manifest failed: %v", name, err)
 		result.Error = err.Error()
 		s.mu.Lock()
-		_ = s.updateCacheEntryLocked(tool, result)
+		_ = s.updateCacheEntryLocked(name, result)
 		s.mu.Unlock()
 		return err
 	}
 
 	// Update cache with successful result (ETag from sniff response).
 	s.mu.Lock()
-	_ = s.updateCacheEntryLocked(tool, result)
+	_ = s.updateCacheEntryLocked(name, result)
 	s.mu.Unlock()
 	return nil
 }
@@ -404,7 +429,7 @@ func (s *Scheduler) SniffAll(ctx context.Context) error {
 // sniffed tools are not re-queried (SC-007). When force is true
 // (manual `xdev sniff`), the TTL skip is bypassed.
 func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
-	cat, err := manifest.LoadCatalog(s.manifestDir)
+	cat, err := s.catalog()
 	if err != nil {
 		return fmt.Errorf("load catalog: %w", err)
 	}
@@ -442,7 +467,7 @@ func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
 			default:
 			}
 
-			sniffErr := s.sniffNowInternal(ctx, tool.Name, force)
+			sniffErr := s.sniffNowTool(ctx, tool, force)
 			// Re-read cache to get the result we just wrote.
 			cache, _ := s.LoadCache()
 			tr := ToolSniffResult{LastSniff: time.Now()}
