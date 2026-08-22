@@ -235,6 +235,12 @@ export default {
   'confirm_uninstall_content': '确定要移除 {tool}@{version} 吗？',
   'up_to_date': '已是最新',
   'update_available': '有可用更新: v{current} -> v{latest}',
+  'self_update.title': '发现新版本',
+  'self_update.text': 'xdev 有可用更新：v{current} → v{latest}。是否立即更新？',
+  'self_update.ignore': '忽略并继续',
+  'self_update.quit': '退出',
+  'self_update.applied': '已更新到 v{latest}，重启 xdev 后生效',
+  'self_update.ignored': '已忽略 v{latest}，出现新版本时会再次提示',
 
   // Filter
   'filter.hide_unavailable': '隐藏不可用',

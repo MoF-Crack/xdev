@@ -65,6 +65,7 @@ import (
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/remote"
+	"github.com/xmdemt/xdev/internal/update"
 	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
 )
@@ -505,6 +506,15 @@ func (a *App) startup(ctx context.Context) {
 	if removed := a.CleanupExpiredArchives(); removed > 0 {
 		logInfo("[startup] cleaned up %d expired archive file(s)", removed)
 	}
+
+	// Spec 034: 启动 2s 后按配置自检更新（异步、失败静默、24h 限频）。
+	go func() {
+		select {
+		case <-time.After(2 * time.Second):
+			a.runStartupSelfCheck()
+		case <-a.rootContext().Done():
+		}
+	}()
 }
 
 // domReady is called when the DOM is ready.
@@ -885,6 +895,25 @@ func (a *App) EnsureSelfInstalled() {
 		return
 	}
 	exeDir := filepath.Dir(exe)
+
+	// Spec 034: stale 副本替换（副本存在但版本旧于当前 → 用源覆盖）。
+	// 只处理 CLI 副本；开关 self_update_stale=false 时跳过。
+	if cfg.Core.SelfUpdateStale && !cliMissing {
+		srcCli := filepath.Join(exeDir, cliName)
+		if runtime.GOOS != "windows" {
+			srcCli = filepath.Join(exeDir, "xdev")
+		}
+		if filepath.Base(exe) == cliName {
+			srcCli = exe
+		}
+		if _, err := os.Stat(srcCli); err == nil {
+			if err := update.ReplaceStaleCLICopy(srcCli, homeDir); err != nil {
+				logWarn("[EnsureSelfInstalled] stale replace failed: %v", err)
+			} else {
+				logInfo("[EnsureSelfInstalled] stale CLI copy check done")
+			}
+		}
+	}
 
 	// Copy xdev.exe to home directory
 	if cliMissing {

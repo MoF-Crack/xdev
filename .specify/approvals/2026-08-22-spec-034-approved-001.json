@@ -1,0 +1,16 @@
+{
+    "schema_version": 1,
+    "approval_id": "2026-08-22-spec-034-approved-001",
+    "asset_type": "spec",
+    "target_path": "specs/034-self-update-startup/spec.md",
+    "decision": "approve-state-transition",
+    "target_version": "1.0.0",
+    "target_state": "Approved",
+    "scope": "Create/approve Feature Spec for 034-self-update-startup (startup self-update & stale-copy replacement)",
+    "approved_by": "xinyan \u003czuijiuhjd@foxmail.com\u003e",
+    "approved_at": "2026-08-22",
+    "authorization_text": "用户 2026-08-22 批准 Spec 034（启动自检更新与旧版本副本替换）：三决策点按默认执行；随 v0.3.3-rc.1 本地提交",
+    "recorded_at": "2026-08-22",
+    "recorded_by": "XDev Agent",
+    "supersedes": []
+}

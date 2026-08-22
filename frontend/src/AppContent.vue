@@ -40,6 +40,8 @@
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
   <EnvVarEditorDialog :show="showEnvEditor" :editing="editingEnvVar" :browse-directory="browseEnvDir" :t="t" @update:show="showEnvEditor = $event" @save="saveEnvDraft" />
+  <!-- Spec 034: 启动自检更新三选对话框 -->
+  <SelfUpdateDialog :show="showSelfUpdate" :current="selfUpdateInfo.current" :latest="selfUpdateInfo.latest" :updating="selfUpdating" :t="t" @update="applySelfUpdate" @ignore="ignoreSelfUpdate" @quit="quitSelfUpdate" />
   <CommandPalette
     v-model:show="showCommandPalette"
     :options="commandPaletteOptions"
@@ -69,6 +71,7 @@ import ToolDetailDrawer from './components/ToolDetailDrawer.vue';
 import InstallProgressDialog from './components/InstallProgressDialog.vue';
 import FormSelectorDialog from './components/FormSelectorDialog.vue';
 import EnvVarEditorDialog from './components/EnvVarEditorDialog.vue';
+import SelfUpdateDialog from './components/SelfUpdateDialog.vue';
 const FavoritesPage = defineAsyncComponent(() => import('./pages/FavoritesPage.vue'));
 const SettingsPage = defineAsyncComponent(() => import('./pages/SettingsPage.vue'));
 const EnvironmentVariablesPage = defineAsyncComponent(() => import('./pages/EnvironmentVariablesPage.vue'));
@@ -135,6 +138,23 @@ onMounted(async () => {
   // Listen for dashboard stats refresh events from the backend
   window.runtime?.EventsOn?.('dashboardStatsUpdated', () => {
     loadDashboard();
+  });
+
+  // Spec 034: 启动自检更新事件（ask → 三选对话框；notify/applied/applied-error → 提示）
+  window.runtime?.EventsOn?.('self-update', (data) => {
+    if (!data) return;
+    if (data.action === 'ask') {
+      selfUpdateInfo.value = { current: data.current, latest: data.latest };
+      showSelfUpdate.value = true;
+    } else if (data.action === 'notify') {
+      message.info(t('update_available_short', { latest: data.latest }));
+    } else if (data.action === 'applied') {
+      showSelfUpdate.value = false;
+      message.success(t('self_update.applied', { latest: data.latest }));
+    } else if (data.action === 'applied-error') {
+      showSelfUpdate.value = false;
+      message.error(t('update_check_failed'));
+    }
   });
 });
 
@@ -1070,6 +1090,39 @@ async function checkUpdate() {
   } finally {
     updateOperating.value = false;
   }
+}
+
+// Spec 034: 启动自检三选对话框状态与动作
+const showSelfUpdate = ref(false);
+const selfUpdateInfo = ref({ current: '', latest: '' });
+const selfUpdating = ref(false);
+
+async function applySelfUpdate() {
+  selfUpdating.value = true;
+  try {
+    const res = await window.go.gui.App.ApplyUpdate();
+    if (res?.error) {
+      message.error(res.error);
+    } else {
+      showSelfUpdate.value = false;
+      message.success(t('self_update.applied', { latest: res.latest }));
+    }
+  } catch (e) {
+    message.error(t('update_check_failed') + ': ' + e);
+  } finally {
+    selfUpdating.value = false;
+  }
+}
+
+function ignoreSelfUpdate() {
+  window.go.gui.App.IgnoreSelfUpdate(selfUpdateInfo.value.latest);
+  showSelfUpdate.value = false;
+  message.info(t('self_update.ignored', { latest: selfUpdateInfo.value.latest }));
+}
+
+function quitSelfUpdate() {
+  showSelfUpdate.value = false;
+  window.runtime?.WindowClose?.();
 }
 
 async function saveMirrors() {

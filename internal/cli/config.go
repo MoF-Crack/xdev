@@ -157,6 +157,10 @@ func coreField(c *config.CoreConfig, field string) (string, error) {
 		return c.LogLevel, nil
 	case "self_update":
 		return strconv.FormatBool(c.SelfUpdate), nil
+	case "self_update_mode":
+		return c.SelfUpdateMode, nil
+	case "self_update_stale":
+		return strconv.FormatBool(c.SelfUpdateStale), nil
 	case "manifest_ttl":
 		return c.ManifestTTL, nil
 	}
@@ -187,6 +191,20 @@ func setCoreField(c *config.CoreConfig, field, value string) error {
 			return err
 		}
 		c.SelfUpdate = b
+	case "self_update_mode":
+		// Spec 034: 枚举校验（prompt | auto | notify）
+		switch value {
+		case "prompt", "auto", "notify":
+			c.SelfUpdateMode = value
+		default:
+			return fmt.Errorf("invalid self_update_mode %q (want prompt|auto|notify)", value)
+		}
+	case "self_update_stale":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		c.SelfUpdateStale = b
 	case "manifest_ttl":
 		c.ManifestTTL = value
 	default:

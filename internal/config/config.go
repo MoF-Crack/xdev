@@ -138,6 +138,11 @@ type CoreConfig struct {
 	ManifestDir      string   `yaml:"manifest_dir"`      // Tool manifest YAML directory
 	LogLevel         string   `yaml:"log_level"`         // Logging verbosity: "debug"|"info"|"warn"|"error"
 	SelfUpdate       bool     `yaml:"self_update"`       // Whether to auto-check for xdev updates
+	// SelfUpdateMode 启动自检发现新版本时的默认行为（Spec 034）：
+	// "prompt"（默认，三选：更新/忽略并继续/退出）| "auto"（自动更新）| "notify"（仅提示）
+	SelfUpdateMode string `yaml:"self_update_mode"`
+	// SelfUpdateStale 启动时是否把 XMDevDir 根下旧版本 xdev CLI 副本替换为当前版本（默认 true）
+	SelfUpdateStale bool `yaml:"self_update_stale"`
 	ManifestTTL      string   `yaml:"manifest_ttl"`      // Cache TTL for remote version lists (Go duration)
 	MirrorPreference []string `yaml:"mirror_preference"` // User-preferred mirror URLs, highest priority
 	// ArchiveRetention 下载归档的保留策略：
@@ -402,6 +407,12 @@ func Load(xmdeDir string) (*Config, error) {
 		cfg.Migration.MigrationMode = "junction"
 	}
 
+	// Spec 034: self-update defaults — 旧 config 文件缺字段时回填；
+	// 未知枚举在决策层按 prompt 容错。
+	if cfg.Core.SelfUpdateMode == "" {
+		cfg.Core.SelfUpdateMode = "prompt"
+	}
+
 	// Re-resolve paths in case the user only wrote partial settings.
 	cfg.ResolvePaths(xmdeDir)
 
@@ -520,6 +531,8 @@ func defaults(xmdeDir string) *Config {
 			ManifestDir: filepath.Join(xmdeDir, "manifests"),
 			LogLevel:    "info",
 			SelfUpdate:  true,
+			SelfUpdateMode:  "prompt",
+			SelfUpdateStale: true,
 			ManifestTTL: "24h",
 		},
 		Path: PathConfig{

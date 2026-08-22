@@ -9,7 +9,7 @@ export function AddCustomTool(arg1:string,arg2:string,arg3:string,arg4:string,ar
 
 export function AddFavorite(arg1:string):Promise<void>;
 
-export function ApplyUpdate():Promise<void>;
+export function ApplyUpdate():Promise<gui.UpdateCheckResult>;
 
 export function BrowseDirectory(arg1:string):Promise<string>;
 
@@ -118,6 +118,8 @@ export function GetProxyConfig():Promise<gui.ProxyInfo>;
 export function GetSniffConfig():Promise<gui.SniffConfigInfo>;
 
 export function GetToolsByCategory(arg1:string):Promise<Array<gui.ToolInfo>>;
+
+export function IgnoreSelfUpdate(arg1:string):Promise<void>;
 
 export function IgnoreTool(arg1:string,arg2:string,arg3:string):Promise<void>;
 

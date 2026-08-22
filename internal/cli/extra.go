@@ -45,31 +45,7 @@ func newSelfCmd() *cobra.Command {
 			Use:   "update",
 			Short: "Update xdev to the latest version",
 			RunE: func(cmd *cobra.Command, args []string) error {
-				ctx := context.Background()
-				v := version.Version
-				fmt.Printf("Current version: %s\n", v)
-				fmt.Println("Checking for updates...")
-
-				result, err := update.Check(ctx, v)
-				if err != nil {
-					fmt.Printf("Error checking for updates: %v\n", err)
-					return fmt.Errorf("update check failed: %w", err)
-				}
-
-				if !result.HasUpdate {
-					fmt.Printf("Already up to date (v%s)\n", result.LatestVersion)
-					return nil
-				}
-
-				fmt.Printf("Update available: v%s -> v%s\n", result.CurrentVersion, result.LatestVersion)
-				fmt.Println("Downloading update...")
-
-				if err := update.Apply(ctx, result); err != nil {
-					return fmt.Errorf("self update: %w", err)
-				}
-
-				fmt.Printf("Successfully updated to v%s! Please restart xdev.\n", result.LatestVersion)
-				return nil
+				return runSelfUpdate()
 			},
 		},
 		&cobra.Command{
@@ -149,11 +125,45 @@ func newSelfCmd() *cobra.Command {
 	return cmd
 }
 
+// runSelfUpdate 执行 xdev 自更新（self update 命令与交互入口共用，
+// Spec 034 复用优先）。
+func runSelfUpdate() error {
+	ctx := context.Background()
+	v := version.Version
+	fmt.Printf("Current version: %s\n", v)
+	fmt.Println("Checking for updates...")
+
+	result, err := update.Check(ctx, v)
+	if err != nil {
+		fmt.Printf("Error checking for updates: %v\n", err)
+		return fmt.Errorf("update check failed: %w", err)
+	}
+
+	if !result.HasUpdate {
+		fmt.Printf("Already up to date (v%s)\n", result.LatestVersion)
+		return nil
+	}
+
+	fmt.Printf("Update available: v%s -> v%s\n", result.CurrentVersion, result.LatestVersion)
+	fmt.Println("Downloading update...")
+
+	if err := update.Apply(ctx, result); err != nil {
+		return fmt.Errorf("self update: %w", err)
+	}
+
+	fmt.Printf("Successfully updated to v%s! Please restart xdev.\n", result.LatestVersion)
+	return nil
+}
+
 func newTuiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
 		Short: "Launch the interactive terminal UI",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Spec 034: 交互入口启动自检（静默降级，不阻塞）
+			if err := runSelfCheck(); err != nil {
+				return err
+			}
 			cat, reg := loadCatalogAndRegistry()
 			cfg := Cfg()
 			p := tui.NewProgram(cfg, cat, reg)
@@ -168,6 +178,10 @@ func newGuiCmd() *cobra.Command {
 		Use:   "gui",
 		Short: "Launch the cross-platform desktop GUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Spec 034: 交互入口启动自检（静默降级，不阻塞）
+			if err := runSelfCheck(); err != nil {
+				return err
+			}
 			exe, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("locate CLI binary: %w", err)

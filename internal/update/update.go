@@ -86,6 +86,17 @@ func Check(ctx context.Context, currentVersion string) (*CheckResult, error) {
 // Apply downloads the new binary from the release assets and replaces
 // the currently running executable.
 func Apply(ctx context.Context, result *CheckResult) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path: %w", err)
+	}
+	return ApplyTo(ctx, result, exe)
+}
+
+// ApplyTo downloads the new binary from the release assets and replaces
+// the binary at exePath. 用于 GUI 自检更新：GUI 进程（xdev-gui）更新的是
+// 同目录的 CLI 二进制（xdev.exe），而不是运行中的 GUI 壳自身。
+func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 	if result.Release == nil {
 		return fmt.Errorf("no release info available")
 	}
@@ -99,16 +110,12 @@ func Apply(ctx context.Context, result *CheckResult) error {
 
 	log.Printf("[update] Downloading update: %s (%d bytes)", asset.Name, asset.Size)
 
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
-	}
-	exe, err = filepath.EvalSymlinks(exe)
+	exe, err := filepath.EvalSymlinks(exePath)
 	if err != nil {
 		return fmt.Errorf("resolve symlinks: %w", err)
 	}
 
-	log.Printf("[update] Current executable: %s", exe)
+	log.Printf("[update] Target executable: %s", exe)
 
 	// Download to a temp file in the same directory as the executable
 	// to avoid cross-device rename issues.

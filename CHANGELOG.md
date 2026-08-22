@@ -5,6 +5,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [Unreleased]
 
+## [0.3.3-rc.1] - 2026-08-22
+
+### Added
+- Spec 034: startup self-update check with configurable policy — `core.self_update_mode` (`prompt` default / `auto` / `notify`) and `core.self_update_stale` (replace stale local CLI copy on startup); 24h rate limit, version-ignore memory (`self_update_ignore.json`), non-TTY graceful downgrade, GUI three-choice dialog (Update / Ignore & Continue / Quit) and CLI interactive prompt on TUI/GUI entry points only
+- `update.ApplyTo` — apply update to a specified target binary (GUI updates the CLI next to itself instead of the running GUI shell)
+
 ## [0.3.3] - 2026-08-22
 
 ### Changed

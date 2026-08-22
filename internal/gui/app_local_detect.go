@@ -263,17 +263,28 @@ func (a *App) CheckForUpdate() UpdateCheckResult {
 }
 
 // ApplyUpdate downloads and applies the latest update.
-func (a *App) ApplyUpdate() error {
+// Spec 034: GUI 场景更新目标是同目录 CLI 二进制（xdev.exe）——
+// 运行中的 GUI 壳（xdev-gui.exe）不能被替换；CLI 归档只写 CLI 二进制。
+func (a *App) ApplyUpdate() UpdateCheckResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+
+	target := cliBinaryNextToSelf()
+	if target == "" {
+		return UpdateCheckResult{Error: "未找到与 GUI 同目录的 xdev CLI 二进制", Current: version.Version}
+	}
+
 	result, err := update.Check(ctx, version.Version)
 	if err != nil {
-		return err
+		return UpdateCheckResult{Error: err.Error(), Current: version.Version}
 	}
 	if !result.HasUpdate {
-		return fmt.Errorf("no update available")
+		return UpdateCheckResult{HasUpdate: false, Current: version.Version, Latest: result.LatestVersion}
 	}
-	return update.Apply(ctx, result)
+	if err := update.ApplyTo(ctx, result, target); err != nil {
+		return UpdateCheckResult{Error: err.Error(), HasUpdate: true, Current: version.Version, Latest: result.LatestVersion}
+	}
+	return UpdateCheckResult{HasUpdate: true, Current: version.Version, Latest: result.LatestVersion}
 }
 
 // ScanLocalTools scans the system for all locally installed development tools

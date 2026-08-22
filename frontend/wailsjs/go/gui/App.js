@@ -234,6 +234,10 @@ export function GetToolsByCategory(arg1) {
   return window['go']['gui']['App']['GetToolsByCategory'](arg1);
 }
 
+export function IgnoreSelfUpdate(arg1) {
+  return window['go']['gui']['App']['IgnoreSelfUpdate'](arg1);
+}
+
 export function IgnoreTool(arg1, arg2, arg3) {
   return window['go']['gui']['App']['IgnoreTool'](arg1, arg2, arg3);
 }

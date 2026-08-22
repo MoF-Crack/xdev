@@ -83,6 +83,10 @@ Short aliases you can add to your shell rc:
 		Version:           version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// No subcommand specified — launch TUI by default
+			// Spec 034: 交互入口启动自检（静默降级，不阻塞）
+			if err := runSelfCheck(); err != nil {
+				return err
+			}
 			cat, reg := loadCatalogAndRegistry()
 			cfg := Cfg()
 			p := tui.NewProgram(cfg, cat, reg)

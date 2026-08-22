@@ -251,6 +251,12 @@ export default {
   'confirm_uninstall_content': 'Remove {tool}@{version}?',
   'up_to_date': 'Up to date',
   'update_available': 'Update available: v{current} -> v{latest}',
+  'self_update.title': 'Update Available',
+  'self_update.text': 'xdev update available: v{current} → v{latest}. Update now?',
+  'self_update.ignore': 'Ignore & Continue',
+  'self_update.quit': 'Quit',
+  'self_update.applied': 'Updated to v{latest}. Restart xdev to apply.',
+  'self_update.ignored': 'Ignored v{latest}. You will be asked again on a newer version.',
 
   // Filter
   'filter.hide_unavailable': 'Hide Unavailable',
