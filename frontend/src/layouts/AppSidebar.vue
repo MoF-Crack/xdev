@@ -23,7 +23,7 @@ defineEmits(['select', 'toggle-compact']);
 </script>
 
 <style scoped>
-.app-sidebar { z-index: 3100; width: 216px; min-width: 216px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--xdev-border-subtle); background: color-mix(in srgb, var(--xdev-bg-panel) 92%, var(--xdev-bg-app)); box-shadow: 8px 0 30px color-mix(in srgb, var(--xdev-accent-soft) 22%, transparent); transition: width var(--xdev-motion-normal) var(--xdev-ease-standard), min-width var(--xdev-motion-normal) var(--xdev-ease-standard); }
+.app-sidebar { width: 216px; min-width: 216px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--xdev-border-subtle); background: color-mix(in srgb, var(--xdev-bg-panel) 92%, var(--xdev-bg-app)); box-shadow: 8px 0 30px color-mix(in srgb, var(--xdev-accent-soft) 22%, transparent); transition: width var(--xdev-motion-normal) var(--xdev-ease-standard), min-width var(--xdev-motion-normal) var(--xdev-ease-standard); }
 .app-sidebar--compact { width: 56px; min-width: 56px; }
 .app-sidebar__brand { min-height: 72px; display: flex; align-items: center; gap: var(--xdev-space-2); padding: 0 var(--xdev-space-4); border-bottom: 1px solid var(--xdev-border-subtle); }
 .app-sidebar__brand :deep(svg) { width: 28px; height: 28px; flex: 0 0 28px; }

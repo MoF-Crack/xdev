@@ -1,10 +1,12 @@
-# XDev Build Script
-# Usage: .\build.ps1 [-SkipFrontend] [-SkipCLI] [-SkipGUI] [-SkipAudit]
+# XDev Build Script（单二进制模型）
+# Usage: .\build.ps1 [-SkipFrontend] [-SkipBuild] [-SkipAudit]
+#
+# 一个可执行文件（xdev）按调用形态多态执行：无参数 → GUI；tui → TUI；
+# 其他参数 → CLI。CLI/GUI 不再分别编译（Spec 030 双二进制已合并）。
 
 param(
     [switch]$SkipFrontend = $false,
-    [switch]$SkipCLI = $false,
-    [switch]$SkipGUI = $false,
+    [switch]$SkipBuild = $false,
     [switch]$SkipAudit = $false
 )
 
@@ -42,29 +44,11 @@ if (-not (Test-Path $binDir)) {
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  XDev v$version Build" -ForegroundColor Cyan
+Write-Host "  XDev v$version Build (single binary)" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Build CLI
-if (-not $SkipCLI) {
-    $cliOutput = Join-Path $binDir "xdev-$version.exe"
-    Write-Host "[1/2] Building CLI: xdev-$version.exe ..." -ForegroundColor Yellow
-    go build -ldflags $ldflags -o $cliOutput .
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: CLI build failed" -ForegroundColor Red
-        exit 1
-    }
-    # Also create a copy without version suffix for convenience
-    $cliPlain = Join-Path $binDir "xdev.exe"
-    Copy-Item $cliOutput $cliPlain -Force
-    Write-Host "  -> $cliOutput" -ForegroundColor Green
-    Write-Host "  -> $cliPlain (copy)" -ForegroundColor Green
-} else {
-    Write-Host "[1/2] Skipping CLI build" -ForegroundColor Gray
-}
-
-# Audit download sources (release gate) before GUI build
+# Audit download sources (release gate)
 if (-not $SkipAudit) {
     Write-Host ""
     Write-Host "[audit] Download source gate (probe) ..." -ForegroundColor Yellow
@@ -78,27 +62,26 @@ if (-not $SkipAudit) {
     Write-Host "[audit] Skipping download source audit (-SkipAudit)" -ForegroundColor Gray
 }
 
-# Build GUI
-if (-not $SkipGUI) {
-    $guiOutput = Join-Path $binDir "xdev-gui-$version.exe"
-    Write-Host "[2/2] Building GUI: xdev-gui-$version.exe ..." -ForegroundColor Yellow
+# Build single binary (GUI+TUI+CLI in one; wails embeds the frontend)
+if (-not $SkipBuild) {
+    $output = Join-Path $binDir "xdev-$version.exe"
+    Write-Host "[1/1] Building xdev-$version.exe (GUI+TUI+CLI)... " -ForegroundColor Yellow
 
-    # Build with wails (outputfilename stays as xdev-gui)
-    wails build -tags gui -ldflags $ldflags 2>&1 | ForEach-Object { Write-Host "  $_" }
+    wails build -ldflags $ldflags 2>&1 | ForEach-Object { Write-Host "  $_" }
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: GUI build failed" -ForegroundColor Red
+        Write-Host "ERROR: build failed" -ForegroundColor Red
         exit 1
     }
 
     # Copy and rename wails output to include version
-    $guiPlain = Join-Path $binDir "xdev-gui.exe"
-    if (Test-Path $guiPlain) {
-        Copy-Item $guiPlain $guiOutput -Force
-        Write-Host "  -> $guiOutput" -ForegroundColor Green
-        Write-Host "  -> $guiPlain (copy)" -ForegroundColor Green
+    $plain = Join-Path $binDir "xdev.exe"
+    if (Test-Path $plain) {
+        Copy-Item $plain $output -Force
+        Write-Host "  -> $output" -ForegroundColor Green
+        Write-Host "  -> $plain (copy)" -ForegroundColor Green
     }
 } else {
-    Write-Host "[2/2] Skipping GUI build" -ForegroundColor Gray
+    Write-Host "[1/1] Skipping build (-SkipBuild)" -ForegroundColor Gray
 }
 
 Write-Host ""

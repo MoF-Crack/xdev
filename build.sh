@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build script for xdev on Linux/macOS
+# Build script for xdev on Linux/macOS（单二进制模型：GUI+TUI+CLI 一个文件）
 set -e
 
 VERSION=$(grep -oP 'Version = "\K[^"]+' internal/version/version.go)
@@ -17,11 +17,7 @@ else
     echo "[security] WARNING: keys/pub.key not found — manifest signature verification will be DISABLED"
 fi
 
-echo "Building xdev v${VERSION}..."
-mkdir -p build/bin
-go build -ldflags "$LDFLAGS" -o build/bin/xdev .
-
-# Audit download sources (release gate) before GUI build
+# Audit download sources (release gate)
 if [ "$SKIP_AUDIT" != "1" ]; then
     echo "Running download source audit (probe gate)..."
     if ! ./scripts/audit-links.sh; then
@@ -30,9 +26,9 @@ if [ "$SKIP_AUDIT" != "1" ]; then
     fi
 fi
 
-echo "Building xdev-gui v${VERSION}..."
-wails build -tags gui -ldflags "$LDFLAGS" -o build/bin/xdev-gui
+echo "Building xdev v${VERSION} (GUI+TUI+CLI single binary)..."
+mkdir -p build/bin
+wails build -ldflags "$LDFLAGS" -o build/bin/xdev
 
 cp build/bin/xdev "build/bin/xdev-${VERSION}"
-cp build/bin/xdev-gui "build/bin/xdev-gui-${VERSION}"
 echo "Done!"

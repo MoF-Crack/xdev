@@ -834,10 +834,10 @@ func TestConfigureHTTPClient_PreservesCheckRedirect(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// discoverGitHub — per_page=30 check
+// discoverGitHub — per_page=100 check（Spec 034 后首选 100，减少请求数）
 // ---------------------------------------------------------------------------
 
-func TestDiscoverVersions_GitHub_PerPage30(t *testing.T) {
+func TestDiscoverVersions_GitHub_PerPage100(t *testing.T) {
 	var capturedQuery string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedQuery = r.URL.RawQuery
@@ -860,11 +860,131 @@ func TestDiscoverVersions_GitHub_PerPage30(t *testing.T) {
 		t.Fatalf("DiscoverVersions: %v", err)
 	}
 
-	if !strings.Contains(capturedQuery, "per_page=30") {
-		t.Errorf("expected per_page=30 in query, got %q", capturedQuery)
+	if !strings.Contains(capturedQuery, "per_page=100") {
+		t.Errorf("expected per_page=100 in query, got %q", capturedQuery)
 	}
-	if strings.Contains(capturedQuery, "per_page=100") {
-		t.Errorf("per_page should not be 100, got %q", capturedQuery)
+	if strings.Contains(capturedQuery, "per_page=30") {
+		t.Errorf("per_page should not be 30, got %q", capturedQuery)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// discoverGitHub — floor 提前终止（floor=已知最新，整页 ≤ floor 即停）
+// ---------------------------------------------------------------------------
+
+func TestDiscoverVersions_GitHub_FloorEarlyStop(t *testing.T) {
+	var mu sync.Mutex
+	pageCount := 0
+	type release struct {
+		TagName string `json:"tag_name"`
+	}
+	pages := [][]release{
+		{{TagName: "v2.0.0"}, {TagName: "v1.19.0"}},
+		{{TagName: "v1.18.0"}, {TagName: "v1.17.0"}},
+		{{TagName: "v1.16.0"}},
+	}
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		idx := pageCount
+		pageCount++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if idx+1 < len(pages) {
+			page := idx + 2
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, serverURL, page))
+		}
+		body, _ := json.Marshal(pages[idx])
+		w.Write(body)
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	transport := &redirectTransport{server.URL}
+	origClient := httpClient
+	httpClient = &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	defer func() { httpClient = origClient }()
+
+	// floor=1.18：第 2 页（1.18/1.17）全部 ≤ 1.18 → 停止，不请求第 3 页。
+	versions, err := DiscoverVersionsWithFloor(context.Background(), manifest.RemoteSource{
+		Type:    "github",
+		URL:     "x/y",
+		Pattern: `v?(\d+\.\d+\.\d+)$`,
+	}, "1.18.0")
+	if err != nil {
+		t.Fatalf("DiscoverVersionsWithFloor: %v", err)
+	}
+	if len(versions) != 4 {
+		t.Errorf("versions = %v, want 4 (v2.0.0, v1.19.0, v1.18.0, v1.17.0)", versions)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if pageCount != 2 {
+		t.Errorf("pages requested = %d, want 2 (early stop before page 3)", pageCount)
+	}
+	// 新版本（> floor）绝不因早停丢失。
+	for _, v := range []string{"2.0.0", "1.19.0"} {
+		found := false
+		for _, got := range versions {
+			if got == v {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("newer version %s missing after early stop: %v", v, versions)
+		}
+	}
+}
+
+// discoverGitHub — floor 为空时保持原有翻到底行为
+func TestDiscoverVersions_GitHub_NoFloorPaginatesAll(t *testing.T) {
+	var mu sync.Mutex
+	pageCount := 0
+	type release struct {
+		TagName string `json:"tag_name"`
+	}
+	pages := [][]release{
+		{{TagName: "v1.2.0"}},
+		{{TagName: "v1.1.0"}},
+	}
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		idx := pageCount
+		pageCount++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if idx == 0 {
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/x/y/releases?page=2>; rel="next"`, serverURL))
+		}
+		body, _ := json.Marshal(pages[idx])
+		w.Write(body)
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	transport := &redirectTransport{server.URL}
+	origClient := httpClient
+	httpClient = &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	defer func() { httpClient = origClient }()
+
+	versions, err := DiscoverVersions(context.Background(), manifest.RemoteSource{
+		Type:    "github",
+		URL:     "x/y",
+		Pattern: `v?(\d+\.\d+\.\d+)$`,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverVersions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Errorf("versions = %v, want 2 (paginate to end without floor)", versions)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if pageCount != 2 {
+		t.Errorf("pages requested = %d, want 2", pageCount)
 	}
 }
 
@@ -1487,6 +1607,75 @@ type failDialer struct {
 	mu        sync.Mutex
 	callCount int
 	next      func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// TestDiscoverVersions_NPM_Fallback 主 registry 失败（5xx）→ 镜像 fallback
+func TestDiscoverVersions_NPM_Fallback(t *testing.T) {
+	mainCalled := false
+	mainServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mainCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mainServer.Close()
+
+	fbCalled := false
+	fbServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fbCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"dist-tags":{"latest":"1.2.0"},"versions":{"1.2.0":{},"1.1.0":{},"1.0.0":{}}}`))
+	}))
+	defer fbServer.Close()
+
+	oldMain := SetNPMRegistryBaseForTest(mainServer.URL)
+	defer SetNPMRegistryBaseForTest(oldMain)
+	oldFB := SetNPMFallbackBaseForTest(fbServer.URL)
+	defer SetNPMFallbackBaseForTest(oldFB)
+
+	versions, err := DiscoverVersions(context.Background(), manifest.RemoteSource{Type: "npm", Package: "demo"})
+	if err != nil {
+		t.Fatalf("DiscoverVersions npm fallback: %v", err)
+	}
+	if !mainCalled {
+		t.Error("primary registry was not called")
+	}
+	if !fbCalled {
+		t.Error("fallback registry was not called")
+	}
+	if len(versions) == 0 || versions[0] != "1.2.0" {
+		t.Errorf("versions = %v, want [1.2.0 ...]", versions)
+	}
+}
+
+// TestDiscoverVersions_NPM_NoFallbackOnSuccess 主 registry 成功时镜像不被调用
+func TestDiscoverVersions_NPM_NoFallbackOnSuccess(t *testing.T) {
+	mainServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"dist-tags":{"latest":"5.0.0"},"versions":{"5.0.0":{},"4.0.0":{}}}`))
+	}))
+	defer mainServer.Close()
+
+	fbCalled := false
+	fbServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fbCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer fbServer.Close()
+
+	oldMain := SetNPMRegistryBaseForTest(mainServer.URL)
+	defer SetNPMRegistryBaseForTest(oldMain)
+	oldFB := SetNPMFallbackBaseForTest(fbServer.URL)
+	defer SetNPMFallbackBaseForTest(oldFB)
+
+	versions, err := DiscoverVersions(context.Background(), manifest.RemoteSource{Type: "npm", Package: "demo"})
+	if err != nil {
+		t.Fatalf("DiscoverVersions npm: %v", err)
+	}
+	if fbCalled {
+		t.Error("fallback registry called although primary succeeded")
+	}
+	if len(versions) == 0 || versions[0] != "5.0.0" {
+		t.Errorf("versions = %v, want [5.0.0 ...]", versions)
+	}
 }
 
 func (d *failDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {

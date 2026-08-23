@@ -28,7 +28,11 @@ type probeVersionFunc func(path string) string
 var defaultProbeVersion probeVersionFunc = func(path string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "self", "version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, path, "self", "version")
+	// Windows：GUI 子系统父进程（xdev 无参启动）exec 控制台子进程时会
+	// 弹出黑色命令行窗口一闪而过（约 1s）——隐藏子进程控制台。
+	util.HideWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}

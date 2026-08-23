@@ -251,6 +251,62 @@ func TestMergeIntoManifest(t *testing.T) {
 	}
 }
 
+// TestMergeIntoManifest_FillsArchivesForExisting — 已存在但缺 archives 的
+// 版本（历史嗅探时模板不可用），本次嗅探带 archives → 补填（upsert）。
+func TestMergeIntoManifest_FillsArchivesForExisting(t *testing.T) {
+	dir := t.TempDir()
+	tool := &manifest.Tool{
+		Name: "rusty",
+		VersionList: []manifest.Version{
+			{Version: "1.98.0", Discovered: true, Unverified: true}, // 历史嗅探：无 archives
+		},
+	}
+	initialData, _ := manifest.MarshalTool(tool)
+	manifestPath := filepath.Join(dir, "rusty.yaml")
+	os.WriteFile(manifestPath, initialData, 0o644)
+
+	discovered := []DiscoveredVersion{
+		{
+			Version:    "1.98.0",
+			Unverified: true,
+			Archives: []manifest.Archive{{
+				URL:         "https://static.example.com/rustup-init.exe",
+				InstallArgs: []string{"--default-toolchain", "{{version}}"},
+				SHA256:      zeroSHA256,
+			}},
+		},
+	}
+
+	if err := mergeIntoManifest(tool, discovered, dir); err != nil {
+		t.Fatalf("mergeIntoManifest failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(manifestPath)
+	var updated manifest.Tool
+	if err := yaml.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(updated.VersionList) != 1 {
+		t.Fatalf("expected 1 version, got %d", len(updated.VersionList))
+	}
+	v := updated.VersionList[0]
+	if v.Version != "1.98.0" {
+		t.Fatalf("version = %q, want 1.98.0", v.Version)
+	}
+	if len(v.Archives) != 1 {
+		t.Fatalf("archives not patched: got %d, want 1", len(v.Archives))
+	}
+	if v.Archives[0].URL != "https://static.example.com/rustup-init.exe" {
+		t.Errorf("patched URL = %q", v.Archives[0].URL)
+	}
+	if len(v.Archives[0].InstallArgs) != 2 || v.Archives[0].InstallArgs[1] != "{{version}}" {
+		t.Errorf("install_args not preserved: %v", v.Archives[0].InstallArgs)
+	}
+	if v.Stable {
+		t.Error("patched entry must not mutate stable flag")
+	}
+}
+
 func TestMergeIntoManifest_Duplicate(t *testing.T) {
 	dir := t.TempDir()
 
@@ -637,6 +693,49 @@ func TestSniffAll_LoadsCatalogOnceWithTools(t *testing.T) {
 	}
 	if loads != 1 {
 		t.Errorf("SniffAll catalog loads = %d, want 1 (Spec 030)", loads)
+	}
+}
+
+// fakeIgnoreSniffer 记录对 gradle 的 Sniff 调用次数（不触发网络）。
+type fakeIgnoreSniffer struct {
+	called *int
+}
+
+func (f fakeIgnoreSniffer) Name() string { return "fake" }
+func (f fakeIgnoreSniffer) Supports(t *manifest.Tool) bool {
+	return t.Name == "gradle"
+}
+func (f fakeIgnoreSniffer) Sniff(ctx context.Context, t *manifest.Tool) ([]DiscoveredVersion, error) {
+	*f.called++
+	return nil, nil
+}
+
+// TestSniffAll_AutoSkipsIgnoredUpdates — 后台自动触发（force=false）跳过
+// 忽略清单（kind=update）中的工具；手动触发不受影响。
+func TestSniffAll_AutoSkipsIgnoredUpdates(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "gradle.yaml"), []byte("name: gradle\nauto_sniff: true\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "ignored_tools.json"), []byte(`{"items":[{"name":"gradle","kind":"update","ignoredAt":"2026-08-23T00:00:00Z"}]}`), 0o644)
+
+	cfg := &config.SniffConfig{Strategy: "interval", Concurrency: 3, RateLimitPerHr: 60}
+	s := NewScheduler(cfg, dir, dir)
+	called := 0
+	s.registry = &SnifferRegistry{sniffers: []Sniffer{fakeIgnoreSniffer{called: &called}}}
+	s.loadCatalog = func(d string) (*manifest.Catalog, error) { return manifest.LoadCatalog(d) }
+
+	if err := s.sniffAllWithForce(context.Background(), false); err != nil {
+		t.Fatalf("sniffAllWithForce(auto): %v", err)
+	}
+	if called != 0 {
+		t.Errorf("auto sniff called ignored tool %d times, want 0", called)
+	}
+
+	// 手动触发（force=true）保持显式语义：不跳过。
+	if err := s.sniffAllWithForce(context.Background(), true); err != nil {
+		t.Fatalf("sniffAllWithForce(manual): %v", err)
+	}
+	if called != 1 {
+		t.Errorf("manual sniff called ignored tool %d times, want 1", called)
 	}
 }
 

@@ -5,6 +5,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [Unreleased]
 
+## [0.3.3-rc.2] - 2026-08-23
+
+### Changed
+- Single-binary model: `xdev`（GUI + TUI + CLI 一个可执行文件，Spec 030 双二进制合并）——无参数启动 GUI、`xdev tui` 进入 TUI、其余参数走 CLI；`wails.json` 输出名 `xdev`；`build.ps1`/`build.sh`/`scripts/build.bat` 单产物构建；`xdev gui` 改为进程内启动（不再 exec 独立 xdev-gui）；EnsureSelfInstalled 只维护单副本；GUI 自更新目标为自身
+- Fixed: black console window flash (~1s) on GUI startup — stale-copy probe (`self version`) exec now hides the child console (`util.HideWindow`)
+- Removed orphan `cmd/xmdevenvmt` entry (documented build/ops commands updated to root `go build .` / `go run .`)
+- Self-update GitHub token resolution reuses `remote.EffectiveGitHubToken` (was a weaker `os.Getenv` subset)
+- Sniff channel hardening: GitHub `per_page` 100 + floor-based pagination early-stop; npm version discovery via streaming JSON (no 16 MiB body cap) + npmmirror fallback (12s primary timeout); startup sniff window 60s→120s
+- Auto sniffing skips tools the user ignored for updates (ignored_tools.json, kind=update)
+- Rust rolling-installer manifests (`install_args {{version}}`) can now derive archive URLs for sniffed versions; manifest merge upserts missing archives for previously-merged versions
+
 ## [0.3.3-rc.1] - 2026-08-22
 
 ### Added

@@ -29,8 +29,8 @@ import (
 var githubBodyLimit = 16 << 20 // 16 MiB
 
 // perPageValues defines the per_page values to try when the response body is
-// truncated. Starting with 30, falling back to 10, then 5.
-var perPageValues = []int{30, 10, 5}
+// truncated. Starting with 100 (GitHub API maximum), falling back to 50, then 30.
+var perPageValues = []int{100, 50, 30}
 
 // explicitGitHubToken holds the token set via ConfigureGitHubToken or config.
 // It takes priority over the environment variables GITHUB_TOKEN and GH_TOKEN.
@@ -55,6 +55,13 @@ func effectiveGitHubToken() string {
 // (either explicitly configured or via environment variable).
 func GitHubTokenConfigured() bool {
 	return effectiveGitHubToken() != ""
+}
+
+// EffectiveGitHubToken 返回当前生效的 GitHub API token（显式配置 >
+// GITHUB_TOKEN > Windows 用户环境 > GH_TOKEN）。供 internal/update 等
+// 其他包复用同一 token 解析，避免弱化子集重复（Spec 034 审计）。
+func EffectiveGitHubToken() string {
+	return effectiveGitHubToken()
 }
 
 // ReloadGitHubTokenFromEnv re-reads GITHUB_TOKEN and GH_TOKEN from the
@@ -357,7 +364,7 @@ func doWithProxyFallback(ctx context.Context, req *http.Request) (*http.Response
 func DiscoverVersions(ctx context.Context, r manifest.RemoteSource) ([]string, error) {
 	switch r.Type {
 	case "github":
-		return discoverGitHub(ctx, r)
+		return discoverGitHub(ctx, r, "")
 	case "json":
 		return discoverJSON(ctx, r)
 	case "html":
@@ -371,11 +378,25 @@ func DiscoverVersions(ctx context.Context, r manifest.RemoteSource) ([]string, e
 	}
 }
 
+// DiscoverVersionsWithFloor 在 GitHub 远端上以 floor（已知最新版本）提前终止
+// 翻页；其他 remote 类型委托 DiscoverVersions（floor 仅 github 有语义）。
+// 由 github sniffer 传入 manifest 的已知最新版本，大幅减少请求数。
+func DiscoverVersionsWithFloor(ctx context.Context, r manifest.RemoteSource, floor string) ([]string, error) {
+	if r.Type == "github" {
+		return discoverGitHub(ctx, r, floor)
+	}
+	return DiscoverVersions(ctx, r)
+}
+
 // npmRegistryBase is the fixed npm registry endpoint used for version
 // discovery. It is intentionally NOT user-controllable via the manifest
 // (SSRF posture — a manifest must never make xdev GET arbitrary hosts);
 // only the exported test-only setter may change it.
 var npmRegistryBase = "https://registry.npmjs.org"
+
+// npmFallbackBase 是版本发现的主 registry 不可达时的镜像（国内可达）。
+// 与 npmRegistryBase 同理，固定常量、非 manifest 可控；测试可用 setter 覆盖。
+var npmFallbackBase = "https://registry.npmmirror.com"
 
 // SetNPMRegistryBaseForTest overrides the npm registry base URL for tests
 // and returns the previous value (caller should restore it with defer).
@@ -386,9 +407,13 @@ func SetNPMRegistryBaseForTest(url string) string {
 	return old
 }
 
-// npmBodyLimit caps the npm registry metadata response size (packages with
-// many versions can be large). Var (not const) for testability.
-var npmBodyLimit = 16 << 20 // 16 MiB
+// SetNPMFallbackBaseForTest overrides the npm fallback registry base URL
+// for tests and returns the previous value (restore with defer).
+func SetNPMFallbackBaseForTest(url string) string {
+	old := npmFallbackBase
+	npmFallbackBase = strings.TrimSuffix(url, "/")
+	return old
+}
 
 // maxNPMVersions caps the number of versions returned from the npm
 // registry (semver 降序截断 20 个).
@@ -402,6 +427,9 @@ var npmVersionPattern = regexp.MustCompile(`^v?\d+(\.\d+)+$`)
 // discoverNPM fetches the npm registry metadata for r.Package and returns
 // the version list: dist-tags.latest first, then the version keys sorted by
 // semver descending, truncated to maxNPMVersions.
+//
+// 主 registry（npmjs）失败（超时/网络/5xx）时 fallback 到 npmFallbackBase
+// （npmmirror，国内可达）——版本发现不再被单一 registry 不可达卡死。
 //
 // 版本键先经过过滤（Pattern 或默认稳定数字形态），latest 同样过滤；
 // 排序用 CompareSemver 降序，等价版本按原始键字符串稳定排序。
@@ -429,11 +457,33 @@ func discoverNPM(ctx context.Context, r manifest.RemoteSource) ([]string, error)
 		return npmVersionPattern.MatchString(v)
 	}
 
+	// 主 registry 用短超时：npmjs 在部分地区不可达，12s 无响应立刻
+	// fallback，避免空等完整 30s client timeout。
+	primaryCtx, cancelPrimary := context.WithTimeout(ctx, npmPrimaryTimeout)
+	versions, err := fetchNPMVersions(primaryCtx, npmRegistryBase, pkg, accept)
+	cancelPrimary()
+	if err == nil {
+		return versions, nil
+	}
+	log.Printf("[remote] npm registry %s failed (%v), falling back to %s", npmRegistryBase, err, npmFallbackBase)
+	versions, fbErr := fetchNPMVersions(ctx, npmFallbackBase, pkg, accept)
+	if fbErr != nil {
+		return nil, fmt.Errorf("npm remote: %v (fallback %s also failed: %v)", err, npmFallbackBase, fbErr)
+	}
+	return versions, nil
+}
+
+// npmPrimaryTimeout 主 registry 的短超时（见 discoverNPM）。
+const npmPrimaryTimeout = 12 * time.Second
+
+// fetchNPMVersions 从指定 registry base 抓取包元数据并返回版本列表
+// （请求 + 解析；失败返回错误，由 discoverNPM 决定是否 fallback）。
+//
+// 解析用流式 JSON：只提取 dist-tags 与 versions 的 key，不将完整响应
+// 读入内存（opencode-ai 等大包在部分镜像返回全量文档可超过 16 MiB）。
+func fetchNPMVersions(ctx context.Context, base, pkg string, accept func(string) bool) ([]string, error) {
 	// 固定 registry 基址（不经 manifest 控制）。
-	// Prefer the abbreviated document: it still contains dist-tags +
-	// version keys but omits per-version tarball metadata, so packages
-	// with hundreds of versions (opencode-ai) stay under the body cap.
-	u := npmRegistryBase + "/" + url.PathEscape(pkg)
+	u := base + "/" + url.PathEscape(pkg)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -450,26 +500,15 @@ func discoverNPM(ctx context.Context, r manifest.RemoteSource) ([]string, error)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("npm remote: registry returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	body, err := readLimitedBody(resp.Body, npmBodyLimit)
-	if err != nil {
-		return nil, fmt.Errorf("npm remote: read body from %s: %w", u, err)
-	}
 
-	var meta struct {
-		DistTags map[string]string          `json:"dist-tags"`
-		Versions map[string]json.RawMessage `json:"versions"`
-	}
-	if err := json.Unmarshal(body, &meta); err != nil {
-		preview := string(body)
-		if len(preview) > 200 {
-			preview = preview[:200]
-		}
-		return nil, fmt.Errorf("npm remote: decode JSON from %s (body preview: %q): %w", u, preview, err)
+	distTags, versionKeys, err := decodeNPMKeys(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("npm remote: decode JSON from %s: %w", u, err)
 	}
 
 	// 版本键集合：先过滤，忽略畸形键。
-	versions := make([]string, 0, len(meta.Versions))
-	for v := range meta.Versions {
+	versions := make([]string, 0, len(versionKeys))
+	for _, v := range versionKeys {
 		if accept(v) {
 			versions = append(versions, v)
 		}
@@ -483,7 +522,7 @@ func discoverNPM(ctx context.Context, r manifest.RemoteSource) ([]string, error)
 	})
 
 	// dist-tags.latest 置顶（同样需通过过滤）；与 versions 重复时不重复追加。
-	latest := strings.TrimSpace(meta.DistTags["latest"])
+	latest := strings.TrimSpace(distTags["latest"])
 	if latest != "" && accept(latest) {
 		out := make([]string, 0, len(versions)+1)
 		out = append(out, latest)
@@ -501,6 +540,104 @@ func discoverNPM(ctx context.Context, r manifest.RemoteSource) ([]string, error)
 		versions = versions[:maxNPMVersions]
 	}
 	return versions, nil
+}
+
+// decodeNPMKeys 流式解析 npm registry 包元数据，提取 dist-tags 与
+// versions 的对象 key（不保留 value），内存与响应体积解耦。
+func decodeNPMKeys(r io.Reader) (map[string]string, []string, error) {
+	distTags := map[string]string{}
+	var versionKeys []string
+
+	dec := json.NewDecoder(r)
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	if tok != json.Delim('{') {
+		return nil, nil, fmt.Errorf("top-level value is %v, want object", tok)
+	}
+	for dec.More() {
+		fieldTok, err := dec.Token()
+		if err != nil {
+			return nil, nil, err
+		}
+		field, ok := fieldTok.(string)
+		if !ok {
+			return nil, nil, fmt.Errorf("unexpected field token %v", fieldTok)
+		}
+		switch field {
+		case "dist-tags":
+			if err := dec.Decode(&distTags); err != nil {
+				return nil, nil, err
+			}
+		case "versions":
+			valTok, err := dec.Token()
+			if err != nil {
+				return nil, nil, err
+			}
+			if valTok != json.Delim('{') {
+				// versions 不是对象（异常文档）：整体跳过。
+				if err := skipJSONValue(dec); err != nil {
+					return nil, nil, err
+				}
+				continue
+			}
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					return nil, nil, err
+				}
+				if k, ok := keyTok.(string); ok {
+					versionKeys = append(versionKeys, k)
+				}
+				if err := skipJSONValue(dec); err != nil {
+					return nil, nil, err
+				}
+			}
+			if _, err := dec.Token(); err != nil { // 收尾 '}'
+				return nil, nil, err
+			}
+		default:
+			if err := skipJSONValue(dec); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil { // 收尾顶层 '}'
+		return nil, nil, err
+	}
+	return distTags, versionKeys, nil
+}
+
+// skipJSONValue 用 Token 遍历跳过当前 JSON 值（json.Decoder 无 Skip 方法）。
+func skipJSONValue(dec *json.Decoder) error {
+	t, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	d, ok := t.(json.Delim)
+	if !ok {
+		return nil // 标量值：一个 token 完成
+	}
+	if d != '{' && d != '[' {
+		return nil
+	}
+	depth := 1
+	for depth > 0 {
+		t2, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d2, ok := t2.(json.Delim); ok {
+			switch d2 {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+	}
+	return nil
 }
 
 // readLimitedBody reads up to limit bytes from r and returns an error if
@@ -522,7 +659,11 @@ func readLimitedBody(r io.Reader, limit int) ([]byte, error) {
 // fetchGitHubPages fetches all pages of GitHub releases for the given
 // owner/repo using the specified per_page count, and extracts versions
 // matching the compiled regex.
-func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, perPage int) ([]string, error) {
+//
+// floor（已知最新版本，可空）用于提前终止：GitHub releases 按发布时间降序，
+// 若当前页所有可提取版本都 ≤ floor，后续页只会更旧 → 停止翻页。
+// floor 只丢弃 ≤ floor 的旧条目，绝不会丢失比 floor 更新的版本。
+func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, perPage int, floor string) ([]string, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=%d", ownerRepo, perPage)
 
 	var allReleases []struct {
@@ -608,6 +749,11 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 		}
 		allReleases = append(allReleases, pageReleases...)
 
+		// 提前终止：floor 非空且本页全部可提取版本 ≤ floor → 后续页只会更旧。
+		if floor != "" && pageAllAtOrBelow(pageReleases, re, floor) {
+			break
+		}
+
 		// Check for next page.
 		linkHeader := resp.Header.Get("Link")
 		nextURL, hasNext := parseNextURL(linkHeader)
@@ -628,14 +774,33 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 	return versions, nil
 }
 
+// pageAllAtOrBelow 报告页内全部可提取版本都 ≤ floor。
+// 防御：页内没有任何可提取版本时返回 false（继续翻页，避免误停）。
+func pageAllAtOrBelow(page []struct {
+	TagName string `json:"tag_name"`
+}, re *regexp.Regexp, floor string) bool {
+	found := 0
+	for _, rel := range page {
+		m := re.FindStringSubmatch(rel.TagName)
+		if len(m) < 2 {
+			continue
+		}
+		found++
+		if util.CompareSemver(m[1], floor) > 0 {
+			return false
+		}
+	}
+	return found > 0
+}
+
 // discoverGitHub uses the GitHub Releases API to list tag names and
 // extracts versions using the Pattern regex.
 // It supports:
 //   - TTL cache (5 min) with ETag / If-None-Match
-//   - Pagination via the Link header
+//   - Pagination via the Link header（floor 提前终止，见 fetchGitHubPages）
 //   - Rate-limit awareness (X-RateLimit-Remaining)
 //   - Automatic retry with smaller per_page on body truncation
-func discoverGitHub(ctx context.Context, r manifest.RemoteSource) ([]string, error) {
+func discoverGitHub(ctx context.Context, r manifest.RemoteSource, floor string) ([]string, error) {
 	if r.URL == "" {
 		return nil, fmt.Errorf("github remote: url (owner/repo) is required")
 	}
@@ -652,7 +817,7 @@ func discoverGitHub(ctx context.Context, r manifest.RemoteSource) ([]string, err
 
 	var lastErr error
 	for i, perPage := range perPageValues {
-		versions, err := fetchGitHubPages(ctx, r.URL, re, perPage)
+		versions, err := fetchGitHubPages(ctx, r.URL, re, perPage, floor)
 		if err == nil {
 			return versions, nil
 		}

@@ -96,7 +96,7 @@ go run ./cmd/xdev-keygen --pub-key keys/pub.key --priv-key keys/priv.key
      检查命令：rg "sha256: 0{64}" manifests/ — 应无输出
 
 □ 2. 重新签名所有 manifest（即使只改了一个）
-     go run ./cmd/xmdevenvmt sign-manifests --manifests-dir manifests --priv-key keys/priv.key
+     go run . sign-manifests --manifests-dir manifests --priv-key keys/priv.key
 
 □ 3. 验证签名文件已生成
      ls manifests/*.yaml.sig — 每个工具对应一个 .sig 文件
@@ -247,11 +247,11 @@ Sidecar 文件写入权限为只读（`0o444`），防止被非授权修改。
 go run ./cmd/xdev-keygen --pub-key keys/pub.key --priv-key keys/priv.key
 
 # 签名所有 manifest
-go run ./cmd/xmdevenvmt sign-manifests --manifests-dir manifests --priv-key keys/priv.key
+go run . sign-manifests --manifests-dir manifests --priv-key keys/priv.key
 
 # 填充 SHA-256 哈希（发布前）
-go run ./cmd/xmdevenvmt fill-sha256 --manifests-dir manifests --dry-run
-go run ./cmd/xmdevenvmt fill-sha256 --manifests-dir manifests
+go run . fill-sha256 --manifests-dir manifests --dry-run
+go run . fill-sha256 --manifests-dir manifests
 
 # 生产构建（自动注入公钥）
 ./build.ps1

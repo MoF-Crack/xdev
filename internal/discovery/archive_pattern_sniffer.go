@@ -39,9 +39,19 @@ func extractGitHubRepoFromURL(url string) (owner, repo string, ok bool) {
 // gets replaced with the actual version by FillArchivePlaceholders.
 const versionPlaceholder = "{version}"
 
+// installerVersionPlaceholder 是安装器在 install_args 中支持的版本注入占位
+// （installer.go {{version}} 模板替换）。滚动安装器（rustup-init 等）的
+// 下载 URL 与版本无关，版本通过 install_args 注入——此类模板也应可用。
+const installerVersionPlaceholder = "{{version}}"
+
 // buildArchiveTemplate takes an existing version and its archive entries
 // and derives a URL template by replacing the concrete version number
 // with the {version} placeholder.
+//
+// 两种有效模板：
+//  1. URL 含版本号：替换为 {version} 占位（常规每版本独立归档）。
+//  2. URL 恒定的滚动安装器：URL 无版本号，但 install_args 含 {{version}}
+//     注入占位——新版本条目复制同一 URL，安装时由安装器注入版本。
 //
 // It returns the template archives and true on success.  If no archive
 // can serve as template (e.g. empty archives list), it returns (nil, false).
@@ -71,12 +81,22 @@ func buildArchiveTemplate(existingVersion string, existingArchives []manifest.Ar
 		templates[i] = t
 	}
 
-	// Verify that at least one URL changed (otherwise the version
-	// string does not appear in the URL, making the template useless).
+	// Verify that at least one template is usable:
+	//   - URL 含 {version} 占位（常规归档），或
+	//   - URL 恒定但 install_args 携带 {{version}} 注入（滚动安装器）。
 	hasChange := false
 	for _, t := range templates {
 		if strings.Contains(t.URL, versionPlaceholder) {
 			hasChange = true
+			break
+		}
+		for _, arg := range t.InstallArgs {
+			if strings.Contains(arg, installerVersionPlaceholder) {
+				hasChange = true
+				break
+			}
+		}
+		if hasChange {
 			break
 		}
 	}

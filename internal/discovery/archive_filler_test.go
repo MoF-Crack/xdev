@@ -110,3 +110,65 @@ func TestFillArchivePlaceholders_NoPlaceholderInURL(t *testing.T) {
 		t.Errorf("SHA256 should be zero placeholder, got %q", result[0].SHA256)
 	}
 }
+
+// TestFillArchivePlaceholders_RustRollingInstaller — rust 类滚动安装器：
+// URL 恒定（不含版本），版本通过 install_args {{version}} 注入。
+// buildArchiveTemplate 应认可该模板，FillArchivePlaceholders 应保留
+// URL 原样 + install_args 模板，供安装器注入版本（Spec 修复）。
+func TestFillArchivePlaceholders_RustRollingInstaller(t *testing.T) {
+	existing := manifest.Archive{
+		OS:          "windows",
+		Arch:        "amd64",
+		Format:      "exe",
+		URL:         "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe",
+		InstallArgs: []string{"-y", "--no-modify-path", "--default-toolchain", "{{version}}"},
+		Strip:       0,
+	}
+
+	template, ok := buildArchiveTemplate("1.97.1", []manifest.Archive{existing})
+	if !ok {
+		t.Fatal("rust rolling-installer template should be usable (install_args carries {{version}})")
+	}
+	if template[0].URL != existing.URL {
+		t.Errorf("URL changed for rolling installer: %q", template[0].URL)
+	}
+
+	filled := FillArchivePlaceholders(&manifest.Tool{Name: "rust"}, "1.98.0", template)
+	if len(filled) != 1 {
+		t.Fatalf("expected 1 filled archive, got %d", len(filled))
+	}
+	if filled[0].URL != existing.URL {
+		t.Errorf("filled URL = %q, want unchanged %q", filled[0].URL, existing.URL)
+	}
+	if filled[0].SHA256 != zeroSHA256 {
+		t.Errorf("SHA256 = %q, want zero placeholder", filled[0].SHA256)
+	}
+	if len(filled[0].InstallArgs) != 4 || filled[0].InstallArgs[3] != "{{version}}" {
+		t.Errorf("InstallArgs not preserved with version injection: %v", filled[0].InstallArgs)
+	}
+}
+
+// TestBuildArchiveTemplate_ConstantURLNoArgs — URL 恒定且无 {{version}}
+// 注入参数：模板不可用（保持原语义，防误用固定 URL）。
+func TestBuildArchiveTemplate_ConstantURLNoArgs(t *testing.T) {
+	existing := manifest.Archive{
+		URL: "https://static.example.com/tool-latest.exe",
+	}
+	if _, ok := buildArchiveTemplate("1.0.0", []manifest.Archive{existing}); ok {
+		t.Error("constant URL without install_args injection should NOT be a usable template")
+	}
+}
+
+// TestBuildArchiveTemplate_PlainStillWorks — 常规 URL 占位模板回归
+func TestBuildArchiveTemplate_PlainStillWorks(t *testing.T) {
+	existing := manifest.Archive{
+		URL: "https://example.com/download/1.0.0/tool-1.0.0.zip",
+	}
+	template, ok := buildArchiveTemplate("1.0.0", []manifest.Archive{existing})
+	if !ok {
+		t.Fatal("versioned URL template should be usable")
+	}
+	if template[0].URL != "https://example.com/download/{version}/tool-{version}.zip" {
+		t.Errorf("template URL = %q", template[0].URL)
+	}
+}

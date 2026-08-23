@@ -1,4 +1,4 @@
-﻿> **文档类型**：工作计划
+> **文档类型**：工作计划
 > **状态**：Frozen（待拆分）
 > **来源**：docs/pending-work-plan.md
 > **P4B 迁移目标**：独立事项转为 Feature Spec 后归档至 docs/history/implementation-plans/
@@ -183,7 +183,7 @@ xdev UI 重设计与下载源治理已完成 Task 1-18。以下 5 项后续工�
 
 3. 发布构建时注入公钥：
    ```powershell
-   go build -ldflags "-X internal/signer.rootPublicKeyB64=$(Get-Content keys/pub.key -Raw)" ./cmd/xmdevenvmt
+   go build -ldflags "-X internal/signer.rootPublicKeyB64=$(Get-Content keys/pub.key -Raw)" .
    ```
 
 4. 验证签名：

@@ -833,9 +833,9 @@ internal/util/
 
 ```
 xmdevenvmt/
-├── main.go                    # 主入口 (//go:build !bindings)
+├── main.go                    # CLI 入口 (//go:build !bindings && !gui, Spec 030)
+├── main_gui.go                # GUI 入口 (//go:build gui)
 ├── main_bindings.go           # 绑定生成入口 (//go:build bindings)
-├── cmd/xmdevenvmt/main.go     # 纯 CLI 入口
 ├── manifests/*.yaml           # 38 个工具 manifest
 ├── frontend/                  # Vue 3 前端
 │   ├── src/

@@ -141,7 +141,7 @@ func (s *Scheduler) onStartupInterval(ctx context.Context) {
 		}
 	}
 
-	s.startupCtx, s.startupCancel = context.WithTimeout(ctx, 60*time.Second)
+	s.startupCtx, s.startupCancel = context.WithTimeout(ctx, 120*time.Second)
 	s.startupDone = make(chan struct{})
 	go func() {
 		defer close(s.startupDone)
@@ -447,11 +447,23 @@ func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
 	results := make(chan toolResult, len(tools))
 	var wg sync.WaitGroup
 
+	// 后台自动触发（force=false）时尊重 GUI 忽略清单（kind=update）：
+	// 用户已忽略更新的工具不再被自动嗅探打扰（不 merge、不写缓存）。
+	// 手动触发（force=true，xdev sniff / GUI 全部嗅探）保持显式语义。
+	ignored := map[string]bool{}
+	if !force {
+		ignored = util.LoadIgnoredUpdateNames(filepath.Dir(s.cachePath))
+	}
+
 	for _, t := range tools {
 		if ctx.Err() != nil {
 			break
 		}
 		if !t.ShouldAutoSniff() {
+			continue
+		}
+		if ignored[t.Name] {
+			log.Printf("[discovery] sniff %q: skipped (user ignored updates for this tool)", t.Name)
 			continue
 		}
 
@@ -745,8 +757,20 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 	}
 
 	appended := 0
+	patched := 0
 	for _, dv := range discovered {
 		if existingVersions[dv.Version] {
+			// 已存在版本：若旧条目因历史嗅探（模板不可用等）缺少
+			// archives 而本次带 archives，则补填（upsert），不再强制重嗅。
+			if len(dv.Archives) > 0 {
+				for i := range existing.VersionList {
+					if existing.VersionList[i].Version == dv.Version && len(existing.VersionList[i].Archives) == 0 {
+						existing.VersionList[i].Archives = dv.Archives
+						patched++
+						break
+					}
+				}
+			}
 			continue
 		}
 
@@ -777,12 +801,15 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 		}
 	}
 
-	if appended == 0 && !latestUpdated {
+	if appended == 0 && patched == 0 && !latestUpdated {
 		return nil
 	}
 
 	if appended > 0 {
 		log.Printf("[discovery] merge: added %d new version(s) to %s", appended, t.Name)
+	}
+	if patched > 0 {
+		log.Printf("[discovery] merge: filled archives for %d existing version(s) in %s", patched, t.Name)
 	}
 	if latestUpdated {
 		log.Printf("[discovery] merge: updated latest to %s for %s", existing.Latest, t.Name)

@@ -851,6 +851,9 @@ func (a *App) GetAboutInfo() AboutInfo {
 // XDev home directory (e.g., X:\XDev\). If missing, it copies them from
 // the current executable's location. The install/ directory is reserved
 // for xdev self-management (version switching, global PATH via junction).
+//
+// 单二进制模型（Spec 034+ 审计）：homeDir 只维护 xdev 一个副本
+// （GUI/TUI/CLI 同一可执行文件），不再复制独立 xdev-gui。
 func (a *App) EnsureSelfInstalled() {
 	cfg := a.getCfg()
 	if cfg == nil || cfg.Core.XMDevDir == "" {
@@ -859,94 +862,42 @@ func (a *App) EnsureSelfInstalled() {
 
 	homeDir := cfg.Core.XMDevDir
 
-	// Determine expected binary names
+	// Determine expected binary names（单二进制：仅 xdev）
 	cliName := "xdev"
-	guiName := "xdev-gui"
 	if runtime.GOOS == "windows" {
 		cliName = "xdev.exe"
-		guiName = "xdev-gui.exe"
 	}
 
 	cliPath := filepath.Join(homeDir, cliName)
-	guiPath := filepath.Join(homeDir, guiName)
 
 	cliMissing := false
-	guiMissing := false
-
 	if _, err := os.Stat(cliPath); err != nil {
 		cliMissing = true
 	}
-	if _, err := os.Stat(guiPath); err != nil {
-		guiMissing = true
-	}
 
-	if !cliMissing && !guiMissing {
-		logInfo("[EnsureSelfInstalled] xdev binaries in home dir are intact")
-		return
-	}
-
-	logInfo("[EnsureSelfInstalled] detected missing binaries in home dir: cli=%v gui=%v, repairing...",
-		cliMissing, guiMissing)
-
-	// Get current executable path as source
-	exe, err := os.Executable()
-	if err != nil {
-		logWarn("[EnsureSelfInstalled] failed to get current exe path: %v", err)
-		return
-	}
-	exeDir := filepath.Dir(exe)
-
-	// Spec 034: stale 副本替换（副本存在但版本旧于当前 → 用源覆盖）。
-	// 只处理 CLI 副本；开关 self_update_stale=false 时跳过。
-	if cfg.Core.SelfUpdateStale && !cliMissing {
-		srcCli := filepath.Join(exeDir, cliName)
-		if runtime.GOOS != "windows" {
-			srcCli = filepath.Join(exeDir, "xdev")
-		}
-		if filepath.Base(exe) == cliName {
-			srcCli = exe
-		}
-		if _, err := os.Stat(srcCli); err == nil {
-			if err := update.ReplaceStaleCLICopy(srcCli, homeDir); err != nil {
-				logWarn("[EnsureSelfInstalled] stale replace failed: %v", err)
-			} else {
-				logInfo("[EnsureSelfInstalled] stale CLI copy check done")
+	if !cliMissing {
+		// Spec 034: stale 副本替换（副本存在但版本旧于当前 → 用源覆盖）。
+		// 开关 self_update_stale=false 时跳过。
+		if cfg.Core.SelfUpdateStale {
+			if src, ok := selfBinarySource(); ok {
+				if err := update.ReplaceStaleCLICopy(src, homeDir); err != nil {
+					logWarn("[EnsureSelfInstalled] stale replace failed: %v", err)
+				} else {
+					logInfo("[EnsureSelfInstalled] stale CLI copy check done")
+				}
 			}
 		}
+		return
 	}
+
+	logInfo("[EnsureSelfInstalled] detected missing binary in home dir: cli=%v, repairing...", cliMissing)
 
 	// Copy xdev.exe to home directory
-	if cliMissing {
-		srcCli := filepath.Join(exeDir, "xdev.exe")
-		if runtime.GOOS != "windows" {
-			srcCli = filepath.Join(exeDir, "xdev")
-		}
-		// If the current exe IS xdev (not xdev-gui), use it directly
-		if filepath.Base(exe) == cliName {
-			srcCli = exe
-		}
-		if _, err := os.Stat(srcCli); err == nil {
-			if err := util.CopyFile(srcCli, cliPath); err != nil {
-				logWarn("[EnsureSelfInstalled] failed to copy %s: %v", cliName, err)
-			} else {
-				logInfo("[EnsureSelfInstalled] copied %s to %s", cliName, homeDir)
-			}
+	if src, ok := selfBinarySource(); ok {
+		if err := util.CopyFile(src, cliPath); err != nil {
+			logWarn("[EnsureSelfInstalled] failed to copy %s: %v", cliName, err)
 		} else {
-			logWarn("[EnsureSelfInstalled] source %s not found at %s", cliName, srcCli)
-		}
-	}
-
-	// Copy xdev-gui.exe to home directory
-	if guiMissing {
-		srcGui := filepath.Join(exeDir, guiName)
-		if _, err := os.Stat(srcGui); err == nil {
-			if err := util.CopyFile(srcGui, guiPath); err != nil {
-				logWarn("[EnsureSelfInstalled] failed to copy %s: %v", guiName, err)
-			} else {
-				logInfo("[EnsureSelfInstalled] copied %s to %s", guiName, homeDir)
-			}
-		} else {
-			logWarn("[EnsureSelfInstalled] source %s not found at %s", guiName, srcGui)
+			logInfo("[EnsureSelfInstalled] copied %s to %s", cliName, homeDir)
 		}
 	}
 
@@ -959,4 +910,15 @@ func (a *App) EnsureSelfInstalled() {
 			logWarn("[EnsureSelfInstalled] failed to install to install/ directory: %v", err)
 		}
 	}
+}
+
+// selfBinarySource 返回当前可执行文件路径（单二进制模型下，GUI/CLI 同源，
+// 复制/替换到 homeDir 的源就是自身）。
+func selfBinarySource() (string, bool) {
+	exe, err := os.Executable()
+	if err != nil {
+		logWarn("[EnsureSelfInstalled] failed to get current exe path: %v", err)
+		return "", false
+	}
+	return exe, true
 }

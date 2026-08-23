@@ -9,8 +9,6 @@ package gui
 import (
 	"context"
 	"os"
-	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/update"
@@ -56,22 +54,14 @@ func (a *App) runStartupSelfCheck() {
 	}
 }
 
-// cliBinaryNextToSelf 返回与运行中可执行文件同目录的 CLI 二进制路径；
-// 不存在返回空串。
+// cliBinaryNextToSelf 单二进制模型下返回当前可执行文件自身
+// （GUI/CLI 同一二进制，更新目标即自身；Windows 上通过 rename 替换运行中文件）。
 func cliBinaryNextToSelf() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	name := "xdev"
-	if runtime.GOOS == "windows" {
-		name = "xdev.exe"
-	}
-	p := filepath.Join(filepath.Dir(exe), name)
-	if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-		return p
-	}
-	return ""
+	return exe
 }
 
 // emitSelfUpdate 向前端推送自检事件（action: ask|notify|applied|applied-error）。

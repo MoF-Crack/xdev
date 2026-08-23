@@ -23,7 +23,7 @@ XDev 是一个跨平台开发环境版本管理器，用 Go 1.25 编写。它提
 
 ```
 xmdevenvmt/
-├── cmd/xmdevenvmt/          # CLI 入口（遗留；生产用根 main.go，Spec 030）
+├── main.go / main_gui.go / main_bindings.go  # 入口（Spec 030：CLI/GUI/bindings 三变体，构建见 build.ps1）
 ├── internal/                 # 内部包（不可外部导入）
 │   ├── cli/                  # CLI 命令定义 (Cobra)
 │   ├── config/               # 配置加载/保存/迁移
@@ -71,7 +71,7 @@ xmdevenvmt/
 
 ```
 ┌─────────────────────────────────────────────┐
-│  cmd/xmdevenvmt  (入口点)                    │
+│  main.go / main_gui.go  (入口点)             │
 ├─────────────────────────────────────────────┤
 │  cli  │  gui  │  tui                        │  ← 表示层
 ├─────────────────────────────────────────────┤

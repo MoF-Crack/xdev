@@ -334,7 +334,7 @@ go test -tags online ./internal/e2e/...
 ```
 
 ### 前置条件
-- L2/L3 需要 `build/bin/xdev.exe`：先运行 `build.sh`（或 `go build -o build/bin/xdev.exe ./cmd/xmdevenvmt`）。
+- L2/L3 需要 `build/bin/xdev.exe`：先运行 `build.sh`（或 `go build -o build/bin/xdev.exe .`）。
 - L3 需要 `ninja@1.12.1` 可达（GitHub releases 或镜像）。网络中断时 EPIC 用例 SKIP 而非 FAIL。
 
 ### 设计要点

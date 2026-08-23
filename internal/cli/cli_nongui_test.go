@@ -33,28 +33,40 @@ func TestCLISourcesDoNotImportGUI(t *testing.T) {
 	}
 }
 
-func TestLocateGUIBinary_Missing(t *testing.T) {
-	dir := t.TempDir()
-	_, err := locateGUIBinary(dir, filepath.Join(dir, "xdev"+exeSuffix()))
-	if err == nil {
-		t.Fatal("expected error when xdev-gui is absent")
+// TestGUILauncherHook 单二进制模型：xdev gui 子命令通过 main 注入的
+// 启动器在进程内启动 GUI；未注入时给出明确错误。
+func TestGUILauncherHook(t *testing.T) {
+	orig := guiLauncher
+	defer func() { guiLauncher = orig }()
+
+	// nil launcher → 明确报错
+	guiLauncher = nil
+	if err := newGuiCmd().RunE(nil, nil); err == nil {
+		t.Error("expected error when GUI launcher not injected")
 	}
-	if !strings.Contains(err.Error(), "xdev-gui") {
-		t.Errorf("error %q should mention xdev-gui", err)
+
+	// 注入后 → launcher 被调用
+	called := 0
+	guiLauncher = func() { called++ }
+	if err := newGuiCmd().RunE(nil, nil); err != nil {
+		t.Fatalf("RunE with launcher: %v", err)
+	}
+	if called != 1 {
+		t.Errorf("launcher called %d times, want 1", called)
 	}
 }
 
-func TestLocateGUIBinary_FindsSibling(t *testing.T) {
-	dir := t.TempDir()
-	want := filepath.Join(dir, "xdev-gui"+exeSuffix())
-	if err := os.WriteFile(want, []byte("gui"), 0o755); err != nil {
-		t.Fatal(err)
+// TestSetGUILauncher 验证注入入口。
+func TestSetGUILauncher(t *testing.T) {
+	orig := guiLauncher
+	defer func() { guiLauncher = orig }()
+	called := 0
+	SetGUILauncher(func() { called++ })
+	if guiLauncher == nil {
+		t.Fatal("launcher not registered")
 	}
-	got, err := locateGUIBinary(dir, filepath.Join(dir, "xdev"+exeSuffix()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
+	guiLauncher()
+	if called != 1 {
+		t.Errorf("launcher called %d times, want 1", called)
 	}
 }

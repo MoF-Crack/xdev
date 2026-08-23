@@ -3,7 +3,7 @@
 // this constant instead of hard-coding their own copy.
 package version
 
-const Version = "0.3.3-rc.1"
+const Version = "0.3.3-rc.2"
 
 // BuildDate is set via -ldflags at build time.
 var BuildDate = ""

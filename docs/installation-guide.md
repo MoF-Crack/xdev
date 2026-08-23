@@ -89,8 +89,8 @@ hdiutil detach /Volumes/XDev
 git clone https://github.com/xmdemt/xmdevenvmt
 cd xmdevenvmt
 
-# CLI 二进制
-go build -ldflags "-s -w -X github.com/xmdemt/xdev/internal/version.Version=$(git describe --tags)" -o build/xdev.exe ./cmd/xmdevenvmt
+# CLI 二进制（Spec 030：根入口，默认不链接 Wails）
+go build -ldflags "-s -w -X github.com/xmdemt/xdev/internal/version.Version=$(git describe --tags)" -o build/xdev.exe .
 ```
 
 ### 构建 GUI

@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -173,6 +172,13 @@ func newTuiCmd() *cobra.Command {
 	}
 }
 
+// guiLauncher 由 main 包注入（单二进制模型：xdev gui 在进程内启动 GUI，
+// 不再 exec 独立 xdev-gui 二进制）。cli 包不依赖 internal/gui（Spec 030 守卫）。
+var guiLauncher func()
+
+// SetGUILauncher 注册 GUI 启动器（main.go 注入 runGUI）。
+func SetGUILauncher(fn func()) { guiLauncher = fn }
+
 func newGuiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "gui",
@@ -182,48 +188,13 @@ func newGuiCmd() *cobra.Command {
 			if err := runSelfCheck(); err != nil {
 				return err
 			}
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("locate CLI binary: %w", err)
+			if guiLauncher == nil {
+				return fmt.Errorf("GUI 未编译进本二进制；直接运行 xdev（无参数）可启动 GUI")
 			}
-			guiPath, err := locateGUIBinary(filepath.Dir(exe), exe)
-			if err != nil {
-				return err
-			}
-			c := exec.Command(guiPath, args...)
-			c.Stdin = os.Stdin
-			c.Stdout = os.Stdout
-			c.Stderr = os.Stderr
-			if err := c.Run(); err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					os.Exit(exitErr.ExitCode())
-				}
-				return fmt.Errorf("launch GUI: %w", err)
-			}
+			guiLauncher()
 			return nil
 		},
 	}
-}
-
-// locateGUIBinary finds xdev-gui in dir (typically next to the CLI binary).
-func locateGUIBinary(dir, cliPath string) (string, error) {
-	candidates := []string{
-		filepath.Join(dir, "xdev-gui"+exeSuffix()),
-		filepath.Join(dir, "xdev-gui"),
-	}
-	for _, p := range candidates {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("xdev-gui not found next to %s — install the GUI build (wails build -tags gui) or run xdev-gui directly", cliPath)
-}
-
-func exeSuffix() string {
-	if os.PathSeparator == '\\' {
-		return ".exe"
-	}
-	return ""
 }
 
 // forwardExecResult writes the stdout/stderr of an ExecResult to the

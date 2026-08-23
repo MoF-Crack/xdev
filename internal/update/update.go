@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -168,8 +169,9 @@ func fetchLatestRelease(ctx context.Context) (*ReleaseInfo, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "xdev-self-update")
-	// Optional: set GITHUB_TOKEN for higher rate limits
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+	// GitHub token 复用 remote 的统一解析（显式配置/env/注册表/GH_TOKEN），
+	// 不再自行弱化读取（Spec 034 审计消除重复）。
+	if token := remote.EffectiveGitHubToken(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

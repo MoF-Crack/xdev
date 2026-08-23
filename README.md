@@ -42,11 +42,12 @@ python --version
 xdev doctor
 ```
 
-或直接运行 GUI：
+或直接运行 GUI（单二进制多态入口）：
 
 ```bash
-xdev gui
-# Windows 也可运行 xdev-gui.exe
+xdev            # 无参数 → 启动 GUI 桌面应用
+xdev tui        # 显式启动 TUI
+xdev gui        # 显式启动 GUI（等价无参数）
 ```
 
 ## 下载
@@ -55,13 +56,13 @@ xdev gui
 
 | 产物 | 说明 |
 |------|------|
-| `xdev-windows-amd64-v0.3.2.zip` | Windows CLI |
-| `xdev-gui-<os>-v0.3.2` | GUI（Windows exe / macOS DMG / Linux AppImage） |
-| `xdev-linux-*-v0.3.2.tar.gz` | Linux CLI（amd64 / arm64） |
-| `xdev-darwin-*-v0.3.2.tar.gz` / `.dmg` | macOS CLI / GUI |
+| `xdev-windows-amd64-v0.3.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-*-v0.3.2.tar.gz` | Linux 单二进制（amd64 / arm64） |
+| `xdev-darwin-*-v0.3.2.tar.gz` / `.dmg` | macOS 单二进制 |
 | `xdev-0.3.2-linux-*.deb` / `.rpm` | Linux 软件包 |
 
-本地构建产物位于 `build/bin/xdev-0.3.2.exe` 与 `build/bin/xdev-gui-0.3.2.exe`。
+每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
+本地构建产物位于 `build/bin/xdev-0.3.2.exe`（或 `build/bin/xdev`）。
 
 ## 命令总览
 
@@ -86,7 +87,7 @@ xdev gui
 | `xdev config proxy` | 查看与设置下载代理 |
 | `xdev self update` | 自更新 |
 | `xdev self uninstall` | 移除 shim 与数据目录 |
-| `xdev tui` | 启动 TUI 终端界面（无参数运行 `xdev` 同样进入 TUI） |
+| `xdev tui` | 启动 TUI 终端界面（单二进制：无参数运行 `xdev` 启动 GUI，`xdev tui` 显式进入 TUI） |
 | `xdev gui` | 启动 GUI 图形界面 |
 | `xdev refresh [<tool>]` | 刷新工具版本列表（`--all` 刷新全部） |
 | `xdev sniff [--all] [--tool <name>] [--headless]` | 远程嗅探新版本 |
@@ -227,7 +228,7 @@ git clone https://github.com/MoF-Crack/xdev.git
 cd xdev
 
 # Windows
-.\build.ps1            # CLI + 下载源审计 + GUI
+.\build.ps1            # 单二进制（GUI+TUI+CLI）+ 下载源审计
 .\build.ps1 -SkipAudit # 跳过链接审计
 
 # Unix
@@ -235,19 +236,19 @@ cd xdev
 # SKIP_AUDIT=1 ./build.sh
 ```
 
-手动构建：
+手动构建（单二进制模型）：
 
 ```bash
 # 前端资源（GUI 的 //go:embed 依赖 frontend/dist）
 cd frontend && npm ci && npm run build && cd ..
 
-# CLI
-go build -ldflags "-s -w" -o build/bin/xdev.exe .
-
-# GUI
-wails build
+# 单二进制（含 GUI/TUI/CLI；等价 wails build）
+wails build -o build/bin/xdev.exe
+# 或先 npm build 后：
+# go build -ldflags "-s -w" -o build/bin/xdev.exe .
 ```
 
+产物行为：无参数 → GUI；`xdev tui` → TUI；其他参数 → CLI 命令。
 版本字符串来自 `internal/version/version.go`。发布流水线会再注入 `GitCommit`、`BuildDate` 与 Ed25519 根公钥。
 
 ## 添加新工具
