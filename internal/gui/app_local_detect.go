@@ -348,6 +348,24 @@ func (a *App) MigrateLocalTool(toolName, localPath string) error {
 		return err
 	}
 
+	// Security (F-10 parity): plain MigrateLocalTool copies from the
+	// JS-supplied path into the xdev install tree — apply the same source
+	// validation as MigrateLocalToolByJunction/ByMove (absolute, existing
+	// directory, not a symlink, not inside the xdev home).
+	if !filepath.IsAbs(localPath) {
+		return fmt.Errorf("source path must be absolute: %q", localPath)
+	}
+	if li, err := os.Lstat(localPath); err != nil {
+		return fmt.Errorf("cannot access local installation at %s: %v", localPath, err)
+	} else if li.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source path must not be a symlink/junction: %s", localPath)
+	} else if !li.IsDir() {
+		return fmt.Errorf("source path is not a directory: %s", localPath)
+	}
+	if cfg0 := a.getCfg(); cfg0 != nil && util.ValidateAbsPathUnder(cfg0.Core.XMDevDir, localPath) == nil {
+		return fmt.Errorf("source path is inside xdev home, refusing to migrate: %s", localPath)
+	}
+
 	cfg := a.getCfg()
 
 	// Determine version from local installation

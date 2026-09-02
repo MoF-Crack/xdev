@@ -224,6 +224,23 @@ func checkRateLimit(resp *http.Response) error {
 // Link-header pagination parser
 // ---------------------------------------------------------------------------
 
+// sameHostURL reports whether raw targets the same host (scheme+host)
+// as the original URL. Used to validate Link-header pagination targets:
+// a foreign host in the Link header must never be followed while the
+// request still carries the GitHub Bearer token — the token would be
+// sent to the attacker's server.
+func sameHostURL(original, next string) bool {
+	ou, err := url.Parse(original)
+	if err != nil {
+		return false
+	}
+	nu, err := url.Parse(next)
+	if err != nil {
+		return false
+	}
+	return ou.Scheme == nu.Scheme && ou.Host == nu.Host
+}
+
 // parseNextURL extracts the URL from the Link header with rel="next".
 // Returns ("", false) if no next page exists.
 func parseNextURL(linkHeader string) (string, bool) {
@@ -758,6 +775,15 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 		linkHeader := resp.Header.Get("Link")
 		nextURL, hasNext := parseNextURL(linkHeader)
 		if !hasNext {
+			break
+		}
+		// Security (M-1 fix): the Link header is attacker-influenceable
+		// (compromised upstream, MITM, or a configured proxy). The next
+		// request still carries the Bearer token — never follow a
+		// pagination URL that leaves the host the loop started on
+		// (api.github.com in production, the test server in tests).
+		if !sameHostURL(apiURL, nextURL) {
+			log.Printf("[remote] WARNING: ignoring cross-host pagination URL in Link header: %s", util.SanitizeURL(nextURL))
 			break
 		}
 		currentURL = nextURL

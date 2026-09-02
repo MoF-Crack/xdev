@@ -115,7 +115,10 @@ func (d *DockerAdapter) Exec(ctx context.Context, id string, cmd []string) (*Exe
 	if len(cmd) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
-	args := append([]string{"exec", id}, cmd...)
+	// Security (M-6 fix): insert "--" after the container id so a command
+	// element starting with "-" is never parsed as a docker exec option
+	// (mirrors the N-14 guard on docker run).
+	args := append([]string{"exec", "--", id}, cmd...)
 	result, _ := util.RunCommand(ctx, "docker", args...)
 	return &result, nil
 }

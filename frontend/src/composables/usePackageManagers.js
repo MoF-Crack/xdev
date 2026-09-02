@@ -85,6 +85,11 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
     const toolName = tool?.name;
     const displayName = tool?.displayName || tool?.name;
     if (!toolName) return;
+    // Entry guard: pmOperating is only set later (inside updatePm, after
+    // the version/preview awaits). Without this guard two rapid clicks on
+    // the Update button run two parallel chains — two confirm dialogs and
+    // two UpdatePackageManager IPC calls.
+    if (pmOperating.value) return;
     const catalogName = tool?.toolName || toolName;
     let latest = '';
     let unverified = false;

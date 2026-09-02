@@ -561,7 +561,6 @@ func TestDiscoverVersions_GitHub_Pagination(t *testing.T) {
 		{"tag_name": "v1.8.0"},
 	}
 
-	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		callCount++
@@ -570,7 +569,10 @@ func TestDiscoverVersions_GitHub_Pagination(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		if count == 1 {
-			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/test/repo/releases?page=2>; rel="next"`, serverURL))
+			// Real GitHub emits a Link header pointing at api.github.com;
+			// the redirectTransport maps that host to this test server.
+			// (Security M-1: pagination URLs must stay on the original host.)
+			w.Header().Set("Link", `<https://api.github.com/repos/test/repo/releases?page=2>; rel="next"`)
 			body, _ := json.Marshal(page1)
 			w.Write(body)
 		} else {
@@ -578,7 +580,6 @@ func TestDiscoverVersions_GitHub_Pagination(t *testing.T) {
 			w.Write(body)
 		}
 	}))
-	serverURL = server.URL
 	defer server.Close()
 
 	transport := &redirectTransport{server.URL}
@@ -599,6 +600,60 @@ func TestDiscoverVersions_GitHub_Pagination(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// DiscoverVersions - GitHub pagination Link header cross-host rejection (M-1)
+// ---------------------------------------------------------------------------
+
+// TestDiscoverVersions_GitHub_PaginationCrossHostRejected guards the M-1 fix:
+// a Link header pointing at a foreign host must never be followed - the next
+// request would still carry the GitHub Bearer token and leak it to the
+// attacker's server.
+func TestDiscoverVersions_GitHub_PaginationCrossHostRejected(t *testing.T) {
+	var mu sync.Mutex
+	callCount := 0
+
+	page1 := []map[string]string{
+		{"tag_name": "v2.0.0"},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		count := callCount
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		if count == 1 {
+			// Hostile Link header: pagination hops to evil.example.
+			w.Header().Set("Link", `<https://evil.example/repos/test/repo/releases?page=2>; rel="next"`)
+			body, _ := json.Marshal(page1)
+			w.Write(body)
+		} else {
+			// If the loop wrongly followed the link, the redirectTransport
+			// would bounce it back here and callCount would exceed 1.
+			body, _ := json.Marshal([]map[string]string{{"tag_name": "v1.0.0"}})
+			w.Write(body)
+		}
+	}))
+	defer server.Close()
+
+	transport := &redirectTransport{server.URL}
+	origClient := httpClient
+	httpClient = &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	defer func() { httpClient = origClient }()
+
+	versions, err := DiscoverVersions(context.Background(), manifest.RemoteSource{
+		Type:    "github",
+		URL:     "test/repo",
+		Pattern: `v?(\d+\.\d+\.\d+)$`,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverVersions github cross-host pagination: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("expected exactly 1 version (page 2 must not be fetched), got %d: %v", len(versions), versions)
+	}
+}
 // ---------------------------------------------------------------------------
 // DiscoverVersions — GitHub with rate limit exhausted
 // ---------------------------------------------------------------------------
@@ -884,7 +939,6 @@ func TestDiscoverVersions_GitHub_FloorEarlyStop(t *testing.T) {
 		{{TagName: "v1.16.0"}},
 	}
 
-	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		idx := pageCount
@@ -893,12 +947,13 @@ func TestDiscoverVersions_GitHub_FloorEarlyStop(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if idx+1 < len(pages) {
 			page := idx + 2
-			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, serverURL, page))
+			// Real GitHub Link headers stay on api.github.com (the
+		// redirectTransport maps that host to this test server).
+		w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, page))
 		}
 		body, _ := json.Marshal(pages[idx])
 		w.Write(body)
 	}))
-	serverURL = server.URL
 	defer server.Close()
 
 	transport := &redirectTransport{server.URL}
@@ -949,7 +1004,6 @@ func TestDiscoverVersions_GitHub_NoFloorPaginatesAll(t *testing.T) {
 		{{TagName: "v1.1.0"}},
 	}
 
-	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		idx := pageCount
@@ -957,12 +1011,13 @@ func TestDiscoverVersions_GitHub_NoFloorPaginatesAll(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if idx == 0 {
-			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/x/y/releases?page=2>; rel="next"`, serverURL))
+			// Real GitHub Link headers stay on api.github.com (the
+		// redirectTransport maps that host to this test server).
+		w.Header().Set("Link", `<https://api.github.com/repos/x/y/releases?page=2>; rel="next"`)
 		}
 		body, _ := json.Marshal(pages[idx])
 		w.Write(body)
 	}))
-	serverURL = server.URL
 	defer server.Close()
 
 	transport := &redirectTransport{server.URL}

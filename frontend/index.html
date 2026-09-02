@@ -3,6 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Content-Security-Policy hardening: the app has no dynamic HTML
+         sinks today; this policy ensures a future v-html/innerHTML would
+         be blocked rather than silently exploitable. Wails serves the
+         bundle from the wails:// origin ('self'); inline styles remain
+         allowed because Naive UI injects scoped style elements. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-src 'none'">
     <title>XDev</title>
     <link rel="icon" type="image/svg+xml" href="/src/assets/logo-small.svg">
     <style>

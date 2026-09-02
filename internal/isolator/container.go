@@ -127,7 +127,10 @@ func (c *containerIsolator) Exec(ctx context.Context, cmd []string) (*ExecResult
 		return nil, fmt.Errorf("empty command")
 	}
 
-	args := append([]string{"exec", c.containerID}, cmd...)
+	// Security (M-6 fix): insert "--" after the container id so a
+	// command element starting with "-" is never parsed as a docker
+	// exec option (mirrors the N-14 guard on docker run).
+	args := append([]string{"exec", "--", c.containerID}, cmd...)
 	result, _ := util.RunCommand(ctx, "docker", args...)
 	return &result, nil
 }

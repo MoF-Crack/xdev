@@ -162,7 +162,14 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 func fetchLatestRelease(ctx context.Context) (*ReleaseInfo, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", githubOwner, githubRepo)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	// Security (M-2 fix): the release JSON gates the self-update binary
+	// replacement — this metadata client must use the same shared redirect
+	// policy as downloadAsset/downloadToMemory (blocks HTTPS→HTTP downgrades
+	// and redirects to private hosts).
+	client := &http.Client{
+		Timeout:       15 * time.Second,
+		CheckRedirect: util.SecureRedirectCheck(10),
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -308,16 +315,14 @@ func writeUpdateFile(dest string, r io.Reader) error {
 	return err
 }
 
-// findAsset searches for an asset matching the given name pattern.
+// findAsset searches for an asset matching the given name exactly.
+// Spec 035 F6: the partial-match (GOOS/GOARCH substring) fallback was
+// removed — it could select an unintended archive (e.g. the GUI bundle
+// "xdev-gui-windows-amd64-v1.0.zip") when the exact name is missing.
+// CI asset names match assetNameForPlatform verbatim on every platform.
 func findAsset(release *ReleaseInfo, name string) (Asset, bool) {
 	for _, a := range release.Assets {
 		if a.Name == name {
-			return a, true
-		}
-	}
-	// Fallback: try partial match
-	for _, a := range release.Assets {
-		if strings.Contains(a.Name, runtime.GOOS) && strings.Contains(a.Name, runtime.GOARCH) {
 			return a, true
 		}
 	}
@@ -486,13 +491,11 @@ func parseSHA256SUMS(content, filename string) (string, error) {
 		if line == "" {
 			continue
 		}
-		// Format: "<hash>  <filename>" or "<hash> <filename>"
+		// Format: "<hash>  <filename>" — the standard sha256sum output
+		// uses exactly two spaces (CI generates it via 'sha256sum *').
+		// Spec 035 F7: the single-space fallback was removed; lenient
+		// parsing is unnecessary on this security-sensitive path.
 		parts := strings.SplitN(line, "  ", 2)
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) == filename {
-			return strings.TrimSpace(parts[0]), nil
-		}
-		// Also try single-space separator
-		parts = strings.SplitN(line, " ", 2)
 		if len(parts) == 2 && strings.TrimSpace(parts[1]) == filename {
 			return strings.TrimSpace(parts[0]), nil
 		}

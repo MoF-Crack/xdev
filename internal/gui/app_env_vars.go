@@ -486,6 +486,17 @@ func (a *App) SwitchToLocalVersion(toolName, localPath string) error {
 	if path == "" {
 		return fmt.Errorf("no local installation found for %s", toolName)
 	}
+	// Security: localPath arrives from the WebView and becomes the
+	// current/<tool> junction target — require an existing, real (non-
+	// symlink) directory so the binding cannot point a tool at an
+	// arbitrary location. The cached path was already scan-verified, but
+	// an explicit path argument must be re-checked here.
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("local path must be absolute: %q", path)
+	}
+	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+		return fmt.Errorf("local path is not an existing directory: %q", path)
+	}
 
 	currentLink := a.currentLink(toolName)
 	if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {

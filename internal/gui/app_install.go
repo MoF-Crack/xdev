@@ -307,15 +307,25 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 			status := task.GetStatus()
 
 			if status == downloader.StatusCompleted {
-				// 下载完成，执行解压和激活
+				// 下载完成，执行解压/运行安装器并激活。
 				// Keep the percent at 100 (download finished) — the phase
-				// string "Extracting..." is enough; resetting to 0 makes
-				// the progress bar restart for no reason.
+				// string is enough; resetting to 0 makes the progress bar
+				// restart for no reason.
+				// 阶段语义：archive → "Extracting..."；executable/script
+				// （rustup 等滚动安装器）→ "Installing..."（运行安装器可能
+				// 耗时数分钟下载 toolchain，进度条保持 100 但文案明确在安装）。
+				phaseStr := "Extracting..."
+				// Spec 035 F10: use the installer's ResolveKind (includes the
+				// rustup URL heuristic) so preview/phase logic and the real
+				// install path can never diverge.
+				if installer.ResolveKind(arch) != manifest.InstallKindArchive {
+					phaseStr = "Installing..."
+				}
 				wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
 					TaskID:  taskID,
 					Tool:    toolName,
 					Version: version,
-					Phase:   "Extracting...",
+					Phase:   phaseStr,
 					Percent: 100,
 				})
 
@@ -392,6 +402,15 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		}
 		// 超时：下载任务耗时过长，清理
 		logWarn("[InstallTool] download poll timeout for %s@%s", toolName, version)
+		// Spec 035 F11: emit installError BEFORE cleanup — without it the
+		// frontend progress dialog waits for a Completed event that never
+		// arrives (single install) and the batch waiter hangs forever.
+		wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+			"taskId":  taskID,
+			"tool":    toolName,
+			"version": version,
+			"error":   "安装等待超时（1 小时）",
+		})
 		a.dlMgr.Cancel(taskID)
 		a.dlMgr.RemoveTask(taskID)
 	}()
@@ -458,7 +477,11 @@ func (a *App) reloadCatalog() error {
 	if err != nil {
 		return err
 	}
+	// Concurrency: reloadCatalog may run on a Wails goroutine (SniffAll/
+	// SniffNow) while other bindings read a.cat — guard the swap.
+	a.catMu.Lock()
 	a.cat = cat
+	a.catMu.Unlock()
 	if a.registry == nil {
 		return nil
 	}

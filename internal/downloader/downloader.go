@@ -394,9 +394,18 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	flags := os.O_CREATE | os.O_WRONLY | os.O_EXCL
 	f, openErr := os.OpenFile(partPath, flags, 0o644)
 	if openErr != nil {
-		// File may already exist — retry without O_EXCL for resume
-		flags = os.O_CREATE | os.O_WRONLY
-		f, openErr = os.OpenFile(partPath, flags, 0o644)
+		// File may already exist — resume path. Security (M-4 fix):
+		// os.OpenFile follows symlinks, so a planted <dest>.part symlink
+		// would redirect the archive write to an arbitrary file. Only
+		// resume when the existing .part is a regular file (lstat, not
+		// stat); otherwise remove the impostor and start fresh with O_EXCL.
+		if fi, stErr := os.Lstat(partPath); stErr == nil && fi.Mode().IsRegular() {
+			flags = os.O_CREATE | os.O_WRONLY
+			f, openErr = os.OpenFile(partPath, flags, 0o644)
+		} else {
+			_ = os.Remove(partPath)
+			f, openErr = os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
+		}
 	}
 	defer f.Close()
 	if openErr != nil {

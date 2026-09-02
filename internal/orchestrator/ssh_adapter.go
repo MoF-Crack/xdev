@@ -137,7 +137,14 @@ func (s *SSHAdapter) ConnectInteractive(ctx context.Context, id string, shell []
 	args := append([]string{"-t"}, s.sshArgs(shell...)...)
 	var c *exec.Cmd
 	if s.target.Password != "" {
-		c = exec.CommandContext(ctx, "sshpass", append([]string{"-p", s.target.Password, sshBinary()}, args...)...)
+		if _, err := exec.LookPath("sshpass"); err != nil {
+			return fmt.Errorf("密码登录需要 sshpass（未在 PATH 中找到）。请安装 sshpass 或改用密钥登录")
+		}
+		// Security: pass the password via the SSHPASS environment variable
+		// (sshpass -e) instead of -p, so it never appears in the process
+		// argument list (ps / Task Manager) — mirrors runSSH.
+		c = exec.CommandContext(ctx, "sshpass", append([]string{"-e", "SSHPASS", sshBinary()}, args...)...)
+		c.Env = append(os.Environ(), "SSHPASS="+s.target.Password)
 	} else {
 		c = exec.CommandContext(ctx, sshBinary(), args...)
 	}
@@ -192,7 +199,10 @@ func sshFieldLooksUnsafe(name, value string) error {
 	if value == "" {
 		return nil
 	}
-	if strings.ContainsAny(value, " \t\n\r;&|`$<>\"'") || strings.HasPrefix(value, "-") {
+	// Security (L-1 fix): path separators and dots are also rejected — the
+	// host/user feed the instance-id filename (SaveInstance) and must not
+	// traverse out of <home>/remote/.
+	if strings.ContainsAny(value, " \t\n\r;&|`$<>\"'/\\") || strings.Contains(value, "..") || strings.HasPrefix(value, "-") {
 		return fmt.Errorf("SSH %s contains unsafe characters", name)
 	}
 	return nil

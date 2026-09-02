@@ -393,6 +393,7 @@ type App struct {
 	ctx      context.Context
 	cfg      *config.Config
 	cfgMu    sync.RWMutex // protects cfg for concurrent read/write
+	catMu    sync.RWMutex // protects cat for concurrent read/write (reloadCatalog)
 	cat      *manifest.Catalog
 	registry *plugin.Registry
 	localMu  sync.RWMutex
@@ -876,8 +877,9 @@ func (a *App) EnsureSelfInstalled() {
 	}
 
 	if !cliMissing {
-		// Spec 034: stale 副本替换（副本存在但版本旧于当前 → 用源覆盖）。
-		// 开关 self_update_stale=false 时跳过。
+		// Spec 034: stale 副本替换（副本与当前运行二进制不一致 → 用源覆盖，
+		// 镜像一致性语义；冒烟反馈 #5：旧版 1.2.2-alpha 副本因版本号断层
+		// 被 CompareSemver 误判「更新」而永不替换）。开关 self_update_stale=false 时跳过。
 		if cfg.Core.SelfUpdateStale {
 			if src, ok := selfBinarySource(); ok {
 				if err := update.ReplaceStaleCLICopy(src, homeDir); err != nil {
@@ -887,6 +889,8 @@ func (a *App) EnsureSelfInstalled() {
 				}
 			}
 		}
+		a.removeObsoleteGUICopy(homeDir)
+		a.ensureCurrentSelfInstall(cfg)
 		return
 	}
 
@@ -909,6 +913,45 @@ func (a *App) EnsureSelfInstalled() {
 		if _, _, err := installer.InstallSelf(cfg); err != nil {
 			logWarn("[EnsureSelfInstalled] failed to install to install/ directory: %v", err)
 		}
+	}
+}
+
+// ensureCurrentSelfInstall 确保当前版本始终经 install/xdev/<version>/ +
+// current/xdev junction 管理（冒烟反馈 #6：junction 长期指向 1.2.2-alpha
+// 目录（内含 0.2.0 二进制）——PATH 解析 `xdev` 命中旧版，而 InstallSelf
+// 此前只在根副本缺失时才被调用，永不更新）。InstallSelf 幂等：同版本
+// 同二进制为 no-op；新版本创建目录并把 junction 切到新版。
+func (a *App) ensureCurrentSelfInstall(cfg *config.Config) {
+	installCli := filepath.Join(cfg.Core.InstallDir, "xdev", version.Version, "xdev.exe")
+	if runtime.GOOS != "windows" {
+		installCli = filepath.Join(cfg.Core.InstallDir, "xdev", version.Version, "xdev")
+	}
+	if _, err := os.Stat(installCli); err == nil {
+		return // 当前版本已安装（junction 由 InstallSelf 创建/更新过）
+	}
+	logInfo("[EnsureSelfInstalled] current version %s not under install/xdev — installing", version.Version)
+	if _, _, err := installer.InstallSelf(cfg); err != nil {
+		logWarn("[EnsureSelfInstalled] failed to install current version: %v", err)
+	}
+}
+
+// removeObsoleteGUICopy 清理 homeDir 根的双二进制时代残留 xdev-gui 副本
+// （冒烟反馈 #5：E:\XDev\xdev-gui.exe 自 7/10 起无人替换也无人清理）。
+// 单二进制模型（Spec 034+）后该文件无任何调用方——PATH 查找按 xdev 名，
+// `xdev gui` 子命令进程内启动。删除失败仅记录不阻塞。
+func (a *App) removeObsoleteGUICopy(homeDir string) {
+	guiName := "xdev-gui"
+	if runtime.GOOS == "windows" {
+		guiName = "xdev-gui.exe"
+	}
+	guiPath := filepath.Join(homeDir, guiName)
+	if _, err := os.Stat(guiPath); err != nil {
+		return // 常见路径：无残留
+	}
+	if err := os.Remove(guiPath); err != nil {
+		logWarn("[EnsureSelfInstalled] failed to remove obsolete %s: %v", guiName, err)
+	} else {
+		logInfo("[EnsureSelfInstalled] removed obsolete dual-binary leftover %s", guiPath)
 	}
 }
 

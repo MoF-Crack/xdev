@@ -6,6 +6,11 @@
     <template #toolbar>
       <PageToolbar :title="headerTitle">
         <n-space>
+          <!-- 后台安装进展指示器：安装转入后台（showProgress=false 但仍 active）时显示，点击重新打开进度框 -->
+          <n-button v-if="installing && !showProgress" size="small" type="primary" :aria-label="t('install.background_progress')" data-action="show-install-progress" @click="showProgress = true">
+            <template #icon><n-icon aria-hidden="true"><cloud-download-outline /></n-icon></template>
+            {{ t('install.background_progress') }} · {{ installProgress.percent || 0 }}%
+          </n-button>
           <UpdateBadge :t="t" :count="availableUpdates.length" :updates="availableUpdates" :loading="updatesLoading" :sniffing="sniffOperating" :installing="updateInstalling" @refresh="loadUpdates" @install="installUpdate" @ignore="ignoreUpdate" @sniff-all="sniffAll" />
           <NotificationCenter :t="t" :notifications="notifications" @clear="clearNotifications" @dismiss="dismissNotification" />
           <n-button ref="commandPaletteTrigger" size="small" secondary :aria-label="t('command_palette.open')" @click="openCommandPalette">
@@ -16,7 +21,7 @@
       </PageToolbar>
     </template>
         <!-- Dashboard -->
-        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
+        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @install-all-updates="installAllUpdates" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
 
         <!-- Favorites Page -->
         <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
@@ -54,12 +59,12 @@
 </template>
 
 <script setup>
-import { ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted } from 'vue';
+import { h, ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted } from 'vue';
 import { NIcon, NButton, NSpace, useMessage, useDialog } from 'naive-ui';
 import {
   SearchOutline,
   HomeOutline, SettingsOutline, CodeOutline, PhonePortraitOutline, ConstructOutline,
-  RocketOutline, DesktopOutline,
+  RocketOutline, DesktopOutline, CloudDownloadOutline,
 } from '@vicons/ionicons5';
 import { useI18n } from './i18n/index';
 import CommandPalette from './components/CommandPalette.vue';
@@ -79,6 +84,7 @@ const IsolationPage = defineAsyncComponent(() => import('./pages/IsolationPage.v
 const RemoteDevelopmentPage = defineAsyncComponent(() => import('./pages/RemoteDevelopmentPage.vue'));
 const AboutPage = defineAsyncComponent(() => import('./pages/AboutPage.vue'));
 import { useInstall } from './composables/useInstall.js';
+import { useBatchUpdates } from './composables/useBatchUpdates.js';
 import { useTools } from './composables/useTools.js';
 import { useNotifications } from './composables/useNotifications.js';
 import { usePackageManagers } from './composables/usePackageManagers.js';
@@ -99,6 +105,12 @@ const { isMaximized, minimizeWindow, toggleMaximize, closeWindow } = useWindowCh
 onUnmounted(() => {
   window.runtime?.EventsOff?.('dashboardStatsUpdated');
   window.runtime?.EventsOff?.('localCacheUpdated');
+  // These two are registered in onMounted below. App.vue swaps
+  // <AppContent> for <SetupWizard> on first run and back again —
+  // without EventsOff every remount stacks another listener and the
+  // TOFU warning dialog / self-update toast fires duplicated.
+  window.runtime?.EventsOff?.('xdev:tofu-warning');
+  window.runtime?.EventsOff?.('self-update');
 });
 
 onMounted(async () => {
@@ -199,7 +211,7 @@ const toolDeps = ref([]);
 const installedVersions = ref([]);
 const availableVersions = ref([]);
 const showCount = ref(10);
-const { install: runInstall, installConfirmed: runInstallConfirmed, repair: runRepair, pause: runPause, resume: runResume, cancel: runCancel, phase: installPhase, progress: installProgress, error: installError, active: installing, paused: downloadPaused } = useInstall({ onComplete: handleInstallComplete, onError: handleInstallError, onCancel: handleInstallCancel });
+const { install: runInstall, installConfirmed: runInstallConfirmed, repair: runRepair, pause: runPause, resume: runResume, cancel: runCancel, waitForCompletion, phase: installPhase, progress: installProgress, error: installError, active: installing, paused: downloadPaused } = useInstall({ onComplete: handleInstallComplete, onError: handleInstallError, onCancel: handleInstallCancel });
 const showProgress = ref(false);
 const installTrigger = ref(null);
 const showFormSelector = ref(false);
@@ -284,6 +296,27 @@ const {
   loadUpdates, loadSniffConfig, loadSniffServiceStatus, sniffAll, installUpdate,
   saveSniffStrategy, installSniffService, uninstallSniffService,
 } = useSniffSession({ t, message, addNotification, doInstall: (...args) => doInstall(...args) });
+
+// 一键更新全部（Spec 035 F2b）：批量循环提取到 useBatchUpdates（依赖
+// 全注入可测）。逐项确认 unverified（FR-018）、事件驱动等待
+// （waitForCompletion）、取消中止整批、真实汇总文案。
+// Spec 036：active 供安装互斥守卫（N2）；batchActive 供完成/取消回调
+// 跳过 showProgress 复位（N4 防闪烁）与取消单文案（N5）。
+const batchActive = ref(false);
+const { installAllUpdates } = useBatchUpdates({
+  previewInstall: (tool, version) => window.go.gui.App.PreviewInstall(tool, version),
+  // 每项已过（或不需要）unverified 确认 → confirmed=true 走非阻塞链路。
+  installConfirmed: (tool, version, formFilter) => startInstallConfirmed(tool, version, true, formFilter),
+  waitForCompletion,
+  dialog,
+  message,
+  t,
+  loadUpdates,
+  availableUpdates,
+  setShowProgress: (v) => { showProgress.value = v; },
+  active: installing,
+  batchActive,
+});
 const { pmOperating, installPackageManager, updatePackageManager, migratePackageManager } = usePackageManagers({
   t, message, dialog, refreshTools: (...args) => refreshTools(...args), selectedTool,
 });
@@ -352,15 +385,19 @@ async function removeFavorite(toolName) {
 }
 
 async function toggleFavorite(toolName) {
-  const isFav = await window.go.gui.App.IsFavorite(toolName);
-  if (isFav) {
-    await removeFavorite(toolName);
-  } else {
-    await addFavorite(toolName);
-  }
-  // 更新当前选中工具的收藏状态
-  if (selectedTool.value && selectedTool.value.name === toolName) {
-    selectedTool.value = { ...selectedTool.value, isFavorite: !isFav };
+  try {
+    const isFav = await window.go.gui.App.IsFavorite(toolName);
+    if (isFav) {
+      await removeFavorite(toolName);
+    } else {
+      await addFavorite(toolName);
+    }
+    // 更新当前选中工具的收藏状态
+    if (selectedTool.value && selectedTool.value.name === toolName) {
+      selectedTool.value = { ...selectedTool.value, isFavorite: !isFav };
+    }
+  } catch (e) {
+    message.error(t('favorites.query_failed') + ': ' + e);
   }
 }
 
@@ -862,6 +899,24 @@ async function loadVersions(toolName) {
   }
 }
 
+// showInstallError（Spec 036 冒烟反馈 #3）：安装失败的错误 toast——
+// ① 存留时间延长到 10s（Naive UI 默认 3s，来不及看清/排查）；
+// ② 内嵌「复制错误」一键复制完整错误文本（与进度框 error alert 的
+// 复制按钮同语义；clipboard 不可用时静默降级为普通长时 toast）。
+function showInstallError(text) {
+  if (!text) return;
+  const copyErrorText = async () => {
+    try { await navigator.clipboard.writeText(text); } catch { /* clipboard unavailable */ }
+  };
+  message.error(() => h('span', null, [
+    text,
+    h('a', {
+      style: 'margin-left:10px;cursor:pointer;text-decoration:underline;white-space:nowrap;',
+      onClick: copyErrorText,
+    }, t('install.copy_error')),
+  ]), { duration: 10000 });
+}
+
 function mergeInstallTool(toolName, fallback = null) {
   const current = selectedTool.value?.name === toolName ? selectedTool.value : null;
   const local = tools.value.find(item => item.name === toolName || item.toolName === toolName);
@@ -869,7 +924,10 @@ function mergeInstallTool(toolName, fallback = null) {
 }
 
 async function doInstall(toolName, version, tool = null, formFilter = '') {
-  if (!version || installing.value) return;
+  if (!version) return;
+  // Spec 036 N2 补遗：此处原为静默早退——安装进行中点击任何安装入口
+  // （更新列表行/徽标弹层/抽屉/版本管理器）无任何反馈。改为 busy 提示。
+  if (installing.value) { message.warning(t('install.busy')); return; }
   tool = mergeInstallTool(toolName, tool);
   installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
 
@@ -937,17 +995,32 @@ function confirmFormInstall(formFilter) {
 }
 
 async function startInstallConfirmed(toolName, version, confirmed, formFilter = '') {
+  // Spec 036 N2: install mutex — every secondary install entry (row
+  // buttons, update badge popover, drawer, version manager, form
+  // selector, unverified confirm) converges here. The batch adapter
+  // never trips this: its loop waits for active=false between items.
+  if (installing.value) {
+    message.warning(t('install.busy'));
+    return;
+  }
   showProgress.value = true;
   const started = confirmed
     ? await runInstallConfirmed(toolName, version, formFilter)
     : await runInstall(toolName, version, formFilter);
-  if (!started && installError.value) message.error(t('install.failed', { error: installError.value.message }));
+  if (!started && installError.value) showInstallError(t('install.failed', { error: installError.value.message }));
+  // 冒烟反馈 #2 根因修复：必须把 started 布尔值返回给调用方——批量更新
+  // 适配器据 `if (!started)` 区分「启动失败」与「已启动（等待事件）」。
+  // 此前 void 返回 undefined 被当失败计，且 active 仍 true 导致下一项
+  // 预检 break——批量在首个成功启动的项之后即中止（成功0 失败1）。
+  return started;
 }
 
 // repairInstall force-reinstalls an installed (possibly incomplete) version.
 // Confirmation uses Naive UI so it is not hidden behind the Wails window.
 async function repairInstall(toolName, version) {
-  if (!version || installing.value) return;
+  if (!version) return;
+  // Spec 036 N2 补遗：同 doInstall——静默早退改 busy 提示。
+  if (installing.value) { message.warning(t('install.busy')); return; }
   installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
   showDrawer.value = false;
   dialog.warning({
@@ -960,9 +1033,16 @@ async function repairInstall(toolName, version) {
 }
 
 async function startRepairConfirmed(toolName, version) {
+  // Spec 036 N2: install mutex (converges both repair entries —
+  // repairInstall dialog and doInstall integrity-check dialog).
+  if (installing.value) {
+    message.warning(t('install.busy'));
+    return;
+  }
   showProgress.value = true;
   const started = await runRepair(toolName, version);
-  if (!started && installError.value) message.error(t('install.failed', { error: installError.value.message }));
+  if (!started && installError.value) showInstallError(t('install.failed', { error: installError.value.message }));
+  return started; // 冒烟反馈 #2：与 startInstallConfirmed 同契约（调用方需要布尔返回值）
 }
 
 async function refreshInstallViews(toolName) {
@@ -974,13 +1054,15 @@ async function refreshInstallViews(toolName) {
 }
 
 async function handleInstallComplete(data) {
-  showProgress.value = false;
+  // Spec 036 N4: during a batch the loop owns the progress dialog —
+  // resetting here would flicker it closed between items.
+  if (!batchActive.value) showProgress.value = false;
   message.success(t('install.success', { tool: data.tool, version: data.version }));
   await refreshInstallViews(data.tool);
 }
 
 async function handleInstallError(data) {
-  message.error(t('install.failed', { error: data.error || data.message }));
+  showInstallError(t('install.failed', { error: data.error || data.message }));
   await refreshInstallViews(data.tool || selectedTool.value?.name || '');
 }
 
@@ -988,7 +1070,8 @@ async function handleInstallCancel(data) {
   await refreshInstallViews(data.tool);
   await nextTick();
   installTrigger.value = document.querySelector(`[data-action="detail"][data-tool="${CSS.escape(data.tool)}"]`) || installTrigger.value;
-  showProgress.value = false;
+  // Spec 036 N4: during a batch the loop owns the progress dialog.
+  if (!batchActive.value) showProgress.value = false;
 }
 
 async function pauseDownload() {
@@ -1000,7 +1083,9 @@ async function resumeDownload() {
 }
 
 async function cancelDownload() {
-  if (await runCancel()) message.warning(t('download_cancelled'));
+  // Spec 036 N5: during a batch the summary toast already reports the
+  // cancellation — skip the per-item toast to avoid double messaging.
+  if (await runCancel() && !batchActive.value) message.warning(t('download_cancelled'));
 }
 
 async function useVersion(toolName, version) {
@@ -1061,7 +1146,13 @@ async function ignoreScanTool(item) {
 }
 
 async function migrateScanTool(item) {
-  await migrateTool(item.name, item.localPath || item.path || ""); scanResults.value = await window.go.gui.App.ScanLocalEnvironments() || []; await loadDashboard();
+  try {
+    await migrateTool(item.name, item.localPath || item.path || "");
+    scanResults.value = await window.go.gui.App.ScanLocalEnvironments() || [];
+    await loadDashboard();
+  } catch (e) {
+    message.error(t('dashboard.scan_failed') + ': ' + e);
+  }
 }
 
 async function unignoreTool(item) {
@@ -1114,10 +1205,14 @@ async function applySelfUpdate() {
   }
 }
 
-function ignoreSelfUpdate() {
-  window.go.gui.App.IgnoreSelfUpdate(selfUpdateInfo.value.latest);
+async function ignoreSelfUpdate() {
   showSelfUpdate.value = false;
   message.info(t('self_update.ignored', { latest: selfUpdateInfo.value.latest }));
+  try {
+    await window.go.gui.App.IgnoreSelfUpdate(selfUpdateInfo.value.latest);
+  } catch (e) {
+    console.error('IgnoreSelfUpdate failed:', e);
+  }
 }
 
 function quitSelfUpdate() {
@@ -1197,7 +1292,12 @@ async function exportProfile() {
     if (!dir) {
       return;
     }
-    const fullPath = dir + '\\xdev-profile.json';
+    // Separator-aware join: the picked dir already uses the native
+    // separator (Windows backslash, Unix forward slash). A hardcoded
+    // backslash becomes a literal filename character on Linux/macOS and
+    // the profile lands outside the chosen directory.
+    const sep = dir.includes('\\') ? '\\' : '/';
+    const fullPath = dir + sep + 'xdev-profile.json';
     await window.go.gui.App.ExportProfile(fullPath);
     message.success(t('settings.profile_export_success') + ': ' + fullPath);
   } catch (e) {
@@ -1212,7 +1312,8 @@ async function importProfile() {
     if (!dir) {
       return;
     }
-    const filePath = dir + '\\xdev-profile.json';
+    const sep = dir.includes('\\') ? '\\' : '/';
+    const filePath = dir + sep + 'xdev-profile.json';
     const result = await window.go.gui.App.ImportProfile(filePath);
     importResult.value = result;
     if (result.success) {

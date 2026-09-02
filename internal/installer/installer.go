@@ -151,6 +151,7 @@ type ProgressPhase int
 const (
 	PhaseDownloading ProgressPhase = iota // Downloading the archive
 	PhaseExtracting                       // Extracting the archive to disk
+	PhaseInstalling                       // Running an executable/script installer (rustup 等，无确定进度)
 	PhaseActivating                       // Creating symlinks, shims, and env vars
 )
 
@@ -463,9 +464,27 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
 		return nil, err
 	}
+
+	// Security (M-3 fix): serialize the remove/extract/verify span for the
+	// same tool across processes. Two concurrent `xdev install go@1.22`
+	// runs interleave stat/RemoveAll/extract and can corrupt the install
+	// tree (the integrity gate can race past a still-writing process).
+	// The lock is released before Activate, which acquires it internally.
+	installLock, lockErr := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
+	if lockErr != nil {
+		return nil, fmt.Errorf("install lock %s: %w", p.Name(), lockErr)
+	}
+	defer installLock.Release()
 	log.Printf("[install] Download complete, starting install-by-kind")
+	// 阶段语义：archive 走"解压"；executable/script（rustup 等滚动安装器）
+	// 走"正在安装"——运行安装器可能耗时数分钟（下载 toolchain）且无确定
+	// 进度，percent=-1 通知前端保持当前进度条、仅切换阶段文案。
 	if onProgress != nil {
-		onProgress(PhaseExtracting, 0, "", "")
+		if ResolveKind(arch) == manifest.InstallKindArchive {
+			onProgress(PhaseExtracting, 0, "", "")
+		} else {
+			onProgress(PhaseInstalling, -1, "", "")
+		}
 	}
 	if err := i.installByKind(ctx, p, arch, ver, installPath); err != nil {
 		log.Printf("[install] ERROR: install-by-kind failed for %s@%s: %v", p.Name(), ver, err)
@@ -474,7 +493,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	// Hard gate for archive extracts only. Executable/script installers
 	// may populate the install tree asynchronously or outside installPath
 	// (e.g. rustup), so binary-presence checks would false-fail them.
-	kind := resolveKind(arch)
+	kind := ResolveKind(arch)
 	if kind == manifest.InstallKindArchive {
 		if err := ensureInstallIntegrity(p, installPath, arch.Strip); err != nil {
 			log.Printf("[install] ERROR: %v", err)
@@ -965,13 +984,19 @@ func (i *Installer) extract(tool string, a *manifest.Archive, ver, dest string) 
 	return err
 }
 
-// resolveKind returns the effective install kind for an archive, applying
+// ResolveKind returns the effective install kind for an archive, applying
 // a conservative URL-based heuristic when the manifest doesn't declare
 // install_kind explicitly. This lets older manifests (e.g. rust.yaml
 // before the kind field was added) benefit from executable/script
 // routing without re-signing — the signature payload only covers
 // tool+sha256map+timestamp, not kind.
-func resolveKind(a *manifest.Archive) string {
+// Spec 035 F10: exported so the GUI preview logic (PreviewInstall) uses
+// the SAME kind resolution as the installer instead of a diverging
+// copy of the rule. A nil archive safely defaults to archive kind.
+func ResolveKind(a *manifest.Archive) string {
+	if a == nil {
+		return manifest.InstallKindArchive
+	}
 	kind := a.EffectiveKind()
 	if kind == manifest.InstallKindArchive && a.InstallKind == "" {
 		u := strings.ToLower(a.URL)
@@ -991,7 +1016,7 @@ func resolveKind(a *manifest.Archive) string {
 //   - executable: verify SHA-256, then run the cached binary
 //   - script: verify SHA-256, then execute the cached script via "sh"
 func (i *Installer) installByKind(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
-	kind := resolveKind(a)
+	kind := ResolveKind(a)
 	switch kind {
 	case manifest.InstallKindExecutable, manifest.InstallKindScript:
 		return i.runInstaller(ctx, p, a, ver, installPath)
@@ -1077,7 +1102,7 @@ func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manife
 		args[i] = replacer.Replace(arg)
 	}
 
-	kind := resolveKind(a)
+	kind := ResolveKind(a)
 	var name string
 	if kind == manifest.InstallKindScript {
 		name = "sh"
@@ -1134,12 +1159,23 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	}
 	defer lock.Release()
 
+	// Security (M-5 fix): p.Name() comes from the manifest YAML and is
+	// used to build current/<name>. A manifest named "..\evil" must never
+	// create a link outside current/ — validate as a safe single path
+	// component and re-check containment before any filesystem write.
+	if _, err := util.SafeName(p.Name()); err != nil {
+		return fmt.Errorf("refusing to activate tool with unsafe name %q: %w", p.Name(), err)
+	}
+
 	currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current")
 	if err := os.MkdirAll(currentDir, 0o755); err != nil {
 		log.Printf("[install] ERROR: failed to create current dir %s: %v", currentDir, err)
 		return err
 	}
 	currentLink := filepath.Join(currentDir, p.Name())
+	if err := util.ValidateSubPath(currentDir, currentLink); err != nil {
+		return fmt.Errorf("activation path %q escapes current dir: %w", currentLink, err)
+	}
 	log.Printf("[install] Activating: %s -> %s", currentLink, installPath)
 
 	// --- H-9 Rollback: Save previous state ---
@@ -1366,7 +1402,7 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 //   - err != nil 且解压已成功：err 是激活错误（版本已安装）
 //   - err != nil 且解压失败：err 是解压错误（版本未安装）
 func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
-	kind := resolveKind(a)
+	kind := ResolveKind(a)
 	switch kind {
 	case manifest.InstallKindExecutable, manifest.InstallKindScript:
 		// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
@@ -1618,8 +1654,18 @@ func (i *Installer) removeShims(p plugin.Plugin) {
 }
 
 // removeEnvFragment removes the env fragment file for a plugin.
+// Security (M-5 fix): p.Name() is manifest-controlled — an unsafe name
+// ("..\evil") would delete an arbitrary .sh file. Validate before use.
 func (i *Installer) removeEnvFragment(p plugin.Plugin) {
+	if _, err := util.SafeName(p.Name()); err != nil {
+		log.Printf("[install] WARNING: skipping env fragment removal for unsafe tool name %q: %v", p.Name(), err)
+		return
+	}
 	fragmentPath := filepath.Join(i.cfg.Core.EnvDir, p.Name()+".sh")
+	if err := util.ValidateSubPath(i.cfg.Core.EnvDir, fragmentPath); err != nil {
+		log.Printf("[install] WARNING: skipping env fragment removal: %v", err)
+		return
+	}
 	_ = os.Remove(fragmentPath)
 	log.Printf("[install] Removed env fragment: %s", fragmentPath)
 }
@@ -1704,8 +1750,6 @@ func InstallSelf(cfg *config.Config) (string, bool, error) {
 		if exe == targetExe {
 			// 已经在正确位置，只需确保 junction 存在
 			ensureSelfJunction(cfg, installDir)
-			// Also ensure xdev-gui is present
-			installGuiBinary(exe, installDir)
 			return installDir, false, nil
 		}
 		// 文件已存在但不是当前二进制，覆盖更新
@@ -1723,66 +1767,10 @@ func InstallSelf(cfg *config.Config) (string, bool, error) {
 	}
 	log.Printf("[self] 已安装 xdev@%s 到 %s", ver, installDir)
 
-	// Also copy xdev-gui binary if available
-	installGuiBinary(exe, installDir)
-
 	// 创建 junction
 	ensureSelfJunction(cfg, installDir)
 
 	return installDir, true, nil
-}
-
-// installGuiBinary finds and copies the xdev-gui binary to the install directory.
-// It looks for xdev-gui.exe next to the current executable.
-func installGuiBinary(currentExe string, installDir string) {
-	if runtime.GOOS != "windows" {
-		return // GUI binary is only relevant on Windows for now
-	}
-
-	guiExeName := "xdev-gui.exe"
-	targetGuiExe := filepath.Join(installDir, guiExeName)
-
-	// Check if xdev-gui.exe already exists and is up-to-date
-	if fi, err := os.Stat(targetGuiExe); err == nil && !fi.IsDir() {
-		// Already exists, check if source is newer
-		srcDir := filepath.Dir(currentExe)
-		srcGuiExe := filepath.Join(srcDir, guiExeName)
-		if srcFi, err := os.Stat(srcGuiExe); err == nil {
-			// Consider the binary up-to-date only if the source is not newer
-			// than the existing copy. We intentionally do NOT use size comparison
-			// because two different binaries can have the same size.
-			if !srcFi.ModTime().After(fi.ModTime()) {
-				return // already up-to-date
-			}
-		}
-	}
-
-	// Search for xdev-gui.exe in common locations
-	searchPaths := []string{
-		filepath.Join(filepath.Dir(currentExe), guiExeName), // Same directory as current exe
-	}
-
-	// If running from build/bin, also check the project root
-	exeDir := filepath.Dir(currentExe)
-	if filepath.Base(exeDir) == "bin" {
-		searchPaths = append(searchPaths,
-			filepath.Join(filepath.Dir(exeDir), guiExeName),               // build/
-			filepath.Join(filepath.Dir(filepath.Dir(exeDir)), guiExeName), // project root
-		)
-	}
-
-	for _, srcGuiExe := range searchPaths {
-		if fi, err := os.Stat(srcGuiExe); err == nil && !fi.IsDir() {
-			if err := util.CopyFile(srcGuiExe, targetGuiExe); err != nil {
-				log.Printf("[self] 复制 xdev-gui 失败: %v", err)
-			} else {
-				log.Printf("[self] 已安装 xdev-gui 到 %s", installDir)
-			}
-			return
-		}
-	}
-
-	log.Printf("[self] 未找到 xdev-gui.exe，跳过 GUI 二进制安装")
 }
 
 // ensureSelfJunction 确保 current/xdev junction 指向正确的安装目录

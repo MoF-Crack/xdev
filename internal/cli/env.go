@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -55,20 +54,19 @@ func newEnvCmd() *cobra.Command {
 			}
 			installPath := p.InstallDir(Cfg().Core.InstallDir, ver)
 			vars := p.EnvVars(installPath)
-			keys := make([]string, 0, len(vars))
-			for k := range vars {
-				keys = append(keys, k)
+			// Security (C-1 fix): this output is designed to be eval'd, so it
+			// must go through envpkg.HookOutput, which validates env-var names
+			// and single-quotes values for POSIX shells / escapes them for
+			// PowerShell. A manifest env_vars value containing ", $, backtick
+			// or $(...) must never execute as shell code.
+			shell := strings.ToLower(strings.TrimSpace(flagShell))
+			switch shell {
+			case "powershell", "pwsh":
+				shell = "powershell"
+			case "":
+				shell = "sh"
 			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				v := vars[k]
-				switch strings.ToLower(flagShell) {
-				case "powershell", "pwsh":
-					fmt.Printf("$env:%s = \"%s\"\n", k, v)
-				default:
-					fmt.Printf("export %s=\"%s\"\n", k, v)
-				}
-			}
+			fmt.Print(envpkg.HookOutput(shell, nil, vars))
 			return nil
 		},
 	}

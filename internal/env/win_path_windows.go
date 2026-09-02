@@ -45,6 +45,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/xmdemt/xdev/internal/util"
@@ -71,6 +72,30 @@ const (
 	_ERROR_NO_MORE_ITEMS  = 259
 )
 
+// withUserPathLock serializes PATH read-modify-write cycles across
+// processes. Security (L-2 fix): every PATH mutator does
+// read-registry → modify → write-registry; concurrent xdev processes
+// (GUI + CLI, or two CLI invocations) could otherwise drop each other's
+// entries. The lock file lives under ~/.xdev/.locks — a fixed, user-owned
+// location that does not depend on config resolution.
+func withUserPathLock(fn func() error) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Cannot resolve the lock location — degrade to the unprotected
+		// call rather than failing PATH management entirely.
+		return fn()
+	}
+	lockPath := filepath.Join(home, ".xdev", ".locks", "userpath.lock")
+	fl, err := util.AcquireFileLock(lockPath, 10*time.Second)
+	if err != nil {
+		// Contention beyond 10s: proceed without the lock (the registry
+		// write itself is atomic; only the read-modify-write window races).
+		return fn()
+	}
+	defer fl.Release()
+	return fn()
+}
+
 // SetWindowsUserPath prepends shimDir to the user's PATH environment
 // variable stored in the Windows registry (HKCU\Environment).  If
 // shimDir is already present the function returns nil immediately.
@@ -78,242 +103,258 @@ const (
 // After modifying the registry we broadcast WM_SETTINGCHANGE so that
 // new processes pick up the change without a reboot.
 func SetWindowsUserPath(shimDir string) error {
-	shimDir = filepath.Clean(shimDir)
+	return withUserPathLock(func() error {
+		shimDir = filepath.Clean(shimDir)
 
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	// Already present?
-	for _, p := range strings.Split(current, ";") {
-		if filepath.Clean(p) == shimDir {
-			return nil
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
 		}
-	}
 
-	newPath := shimDir + ";" + current
-	if err := WriteUserPath(newPath); err != nil {
-		return fmt.Errorf("write user PATH: %w", err)
-	}
-	BroadcastEnvironmentChange()
-	return nil
+		// Already present?
+		for _, p := range strings.Split(current, ";") {
+			if filepath.Clean(p) == shimDir {
+				return nil
+			}
+		}
+
+		newPath := shimDir + ";" + current
+		if err := WriteUserPath(newPath); err != nil {
+			return fmt.Errorf("write user PATH: %w", err)
+		}
+		BroadcastEnvironmentChange()
+		return nil
+	})
 }
 
 // RemoveFromWindowsUserPath removes shimDir from the user's PATH
 // environment variable stored in the Windows registry.
 func RemoveFromWindowsUserPath(shimDir string) error {
-	shimDir = filepath.Clean(shimDir)
+	return withUserPathLock(func() error {
+		shimDir = filepath.Clean(shimDir)
 
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	parts := strings.Split(current, ";")
-	var kept []string
-	for _, p := range parts {
-		if filepath.Clean(p) != shimDir {
-			kept = append(kept, p)
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
 		}
-	}
 
-	newPath := strings.Join(kept, ";")
-	if err := WriteUserPath(newPath); err != nil {
-		return fmt.Errorf("write user PATH: %w", err)
-	}
-	BroadcastEnvironmentChange()
-	return nil
+		parts := strings.Split(current, ";")
+		var kept []string
+		for _, p := range parts {
+			if filepath.Clean(p) != shimDir {
+				kept = append(kept, p)
+			}
+		}
+
+		newPath := strings.Join(kept, ";")
+		if err := WriteUserPath(newPath); err != nil {
+			return fmt.Errorf("write user PATH: %w", err)
+		}
+		BroadcastEnvironmentChange()
+		return nil
+	})
 }
 
 // AppendToUserPath 将指定目录追加到用户级 PATH 末尾（如果尚未存在）。
 // 用于将工具的 bin 目录加入 PATH，使得命令在终端中直接可用。
 // 安全检查：验证路径存在且是目录，防止无效路径或文件被写入 PATH。
 func AppendToUserPath(dir string) error {
-	dir = filepath.Clean(dir)
+	return withUserPathLock(func() error {
+		dir = filepath.Clean(dir)
 
-	// 安全检查：路径必须存在且是目录
-	if fi, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("path does not exist: %s", dir)
-	} else if !fi.IsDir() {
-		return fmt.Errorf("path is not a directory: %s", dir)
-	}
-
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	// 已存在则跳过
-	for _, p := range strings.Split(current, ";") {
-		if strings.EqualFold(filepath.Clean(p), dir) {
-			return nil
+		// 安全检查：路径必须存在且是目录
+		if fi, err := os.Stat(dir); err != nil {
+			return fmt.Errorf("path does not exist: %s", dir)
+		} else if !fi.IsDir() {
+			return fmt.Errorf("path is not a directory: %s", dir)
 		}
-	}
 
-	// 追加到末尾
-	newPath := current + ";" + dir
-	if err := WriteUserPath(newPath); err != nil {
-		return fmt.Errorf("write user PATH: %w", err)
-	}
-	BroadcastEnvironmentChange()
-	return nil
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
+		}
+
+		// 已存在则跳过
+		for _, p := range strings.Split(current, ";") {
+			if strings.EqualFold(filepath.Clean(p), dir) {
+				return nil
+			}
+		}
+
+		// 追加到末尾
+		newPath := current + ";" + dir
+		if err := WriteUserPath(newPath); err != nil {
+			return fmt.Errorf("write user PATH: %w", err)
+		}
+		BroadcastEnvironmentChange()
+		return nil
+	})
 }
 
 // RemoveFromUserPath 从用户级 PATH 中移除指定目录。
 func RemoveFromUserPath(dir string) error {
-	dir = filepath.Clean(dir)
+	return withUserPathLock(func() error {
+		dir = filepath.Clean(dir)
 
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	parts := strings.Split(current, ";")
-	var kept []string
-	target := filepath.Clean(dir)
-	for _, p := range parts {
-		if !strings.EqualFold(filepath.Clean(p), target) {
-			kept = append(kept, p)
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
 		}
-	}
 
-	newPath := strings.Join(kept, ";")
-	if err := WriteUserPath(newPath); err != nil {
-		return fmt.Errorf("write user PATH: %w", err)
-	}
-	BroadcastEnvironmentChange()
-	return nil
+		parts := strings.Split(current, ";")
+		var kept []string
+		target := filepath.Clean(dir)
+		for _, p := range parts {
+			if !strings.EqualFold(filepath.Clean(p), target) {
+				kept = append(kept, p)
+			}
+		}
+
+		newPath := strings.Join(kept, ";")
+		if err := WriteUserPath(newPath); err != nil {
+			return fmt.Errorf("write user PATH: %w", err)
+		}
+		BroadcastEnvironmentChange()
+		return nil
+	})
 }
 
 // RemoveFromUserPathPrefix 删除用户 PATH 中所有以 prefix 开头的条目
 // （Windows 大小写不敏感）。用于清掉测试残留的 TempDir 路径。
 func RemoveFromUserPathPrefix(prefix string) error {
-	prefix = strings.ToLower(filepath.Clean(prefix))
-	if prefix == "" || prefix == "." {
-		return fmt.Errorf("refusing to remove PATH entries with empty prefix")
-	}
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-	parts := strings.Split(current, ";")
-	var kept []string
-	changed := false
-	for _, p := range parts {
-		cleaned := strings.ToLower(filepath.Clean(p))
-		if cleaned == prefix || strings.HasPrefix(cleaned, prefix+string(os.PathSeparator)) {
-			changed = true
-			continue
+	return withUserPathLock(func() error {
+		prefix = strings.ToLower(filepath.Clean(prefix))
+		if prefix == "" || prefix == "." {
+			return fmt.Errorf("refusing to remove PATH entries with empty prefix")
 		}
-		kept = append(kept, p)
-	}
-	if !changed {
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
+		}
+		parts := strings.Split(current, ";")
+		var kept []string
+		changed := false
+		for _, p := range parts {
+			cleaned := strings.ToLower(filepath.Clean(p))
+			if cleaned == prefix || strings.HasPrefix(cleaned, prefix+string(os.PathSeparator)) {
+				changed = true
+				continue
+			}
+			kept = append(kept, p)
+		}
+		if !changed {
+			return nil
+		}
+		if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
+			return fmt.Errorf("write user PATH: %w", err)
+		}
+		BroadcastEnvironmentChange()
 		return nil
-	}
-	if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
-		return fmt.Errorf("write user PATH: %w", err)
-	}
-	BroadcastEnvironmentChange()
-	return nil
+	})
 }
 
 // AddCurrentBinPaths 将 current/<tool> 的 bin 子目录添加到用户 PATH。
 // binPaths 由 ToolBinPaths(toolName, currentDir) 生成。
 // 这些路径使用 current/ 前缀，切换版本时只需改 Junction，PATH 不变。
 func AddCurrentBinPaths(binPaths []string) error {
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	parts := strings.Split(current, ";")
-	existing := make(map[string]bool)
-	for _, p := range parts {
-		existing[strings.ToLower(filepath.Clean(p))] = true
-	}
-
-	changed := false
-	for _, bp := range binPaths {
-		cleanBP := filepath.Clean(bp)
-		if !existing[strings.ToLower(cleanBP)] {
-			parts = append(parts, cleanBP)
-			changed = true
+	return withUserPathLock(func() error {
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
 		}
-	}
 
-	if changed {
-		if err := WriteUserPath(strings.Join(parts, ";")); err != nil {
-			return fmt.Errorf("write user PATH: %w", err)
+		parts := strings.Split(current, ";")
+		existing := make(map[string]bool)
+		for _, p := range parts {
+			existing[strings.ToLower(filepath.Clean(p))] = true
 		}
-		BroadcastEnvironmentChange()
-	}
-	return nil
+
+		changed := false
+		for _, bp := range binPaths {
+			cleanBP := filepath.Clean(bp)
+			if !existing[strings.ToLower(cleanBP)] {
+				parts = append(parts, cleanBP)
+				changed = true
+			}
+		}
+
+		if changed {
+			if err := WriteUserPath(strings.Join(parts, ";")); err != nil {
+				return fmt.Errorf("write user PATH: %w", err)
+			}
+			BroadcastEnvironmentChange()
+		}
+		return nil
+	})
 }
 
 // RemoveCurrentBinPaths 从用户 PATH 中移除 current/<tool> 的 bin 子目录。
 func RemoveCurrentBinPaths(binPaths []string) error {
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	toRemove := make(map[string]bool)
-	for _, bp := range binPaths {
-		toRemove[strings.ToLower(filepath.Clean(bp))] = true
-	}
-
-	parts := strings.Split(current, ";")
-	var kept []string
-	changed := false
-	for _, p := range parts {
-		if toRemove[strings.ToLower(filepath.Clean(p))] {
-			changed = true
-			continue
+	return withUserPathLock(func() error {
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
 		}
-		kept = append(kept, p)
-	}
 
-	if changed {
-		if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
-			return fmt.Errorf("write user PATH: %w", err)
+		toRemove := make(map[string]bool)
+		for _, bp := range binPaths {
+			toRemove[strings.ToLower(filepath.Clean(bp))] = true
 		}
-		BroadcastEnvironmentChange()
-	}
-	return nil
+
+		parts := strings.Split(current, ";")
+		var kept []string
+		changed := false
+		for _, p := range parts {
+			if toRemove[strings.ToLower(filepath.Clean(p))] {
+				changed = true
+				continue
+			}
+			kept = append(kept, p)
+		}
+
+		if changed {
+			if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
+				return fmt.Errorf("write user PATH: %w", err)
+			}
+			BroadcastEnvironmentChange()
+		}
+		return nil
+	})
 }
 
 // RemoveAllCurrentPaths 从用户 PATH 中移除所有 current/ 前缀的条目。
 // 用于从 direct 模式切换回 shim 模式时清理。
 func RemoveAllCurrentPaths(currentDir string) error {
-	current, err := ReadUserPath()
-	if err != nil {
-		return fmt.Errorf("read user PATH: %w", err)
-	}
-
-	currentPrefix := strings.ToLower(filepath.Clean(currentDir))
-	if !strings.HasSuffix(currentPrefix, "\\") && !strings.HasSuffix(currentPrefix, "/") {
-		currentPrefix += "\\"
-	}
-
-	parts := strings.Split(current, ";")
-	var kept []string
-	changed := false
-	for _, p := range parts {
-		if strings.HasPrefix(strings.ToLower(filepath.Clean(p)), currentPrefix) {
-			changed = true
-			continue
+	return withUserPathLock(func() error {
+		current, err := ReadUserPath()
+		if err != nil {
+			return fmt.Errorf("read user PATH: %w", err)
 		}
-		kept = append(kept, p)
-	}
 
-	if changed {
-		if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
-			return fmt.Errorf("write user PATH: %w", err)
+		currentPrefix := strings.ToLower(filepath.Clean(currentDir))
+		if !strings.HasSuffix(currentPrefix, "\\") && !strings.HasSuffix(currentPrefix, "/") {
+			currentPrefix += "\\"
 		}
-		BroadcastEnvironmentChange()
-	}
-	return nil
+
+		parts := strings.Split(current, ";")
+		var kept []string
+		changed := false
+		for _, p := range parts {
+			if strings.HasPrefix(strings.ToLower(filepath.Clean(p)), currentPrefix) {
+				changed = true
+				continue
+			}
+			kept = append(kept, p)
+		}
+
+		if changed {
+			if err := WriteUserPath(strings.Join(kept, ";")); err != nil {
+				return fmt.Errorf("write user PATH: %w", err)
+			}
+			BroadcastEnvironmentChange()
+		}
+		return nil
+	})
 }
 
 // ReadUserPath reads the "Path" value from HKCU\Environment using the
