@@ -310,6 +310,35 @@ test('installation progress visual baseline', async ({ page }, testInfo) => {
   });
 });
 
+test('backgrounded install shows a toolbar progress indicator that reopens the dialog', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, cases.progress);
+  await openToolCatalog(page);
+  await page.getByText('Node.js', { exact: true }).click();
+  await page.getByRole('button', { name: '安装' }).locator(':not([disabled])').first().click();
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    tool: 'node', version: '22.14.0', percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s',
+  }));
+  await expect(page.locator('.n-modal')).toBeVisible();
+  // Send the install to the background — the modal closes but stays active.
+  await page.getByRole('button', { name: '后台运行' }).click();
+  await expect(page.locator('.n-modal')).toBeHidden();
+  // The toolbar indicator appears with the live percent.
+  const indicator = page.locator('[data-action="show-install-progress"]');
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toContainText('42%');
+  // Live progress keeps flowing into the indicator while backgrounded.
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    tool: 'node', version: '22.14.0', percent: 77, phase: 'Downloading', speed: '9 MB/s', eta: '3s',
+  }));
+  await expect(indicator).toContainText('77%');
+  // Clicking the indicator reopens the progress dialog with live state.
+  await indicator.click();
+  await expect(page.locator('.n-modal')).toBeVisible();
+  await expect(page.locator('.n-modal')).toContainText('77%');
+  // The indicator hides while the dialog is open again.
+  await expect(indicator).toBeHidden();
+});
+
 test('installation pause resume and cancel use the active task and protect the dialog', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
   await openToolCatalog(page);

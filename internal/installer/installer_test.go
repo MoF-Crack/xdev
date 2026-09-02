@@ -477,6 +477,70 @@ func TestInstallSelf_AlreadyInstalled(t *testing.T) {
 	_ = isNew2 // isNew2 is true because exe != targetExe in test context
 }
 
+// 冒烟反馈 #6：InstallSelf 不得再向版本目录复制 xdev-gui.exe
+// （单二进制模型——GUI/CLI/TUI 同一可执行文件）。
+func TestInstallSelf_NoGuiBinaryInVersionDir(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := &config.Config{
+		Core: config.CoreConfig{
+			XMDevDir:   tmp,
+			InstallDir: filepath.Join(tmp, "install"),
+		},
+	}
+
+	if _, _, err := InstallSelf(cfg); err != nil {
+		t.Fatalf("InstallSelf failed: %v", err)
+	}
+
+	expectedDir := filepath.Join(cfg.Core.InstallDir, "xdev", version.Version)
+	guiPath := filepath.Join(expectedDir, "xdev-gui.exe")
+	if _, err := os.Stat(guiPath); !os.IsNotExist(err) {
+		t.Errorf("xdev-gui.exe must not be created in the version dir, stat err=%v", err)
+	}
+}
+
+// 冒烟反馈 #6：junction 原指向旧版本目录（模拟 1.2.2-alpha）时，
+// InstallSelf 后必须切到当前版本目录。
+func TestInstallSelf_JunctionSwitchesFromLegacyDir(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := &config.Config{
+		Core: config.CoreConfig{
+			XMDevDir:   tmp,
+			InstallDir: filepath.Join(tmp, "install"),
+		},
+	}
+
+	// 模拟旧版本目录 + junction 指向它
+	legacyDir := filepath.Join(cfg.Core.InstallDir, "xdev", "1.2.2-alpha")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "xdev.exe"), []byte("legacy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	currentDir := filepath.Join(tmp, "current")
+	if err := os.MkdirAll(currentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	currentLink := filepath.Join(currentDir, "xdev")
+	if err := util.CreateJunction(currentLink, legacyDir); err != nil {
+		t.Skipf("junction not supported here: %v", err)
+	}
+
+	if _, _, err := InstallSelf(cfg); err != nil {
+		t.Fatalf("InstallSelf failed: %v", err)
+	}
+
+	target, err := os.Readlink(currentLink)
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	expectedDir := filepath.Join(cfg.Core.InstallDir, "xdev", version.Version)
+	if filepath.Clean(target) != filepath.Clean(expectedDir) {
+		t.Errorf("junction target = %q, want %q (legacy %q must be switched away)", target, expectedDir, legacyDir)
+	}
+}
+
 func TestInstallSelf_EnsureJunction(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := &config.Config{

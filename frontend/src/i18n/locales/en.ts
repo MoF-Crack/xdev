@@ -42,6 +42,7 @@ export default {
   'btn.browse': 'Browse',
   'btn.test': 'Test',
   'btn.update': 'Update',
+  'btn.skip': 'Skip',
   'btn.edit': 'Edit',
   'btn.delete': 'Delete',
   'btn.clean': 'Clean',
@@ -232,6 +233,7 @@ export default {
   'install.progress': 'Installation progress',
   'installing_downloading': 'Downloading...',
   'installing_extracting': 'Extracting...',
+  'installing_installing': 'Installing (running installer, may take several minutes)...',
   'installing_completed': 'Completed',
   'install.background': 'Run in background',
   'install.copy_error': 'Copy Error',
@@ -562,6 +564,10 @@ export default {
   'updates.count': '{n} updates',
   'updates.empty': 'No updates available',
   'updates.install': 'Install',
+  'updates.install_all': 'Update All',
+  'updates.install_all_confirm': 'Install {n} available update(s) one by one. Continue?',
+  'updates.install_all_summary': 'Updates finished: {done} succeeded, {failed} failed, {skipped} skipped',
+  'updates.install_all_cancelled': 'Update batch cancelled: {done} succeeded, {failed} failed, {skipped} skipped',
   'updates.ignore': 'Ignore',
   'updates.ignored_ok': 'Update ignored',
   'updates.sniff_now': 'Sniff This Tool',
@@ -605,6 +611,11 @@ export default {
   'install.tofu_warning_title': 'Version Verification Notice',
   'install.tofu_warning_content': '{tool} {version} has not been pre-verified. The download has completed and its checksum has been recorded. Future installations of this version will verify against this checksum.',
   'install.tofu_warning_confirm': 'Continue',
+
+  // Install mutex (Spec 036 N2)
+  'install.busy': 'An installation is already in progress',
+  // Background install progress indicator (smoke feedback #4)
+  'install.background_progress': 'Installing in background',
 
   // Unverified version confirmation (sniff-discovered)
   'install.unverified_title': 'Unverified Version',

@@ -39,14 +39,19 @@ var defaultProbeVersion probeVersionFunc = func(path string) string {
 	return toolmeta.ExtractVersionFromOutput(string(out))
 }
 
-// ReplaceStaleCLICopy 探测 homeDir 根下 xdev CLI 副本版本，若旧于当前版本
-// （version.Version）则用 currentExe 覆盖副本，替换前后校验 SHA-256。
+// ReplaceStaleCLICopy 探测 homeDir 根下 xdev CLI 副本，若与当前运行二进制
+// 不一致则用 currentExe 覆盖副本，替换前后校验 SHA-256。
+//
+// 镜像一致性语义（冒烟反馈 #5 修复）：home 根副本的职责是「当前运行
+// 二进制的镜像」——版本不同即替换。此前的 CompareSemver 判「旧于才替换」
+// 在版本号断层上方向反转（旧分支 1.2.2-alpha vs 主线 0.3.3：1.2.2 > 0.3.3
+// 被判「副本更新」→ 永不替换）。镜像语义同时覆盖同版本不同构建（本地重编）。
 //
 // 安全边界（全部跳过并返回 nil，不阻塞启动）：
 //   - 副本不存在或为目录（缺失场景由 EnsureSelfInstalled 复制）
 //   - 副本路径与 currentExe 相同（自指）
-//   - 版本探测失败（不可执行/超时/解析不出版本）
-//   - 副本版本不旧于当前版本
+//   - 版本探测失败（不可执行/超时/解析不出版本——防误伤 home 根的无关 exe）
+//   - 探测版本 == 当前版本（已是镜像；同版本必同构建，构建元数据不参与）
 func ReplaceStaleCLICopy(currentExe, homeDir string) error {
 	return ReplaceStaleCLICopyWithProbe(currentExe, homeDir, defaultProbeVersion)
 }
@@ -79,10 +84,10 @@ func ReplaceStaleCLICopyWithProbe(currentExe, homeDir string, probe probeVersion
 
 	probed := probe(copyPath)
 	if probed == "" {
-		return nil // 探测失败：跳过（可能是损坏副本，不能盲目覆盖）
+		return nil // 探测失败：跳过（可能是损坏副本或无关 exe，不能盲目覆盖）
 	}
-	if util.CompareSemver(probed, version.Version) >= 0 {
-		return nil // 副本不旧于当前：不动
+	if probed == version.Version {
+		return nil // 已是当前版本的镜像：不动
 	}
 
 	// 替换：用当前可执行文件覆盖旧副本，前后 SHA-256 校验一致。

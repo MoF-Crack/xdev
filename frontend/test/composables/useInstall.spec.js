@@ -141,4 +141,94 @@ describe('useInstall', () => {
     expect(state.progress.value.eta).toBe('5s');
     expect(state.phase.value).toBe('Attempt 2/3 for github.com');
   });
+
+  // --- Spec 035 F2a: waitForCompletion waiter + race guards ---
+
+  it('waitForCompletion resolves completed on the Completed event', async () => {
+    const { listeners } = setup();
+    const state = useInstall();
+    await state.install('node', '22');
+    const pending = state.waitForCompletion();
+    listeners.installProgress.forEach((fn) => fn({ taskId: 'node@22', phase: 'Completed', percent: 100 }));
+    await expect(pending).resolves.toBe('completed');
+  });
+
+  it('waitForCompletion resolves error on the installError event', async () => {
+    const { listeners } = setup();
+    const state = useInstall();
+    await state.install('go', '1.24');
+    const pending = state.waitForCompletion();
+    listeners.installError.forEach((fn) => fn({ taskId: 'go@1.24', error: 'x' }));
+    await expect(pending).resolves.toBe('error');
+    expect(state.error.value.message).toBe('x');
+  });
+
+  it('waitForCompletion resolves cancelled after cancel()', async () => {
+    const { app } = setup();
+    const state = useInstall();
+    await state.install('java', '21');
+    const pending = state.waitForCompletion();
+    await state.cancel();
+    await expect(pending).resolves.toBe('cancelled');
+    expect(app.CancelDownload).toHaveBeenCalledWith('java@21');
+  });
+
+  it('a cancel ack event resolves cancelled once and suppresses the error toast', async () => {
+    // Race: user presses Cancel; before the IPC returns, the backend
+    // already emits installError("下载已取消"). The event must resolve
+    // the waiter as 'cancelled' and NOT surface an error/reportError.
+    const { listeners, app } = setup({
+      CancelDownload: vi.fn(() => new Promise((resolve) => { setTimeout(resolve, 10); })),
+    });
+    const onError = vi.fn();
+    const state = useInstall({ onError });
+    await state.install('java', '21');
+    const pending = state.waitForCompletion();
+    const cancelPromise = state.cancel();
+    listeners.installError.forEach((fn) => fn({ taskId: 'java@21', error: '下载已取消' }));
+    await cancelPromise;
+    await expect(pending).resolves.toBe('cancelled');
+    expect(state.error.value).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+    expect(app.CancelDownload).toHaveBeenCalled();
+  });
+
+  it('an error arriving after cancel completed does not overwrite lastResult', async () => {
+    const { listeners } = setup();
+    const state = useInstall();
+    await state.install('java', '21');
+    await state.cancel();
+    // Late event after active=false — dropped by the guard entirely.
+    listeners.installError.forEach((fn) => fn({ taskId: 'java@21', error: 'late' }));
+    await expect(state.waitForCompletion()).resolves.toBe('cancelled');
+  });
+
+  it('waitForCompletion returns the recorded result when the event landed first', async () => {
+    // Fast path: already-installed versions emit Completed synchronously,
+    // BEFORE waitForCompletion registers — lastResult must cover it.
+    const { listeners } = setup();
+    const state = useInstall();
+    await state.install('node', '22');
+    listeners.installProgress.forEach((fn) => fn({ taskId: 'node@22', phase: 'Completed', percent: 100 }));
+    await expect(state.waitForCompletion()).resolves.toBe('completed');
+  });
+
+  it('dispose releases a pending waiter as disposed', async () => {
+    const { listeners } = setup();
+    const scope = effectScope();
+    let state;
+    scope.run(() => { state = useInstall(); });
+    await state.install('node', '22');
+    const pending = state.waitForCompletion();
+    scope.stop();
+    // dispose notified the waiter BEFORE unsubscribing, so it resolves
+    // 'disposed' even though no further events can arrive.
+    expect(listeners.installProgress).toBeDefined();
+    await expect(pending).resolves.toBe('disposed');
+  });
+
+  it('waitForCompletion with nothing recorded resolves idle', async () => {
+    const state = useInstall();
+    await expect(state.waitForCompletion()).resolves.toBe('idle');
+  });
 });

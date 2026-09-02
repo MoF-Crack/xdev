@@ -79,6 +79,26 @@ export function createInitializedWailsBrowserMocks() {
   }];
   const methods = {
     IsInitialized: async () => true,
+    // Spec 032 bootstrap round-trip: AppContent calls GetBootstrapState
+    // first on mount. The Proxy fallback would answer [] (no throw, no
+    // data) leaving categories/stats/favorites empty — the e2e sidebar
+    // never got its dynamic tool pages until this mock existed.
+    GetBootstrapState: async () => ({
+      initialized: true,
+      categories: [{ name: 'language', displayName: 'Languages' }, { name: 'package-manager', displayName: 'Package Managers' }],
+      stats: {
+        totalTools: 24,
+        installedCount: 3,
+        installSize: 1610612736,
+        cacheSize: 268435456,
+        xmdevDir: 'D:\\XDev',
+        installDir: 'D:\\XDev\\install',
+        shimDir: 'D:\\XDev\\shims',
+        cacheDir: 'D:\\XDev\\cache',
+        installedTools: [{ displayName: 'Node.js', version: '20.18.0', category: 'language' }],
+      },
+      favorites: [{ name: 'node', displayName: 'Node.js', category: 'language', addedAt: '2026-08-01', activeVersion: '20.18.0', installed: true, localVersion: '20.18.0', localPath: 'C:\\Program Files\\nodejs', source: 'xdev', formFactor: ['gui', 'cli'] }],
+    }),
     GetCategories: async () => [{ name: 'language', displayName: 'Languages' }, { name: 'package-manager', displayName: 'Package Managers' }],
     GetToolsByCategory: async (category) => category === 'package-manager' ? [{ name: 'npm', toolName: 'npm', displayName: 'npm', category: 'package-manager', installed: false, canInstall: true, isFavorite: false }, { name: 'pnpm', toolName: 'pnpm', displayName: 'pnpm', category: 'package-manager', installed: true, canInstall: true, isFavorite: true, hasUpdate: true }, { name: 'manual-pm', toolName: 'manual-pm', displayName: 'Manual PM', category: 'package-manager', installed: false, canInstall: false, installHint: 'Install from vendor site' }] : tools,
     GetDashboardStats: async () => ({

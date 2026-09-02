@@ -21,6 +21,7 @@ func (m Model) viewHelpOverlay(base string) string {
 		{"i", "Install selected tool"},
 		{"u", "Uninstall version"},
 		{"r", "Refresh remote versions"},
+		{"x", "Available updates (sniff)"},
 		{"l", "Expand/collapse version list"},
 		{"q/Ctrl+C", "Quit"},
 		{"Esc", "Cancel / Close popup"},

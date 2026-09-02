@@ -327,6 +327,10 @@ func showUpdates(cmd *cobra.Command) error {
 		fmt.Printf("  %-16s %s → %s  (xdev install %s@%s)\n",
 			u.Tool, u.Installed, u.Available, u.Tool, u.Available)
 	}
+	// 一键更新提示（嗅探结果基于缓存；upgrade --all 逐个升级全部）。
+	if len(upgrades) > 0 {
+		fmt.Printf("\n一键更新全部：xdev upgrade --all\n")
+	}
 	return nil
 }
 

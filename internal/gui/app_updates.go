@@ -306,10 +306,13 @@ var allowedXdevSubcommands = map[string]struct{}{
 
 // runXdevCommand executes a raw xdev command string and returns its output.
 // Used by update actions that need to invoke the CLI.
+// Spec 035 F8: resolve our own executable path FIRST and only fall
+// back to exec.LookPath — a same-named "xdev" earlier on PATH could
+// otherwise shadow (or hijack) the CLI we invoke.
 func (a *App) runXdevCommand(args string) (string, error) {
-	exe, err := exec.LookPath("xdev")
+	exe, err := os.Executable()
 	if err != nil {
-		exe, err = os.Executable()
+		exe, err = exec.LookPath("xdev")
 		if err != nil {
 			return "", err
 		}

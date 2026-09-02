@@ -83,9 +83,84 @@ func TestKindRouting_ArchiveExtractsNotRuns(t *testing.T) {
 	}
 }
 
-// TestKindRouting_ExecutableRunsAfterSHA verifies that kind=executable
-// runs the cached binary via the exec runner (mocked) after SHA
-// verification. The runner receives the cached exe path and InstallArgs.
+// TestKindRouting_PhaseInstallingForExecutable 验证 executable/script 安装
+// 在 install-by-kind 阶段发送 PhaseInstalling（而非 Extracting）——滚动
+// 安装器（rustup 等）运行期无确定进度，前端据此显示"正在安装"文案。
+func TestKindRouting_PhaseInstallingForExecutable(t *testing.T) {
+	ins, cfg, _ := newTestInstaller(t)
+	mr := &mockExecRunner{}
+	ins.SetExecRunner(mr)
+
+	content := "fake-exe-payload"
+	seedCacheFile(t, cfg.Core.CacheDir, "fakeexe3", "1.0.0", "exe", content)
+	realSHA := sha256Hex(t, content)
+
+	p := &fakePlugin{
+		name:  "fakeexe3",
+		shims: []string{},
+		archive: &manifest.Archive{
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "exe",
+			URL: "https://example.test/fakeexe3-1.0.0.exe", SHA256: realSHA,
+			InstallKind: manifest.InstallKindExecutable,
+			InstallArgs: []string{"--silent", "-y"},
+		},
+	}
+
+	var phases []ProgressPhase
+	_, err := ins.InstallWithProgress(context.Background(), p, "1.0.0",
+		func(phase ProgressPhase, percent float64, speed, eta string) {
+			phases = append(phases, phase)
+		}, InstallOptions{NoActivate: true})
+	if err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+	found := false
+	for _, ph := range phases {
+		if ph == PhaseInstalling {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("executable install phases = %v, want PhaseInstalling present (no Extracting for rolling installers)", phases)
+	}
+}
+
+// TestKindRouting_ArchiveEmitsExtracting 回归：archive 仍走 PhaseExtracting。
+func TestKindRouting_ArchiveEmitsExtracting(t *testing.T) {
+	ins, cfg, _ := newTestInstaller(t)
+	ins.SetExecRunner(&mockExecRunner{})
+
+	cacheFile := filepath.Join(cfg.Core.CacheDir, "fakego2-1.0.0.zip")
+	makeFakeZip(t, cacheFile, "fakego2")
+	realSHA := fileSHA(t, cacheFile)
+
+	p := &fakePlugin{
+		name:  "fakego2",
+		shims: []string{},
+		archive: &manifest.Archive{
+			OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
+			URL: "https://example.test/fakego2-1.0.0.zip", SHA256: realSHA, Strip: 1,
+		},
+	}
+
+	var phases []ProgressPhase
+	_, err := ins.InstallWithProgress(context.Background(), p, "1.0.0",
+		func(phase ProgressPhase, percent float64, speed, eta string) {
+			phases = append(phases, phase)
+		}, InstallOptions{NoActivate: true})
+	if err != nil {
+		t.Fatalf("Install failed: %v", err)
+	}
+	found := false
+	for _, ph := range phases {
+		if ph == PhaseExtracting {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("archive install phases = %v, want PhaseExtracting present", phases)
+	}
+}
 func TestKindRouting_ExecutableRunsAfterSHA(t *testing.T) {
 	ins, cfg, _ := newTestInstaller(t)
 	mr := &mockExecRunner{}
@@ -224,5 +299,32 @@ func TestRunInstaller_PlaceholderSHARejects(t *testing.T) {
 	}
 	if mr.called {
 		t.Error("execRunner must NOT be called when SHA is a placeholder")
+	}
+}
+
+// TestResolveKind_NilArchive (Spec 035 F10): the exported entry point
+// must not panic on nil — GUI preview paths call it defensively.
+func TestResolveKind_NilArchive(t *testing.T) {
+	if got := ResolveKind(nil); got != manifest.InstallKindArchive {
+		t.Errorf("ResolveKind(nil) = %q, want %q", got, manifest.InstallKindArchive)
+	}
+}
+
+// TestResolveKind_RustupURLHeuristic (Spec 035 F10): the rustup URL
+// heuristic must survive the export — unsigned/older manifests without
+// an explicit kind still route to script/executable.
+func TestResolveKind_RustupURLHeuristic(t *testing.T) {
+	script := &manifest.Archive{URL: "https://sh.rustup.rs"}
+	if got := ResolveKind(script); got != manifest.InstallKindScript {
+		t.Errorf("ResolveKind(rustup URL) = %q, want %q", got, manifest.InstallKindScript)
+	}
+	exe := &manifest.Archive{URL: "https://example.test/rustup-init.exe"}
+	if got := ResolveKind(exe); got != manifest.InstallKindExecutable {
+		t.Errorf("ResolveKind(rustup-init URL) = %q, want %q", got, manifest.InstallKindExecutable)
+	}
+	// Explicit kind wins over the heuristic.
+	declared := &manifest.Archive{URL: "https://sh.rustup.rs", InstallKind: manifest.InstallKindArchive}
+	if got := ResolveKind(declared); got != manifest.InstallKindArchive {
+		t.Errorf("ResolveKind(declared archive) = %q, want %q (explicit kind wins)", got, manifest.InstallKindArchive)
 	}
 }

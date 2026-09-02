@@ -52,7 +52,7 @@ func TestReplaceStaleCLICopy_OldReplaced(t *testing.T) {
 	}
 }
 
-// TC-S5-2 同版本跳过（文件不变）
+// TC-S5-2 同版本跳过（已是当前版本镜像，文件不变）
 func TestReplaceStaleCLICopy_SameVersion(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
@@ -68,19 +68,21 @@ func TestReplaceStaleCLICopy_SameVersion(t *testing.T) {
 	}
 }
 
-// TC-S5-3 更新版本跳过
-func TestReplaceStaleCLICopy_NewerVersion(t *testing.T) {
+// TC-S5-3 版本号断层场景（冒烟反馈 #5 核心）：副本探测版本「高于」当前
+// （旧分支 1.2.2-alpha vs 主线 0.3.3——CompareSemver 判 1.2.2 更新导致
+// 永不替换的实测症状）。镜像一致性语义下：版本不同即替换。
+func TestReplaceStaleCLICopy_HigherVersionStillReplaced(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
 	copyPath := filepath.Join(home, "xdev.exe")
-	writeFile(t, current, "NEW")
-	writeFile(t, copyPath, "OLD")
+	writeFile(t, current, "NEW-BINARY-CONTENT")
+	writeFile(t, copyPath, "OLD-LEGACY-CONTENT")
 
-	if err := ReplaceStaleCLICopyWithProbe(current, home, stubProbe("99.0.0")); err != nil {
-		t.Fatal(err)
+	if err := ReplaceStaleCLICopyWithProbe(current, home, stubProbe("1.2.2-alpha")); err != nil {
+		t.Fatalf("ReplaceStaleCLICopyWithProbe: %v", err)
 	}
-	if got := readFile(t, copyPath); got != "OLD" {
-		t.Errorf("copy changed on newer version: %q", got)
+	if got := readFile(t, copyPath); got != "NEW-BINARY-CONTENT" {
+		t.Errorf("legacy copy (higher semver, version discontinuity) not replaced: %q", got)
 	}
 }
 

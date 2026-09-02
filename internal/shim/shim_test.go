@@ -380,6 +380,64 @@ func TestMaybeExec_ShimName(t *testing.T) {
 	}
 }
 
+// TestMaybeExec_AliasDispatchesToRealTarget verifies the positive dispatch
+// path: an alias that resolves to a real installed binary is exec'd
+// successfully (Spec 035 F1 — the zero-argument entry in main.go relies on
+// this semantics before falling back to runGUI).  The target is a copy of
+// the test binary itself, mirroring the production layout
+// $XMDEV_HOME/current/<alias>/<alias>(.exe).
+func TestMaybeExec_AliasDispatchesToRealTarget(t *testing.T) {
+	// On Unix, run() uses unix.Exec which replaces the current process
+	// (Spec 030) — a successful dispatch never returns, so the in-process
+	// assertion is only possible on Windows where run() spawns and waits.
+	if runtime.GOOS != "windows" {
+		t.Skip("positive dispatch exec-replaces the test process on unix; covered by manual smoke MS-F1")
+	}
+
+	home := t.TempDir()
+	curDir := filepath.Join(home, "current", "fakepy")
+	if err := os.MkdirAll(curDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy the running test binary as the target executable.
+	selfPath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext := exeSuffix()
+	targetPath := filepath.Join(curDir, "fakepy"+ext)
+	data, err := os.ReadFile(selfPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("XMDEV_HOME", home)
+	config.ResetHomeDirForTest()
+	InvalidateShimIndex()
+
+	// MaybeExec passes os.Args[1:] through to the dispatched child.  The
+	// child is a copy of this very test binary: the inherited -test.*
+	// flags would make it re-run the whole suite (and this test again)
+	// recursively.  Neutralize the args so the child matches no tests
+	// ("-test.run=^$") and exits 0 immediately, standing in for a real
+	// tool invoked with zero arguments.
+	origArgs := os.Args
+	os.Args = []string{origArgs[0], "-test.run=^$"}
+	defer func() { os.Args = origArgs }()
+
+	handled, err := MaybeExec("fakepy" + ext)
+	if !handled {
+		t.Fatal("alias name should trigger shim dispatch (handled = true)")
+	}
+	if err != nil {
+		t.Fatalf("unexpected dispatch error: %v", err)
+	}
+}
+
 // TestInstallShim_RejectsInvalidNames verifies InstallShim refuses names
 // that could escape the shims directory or are otherwise unsafe (F-08 /
 // D11) — validation happens before any filesystem access.

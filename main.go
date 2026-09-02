@@ -15,10 +15,12 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/cli"
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/signer"
 )
 
@@ -43,6 +45,20 @@ func main() {
 	// 单二进制多态入口：无参数 → GUI；其余交给 Cobra CLI
 	// （tui/gui 子命令与普通命令由命令树分派）。
 	if len(os.Args) <= 1 {
+		// 零参数调用的工具 shim（python/node 等进 REPL 的工具）必须照常
+		// 分发，不能落入 GUI 分支（Spec 035 F1）。MaybeExec 对
+		// xdev/xdev-*/xdev-gui*/wailsbindings 名字在 Lookup 前短路返回
+		// false，真 GUI 启动零影响。错误处理与 root.go 同构。
+		if handled, err := shim.MaybeExec(filepath.Base(os.Args[0])); handled {
+			if err != nil {
+				if exitErr, ok := err.(*shim.ExitCodeError); ok {
+					os.Exit(exitErr.Code)
+				}
+				fmt.Fprintln(os.Stderr, "shim:", err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
 		runGUI()
 		return
 	}

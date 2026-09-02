@@ -44,7 +44,7 @@ function focusTarget() {
 function keepFocusInside(event) {
   if (props.show && !dialog.value?.contains(event.target)) focusTarget()?.focus();
 }
-const phaseKeyMap = { Downloading: 'installing_downloading', 'Downloading...': 'installing_downloading', Extracting: 'installing_extracting', 'Extracting...': 'installing_extracting', Completed: 'installing_completed' };
+const phaseKeyMap = { Downloading: 'installing_downloading', 'Downloading...': 'installing_downloading', Extracting: 'installing_extracting', 'Extracting...': 'installing_extracting', Installing: 'installing_installing', 'Installing...': 'installing_installing', Completed: 'installing_completed' };
 const localizedPhase = computed(() => { const key = phaseKeyMap[props.phase]; return key ? props.t(key) : props.phase; });
 function runInBackground() { emit('update:show', false); }
 function requestClose(show) { if (props.active) return; emit('update:show', show); }

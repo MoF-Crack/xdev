@@ -162,8 +162,6 @@ func TestFindAsset_ExactMatch(t *testing.T) {
 }
 
 func TestFindAsset_NoMatch(t *testing.T) {
-	// Asset must not contain runtime.GOOS+GOARCH substrings, otherwise the
-	// partial-match fallback in findAsset would accept it on Linux/Darwin CI.
 	release := &ReleaseInfo{
 		Assets: []Asset{
 			{Name: "other-tool-solaris-sparc", BrowserDownloadURL: "http://example.com/other"},
@@ -172,6 +170,29 @@ func TestFindAsset_NoMatch(t *testing.T) {
 	_, ok := findAsset(release, "xdev-linux-amd64")
 	if ok {
 		t.Error("findAsset: expected no match, got one")
+	}
+}
+
+// TestFindAsset_NoPartialMatchFallback (Spec 035 F6): when the exact
+// asset name is missing, a same-platform asset with a different name
+// (e.g. the GUI bundle) must NOT be selected by substring matching.
+func TestFindAsset_NoPartialMatchFallback(t *testing.T) {
+	name := "xdev-" + runtime.GOOS + "-" + runtime.GOARCH + "-v1.0.0"
+	if runtime.GOOS == "windows" {
+		name += ".zip"
+	} else {
+		name += ".tar.gz"
+	}
+	guiName := "xdev-gui-" + runtime.GOOS + "-" + runtime.GOARCH + "-v1.0.0.zip"
+	release := &ReleaseInfo{
+		Assets: []Asset{
+			{Name: guiName, BrowserDownloadURL: "http://example.com/gui"},
+			{Name: "SHA256SUMS", BrowserDownloadURL: "http://example.com/sums"},
+		},
+	}
+	asset, ok := findAsset(release, name)
+	if ok {
+		t.Errorf("findAsset: exact name %q missing, partial match must not select %q", name, asset.Name)
 	}
 }
 
@@ -198,14 +219,13 @@ func TestParseSHA256SUMS_DoubleSpace(t *testing.T) {
 	}
 }
 
-func TestParseSHA256SUMS_SingleSpace(t *testing.T) {
+// Spec 035 F7: single-space lines are NOT valid sha256sum output —
+// the lenient fallback was removed, so such a line must fail to parse.
+func TestParseSHA256SUMS_SingleSpaceRejected(t *testing.T) {
 	content := "abc123def456 xdev-linux-amd64\n"
-	hash, err := parseSHA256SUMS(content, "xdev-linux-amd64")
-	if err != nil {
-		t.Fatalf("parseSHA256SUMS: unexpected error: %v", err)
-	}
-	if hash != "abc123def456" {
-		t.Errorf("parseSHA256SUMS hash = %q, want %q", hash, "abc123def456")
+	_, err := parseSHA256SUMS(content, "xdev-linux-amd64")
+	if err == nil {
+		t.Error("parseSHA256SUMS: expected error for single-space line, got hash")
 	}
 }
 

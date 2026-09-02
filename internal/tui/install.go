@@ -48,6 +48,13 @@ func (ps *progressState) store(phase int, percent float64, speed, eta string) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	ps.phase = phase
+	if percent < 0 {
+		// Spec 035 F5: indeterminate phases (e.g. PhaseInstalling emits -1
+		// while a rolling installer runs) keep the last known percent —
+		// matches the GUI, which also only swaps the phase text.
+		// Common sequence: download ends at 100, Installing shows 100%.
+		return
+	}
 	ps.percent = percent
 	ps.speed = speed
 	ps.eta = eta
@@ -132,9 +139,16 @@ func (m Model) viewInstallOverlay(base string) string {
 	}
 	s := m.installState
 
+	// Spec 035 F5: defensive clamp — a negative percent (indeterminate
+	// phase) must never render as "-1%" or an empty progress bar.
+	percent := s.Percent
+	if percent < 0 {
+		percent = 0
+	}
+
 	// Progress bar
 	barWidth := 30
-	filled := int(s.Percent / 100 * float64(barWidth))
+	filled := int(percent / 100 * float64(barWidth))
 	if filled > barWidth {
 		filled = barWidth
 	}
@@ -142,8 +156,13 @@ func (m Model) viewInstallOverlay(base string) string {
 
 	var b strings.Builder
 	b.WriteString(StyleBold.Render(fmt.Sprintf("  Installing %s@%s", s.Tool, s.Version)) + "\n\n")
+	// Spec 035 F4: batch update context (only when a batch queue is
+	// active; plain single installs render exactly as before).
+	if m.updateQueue != nil {
+		b.WriteString(StyleDim.Render(fmt.Sprintf("  Batch %d/%d", m.updateIdx+1, len(m.updateQueue))) + "\n")
+	}
 	b.WriteString(fmt.Sprintf("  %s  %s\n", s.Phase.String(), bar))
-	b.WriteString(fmt.Sprintf("  %.0f%%", s.Percent))
+	b.WriteString(fmt.Sprintf("  %.0f%%", percent))
 	if s.Speed != "" {
 		b.WriteString(fmt.Sprintf("   Speed: %s", s.Speed))
 	}

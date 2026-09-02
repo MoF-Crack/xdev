@@ -44,6 +44,7 @@ export default {
   'btn.browse': '浏览',
   'btn.test': '测试',
   'btn.update': '更新',
+  'btn.skip': '跳过',
   'btn.edit': '编辑',
   'btn.delete': '删除',
   'btn.clean': '清理',
@@ -216,6 +217,7 @@ export default {
   'install.progress': '安装进度',
   'installing_downloading': '下载中...',
   'installing_extracting': '解压中...',
+  'installing_installing': '正在安装（运行安装器，可能需要数分钟）...',
   'installing_completed': '已完成',
   'install.background': '后台运行',
   'install.copy_error': '复制错误',
@@ -562,6 +564,10 @@ export default {
   'updates.count': '{n} 个更新',
   'updates.empty': '暂无可更新工具',
   'updates.install': '安装',
+  'updates.install_all': '全部更新',
+  'updates.install_all_confirm': '将依次安装 {n} 个可用更新，是否继续？',
+  'updates.install_all_summary': '更新结束：成功 {done}，失败 {failed}，跳过 {skipped}',
+  'updates.install_all_cancelled': '批量更新已取消：成功 {done}，失败 {failed}，跳过 {skipped}',
   'updates.ignore': '忽略',
   'updates.ignored_ok': '已忽略更新',
   'updates.sniff_now': '嗅探当前工具',
@@ -605,6 +611,11 @@ export default {
   'install.tofu_warning_title': '版本校验提示',
   'install.tofu_warning_content': '{tool} {version} 未经预校验，已下载并计算校验值，后续安装将以此校验。',
   'install.tofu_warning_confirm': '继续',
+
+  // Install mutex (Spec 036 N2)
+  'install.busy': '已有安装进行中',
+  // Background install progress indicator (smoke feedback #4)
+  'install.background_progress': '后台安装中',
 
   // Unverified version confirmation (sniff-discovered)
   'install.unverified_title': '未验证版本',

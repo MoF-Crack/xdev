@@ -45,6 +45,7 @@ type InstallPhase int
 const (
 	PhaseDownloading InstallPhase = iota
 	PhaseExtracting
+	PhaseInstalling
 	PhaseActivating
 )
 
@@ -54,6 +55,8 @@ func (p InstallPhase) String() string {
 		return "Downloading"
 	case PhaseExtracting:
 		return "Extracting"
+	case PhaseInstalling:
+		return "Installing"
 	case PhaseActivating:
 		return "Activating"
 	default:

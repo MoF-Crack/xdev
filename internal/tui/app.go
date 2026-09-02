@@ -112,6 +112,12 @@ type Model struct {
 	// Install state
 	installState *InstallState
 
+	// Updates view（嗅探结果一键更新）
+	updatesView bool
+	updates     []toolUpdate
+	updateQueue []toolUpdate
+	updateIdx   int
+
 	// Help overlay
 	showHelp bool
 
@@ -207,9 +213,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleUninstallConfirmKey(msg)
 		}
 
-		// Install progress overlay
+		// Install progress overlay — checked BEFORE the updates view
+		// (Spec 035 F4): while a batch update runs, Esc/c cancels the
+		// current install (handleInstallOverlayKey also clears the batch
+		// queue, F3); a second Esc then leaves the updates view.
 		if m.installState != nil {
 			return m.handleInstallOverlayKey(msg)
+		}
+
+		// Updates view
+		if m.updatesView {
+			return m.handleUpdatesKey(msg)
 		}
 
 		// Search mode
@@ -223,7 +237,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case InstallProgressMsg:
 			if m.installState != nil && m.installState.ID == msg.ID {
 				m.installState.Phase = msg.Phase
-				m.installState.Percent = msg.Percent
+				// Spec 035 F5: negative percent means indeterminate — keep the
+				// last known value (defense in depth; progressState.store
+				// already guards the main path).
+				if msg.Percent >= 0 {
+					m.installState.Percent = msg.Percent
+				}
 				m.installState.Speed = msg.Speed
 				m.installState.ETA = msg.ETA
 				// Continue ticking until install completes
@@ -252,9 +271,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.installState = nil
 		if msg.Err != nil {
+			// Spec 035 F3: a failed install must also clear the batch update
+			// queue — otherwise the next successful plain install would
+			// unexpectedly resume the "update all" sequence.
+			m.updateQueue = nil
+			m.updateIdx = 0
 			m.errMsg = msg.Err.Error()
 			return m, nil
 		}
+		// 更新队列：继续下一个（全部更新）。
+		if m.updateQueue != nil && m.updateIdx+1 < len(m.updateQueue) {
+			m.updateIdx++
+			return m.startToolUpdate(m.updateQueue[m.updateIdx])
+		}
+		m.updateQueue = nil
+		m.updateIdx = 0
 		// Refresh data
 		return m, m.refreshData()
 
@@ -280,6 +311,16 @@ func (m Model) View() string {
 
 	// Title bar — exactly 1 line, Width may wrap so Height(1) truncates
 	title := StyleTitle.Render(fmt.Sprintf("XDev v%s", version.Version))
+
+	// Updates view（嗅探结果一键更新）单独渲染。批量更新进行中时用
+	// 安装进度 overlay 替换渲染（Spec 035 F4）——既有 viewInstallOverlay
+	// 忽略 base 参数，与主视图 overlay 行为一致；不宣称叠加。
+	if m.updatesView {
+		if m.installState != nil {
+			return m.viewInstallOverlay(m.updatesViewString())
+		}
+		return m.updatesViewString()
+	}
 
 	// Search indicator
 	searchHint := ""
@@ -416,6 +457,9 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case KeyRefresh:
 		return m, m.fetchRemoteVersions()
+
+	case KeyUpdates:
+		return m.enterUpdatesView(), nil
 	}
 
 	return m, nil
@@ -462,6 +506,11 @@ func (m Model) handleInstallOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.installState.Cancel()
 		}
 		m.installState = nil
+		// Spec 035 F3: cancelling the current install aborts the whole
+		// batch — a leftover queue would silently resume on the next
+		// successful plain install.
+		m.updateQueue = nil
+		m.updateIdx = 0
 		return m, nil
 	}
 	return m, nil

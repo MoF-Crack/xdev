@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -68,6 +69,7 @@ func TestInstallPhaseString(t *testing.T) {
 	}{
 		{PhaseDownloading, "Downloading"},
 		{PhaseExtracting, "Extracting"},
+		{PhaseInstalling, "Installing"},
 		{PhaseActivating, "Activating"},
 		{InstallPhase(99), "Unknown"},
 	}
@@ -333,5 +335,239 @@ func TestViewOutputLineCount(t *testing.T) {
 			t.Errorf("View() output %d lines for %dx%d terminal, want %d lines",
 				lineCount, sz.w, sz.h, sz.h)
 		}
+	}
+}
+
+// newTUITestModel builds a minimal Model for direct-message tests.
+func newTUITestModel(t *testing.T) Model {
+	t.Helper()
+	cfg := &config.Config{
+		Core: config.CoreConfig{
+			XMDevDir:   t.TempDir(),
+			InstallDir: t.TempDir(),
+			ShimDir:    t.TempDir(),
+		},
+	}
+	cat := &manifest.Catalog{}
+	reg := plugin.NewRegistry()
+	return NewModel(cfg, cat, reg)
+}
+
+// TestInstallProgress_NegativePercentKeepsLastValue (Spec 035 F5):
+// PhaseInstalling emits percent=-1 (indeterminate). The percent must
+// stay at the last known value while the phase text still updates.
+func TestInstallProgress_NegativePercentKeepsLastValue(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Phase: PhaseDownloading, Percent: 50}
+
+	updated, _ := m.Update(InstallProgressMsg{ID: 1, Phase: PhaseInstalling, Percent: -1})
+	m2 := updated.(Model)
+	if m2.installState == nil {
+		t.Fatal("installState unexpectedly cleared")
+	}
+	if m2.installState.Percent != 50 {
+		t.Errorf("Percent = %v, want 50 (kept from previous update)", m2.installState.Percent)
+	}
+	if m2.installState.Phase != PhaseInstalling {
+		t.Errorf("Phase = %v, want PhaseInstalling (phase must still update)", m2.installState.Phase)
+	}
+}
+
+// TestInstallProgress_NormalPercentStillUpdates (Spec 035 F5):
+// the negative-percent guard must not swallow legitimate values.
+func TestInstallProgress_NormalPercentStillUpdates(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Phase: PhaseDownloading, Percent: 10}
+
+	updated, _ := m.Update(InstallProgressMsg{ID: 1, Phase: PhaseActivating, Percent: 75})
+	m2 := updated.(Model)
+	if m2.installState.Percent != 75 {
+		t.Errorf("Percent = %v, want 75", m2.installState.Percent)
+	}
+	if m2.installState.Phase != PhaseActivating {
+		t.Errorf("Phase = %v, want PhaseActivating", m2.installState.Phase)
+	}
+}
+
+// TestViewInstallOverlay_ClampsNegativePercent (Spec 035 F5): even if
+// installState.Percent is somehow negative, the overlay must not render
+// "-1%" or an empty progress bar (defense-in-depth clamp).
+func TestViewInstallOverlay_ClampsNegativePercent(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Phase: PhaseInstalling, Percent: -1}
+
+	// Width/height are set by NewModel (80x24) — enough for the overlay.
+	out := m.viewInstallOverlay("")
+	if strings.Contains(out, "-1%") {
+		t.Errorf("overlay renders -1%%, want clamped 0%%:\n%s", out)
+	}
+	if !strings.Contains(out, "Installing go@1.26.5") {
+		t.Errorf("overlay missing tool/version line:\n%s", out)
+	}
+}
+
+// TestInstallResultError_ClearsUpdateQueue (Spec 035 F3): a failed
+// install clears the batch update queue so a later plain install
+// cannot accidentally resume "update all".
+func TestInstallResultError_ClearsUpdateQueue(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5"}
+	m.updateQueue = []toolUpdate{{Tool: "go", Current: "1.0", Latest: "2.0"}}
+	m.updateIdx = 0
+
+	updated, _ := m.Update(InstallResultMsg{ID: 1, Err: fmt.Errorf("boom")})
+	m2 := updated.(Model)
+	if m2.updateQueue != nil {
+		t.Errorf("updateQueue = %v, want nil after failed install", m2.updateQueue)
+	}
+	if m2.updateIdx != 0 {
+		t.Errorf("updateIdx = %d, want 0", m2.updateIdx)
+	}
+	if m2.installState != nil {
+		t.Error("installState should be cleared")
+	}
+}
+
+// TestInstallCancelKey_ClearsUpdateQueue (Spec 035 F3): pressing Esc
+// while a batch update install runs cancels it AND clears the queue.
+func TestInstallCancelKey_ClearsUpdateQueue(t *testing.T) {
+	m := newTUITestModel(t)
+	cancelled := false
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Cancel: func() { cancelled = true }}
+	m.updateQueue = []toolUpdate{{Tool: "go", Current: "1.0", Latest: "2.0"}}
+	m.updateIdx = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2 := updated.(Model)
+	if !cancelled {
+		t.Error("install cancel func was not invoked")
+	}
+	if m2.installState != nil {
+		t.Error("installState should be cleared")
+	}
+	if m2.updateQueue != nil {
+		t.Errorf("updateQueue = %v, want nil after cancel", m2.updateQueue)
+	}
+}
+
+// TestStartToolUpdate_RegistryMissClearsQueue (Spec 035 F3): when the
+// tool is not in the registry the batch aborts in place (no
+// InstallResultMsg will follow).
+func TestStartToolUpdate_RegistryMissClearsQueue(t *testing.T) {
+	m := newTUITestModel(t)
+	m.updateQueue = []toolUpdate{{Tool: "ghost", Current: "1.0", Latest: "2.0"}}
+	m.updateIdx = 0
+
+	m2, _ := m.startToolUpdate(m.updateQueue[0])
+	if m2.updateQueue != nil {
+		t.Errorf("updateQueue = %v, want nil after registry miss", m2.updateQueue)
+	}
+	if m2.errMsg == "" {
+		t.Error("errMsg should explain the registry miss")
+	}
+}
+
+// TestUpdatesView_InstallTakesKeyPrecedence (Spec 035 F4): while both
+// the updates view and an install overlay are active, Esc must cancel
+// the install (not leave the view); the updates view stays open.
+func TestUpdatesView_InstallTakesKeyPrecedence(t *testing.T) {
+	m := newTUITestModel(t)
+	m.updatesView = true
+	cancelled := false
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Cancel: func() { cancelled = true }}
+	m.updateQueue = []toolUpdate{{Tool: "go", Current: "1.0", Latest: "2.0"}}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2 := updated.(Model)
+	if !cancelled {
+		t.Error("Esc should cancel the install first")
+	}
+	if m2.installState != nil {
+		t.Error("installState should be cleared by Esc")
+	}
+	if !m2.updatesView {
+		t.Error("updates view should remain open after cancelling the install")
+	}
+	if m2.updateQueue != nil {
+		t.Error("updateQueue should be cleared along with the cancel")
+	}
+}
+
+// TestView_UpdatesViewWithInstallShowsBatch (Spec 035 F4): when a batch
+// update runs inside the updates view, the install overlay replaces the
+// view and carries the batch context line.
+func TestView_UpdatesViewWithInstallShowsBatch(t *testing.T) {
+	m := newTUITestModel(t)
+	m.updatesView = true
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Phase: PhaseDownloading, Percent: 40}
+	m.updateQueue = make([]toolUpdate, 5)
+	m.updateQueue[1] = toolUpdate{Tool: "go", Latest: "1.26.5"}
+	m.updateIdx = 1
+
+	out := m.View()
+	if !strings.Contains(out, "Installing go@1.26.5") {
+		t.Errorf("view should render the install overlay inside updates view:\n%s", out)
+	}
+	if !strings.Contains(out, "Batch 2/5") {
+		t.Errorf("view should render the batch context line:\n%s", out)
+	}
+}
+
+// TestView_PlainInstallOverlayHasNoBatchLine (Spec 035 F4): a plain
+// single install (no update queue) renders exactly as before — no
+// batch line.
+func TestView_PlainInstallOverlayHasNoBatchLine(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5", Phase: PhaseDownloading, Percent: 40}
+
+	out := m.viewInstallOverlay("")
+	if strings.Contains(out, "Batch") {
+		t.Errorf("plain install overlay must not contain a Batch line:\n%s", out)
+	}
+}
+
+// TestHelpOverlay_ListsUpdatesKey (Spec 035 F9): the help key table
+// includes the [x] updates-view shortcut.
+func TestHelpOverlay_ListsUpdatesKey(t *testing.T) {
+	m := newTUITestModel(t)
+	out := m.viewHelpOverlay("")
+	if !strings.Contains(out, "Available updates") {
+		t.Errorf("help overlay should list the x shortcut:\n%s", out)
+	}
+}
+
+// TestUpdatesViewRendersErrMsg (Spec 036 N1): errors must be visible
+// inside the updates view — View() early-returns for updatesView and
+// never reaches the main view's errBar.
+func TestUpdatesViewRendersErrMsg(t *testing.T) {
+	m := newTUITestModel(t)
+	m.updatesView = true
+	m.errMsg = "boom"
+	out := m.View()
+	if !strings.Contains(out, "Error: boom") {
+		t.Errorf("updates view should render errMsg inline:\n%s", out)
+	}
+}
+
+// TestUpdatesViewNoErrMsgWhenEmpty (Spec 036 N1): no error line when
+// errMsg is empty.
+func TestUpdatesViewNoErrMsgWhenEmpty(t *testing.T) {
+	m := newTUITestModel(t)
+	m.updatesView = true
+	out := m.View()
+	if strings.Contains(out, "Error:") {
+		t.Errorf("updates view should not render an error line when errMsg is empty:\n%s", out)
+	}
+}
+
+// TestUpdatesViewEmptyListWithErrMsg (Spec 036 N1): the empty-list hint
+// and the error line coexist.
+func TestUpdatesViewEmptyListWithErrMsg(t *testing.T) {
+	m := newTUITestModel(t)
+	m.updatesView = true
+	m.errMsg = "boom"
+	out := m.View()
+	if !strings.Contains(out, "暂无可用更新") || !strings.Contains(out, "Error: boom") {
+		t.Errorf("both the empty-list hint and the error line should render:\n%s", out)
 	}
 }
