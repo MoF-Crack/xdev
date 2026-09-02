@@ -469,46 +469,58 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	// same tool across processes. Two concurrent `xdev install go@1.22`
 	// runs interleave stat/RemoveAll/extract and can corrupt the install
 	// tree (the integrity gate can race past a still-writing process).
-	// The lock is released before Activate, which acquires it internally.
+	// NOTE: the lock is released before Activate — Activate acquires the
+	// same tool lock internally, and Windows named mutexes are reentrant
+	// only per-thread: a goroutine migration between the two acquisitions
+	// would self-deadlock for the full 30s Activate timeout.
 	installLock, lockErr := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
 	if lockErr != nil {
 		return nil, fmt.Errorf("install lock %s: %w", p.Name(), lockErr)
 	}
-	defer installLock.Release()
-	log.Printf("[install] Download complete, starting install-by-kind")
-	// 阶段语义：archive 走"解压"；executable/script（rustup 等滚动安装器）
-	// 走"正在安装"——运行安装器可能耗时数分钟（下载 toolchain）且无确定
-	// 进度，percent=-1 通知前端保持当前进度条、仅切换阶段文案。
-	if onProgress != nil {
-		if ResolveKind(arch) == manifest.InstallKindArchive {
-			onProgress(PhaseExtracting, 0, "", "")
+	// The critical section (install-by-kind + integrity gate + post-install
+	// hook) runs under the install lock and RELEASES it before activation,
+	// which acquires the same lock internally.
+	err = func() error {
+		defer installLock.Release()
+		log.Printf("[install] Download complete, starting install-by-kind")
+		// 阶段语义：archive 走"解压"；executable/script（rustup 等滚动安装器）
+		// 走"正在安装"——运行安装器可能耗时数分钟（下载 toolchain）且无确定
+		// 进度，percent=-1 通知前端保持当前进度条、仅切换阶段文案。
+		if onProgress != nil {
+			if ResolveKind(arch) == manifest.InstallKindArchive {
+				onProgress(PhaseExtracting, 0, "", "")
+			} else {
+				onProgress(PhaseInstalling, -1, "", "")
+			}
+		}
+		if err := i.installByKind(ctx, p, arch, ver, installPath); err != nil {
+			log.Printf("[install] ERROR: install-by-kind failed for %s@%s: %v", p.Name(), ver, err)
+			return err
+		}
+		// Hard gate for archive extracts only. Executable/script installers
+		// may populate the install tree asynchronously or outside installPath
+		// (e.g. rustup), so binary-presence checks would false-fail them.
+		kind := ResolveKind(arch)
+		if kind == manifest.InstallKindArchive {
+			if err := ensureInstallIntegrity(p, installPath, arch.Strip); err != nil {
+				log.Printf("[install] ERROR: %v", err)
+				// Best-effort cleanup so the broken dir is not left as "installed".
+				_ = os.RemoveAll(installPath)
+				return err
+			}
+			log.Printf("[install] Install-by-kind complete (integrity OK)")
 		} else {
-			onProgress(PhaseInstalling, -1, "", "")
+			log.Printf("[install] Install-by-kind complete (kind=%s, skip extract integrity)", kind)
 		}
-	}
-	if err := i.installByKind(ctx, p, arch, ver, installPath); err != nil {
-		log.Printf("[install] ERROR: install-by-kind failed for %s@%s: %v", p.Name(), ver, err)
-		return nil, err
-	}
-	// Hard gate for archive extracts only. Executable/script installers
-	// may populate the install tree asynchronously or outside installPath
-	// (e.g. rustup), so binary-presence checks would false-fail them.
-	kind := ResolveKind(arch)
-	if kind == manifest.InstallKindArchive {
-		if err := ensureInstallIntegrity(p, installPath, arch.Strip); err != nil {
-			log.Printf("[install] ERROR: %v", err)
-			// Best-effort cleanup so the broken dir is not left as "installed".
-			_ = os.RemoveAll(installPath)
-			return nil, err
-		}
-		log.Printf("[install] Install-by-kind complete (integrity OK)")
-	} else {
-		log.Printf("[install] Install-by-kind complete (kind=%s, skip extract integrity)", kind)
-	}
 
-	// Post-install hook
-	if err := p.PostInstall(ctx, installPath); err != nil {
-		log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+		// Post-install hook
+		if err := p.PostInstall(ctx, installPath); err != nil {
+			log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+		}
+		return nil
+	}()
+	if err != nil {
+		return nil, err
 	}
 
 	if opts.NoActivate {

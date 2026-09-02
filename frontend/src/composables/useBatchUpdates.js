@@ -1,31 +1,26 @@
-// useBatchUpdates — GUI「一键更新全部」的批量安装循环（Spec 035 F2b）。
+// useBatchUpdates — GUI「一键更新全部」的批量安装（Spec 035 F2b + Spec 037 阶段 1）。
 //
-// 设计原则（solution.md F2 v4）：
+// 设计原则：
 // 1. FR-018 逐项确认：unverified 版本每项单独弹确认，拒绝→跳过该
 //    项继续；PreviewInstall 调用失败（旧构建）同样按 unverified 弹
-//    确认，绝不静默跳过。
-// 2. 事件驱动等待（waitForCompletion，来自 useInstall），不忙等。
-// 3. 取消 = 取消当前项并中止整批（cancelled 文案）。
-// 4. 真实汇总（成功/失败/跳过）；取消另有文案。
+//    确认，绝不静默跳过。确认阶段串行（用户逐一决策）。
+// 2. Spec 037 阶段 1：确认后的清单交 useParallelBatch 并行执行——
+//    每项独立会话（事件按 taskId 路由），Promise.allSettled 等待，
+//    单项失败/取消不影响其他项。
+// 3. 取消 = cancelAll 取消所有进行中的项（引擎级）。
+// 4. 真实汇总（成功/失败/取消计数）；N2 互斥与 N4/N5 防闪烁语义保留
+//    （batchActive 期间完成/取消回调不复位全局进度框）。
 // 5. 批量形态：默认形态，仅「形态特定且唯一形态」自动选定（对齐
 //    单装逻辑）；不弹形态选择对话框。
 //
-// Spec 036 增量：
-// - N2 安装互斥：入口守卫（active 时提示 busy）+ 逐项预检（用户经
-//   Run in Background 后门插入单项安装时批量让位）+ started=false
-//   不关进度框（进度框属正在进行的另一安装，finally 兜底复位）。
-// - N4 防闪烁：batchActive 循环期间置 true——AppContent 的完成/取消
-//   回调据此跳过 showProgress 复位（由本循环统一管理关闭时机），
-//   error 路径同样不再逐项关开。
-//
-// 依赖全注入（previewInstall/installConfirmed/waitForCompletion/dialog/
-// message/t/loadUpdates/availableUpdates/setShowProgress/active/
-// batchActive），AppContent 仅装配——批量逻辑在本 composable 单测覆盖。
+// 依赖全注入（previewInstall/installConfirmed 工厂/parallelBatch/
+// dialog/message/t/loadUpdates/availableUpdates/setShowProgress/
+// active/batchActive），AppContent 仅装配——批量逻辑在本 composable
+// 单测覆盖。
 
 export function useBatchUpdates({
   previewInstall,
-  installConfirmed,
-  waitForCompletion,
+  parallelBatch,
   dialog,
   message,
   t,
@@ -57,8 +52,7 @@ export function useBatchUpdates({
   async function installAllUpdates() {
     const list = [...(availableUpdates?.value || [])];
     if (!list.length) return;
-    // N2: never enter the batch while another install is running — every
-    // per-item install would hit the startInstallConfirmed mutex guard.
+    // N2: never enter the batch while another install is running.
     if (active?.value) {
       message.warning(t('install.busy'));
       return;
@@ -77,20 +71,12 @@ export function useBatchUpdates({
     });
     if (!ok) return;
 
-    let done = 0;
-    let failed = 0;
-    let skipped = 0;
-    let cancelled = false;
     if (batchActive) batchActive.value = true;
     try {
+      // ---- Phase 1 (serial): per-item FR-018 confirmation ----
+      const confirmed = [];
+      let skipped = 0;
       for (const u of list) {
-        // N2 pre-item check: a manual install may have been squeezed in
-        // through "Run in Background" between items — yield the rest of
-        // the batch instead of hammering the mutex guard per item.
-        if (active?.value) {
-          cancelled = true;
-          break;
-        }
         let preview = null;
         try {
           preview = await previewInstall(u.tool, u.latestVersion);
@@ -109,41 +95,22 @@ export function useBatchUpdates({
         if (preview?.hasFormSpecificArchives && (preview.availableForms || []).length === 1) {
           formFilter = preview.availableForms[0];
         }
-
-        setShowProgress(true);
-        const started = await installConfirmed(u.tool, u.latestVersion, formFilter);
-        if (!started) {
-          failed++;
-          // N2: keep the progress dialog open — a false start is almost
-          // always an active-conflict and the visible dialog belongs to
-          // the install that IS running. The finally net closes it.
-          continue;
-        }
-
-        // 'completed' | 'error' | 'cancelled' | 'disposed' | 'idle'
-        const result = await waitForCompletion();
-        if (result === 'cancelled' || result === 'disposed') {
-          cancelled = true;
-          break;
-        }
-        if (result === 'completed') {
-          done++;
-          await loadUpdates();
-        } else {
-          // 'error' | 'idle' (idle = all events lost; count as failed).
-          // N4: do not close/reopen the dialog per failed item — the
-          // finally net closes it once the batch ends.
-          failed++;
-        }
+        confirmed.push({ tool: u.tool, version: u.latestVersion, formFilter });
       }
+
+      if (!confirmed.length) {
+        message.info(t('updates.install_all_summary', { done: 0, failed: 0, skipped }));
+        return;
+      }
+
+      // ---- Phase 2 (parallel): execute the confirmed set ----
+      setShowProgress(true);
+      const { done, failed, cancelled } = await parallelBatch.run(confirmed);
+      await loadUpdates();
+      message.info(t('updates.install_all_summary', { done, failed, skipped: skipped + cancelled }));
     } finally {
       if (batchActive) batchActive.value = false;
       setShowProgress(false); // safety net: reset on every exit path
-    }
-    if (cancelled) {
-      message.warning(t('updates.install_all_cancelled', { done, failed, skipped }));
-    } else {
-      message.info(t('updates.install_all_summary', { done, failed, skipped }));
     }
   }
 

@@ -616,6 +616,9 @@ export default {
   'install.busy': '已有安装进行中',
   // Background install progress indicator (smoke feedback #4)
   'install.background_progress': '后台安装中',
+  // Parallel batch installs (Spec 037 phase 1)
+  'install.parallel_title': '正在安装更新',
+  'install.parallel_background': '{n} 项安装进行中',
 
   // Unverified version confirmation (sniff-discovered)
   'install.unverified_title': '未验证版本',

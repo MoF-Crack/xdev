@@ -616,6 +616,9 @@ export default {
   'install.busy': 'An installation is already in progress',
   // Background install progress indicator (smoke feedback #4)
   'install.background_progress': 'Installing in background',
+  // Parallel batch installs (Spec 037 phase 1)
+  'install.parallel_title': 'Installing updates',
+  'install.parallel_background': '{n} installs in progress',
 
   // Unverified version confirmation (sniff-discovered)
   'install.unverified_title': 'Unverified Version',

@@ -5,6 +5,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-02
+
+### Added
+- Spec 037 阶段 1：批量「全部更新」并行安装——确认后的清单交 `useParallelBatch` 引擎并行执行（每项独立 `useInstall` 会话，事件按 taskId 路由）；`InstallProgressDialog` 多项模式（每项独立进度行 + 逐项取消 + 批量取消）；工具栏后台指示器批量时显示「N 项安装进行中」；守卫测试 35 用例（useParallelBatch 8 + useBatchUpdates 18 + 集成 5 + 对话框 4）+ e2e 并行基线。单装路径不变；批量期间单装入口 busy 守卫。旧「void 返回中止批量」缺陷在新架构下结构性不可能（专项不变量测试锁定）
+- i18n parity 守卫测试：en/zh 键集与占位符集必须完全一致（运行时 fallback 不再掩盖翻译缺失）
+- 环境变量写入门禁（L-3 收口）：`SetEnvVar`/`DeleteEnvVar` 的 PATH 路由到专用 writer（32,767 字符上限 + RMW 锁）、machine 层白名单、值长度上限；守卫测试 `setenvvar_guard_test.go`
+
+### Changed
+- CI 发布产物收口（单二进制语义对齐）：删除 macOS GUI DMG 重复构建（与 CLI DMG 同一产物）；AppImage 产物名 `xdev-gui-*` → `xdev-*`（desktop Exec/AppRun 同步）；release 段构建去掉过时的 `-tags gui`
+- 前端事件监听器泄漏修复（TOFU/self-update 首次向导后双弹窗）；`repair()` 重置 `cancelRequested`（真实错误不再被吞成 Cancelled 且中断批量）；profile 导出导入路径分隔符按平台自适应
+
+### Fixed
+- 安全审计 21 项修复（C-1 env shell 注入 / H-1~H-3 plugin 三连 / M-1 token 分页外泄 / M-2 自更新重定向 / M-3 安装锁 / M-4 续传符号链接竞态 / M-5 manifest 名穿越 / M-6 docker exec 注入 / L-1 SSH 字段 / L-2 PATH TOCTOU / GUI catMu / sshpass 密码泄漏等，详见提交 07415a7）
+
+## [0.3.3-rc.2] - 2026-08-23
+
 ### Fixed
 - Spec 035（三轮审查问题修复）：
   - F1（P0）：零参数工具 shim 调用不再误启 GUI——`main.go` 无参分支先做 `shim.MaybeExec` 判定（python/node 等零参数进 REPL 的工具恢复正常分发，同时收窄不可信 PATH 下同名 shim 启动完整 GUI 的攻击面）

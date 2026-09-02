@@ -20,7 +20,15 @@ export function installWailsMocks(appOverrides = {}, runtimeOverrides = {}) {
       App: { ...defaultApp, ...appOverrides },
     },
   };
-  window.runtime = { ...defaultRuntime, ...runtimeOverrides };
+  // Spec 037: parallel sessions register multiple listeners per event —
+  // defaultRuntime's single-slot EventsOn would drop all but the last.
+  const unitListeners = {};
+  window.runtime = {
+    ...defaultRuntime,
+    EventsOn: (name, callback) => { (unitListeners[name] ||= new Set()).add(callback); return () => unitListeners[name]?.delete(callback); },
+    EventsOff: (name) => { delete unitListeners[name]; },
+    ...runtimeOverrides,
+  };
   return { app: window.go.gui.App, runtime: window.runtime };
 }
 
@@ -126,6 +134,8 @@ export function createInitializedWailsBrowserMocks() {
     GetAllEnvVars: async () => [{ name: 'OLD_HOME', value: 'C:\\Missing', toolName: 'old', level: 'user', source: 'system', isValid: false, invalidReason: 'missing' }],
     GetCacheBreakdown: async () => ({ downloads: 134217728, metadata: 1048576, total: 135266304 }),
     InstallTool: async (...args) => { window.__wailsCalls.InstallTool.push(args); },
+    // Spec 037 e2e: parallel batch installs go through InstallToolConfirmed.
+    InstallToolConfirmed: async (...args) => { window.__wailsCalls.InstallToolConfirmed.push(args); return null; },
     InstallToolWithForm: async (...args) => { window.__wailsCalls.InstallToolWithForm.push(args); },
     PauseDownload: async (...args) => { window.__wailsCalls.PauseDownload.push(args); },
     ResumeDownload: async (...args) => { window.__wailsCalls.ResumeDownload.push(args); },
@@ -162,6 +172,9 @@ export function createInitializedWailsBrowserMocks() {
     RemoveCustomTool: async (...args) => { window.__wailsCalls.RemoveCustomTool.push(args); },
     CheckToolDependencies: async (name) => (name === 'node' ? [{ tool: 'npm', requiredVersion: '>=9.0.0', currentVersion: '10.9.0', satisfied: true, reason: '', installPath: '' }] : []),
     IsVersionUnverified: async () => false,
+    // Spec 037 e2e: updates list for the dashboard install-all flow.
+    // Tests inject window.__wailsUpdates via addInitScript before goto.
+    GetAvailableUpdates: async () => (window.__wailsUpdates || []),
     PreviewInstall: async (tool, version) => ({
       tool, version, unverified: false, hasFormSpecificArchives: false, availableForms: [],
       integrity: { tool, version, path: '', ok: false, reason: 'not installed', missing: [] },
@@ -174,14 +187,16 @@ export function createInitializedWailsBrowserMocks() {
   });
   const listeners = {};
   const runtime = new Proxy({
-    EventsOn: (name, callback) => { listeners[name] = callback; return () => { if (listeners[name] === callback) delete listeners[name]; }; },
+    // Spec 037: multiple sessions listen to the same event name
+    // (parallel installs) — keep a Set of callbacks like real Wails.
+    EventsOn: (name, callback) => { (listeners[name] ||= new Set()).add(callback); return () => listeners[name]?.delete(callback); },
     EventsOff: (name) => { delete listeners[name]; },
     WindowIsMaximised: async () => false,
   }, {
     get: (target, property) => target[property] ?? (() => null),
   });
-  window.__wailsEmit = (name, data) => listeners[name]?.(data);
-  window.__wailsCalls = { InstallTool: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [] };
+  window.__wailsEmit = (name, data) => listeners[name]?.forEach((fn) => fn(data));
+  window.__wailsCalls = { InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [] };
   window.go = { gui: { App: app } };
   window.runtime = runtime;
 }

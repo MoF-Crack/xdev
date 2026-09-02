@@ -364,6 +364,60 @@ test('installation pause resume and cancel use the active task and protect the d
   await expect(detailTrigger).toBeFocused();
 });
 
+// Spec 037 阶段 1 e2e 基线：批量「全部更新」并行执行——多项进度框渲染
+// 每项独立行（tool@version + 各自进度 + 逐项取消），确认对话框逐项串行，
+// 全部完成后真实汇总。后端 mock 的 InstallToolConfirmed 记录启动调用。
+test('batch update runs items in parallel with a multi-item progress dialog', async ({ page }, testInfo) => {
+  // Inject the updates list BEFORE the app mounts (init scripts run in
+  // order; this one must precede openApp's goto).
+  await page.addInitScript(() => {
+    window.__wailsUpdates = [
+      { tool: 'node', currentVersion: '20.18.0', latestVersion: '22.14.0', command: 'xdev install node@22.14.0' },
+      { tool: 'go', currentVersion: '1.24.0', latestVersion: '1.26.0', command: 'xdev install go@1.26.0' },
+    ];
+  });
+  await openApp(page, testInfo, cases.dashboard);
+
+  // The dashboard's install-all button (enabled once updates load).
+  const installAll = page.locator('[data-action="install-all-updates"]');
+  await expect(installAll).toBeEnabled();
+  await installAll.click();
+  // Batch confirm dialog (non-unverified mock → no per-item dialogs).
+  await page.getByRole('button', { name: /更新|Update/i }).last().click();
+
+  // Both items started in parallel — the two sessions each called
+  // InstallToolConfirmed before either Completed event arrives.
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    taskId: 'node@22.14.0', tool: 'node', version: '22.14.0', phase: 'Downloading', percent: 40,
+  }));
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    taskId: 'go@1.26.0', tool: 'go', version: '1.26.0', phase: 'Downloading', percent: 60,
+  }));
+
+  // Multi-item dialog: one row per item with independent progress.
+  // (The Naive confirm dialog also uses .n-modal while animating out —
+  // anchor on the install dialog's batch rows instead.)
+  const modal = page.locator('.n-modal.n-modal--wide');
+  await expect(modal).toBeVisible();
+  await expect(modal.locator('[data-batch-item="node"]')).toContainText('40%');
+  await expect(modal.locator('[data-batch-item="go"]')).toContainText('60%');
+  await expect(page.getByRole('button', { name: /取消 node|Cancel node/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /取消 go|Cancel go/i })).toBeVisible();
+
+  // The parallel property: both installs launched before any completion.
+  expect(await page.evaluate(() => window.__wailsCalls.InstallToolConfirmed.length)).toBe(2);
+
+  // Complete both — the batch resolves, reports the truthful summary,
+  // and the finally net closes the progress dialog.
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    taskId: 'node@22.14.0', tool: 'node', version: '22.14.0', phase: 'Completed', percent: 100,
+  }));
+  await page.evaluate(() => window.__wailsEmit('installProgress', {
+    taskId: 'go@1.26.0', tool: 'go', version: '1.26.0', phase: 'Completed', percent: 100,
+  }));
+  await expect(modal).toBeHidden();
+});
+
 test('narrow app shell is compact, contained, and has no serious accessibility violations', async ({ page }, testInfo) => {
   await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
   await expect(page.getByText('Node.js', { exact: true })).toBeVisible();

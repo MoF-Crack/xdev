@@ -7,7 +7,12 @@
       <PageToolbar :title="headerTitle">
         <n-space>
           <!-- 后台安装进展指示器：安装转入后台（showProgress=false 但仍 active）时显示，点击重新打开进度框 -->
-          <n-button v-if="installing && !showProgress" size="small" type="primary" :aria-label="t('install.background_progress')" data-action="show-install-progress" @click="showProgress = true">
+          <!-- Spec 037：批量并行时显示项数而非单项百分比 -->
+          <n-button v-if="batchInstalling && !showProgress" size="small" type="primary" :aria-label="t('install.parallel_background', { n: batchActiveCount })" data-action="show-install-progress" @click="showProgress = true">
+            <template #icon><n-icon aria-hidden="true"><cloud-download-outline /></n-icon></template>
+            {{ t('install.parallel_background', { n: batchActiveCount }) }}
+          </n-button>
+          <n-button v-else-if="installing && !showProgress" size="small" type="primary" :aria-label="t('install.background_progress')" data-action="show-install-progress" @click="showProgress = true">
             <template #icon><n-icon aria-hidden="true"><cloud-download-outline /></n-icon></template>
             {{ t('install.background_progress') }} · {{ installProgress.percent || 0 }}%
           </n-button>
@@ -42,7 +47,7 @@
 
   <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
-  <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" />
+  <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
   <EnvVarEditorDialog :show="showEnvEditor" :editing="editingEnvVar" :browse-directory="browseEnvDir" :t="t" @update:show="showEnvEditor = $event" @save="saveEnvDraft" />
   <!-- Spec 034: 启动自检更新三选对话框 -->
@@ -59,7 +64,7 @@
 </template>
 
 <script setup>
-import { h, ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted } from 'vue';
+import { h, ref, computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { NIcon, NButton, NSpace, useMessage, useDialog } from 'naive-ui';
 import {
   SearchOutline,
@@ -85,6 +90,7 @@ const RemoteDevelopmentPage = defineAsyncComponent(() => import('./pages/RemoteD
 const AboutPage = defineAsyncComponent(() => import('./pages/AboutPage.vue'));
 import { useInstall } from './composables/useInstall.js';
 import { useBatchUpdates } from './composables/useBatchUpdates.js';
+import { useParallelBatch } from './composables/useParallelBatch.js';
 import { useTools } from './composables/useTools.js';
 import { useNotifications } from './composables/useNotifications.js';
 import { usePackageManagers } from './composables/usePackageManagers.js';
@@ -218,6 +224,31 @@ const showFormSelector = ref(false);
 const formSelectorTool = ref(null);
 const formSelectorRequest = ref(null);
 
+// ---- Spec 037 阶段 1：并行批量安装 ----
+// 每项一个独立 useInstall 会话：事件按 taskId 路由（belongsToCurrentTask），
+// 会话状态镜像到行对象供 InstallProgressDialog 多项模式渲染。
+// 会话回调不触碰全局 showProgress（批量进度框由 useBatchUpdates 管理）。
+function createBatchSession(row) {
+  const session = useInstall({
+    onComplete: () => { row.active = false; row.paused = false; },
+    onError: (data) => { row.error = { message: data?.error || data?.message || String(data) }; row.active = false; },
+    onCancel: () => { row.active = false; row.paused = false; },
+  });
+  // Mirror session reactive state onto the row (dialog renders rows).
+  watch(() => session.phase.value, (v) => { row.phase = v; }, { immediate: true });
+  watch(() => session.progress.value, (v) => { row.percent = v?.percent || 0; row.bytes = v?.bytes || 0; row.totalBytes = v?.totalBytes || 0; row.speed = v?.speed || ''; row.eta = v?.eta || ''; }, { immediate: true });
+  watch(() => session.active.value, (v) => { row.active = v; }, { immediate: true });
+  watch(() => session.paused.value, (v) => { row.paused = v; }, { immediate: true });
+  watch(() => session.error.value, (v) => { if (v) row.error = v; }, { immediate: true });
+  return session;
+}
+const parallelBatch = useParallelBatch({ sessionFactory: createBatchSession, message, t });
+const batchItems = parallelBatch.items;
+const batchInstalling = parallelBatch.running;
+const batchActiveCount = computed(() => batchItems.filter((r) => r.active).length);
+async function cancelBatchItem(row) { await (row.session?.cancel?.() || Promise.resolve()).catch?.(() => {}); }
+async function cancelAllBatch() { await parallelBatch.cancelAll(); }
+
 // Dashboard state
 const stats = ref({});
 const dashboardLoading = ref(false);
@@ -305,9 +336,8 @@ const {
 const batchActive = ref(false);
 const { installAllUpdates } = useBatchUpdates({
   previewInstall: (tool, version) => window.go.gui.App.PreviewInstall(tool, version),
-  // 每项已过（或不需要）unverified 确认 → confirmed=true 走非阻塞链路。
-  installConfirmed: (tool, version, formFilter) => startInstallConfirmed(tool, version, true, formFilter),
-  waitForCompletion,
+  // Spec 037 阶段 1：确认后的清单交 parallelBatch 并行执行（每项独立会话）。
+  parallelBatch,
   dialog,
   message,
   t,
@@ -927,7 +957,7 @@ async function doInstall(toolName, version, tool = null, formFilter = '') {
   if (!version) return;
   // Spec 036 N2 补遗：此处原为静默早退——安装进行中点击任何安装入口
   // （更新列表行/徽标弹层/抽屉/版本管理器）无任何反馈。改为 busy 提示。
-  if (installing.value) { message.warning(t('install.busy')); return; }
+  if (installing.value || batchActive.value) { message.warning(t('install.busy')); return; }
   tool = mergeInstallTool(toolName, tool);
   installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
 
@@ -999,7 +1029,7 @@ async function startInstallConfirmed(toolName, version, confirmed, formFilter = 
   // buttons, update badge popover, drawer, version manager, form
   // selector, unverified confirm) converges here. The batch adapter
   // never trips this: its loop waits for active=false between items.
-  if (installing.value) {
+  if (installing.value || batchActive.value) {
     message.warning(t('install.busy'));
     return;
   }
@@ -1020,7 +1050,7 @@ async function startInstallConfirmed(toolName, version, confirmed, formFilter = 
 async function repairInstall(toolName, version) {
   if (!version) return;
   // Spec 036 N2 补遗：同 doInstall——静默早退改 busy 提示。
-  if (installing.value) { message.warning(t('install.busy')); return; }
+  if (installing.value || batchActive.value) { message.warning(t('install.busy')); return; }
   installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
   showDrawer.value = false;
   dialog.warning({

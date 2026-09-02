@@ -664,12 +664,44 @@ func getRegKey(level string) (rootKey uintptr, subKey string, err error) {
 // ("user" or "machine"). The value is stored as REG_EXPAND_SZ.
 // Protected system variables (PATH, SystemRoot, etc.) are rejected.
 // The change is broadcast via WM_SETTINGCHANGE for immediate effect.
+//
+// Security (L-3 fix): the generic level-aware API now enforces the same
+// protections as the dedicated writers —
+//   - "path" is routed to WriteUserPath/WriteSystemPath, which apply the
+//     32,767-char registry limit and the cross-process RMW lock;
+//   - at "machine" level, only whitelisted tool-home names may be written
+//     (user level stays open for the GUI env editor's custom vars, which
+//     are syntax-validated upstream);
+//   - values are length-capped the same way WriteUserPath caps PATH.
 func SetEnvVar(name, value, level string) error {
-	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
+	if strings.EqualFold(name, "path") {
+		// PATH is routed through the dedicated writers, which apply the
+		// 32,767-char registry limit and the cross-process RMW lock —
+		// never the generic value writer.
+		switch level {
+		case "user":
+			return withUserPathLock(func() error { return WriteUserPath(value) })
+		case "machine":
+			return WriteSystemPath(value)
+		default:
+			return fmt.Errorf("unsupported environment variable level %q", level)
+		}
+	}
+	if util.IsProtectedSystemEnvVar(name) {
 		return fmt.Errorf("cannot modify protected system env var: %s", name)
+	}
+	if level == "machine" && !util.IsAllowedEnvVarName(name) {
+		// Machine (HKLM) writes are admin-level and system-wide: only known
+		// tool-home variables may be written there. User level stays open for
+		// the GUI env editor's custom variables (syntax-validated upstream).
+		return fmt.Errorf("cannot set non-whitelisted machine env var: %s (only known tool-home variables may be written at machine level)", name)
 	}
 	if strings.ContainsRune(value, '\x00') {
 		return fmt.Errorf("env var %q value contains null bytes — refusing to write to registry", name)
+	}
+	const maxWinRegValueLen = 32767
+	if len(value) > maxWinRegValueLen {
+		return fmt.Errorf("env var %s value length %d exceeds Windows registry limit of %d characters", name, len(value), maxWinRegValueLen)
 	}
 
 	rootKey, subKey, err := getRegKey(level)
@@ -792,9 +824,19 @@ func GetEnvVar(name, level string) (string, error) {
 // DeleteEnvVar deletes a Windows registry environment variable at the given
 // level ("user" or "machine"). Protected system variables (PATH, SystemRoot,
 // etc.) are rejected. The change is broadcast via WM_SETTINGCHANGE.
+//
+// Security (L-3 fix): mirrors SetEnvVar — PATH deletion is refused
+// outright (destructive; no dedicated writer has a delete-path semantic)
+// and machine-level deletes are limited to the whitelisted tool-home
+// variables. User-level deletes stay open for the GUI env editor.
 func DeleteEnvVar(name, level string) error {
-	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
-		return fmt.Errorf("cannot modify protected system env var: %s", name)
+	if util.IsProtectedSystemEnvVar(name) {
+		// PATH removal is destructive (no dedicated writer has a delete-path
+		// semantic) — refuse it outright instead of allowing a bare delete.
+		return fmt.Errorf("cannot delete protected system env var: %s", name)
+	}
+	if level == "machine" && !util.IsAllowedEnvVarName(name) {
+		return fmt.Errorf("cannot delete non-whitelisted machine env var: %s", name)
 	}
 	rootKey, subKey, err := getRegKey(level)
 	if err != nil {

@@ -1,26 +1,21 @@
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
 import { useBatchUpdates } from '../../src/composables/useBatchUpdates.js';
+import { useParallelBatch } from '../../src/composables/useParallelBatch.js';
 
-// Spec 035 F2b: batch update loop — per-item confirmation (FR-018),
-// event-driven waiting, cancel-aborts-batch, truthful summary, and the
-// finally safety net for the progress dialog.
+// Spec 035 F2b + Spec 037 阶段 1：批量更新——串行逐项确认（FR-018）+
+// 并行执行（useParallelBatch 每项独立会话）+ 真实汇总 + finally 兜底。
 
 function setup({
   updates = [{ tool: 'node', current: '20.0.0', latestVersion: '22.0.0' }, { tool: 'go', current: '1.22.0', latestVersion: '1.24.0' }],
   previewResult = null, // null → PreviewInstall resolves this shape
   previewImpl,
-  installImpl,
-  waitImpl,
+  sessionStartImpl, // async (tool, version, form) => started boolean
+  sessionWaitImpl,  // async () => 'completed' | 'error' | 'cancelled' | 'disposed' | 'idle'
 } = {}) {
   const previewInstall = previewImpl || vi.fn(async () => (previewResult ?? { unverified: true, hasFormSpecificArchives: false, availableForms: [] }));
-  const installConfirmed = installImpl || vi.fn(async () => true);
-  const waitForCompletion = waitImpl || vi.fn(async () => 'completed');
-  const dialog = {
-    // Record calls and auto-resolve promise dialogs by clicking the
-    // positive/negative button per test config.
-    warning: vi.fn(),
-  };
+  const installConfirmed = vi.fn();
+  const dialog = { warning: vi.fn() };
   const message = { info: vi.fn(), warning: vi.fn(), success: vi.fn(), error: vi.fn() };
   const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key);
   const availableUpdates = ref([...updates]);
@@ -28,17 +23,38 @@ function setup({
   const loadUpdates = vi.fn(async () => null);
   const active = ref(false);
   const batchActive = ref(false);
+
+  // Real parallel engine with mock sessions.
+  const sessionFactory = (row) => ({
+    installConfirmed: async (tool, version, formFilter) => {
+      installConfirmed(tool, version, formFilter);
+      row.phase = 'Downloading';
+      const started = sessionStartImpl ? await sessionStartImpl(tool, version) : true;
+      return started;
+    },
+    waitForCompletion: async () => {
+      const result = sessionWaitImpl ? await sessionWaitImpl(tool0(row), ver0(row)) : 'completed';
+      // Mirror the real session behavior for the dialog rows.
+      if (result === 'completed' || result === 'cancelled' || result === 'error' || result === 'disposed') row.active = false;
+      return result;
+    },
+    cancel: vi.fn(async () => true),
+    pause: vi.fn(async () => true),
+    resume: vi.fn(async () => true),
+  });
+  // helpers closed over row via closure-locals below
+  function tool0(row) { return row?.tool; }
+  function ver0(row) { return row?.version; }
+
+  const parallelBatch = useParallelBatch({ sessionFactory, message, t });
   const batch = useBatchUpdates({
-    previewInstall, installConfirmed, waitForCompletion,
+    previewInstall, parallelBatch,
     dialog, message, t, loadUpdates, availableUpdates, setShowProgress,
     active, batchActive,
   });
-  return { batch, previewInstall, installConfirmed, waitForCompletion, dialog, message, availableUpdates, setShowProgress, loadUpdates, active, batchActive };
+  return { batch, parallelBatch, previewInstall, installConfirmed, dialog, message, availableUpdates, setShowProgress, loadUpdates, active, batchActive };
 }
 
-// clickDialog simulates the user clicking a dialog button: finds the
-// latest dialog.warning call whose title matches and invokes its
-// handler. resolveWith: 'positive' | 'negative' | 'close'.
 function clickDialog(dialog, resolveWith, index = 0) {
   const call = dialog.warning.mock.calls[index];
   const opts = call[0];
@@ -47,14 +63,10 @@ function clickDialog(dialog, resolveWith, index = 0) {
   else opts.onClose?.();
 }
 
-// runBatch drives installAllUpdates while auto-clicking dialog buttons.
-// batchDialog: 'positive' for the initial batch confirm.
-// itemDialogs: array of 'positive' | 'negative' per unverified dialog.
 async function runBatch(ctx, { batchDialog = 'positive', itemDialogs = [] } = {}) {
   const p = ctx.batch.installAllUpdates();
   await vi.waitFor(() => expect(ctx.dialog.warning).toHaveBeenCalled());
   clickDialog(ctx.dialog, batchDialog);
-  // Unverified dialogs appear one by one — click each as it shows.
   for (let i = 0; i < itemDialogs.length; i++) {
     await vi.waitFor(() => expect(ctx.dialog.warning.mock.calls.length).toBeGreaterThanOrEqual(i + 2));
     clickDialog(ctx.dialog, itemDialogs[i], i + 1);
@@ -62,15 +74,14 @@ async function runBatch(ctx, { batchDialog = 'positive', itemDialogs = [] } = {}
   await p;
 }
 
-describe('useBatchUpdates', () => {
+describe('useBatchUpdates (Spec 037 phase 1: serial confirm + parallel run)', () => {
   it('installs each unverified item after per-item confirmation', async () => {
     const ctx = setup();
     await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
-    // 1 batch dialog + 2 per-item confirmations
     expect(ctx.dialog.warning).toHaveBeenCalledTimes(3);
     expect(ctx.installConfirmed).toHaveBeenCalledTimes(2);
-    expect(ctx.installConfirmed).toHaveBeenNthCalledWith(1, 'node', '22.0.0', '');
-    expect(ctx.installConfirmed).toHaveBeenNthCalledWith(2, 'go', '1.24.0', '');
+    expect(ctx.installConfirmed).toHaveBeenCalledWith('node', '22.0.0', '');
+    expect(ctx.installConfirmed).toHaveBeenCalledWith('go', '1.24.0', '');
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 2, failed: 0, skipped: 0 }));
   });
 
@@ -85,11 +96,8 @@ describe('useBatchUpdates', () => {
   it('treats a PreviewInstall failure as unverified and still asks', async () => {
     const ctx = setup({ previewImpl: vi.fn(async () => { throw new Error('old build'); }) });
     await runBatch(ctx, { itemDialogs: ['positive', 'negative'] });
-    // Old build: preview fails → EVERY item still gets a confirmation
-    // dialog (never silently skipped). First installs, second is skipped.
     expect(ctx.dialog.warning).toHaveBeenCalledTimes(3);
     expect(ctx.installConfirmed).toHaveBeenCalledTimes(1);
-    expect(ctx.installConfirmed).toHaveBeenCalledWith('node', '22.0.0', '');
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 1, failed: 0, skipped: 1 }));
   });
 
@@ -102,37 +110,36 @@ describe('useBatchUpdates', () => {
     expect(ctx.installConfirmed).toHaveBeenCalledWith('opencode', '1.2.0', 'cli');
   });
 
-  it('counts a failed start as failed and moves on', async () => {
-    const ctx = setup({ installImpl: vi.fn(async () => false) });
+  it('counts a failed start as failed (all items still attempted)', async () => {
+    const ctx = setup({ sessionStartImpl: vi.fn(async () => false) });
     await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
     expect(ctx.installConfirmed).toHaveBeenCalledTimes(2);
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 2, skipped: 0 }));
   });
 
-  it('counts an error result as failed and continues', async () => {
-    const ctx = setup({ waitImpl: vi.fn(async () => 'error') });
+  it('counts an error result as failed', async () => {
+    const ctx = setup({ sessionWaitImpl: vi.fn(async () => 'error') });
     await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 2, skipped: 0 }));
     expect(ctx.setShowProgress).toHaveBeenCalledWith(false);
   });
 
-  it('aborting the batch on cancel: no further installs, warning summary', async () => {
-    const ctx = setup({ waitImpl: vi.fn(async () => 'cancelled') });
-    await runBatch(ctx, { itemDialogs: ['positive'] });
-    expect(ctx.installConfirmed).toHaveBeenCalledTimes(1); // second item never starts
-    expect(ctx.message.warning).toHaveBeenCalledWith('updates.install_all_cancelled:' + JSON.stringify({ done: 0, failed: 0, skipped: 0 }));
-    expect(ctx.message.info).not.toHaveBeenCalled();
+  it('cancelling items counts them as skipped, others still complete', async () => {
+    const ctx = setup({ sessionWaitImpl: vi.fn(async (tool) => (tool === 'node' ? 'cancelled' : 'completed')) });
+    await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
+    expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 1, failed: 0, skipped: 1 }));
   });
 
   it('treats an idle wait (lost events) as failed, never as success', async () => {
-    const ctx = setup({ waitImpl: vi.fn(async () => 'idle') });
+    const ctx = setup({ sessionWaitImpl: vi.fn(async () => 'idle') });
     await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 2, skipped: 0 }));
   });
 
   it('resets showProgress via the finally safety net on every exit path', async () => {
-    const ctx = setup({ waitImpl: vi.fn(async () => 'cancelled') });
-    await runBatch(ctx, { itemDialogs: ['positive'] });
+    const ctx = setup({ sessionWaitImpl: vi.fn(async () => 'cancelled') });
+    // 并行模式：确认阶段两项都要点（取消不影响其他项的确认流程）。
+    await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
     const calls = ctx.setShowProgress.mock.calls;
     expect(calls.length).toBeGreaterThan(0);
     expect(calls[calls.length - 1][0]).toBe(false);
@@ -143,14 +150,6 @@ describe('useBatchUpdates', () => {
     await runBatch(ctx, { batchDialog: 'negative' });
     expect(ctx.installConfirmed).not.toHaveBeenCalled();
     expect(ctx.message.info).not.toHaveBeenCalled();
-    expect(ctx.message.warning).not.toHaveBeenCalled();
-  });
-
-  it('resolves disposed as a cancellation (break out of the loop)', async () => {
-    const ctx = setup({ waitImpl: vi.fn(async () => 'disposed') });
-    await runBatch(ctx, { itemDialogs: ['positive'] });
-    expect(ctx.installConfirmed).toHaveBeenCalledTimes(1);
-    expect(ctx.message.warning).toHaveBeenCalled();
   });
 
   it('short-circuits on an empty updates list', async () => {
@@ -164,7 +163,7 @@ describe('useBatchUpdates', () => {
 
   it('declines to start while another install is active (N2)', async () => {
     const ctx = setup();
-    ctx.active.value = true; // a single install is already running
+    ctx.active.value = true;
     await ctx.batch.installAllUpdates();
     expect(ctx.dialog.warning).not.toHaveBeenCalled();
     expect(ctx.installConfirmed).not.toHaveBeenCalled();
@@ -172,81 +171,73 @@ describe('useBatchUpdates', () => {
     expect(ctx.message.warning).toHaveBeenCalledWith('install.busy');
   });
 
-  it('keeps the progress dialog open when an item fails to start (N2)', async () => {
-    const ctx = setup({ installImpl: vi.fn(async () => false) });
+  it('keeps the progress dialog open when items fail to start (N2)', async () => {
+    const ctx = setup({ sessionStartImpl: vi.fn(async () => false) });
     await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
     expect(ctx.installConfirmed).toHaveBeenCalledTimes(2);
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 2, skipped: 0 }));
-    // Only the finally net may close the dialog — no per-item close.
     const falseCalls = ctx.setShowProgress.mock.calls.filter(([v]) => v === false);
     expect(falseCalls.length).toBe(1);
   });
 
-  it('yields the batch when a manual install starts mid-batch (N2)', async () => {
+  // --- Spec 036 N4: no flicker ---
+
+  it('toggles batchActive around the batch run (N4)', async () => {
     let ctx;
-    const waitImpl = vi.fn(async () => {
-      // The user squeezed in a manual install via Run in Background
-      // right after the first item finished.
-      ctx.active.value = true;
+    const sessionWaitImpl = vi.fn(async () => {
+      // sample during the parallel run
+      batchSamples.push(ctx.batchActive.value);
       return 'completed';
     });
+    const batchSamples = [];
     ctx = setup({
-      waitImpl,
-      previewResult: { unverified: false, hasFormSpecificArchives: false, availableForms: [] },
-    });
-    await runBatch(ctx, {}); // non-unverified → no item dialogs
-    expect(ctx.installConfirmed).toHaveBeenCalledTimes(1); // second item never starts
-    expect(ctx.message.warning).toHaveBeenCalledWith('updates.install_all_cancelled:' + JSON.stringify({ done: 1, failed: 0, skipped: 0 }));
-    expect(ctx.message.info).not.toHaveBeenCalled();
-  });
-
-  // --- Spec 036 N4: no flicker between batch items ---
-
-  it('toggles batchActive around the batch loop (N4)', async () => {
-    const samples = [];
-    let ctx;
-    const waitImpl = vi.fn(async () => {
-      samples.push(ctx.batchActive.value);
-      return 'completed';
-    });
-    ctx = setup({
-      waitImpl,
+      sessionWaitImpl,
       previewResult: { unverified: false, hasFormSpecificArchives: false, availableForms: [] },
     });
     expect(ctx.batchActive.value).toBe(false);
     await runBatch(ctx, {});
-    expect(samples).toEqual([true, true]); // sampled inside the loop
-    expect(ctx.batchActive.value).toBe(false); // reset by finally
+    expect(batchSamples.length).toBe(2);
+    expect(batchSamples.every((v) => v === true)).toBe(true);
+    expect(ctx.batchActive.value).toBe(false);
   });
 
-  it('does not flicker the progress dialog between batch items (N4)', async () => {
+  it('does not flicker the progress dialog (single open + final close)', async () => {
     const ctx = setup({
       previewResult: { unverified: false, hasFormSpecificArchives: false, availableForms: [] },
     });
     await runBatch(ctx, {});
     const seq = ctx.setShowProgress.mock.calls.map(([v]) => v);
-    for (let i = 1; i < seq.length; i++) {
-      if (seq[i - 1] === false && seq[i] === true) {
-        throw new Error(`close/reopen flicker at ${i - 1}->${i}: [${seq.join(', ')}]`);
-      }
-    }
-    expect(seq[0]).toBe(true);
-    expect(seq[seq.length - 1]).toBe(false); // finally net
+    expect(seq).toEqual([true, false]);
   });
 
   it('does not flicker the progress dialog when items error (N4)', async () => {
     const ctx = setup({
-      waitImpl: vi.fn(async () => 'error'),
+      sessionWaitImpl: vi.fn(async () => 'error'),
       previewResult: { unverified: false, hasFormSpecificArchives: false, availableForms: [] },
     });
     await runBatch(ctx, {});
     const seq = ctx.setShowProgress.mock.calls.map(([v]) => v);
-    for (let i = 1; i < seq.length; i++) {
-      if (seq[i - 1] === false && seq[i] === true) {
-        throw new Error(`close/reopen flicker at ${i - 1}->${i}: [${seq.join(', ')}]`);
-      }
+    expect(seq).toEqual([true, false]);
+  });
+
+  // --- Spec 037: parallel engine behavior ---
+
+  it('parallel engine: rows mirror per-item state and expose cancel', async () => {
+    const ctx = setup({ sessionWaitImpl: vi.fn(async () => 'completed') });
+    await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });
+    expect(ctx.parallelBatch.items.length).toBe(2);
+    for (const row of ctx.parallelBatch.items) {
+      expect(row.active).toBe(false); // completed rows deactivate
+      expect(row.tool).toBeTruthy();
     }
-    expect(seq[seq.length - 1]).toBe(false);
-    expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 2, skipped: 0 }));
+    expect(ctx.parallelBatch.running.value).toBe(false);
+  });
+
+  it('all declined items → summary with skipped only, no sessions', async () => {
+    const ctx = setup();
+    await runBatch(ctx, { itemDialogs: ['negative', 'negative'] });
+    expect(ctx.installConfirmed).not.toHaveBeenCalled();
+    expect(ctx.parallelBatch.items.length).toBe(0);
+    expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 0, skipped: 2 }));
   });
 });

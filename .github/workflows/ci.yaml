@@ -325,22 +325,22 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VER="${TAG#v}"
-          # Build the GUI variant (Wails bindings) for amd64
-          GOARCH=amd64 go build -tags gui -ldflags="-s -w" -o xdev-gui .
+          # 单二进制模型：一个产物同时提供 GUI/TUI/CLI（0.4.0 起产物名统一为 xdev-*）
+          GOARCH=amd64 go build -ldflags="-s -w" -o xdev .
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
           rm -rf "$APPDIR"
           mkdir -p "$APPDIR/usr/bin"
-          cp xdev-gui "$APPDIR/usr/bin/xdev-gui"
-          chmod +x "$APPDIR/usr/bin/xdev-gui"
+          cp xdev "$APPDIR/usr/bin/xdev"
+          chmod +x "$APPDIR/usr/bin/xdev"
 
           mkdir -p "$APPDIR/usr/share/applications"
-          cat > "$APPDIR/usr/share/applications/xdev-gui.desktop" <<'DESKTOP'
+          cat > "$APPDIR/usr/share/applications/xdev.desktop" <<'DESKTOP'
           [Desktop Entry]
           Name=XDev
           Comment=Cross-platform development environment manager
-          Exec=xdev-gui
+          Exec=xdev
           Icon=xdev
           Terminal=false
           Type=Application
@@ -348,7 +348,7 @@ jobs:
           DESKTOP
 
           # appimagetool looks for a .desktop file in the AppDir root
-          cp "$APPDIR/usr/share/applications/xdev-gui.desktop" "$APPDIR/xdev-gui.desktop"
+          cp "$APPDIR/usr/share/applications/xdev.desktop" "$APPDIR/xdev.desktop"
 
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
@@ -359,7 +359,7 @@ jobs:
           cat > "$APPDIR/AppRun" <<'APPRUN'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
-          exec "$HERE/usr/bin/xdev-gui" "$@"
+          exec "$HERE/usr/bin/xdev" "$@"
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
@@ -368,9 +368,9 @@ jobs:
           chmod +x appimagetool
 
           # --appimage-extract-and-run avoids FUSE requirement on CI runners
-          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-x86_64.AppImage"
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-${VER}-x86_64.AppImage"
 
-          rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
+          rm -rf "$APPDIR" appimagetool squashfs-root xdev
 
       - name: Build Linux AppImage (arm64)
         continue-on-error: true
@@ -379,28 +379,28 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VER="${TAG#v}"
-          # Cross-compile GUI variant for arm64
-          GOARCH=arm64 go build -tags gui -ldflags="-s -w" -o xdev-gui-arm64 .
+          # 单二进制模型：arm64 交叉编译同一产物（0.4.0 起产物名统一为 xdev-*）
+          GOARCH=arm64 go build -ldflags="-s -w" -o xdev-arm64 .
 
           # Assemble AppDir
           APPDIR="XDev-arm64.AppDir"
           rm -rf "$APPDIR"
           mkdir -p "$APPDIR/usr/bin"
-          cp xdev-gui-arm64 "$APPDIR/usr/bin/xdev-gui"
-          chmod +x "$APPDIR/usr/bin/xdev-gui"
+          cp xdev-arm64 "$APPDIR/usr/bin/xdev"
+          chmod +x "$APPDIR/usr/bin/xdev"
 
           mkdir -p "$APPDIR/usr/share/applications"
-          cat > "$APPDIR/usr/share/applications/xdev-gui.desktop" <<'DESKTOP'
+          cat > "$APPDIR/usr/share/applications/xdev.desktop" <<'DESKTOP'
           [Desktop Entry]
           Name=XDev
           Comment=Cross-platform development environment manager
-          Exec=xdev-gui
+          Exec=xdev
           Icon=xdev
           Terminal=false
           Type=Application
           Categories=Development;
           DESKTOP
-          cp "$APPDIR/usr/share/applications/xdev-gui.desktop" "$APPDIR/xdev-gui.desktop"
+          cp "$APPDIR/usr/share/applications/xdev.desktop" "$APPDIR/xdev.desktop"
 
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
@@ -410,7 +410,7 @@ jobs:
           cat > "$APPDIR/AppRun" <<'APPRUN'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
-          exec "$HERE/usr/bin/xdev-gui" "$@"
+          exec "$HERE/usr/bin/xdev" "$@"
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
@@ -423,9 +423,9 @@ jobs:
           chmod +x appimagetool
 
           # Run arm64 appimagetool via qemu-user-static emulation
-          ARCH=arm64 qemu-aarch64-static ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-aarch64.AppImage"
+          ARCH=arm64 qemu-aarch64-static ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-${VER}-aarch64.AppImage"
 
-          rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui-arm64
+          rm -rf "$APPDIR" appimagetool squashfs-root xdev-arm64
 
       - name: Generate SHA256SUMS
         env:
@@ -533,12 +533,12 @@ jobs:
             LDFLAGS="$LDFLAGS -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
           fi
 
-          SKIP_CLI_DMG=0; SKIP_GUI_ARM64_DMG=0; SKIP_GUI_AMD64_DMG=0
+          # 单二进制模型（0.3.3+）：GUI DMG 与 CLI DMG 是同一构建产物，
+          # 不再重复打包 xdev-gui-*（0.4.0 起产物收口为每平台单件）。
+          SKIP_CLI_DMG=0
           echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-arm64-v${VER}.dmg" && SKIP_CLI_DMG=1
-          echo "$EXISTING_ASSETS" | grep -qw "xdev-gui-darwin-arm64-v${VER}.dmg" && SKIP_GUI_ARM64_DMG=1
-          echo "$EXISTING_ASSETS" | grep -qw "xdev-gui-darwin-amd64-v${VER}.dmg" && SKIP_GUI_AMD64_DMG=1
 
-          if [ $SKIP_CLI_DMG -eq 1 ] && [ $SKIP_GUI_ARM64_DMG -eq 1 ] && [ $SKIP_GUI_AMD64_DMG -eq 1 ]; then
+          if [ $SKIP_CLI_DMG -eq 1 ]; then
             echo "SKIP: all macOS DMGs already exist"
             exit 0
           fi
@@ -547,45 +547,13 @@ jobs:
           GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev-amd64 .
           GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev-arm64 .
 
-          # Create DMG for CLI (arm64 universal-ready)
-          if [ $SKIP_CLI_DMG -ne 1 ]; then
-            STAGING="xdev-dmg-staging"
-            mkdir -p "$STAGING"
-            cp xdev-arm64 "$STAGING/xdev"
-            chmod +x "$STAGING/xdev"
-            hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
-            rm -rf "$STAGING"
-          else
-            echo "SKIP: xdev-darwin-arm64-v${VER}.dmg already exists"
-          fi
-
-          # Create DMG for GUI (arm64)
-          if [ $SKIP_GUI_ARM64_DMG -ne 1 ]; then
-            GOARCH=arm64 go build -tags gui -ldflags="$LDFLAGS" -o xdev-gui-arm64 .
-            STAGING="xdev-dmg-staging"
-            mkdir -p "$STAGING"
-            cp xdev-gui-arm64 "$STAGING/xdev-gui"
-            chmod +x "$STAGING/xdev-gui"
-            hdiutil create -volname "XDev GUI" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-gui-darwin-arm64-v${VER}.dmg"
-            rm -rf "$STAGING"
-            rm -f xdev-gui-arm64
-          else
-            echo "SKIP: xdev-gui-darwin-arm64-v${VER}.dmg already exists"
-          fi
-
-          # Create DMG for GUI (amd64)
-          if [ $SKIP_GUI_AMD64_DMG -ne 1 ]; then
-            GOARCH=amd64 go build -tags gui -ldflags="$LDFLAGS" -o xdev-gui-amd64 .
-            STAGING="xdev-dmg-staging"
-            mkdir -p "$STAGING"
-            cp xdev-gui-amd64 "$STAGING/xdev-gui"
-            chmod +x "$STAGING/xdev-gui"
-            hdiutil create -volname "XDev GUI" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-gui-darwin-amd64-v${VER}.dmg"
-            rm -rf "$STAGING"
-            rm -f xdev-gui-amd64
-          else
-            echo "SKIP: xdev-gui-darwin-amd64-v${VER}.dmg already exists"
-          fi
+          # Create DMG (arm64 universal-ready)
+          STAGING="xdev-dmg-staging"
+          mkdir -p "$STAGING"
+          cp xdev-arm64 "$STAGING/xdev"
+          chmod +x "$STAGING/xdev"
+          hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
+          rm -rf "$STAGING"
 
           rm -f xdev-amd64 xdev-arm64
 
@@ -673,26 +641,26 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          go build -tags gui -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev-gui .
+          go build -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev .
 
           APPDIR="XDev.AppDir"
           rm -rf "$APPDIR"
           mkdir -p "$APPDIR/usr/bin"
-          cp xdev-gui "$APPDIR/usr/bin/xdev-gui"
-          chmod +x "$APPDIR/usr/bin/xdev-gui"
+          cp xdev "$APPDIR/usr/bin/xdev"
+          chmod +x "$APPDIR/usr/bin/xdev"
 
           mkdir -p "$APPDIR/usr/share/applications"
-          cat > "$APPDIR/usr/share/applications/xdev-gui.desktop" <<'DESKTOP'
+          cat > "$APPDIR/usr/share/applications/xdev.desktop" <<'DESKTOP'
           [Desktop Entry]
           Name=XDev
           Comment=Cross-platform development environment manager
-          Exec=xdev-gui
+          Exec=xdev
           Icon=xdev
           Terminal=false
           Type=Application
           Categories=Development;
           DESKTOP
-          cp "$APPDIR/usr/share/applications/xdev-gui.desktop" "$APPDIR/xdev-gui.desktop"
+          cp "$APPDIR/usr/share/applications/xdev.desktop" "$APPDIR/xdev.desktop"
 
           mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
           cp build/appicon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/xdev.png"
@@ -702,16 +670,16 @@ jobs:
           cat > "$APPDIR/AppRun" <<'APPRUN'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
-          exec "$HERE/usr/bin/xdev-gui" "$@"
+          exec "$HERE/usr/bin/xdev" "$@"
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
           wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
           chmod +x appimagetool
 
-          ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-gui-${VER}-aarch64.AppImage"
+          ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-${VER}-aarch64.AppImage"
 
-          rm -rf "$APPDIR" appimagetool squashfs-root xdev-gui
+          rm -rf "$APPDIR" appimagetool squashfs-root xdev
 
       - name: Upload arm64 AppImage to Release
         uses: softprops/action-gh-release@v2
