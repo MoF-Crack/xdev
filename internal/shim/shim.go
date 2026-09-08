@@ -78,7 +78,18 @@ func MaybeExec(selfName string) (bool, error) {
 	alias := strings.TrimSuffix(selfName, exeSuffix())
 	target, _, args, err := Lookup(alias, os.Args[1:])
 	if err != nil {
-		return true, err
+		// PATH 透传（Spec 038）：shim 存在但工具未由 xdev 管理时，不能
+		// 遮蔽系统上已有的同名真实工具——在剔除 xdev 自身目录（shims/、
+		// current/）的 PATH 上重新解析并 exec。找不到才保留原始错误
+		//（提示 xdev install）。
+		pathTarget, pathErr := LookupOnPath(alias)
+		if pathErr != nil || pathTarget == "" {
+			return true, err
+		}
+		if rerr := run(pathTarget, os.Args[1:]); rerr != nil {
+			return true, rerr
+		}
+		return true, nil
 	}
 	if err := run(target, args); err != nil {
 		return true, err

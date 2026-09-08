@@ -42,3 +42,12 @@ xdev 管理时，透传到 PATH 上的真实可执行文件」的降级路径。
 
 用户日常工具（git/node/python 等任何在目录里有 shim 但未激活的）全部失效，
 且报错信息误导（让用户去 install 一个系统已有的工具）。
+
+## 实测记录（2026-09-08，0.4.0 发布会话）
+
+- `go build ./...`（VCS stamping）调用 git → 命中孤儿 shim → "error obtaining VCS
+  status: exit status 1"，三次重试全挂，必须把 D:\Env\Tools\Git\cmd 手工前置
+  到 PATH 才能构建——同一缺陷连编译工具链都被破坏，实锤 P0。
+- gh CLI 同样受影响（内部 git 检测 base repo 失败）。
+- 临时绕过：将真实 Git 目录前置到 PATH（或删除孤儿 shim）。
+
