@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/util"
@@ -12,6 +13,17 @@ import (
 // stubProbe 返回固定版本的探测桩（默认"旧版本"）。
 func stubProbe(ver string) probeVersionFunc {
 	return func(path string) string { return ver }
+}
+
+// staleFixtureName 返回与 stale.go 一致的 CLI 副本名——测试在 Unix 上必须用
+// "xdev"（生产从未在 Unix 落盘 "xdev.exe" 命名副本，文件名不匹配会让
+// ReplaceStaleCLICopyWithProbe 的 Stat 短路，导致断言假失败）。
+func staleFixtureName(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return "xdev.exe"
+	}
+	return "xdev"
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -34,7 +46,7 @@ func readFile(t *testing.T, path string) string {
 func TestReplaceStaleCLICopy_OldReplaced(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
-	copyPath := filepath.Join(home, "xdev.exe")
+	copyPath := filepath.Join(home, staleFixtureName(t))
 	writeFile(t, current, "NEW-BINARY-CONTENT")
 	writeFile(t, copyPath, "OLD-BINARY-CONTENT")
 
@@ -56,7 +68,7 @@ func TestReplaceStaleCLICopy_OldReplaced(t *testing.T) {
 func TestReplaceStaleCLICopy_SameVersion(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
-	copyPath := filepath.Join(home, "xdev.exe")
+	copyPath := filepath.Join(home, staleFixtureName(t))
 	writeFile(t, current, "NEW")
 	writeFile(t, copyPath, "OLD")
 
@@ -74,7 +86,7 @@ func TestReplaceStaleCLICopy_SameVersion(t *testing.T) {
 func TestReplaceStaleCLICopy_HigherVersionStillReplaced(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
-	copyPath := filepath.Join(home, "xdev.exe")
+	copyPath := filepath.Join(home, staleFixtureName(t))
 	writeFile(t, current, "NEW-BINARY-CONTENT")
 	writeFile(t, copyPath, "OLD-LEGACY-CONTENT")
 
@@ -90,7 +102,7 @@ func TestReplaceStaleCLICopy_HigherVersionStillReplaced(t *testing.T) {
 func TestReplaceStaleCLICopy_ProbeFailure(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
-	copyPath := filepath.Join(home, "xdev.exe")
+	copyPath := filepath.Join(home, staleFixtureName(t))
 	writeFile(t, current, "NEW")
 	writeFile(t, copyPath, "OLD")
 
@@ -105,7 +117,7 @@ func TestReplaceStaleCLICopy_ProbeFailure(t *testing.T) {
 // TC-S5-5 自指跳过（副本 == currentExe）
 func TestReplaceStaleCLICopy_SelfReference(t *testing.T) {
 	home := t.TempDir()
-	copyPath := filepath.Join(home, "xdev.exe")
+	copyPath := filepath.Join(home, staleFixtureName(t))
 	writeFile(t, copyPath, "MYSELF")
 
 	if err := ReplaceStaleCLICopyWithProbe(copyPath, home, stubProbe("0.1.0")); err != nil {
@@ -125,7 +137,7 @@ func TestReplaceStaleCLICopy_NoCopy(t *testing.T) {
 	if err := ReplaceStaleCLICopyWithProbe(current, home, stubProbe("0.1.0")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(home, "xdev.exe")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, staleFixtureName(t))); !os.IsNotExist(err) {
 		t.Errorf("missing copy should stay missing, stat err=%v", err)
 	}
 }
@@ -135,14 +147,14 @@ func TestReplaceStaleCLICopy_CopyIsDir(t *testing.T) {
 	home := t.TempDir()
 	current := filepath.Join(t.TempDir(), "xdev.exe")
 	writeFile(t, current, "NEW")
-	if err := os.MkdirAll(filepath.Join(home, "xdev.exe"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, staleFixtureName(t)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := ReplaceStaleCLICopyWithProbe(current, home, stubProbe("0.1.0")); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(filepath.Join(home, "xdev.exe"))
+	fi, err := os.Stat(filepath.Join(home, staleFixtureName(t)))
 	if err != nil || !fi.IsDir() {
 		t.Errorf("dir copy should be untouched, err=%v", err)
 	}

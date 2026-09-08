@@ -140,9 +140,15 @@ func TestScanDedupesCaseOnWindows(t *testing.T) {
 }
 
 func TestIndexByBasenameAndFirstInIndex(t *testing.T) {
+	// .cmd 是 Windows 可执行后缀（Unix 上 Scan/lookupKey 不会剥它）；
+	// fixture 按平台取真实可执行名，断言才与生产行为一致。
+	ext := ".cmd"
+	if runtime.GOOS != "windows" {
+		ext = ""
+	}
 	hits := []Hit{
-		{Path: filepath.Join("tmp", "left", "pnpm.cmd"), Dir: filepath.Join("tmp", "left")},
-		{Path: filepath.Join("tmp", "right", "pnpm.cmd"), Dir: filepath.Join("tmp", "right")},
+		{Path: filepath.Join("tmp", "left", "pnpm"+ext), Dir: filepath.Join("tmp", "left")},
+		{Path: filepath.Join("tmp", "right", "pnpm"+ext), Dir: filepath.Join("tmp", "right")},
 	}
 	idx := IndexByBasename(hits)
 	got, ok := FirstInIndex([]string{"missing", "pnpm"}, idx)

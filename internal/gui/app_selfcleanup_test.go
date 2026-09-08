@@ -45,10 +45,16 @@ func TestRemoveObsoleteGUICopy_NoLeftover(t *testing.T) {
 }
 
 // 只清理精确文件名——home 根其他文件（如 config.yaml）不受影响。
+// 注意：精确名是平台产物名（Windows 为 xdev-gui.exe，Unix 为 xdev-gui）——
+// 生产从未在 Unix 发售过 .exe 命名副本，断言必须按平台取期望名。
 func TestRemoveObsoleteGUICopy_OnlyExactName(t *testing.T) {
 	a := newTestApp(t)
 	home := t.TempDir()
-	guiPath := filepath.Join(home, "xdev-gui.exe")
+	guiName := "xdev-gui.exe"
+	if runtime.GOOS != "windows" {
+		guiName = "xdev-gui"
+	}
+	guiPath := filepath.Join(home, guiName)
 	keepPath := filepath.Join(home, "config.yaml")
 	if err := os.WriteFile(guiPath, []byte("legacy"), 0o755); err != nil {
 		t.Fatal(err)
@@ -60,7 +66,7 @@ func TestRemoveObsoleteGUICopy_OnlyExactName(t *testing.T) {
 	a.removeObsoleteGUICopy(home)
 
 	if _, err := os.Stat(guiPath); !os.IsNotExist(err) {
-		t.Errorf("xdev-gui.exe should be removed, err=%v", err)
+		t.Errorf("%s should be removed, err=%v", guiName, err)
 	}
 	if _, err := os.Stat(keepPath); err != nil {
 		t.Errorf("config.yaml must survive: %v", err)
