@@ -76,4 +76,4 @@ test-results/
 # Local validation logs (transient)
 build/*validate*
 build/gov-*
-build/local-*;
+build/local-*
