@@ -72,3 +72,8 @@ test-results/
 # DSH internal session metadata (not part of the repo)
 .omo/
 
+
+# Local validation logs (transient)
+build/*validate*
+build/gov-*
+build/local-*;
