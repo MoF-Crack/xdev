@@ -53,7 +53,7 @@ jobs:
       # 云端资源节约：Go 编译缓存（setup-go 只缓存模块，不缓存 build cache）。
       # 首跑后各 job 的 go build/test 编译时间约减半。
       - name: Go build cache
-        uses: actions/cache@v7
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -127,7 +127,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Go build cache
-        uses: actions/cache@v7
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -196,7 +196,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Go build cache
-        uses: actions/cache@v7
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -490,7 +490,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Go build cache
-        uses: actions/cache@v7
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
@@ -615,7 +615,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Go build cache
-        uses: actions/cache@v7
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/go-build
