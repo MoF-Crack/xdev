@@ -4,7 +4,8 @@
 > **状态**：Approved
 > **文档版本**：1.0.0
 > **创建日期**：2026-08-21
-> **所有者**：xinyan
+> **最后更新**：2026-08-21
+> **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **权威范围**：CLI 默认构建不含 Wails；shim 热路径降成本；嗅探禁止 N×LoadCatalog；self-update 对齐真实 Release
 > **Constitution**：`1.0.0`
 
