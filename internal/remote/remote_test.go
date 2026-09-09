@@ -1949,6 +1949,63 @@ func TestDiscoverVersions_NPM_EmptyPackage(t *testing.T) {
 	}
 }
 
+// Spec 039（dsh 预发布版本流）：dist-tags.latest 本身是 rc；pattern 接受
+// rc/alpha 预发布（否则零版本可发现）；降序排序含预发布语义
+//（0.1.2-rc.1 > 0.1.2-alpha.5 > 0.1.1-rc.2），latest 置顶。
+func TestDiscoverVersions_NPM_PrereleasePatternAndOrder(t *testing.T) {
+	registry := map[string]interface{}{
+		"name": "@deepseek-ai/dsh",
+		"dist-tags": map[string]string{
+			"latest": "0.1.2-rc.1",
+			"alpha":  "0.1.5-alpha.1",
+			"next":   "0.1.2-rc.1",
+		},
+		"versions": map[string]interface{}{
+			"0.1.0-rc.7":  map[string]interface{}{"version": "0.1.0-rc.7"},
+			"0.1.1-rc.2":  map[string]interface{}{"version": "0.1.1-rc.2"},
+			"0.1.2-alpha.5": map[string]interface{}{"version": "0.1.2-alpha.5"},
+			"0.1.2-rc.1":  map[string]interface{}{"version": "0.1.2-rc.1"},
+			"0.1.5-alpha.1": map[string]interface{}{"version": "0.1.5-alpha.1"},
+			"0.1.3-alpha.2": map[string]interface{}{"version": "0.1.3-alpha.2"},
+		},
+	}
+	body, _ := json.Marshal(registry)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	httpClient = npmTestClient(server.URL)
+	defer func() { httpClient = origClient }()
+
+	// dsh.yaml 的 pattern：接受稳定版 + alpha/beta/rc 预发布。
+	versions, err := DiscoverVersions(context.Background(), manifest.RemoteSource{
+		Type:    "npm",
+		Package: "@deepseek-ai/dsh",
+		Pattern: `^(\d+\.\d+\.\d+)(-(alpha|beta|rc)\.\d+)?$`,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverVersions npm prerelease: %v", err)
+	}
+	want := []string{
+		"0.1.2-rc.1",  // dist-tags.latest 置顶（versions 中的同名键去重）
+		"0.1.5-alpha.1", // 0.1.5 > 0.1.3 > 0.1.2
+		"0.1.3-alpha.2",
+		"0.1.2-alpha.5", // 同核心：rc（已置顶）> alpha
+		"0.1.1-rc.2",
+		"0.1.0-rc.7",
+	}
+	if len(versions) != len(want) {
+		t.Fatalf("got %d versions %v, want %d", len(versions), versions, len(want))
+	}
+	for i, v := range want {
+		if versions[i] != v {
+			t.Errorf("versions[%d] = %q, want %q (full: %v)", i, versions[i], v, versions)
+		}
+	}
+}
+
 func TestDiscoverVersions_NPM_NonOKStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)

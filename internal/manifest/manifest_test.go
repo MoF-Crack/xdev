@@ -706,6 +706,15 @@ func TestEffectiveKind_Script(t *testing.T) {
 	}
 }
 
+// Spec 039: npm-kind archives delegate the install to the npm CLI
+// (no archive download). Explicit declaration only.
+func TestEffectiveKind_NPM(t *testing.T) {
+	a := Archive{InstallKind: InstallKindNPM}
+	if got := a.EffectiveKind(); got != InstallKindNPM {
+		t.Errorf("npm: EffectiveKind() = %q, want %q", got, InstallKindNPM)
+	}
+}
+
 // TestEffectiveKind_UnknownFallsBackToArchive enforces the trust model:
 // an unrecognised kind must never silently become executable/script
 // (those run untrusted code). The safe default is always "archive"

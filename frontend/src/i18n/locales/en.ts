@@ -180,6 +180,7 @@ export default {
   'detail.no_versions_installed': 'No versions installed',
   'detail.show_more': 'Show more ({count} remaining)',
   'detail.active': 'ACTIVE',
+  'detail.prerelease': 'Pre-release',
   'detail.versions_count': '{count} versions',
   'detail.custom_version_placeholder': 'e.g. 3.11.5',
   'detail.incomplete': 'Incomplete',

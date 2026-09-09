@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [Unreleased]
 
+### Added
+- Spec 039：dsh（DeepSeek Harness）安装管理——分类对齐 OpenCode（development_tools），默认 npm 托管安装（`install_kind: npm`：`npm install -g --prefix <installDir>/<version>`，npm 负责依赖树解析、registry 完整性校验与启动器生成）；安装前 npm 依赖预检（xdev 管理的 Node 优先，缺失/版本不足硬失败并提示 `xdev install node`）
+- npm 安装通道（`internal/installer/npm_install.go`）：CLI（InstallWithProgress 跳过归档下载）与 GUI（下载管理器旁路 + installProgress/installError 事件契约一致）双管线；npm 全局布局（win `dsh.cmd` / unix `bin/dsh`）命中既有 shim 分发与完整性门，零下游改动
+- 预发布版本语义（SemVer 2.0.0）：`util.CompareSemver` 升级（`1.0.0 > 1.0.0-rc.1 > 1.0.0-alpha.9`、rc-only 版本流 latest 可推进）；嗅探合并的 latest 预发布抢占保护（稳定 latest 不被 alpha/rc 劫持）+ `stable` 标志按版本串推导；dsh remote pattern 接受 `-(alpha|beta|rc).N`（npm `latest` dist-tag 实测为 rc，不接受则零版本可发现）；GUI 版本列表预发行徽标（i18n en/zh）
+
+### Changed
+- 嗅探合并发现的稳定版本现在写入 `stable: true`（此前隐式 false）；npm-kind 版本豁免「归档 URL 未验证」确认弹窗（无归档下载，npm 自带完整性校验）
+
 ## [0.4.0] - 2026-09-02
 
 ### Added

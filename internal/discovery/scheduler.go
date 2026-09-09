@@ -774,8 +774,11 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 			continue
 		}
 
+		// Spec 039: 稳定版本串 → stable: true；预发布（-rc.N/-alpha.N 等）→
+		// stable: false（GUI 徽标区分预发行通道）。
 		existing.VersionList = append(existing.VersionList, manifest.Version{
 			Version:    dv.Version,
+			Stable:     !util.IsPrereleaseVersion(dv.Version),
 			Release:    dv.ReleaseDate,
 			Archives:   dv.Archives,
 			Discovered: true,
@@ -790,14 +793,38 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 	}
 
 	// Phase 2B: auto-update latest from discovered versions.
-	// Iterate all discovered versions; if any is newer than the current
-	// latest, promote it.  Non-semver versions (e.g. "r29") are safely
-	// skipped by IsVersionNewer (returns false).
+	//
+	// Spec 039 prerelease rules（dsh 频繁更新 + alpha 通道）:
+	//   - a pre-release candidate never hijacks a STABLE latest (npm
+	//     dist-tags semantics: alphas live on their own channel — a tool
+	//     that released 1.0.0 stable keeps latest=1.0.0 even after
+	//     1.1.0-alpha.1 is discovered);
+	//   - a pre-release candidate only advances a pre-release latest of
+	//     the SAME channel: rc → rc promotions work (dsh's npm
+	//     dist-tags.latest is itself an rc, and IsVersionNewer
+	//     false-negatives every "-" string, which froze such streams),
+	//     but the alpha channel (dsh: alpha=0.1.5-alpha.1 > latest
+	//     0.1.2-rc.1) never hijacks an rc-latest;
+	//   - comparisons are prerelease-aware (SemVer 2.0.0);
+	//   - non-semver keys ("r29") parse to 0.0.0 and never promote —
+	//     same conservative skip as before.
 	latestUpdated := false
+	latestIsPre := util.IsPrereleaseVersion(existing.Latest)
+	latestChannel := util.PrereleaseChannel(existing.Latest)
 	for _, dv := range discovered {
-		if util.IsVersionNewer(dv.Version, existing.Latest) {
+		if existing.Latest != "" && util.IsPrereleaseVersion(dv.Version) {
+			if !latestIsPre {
+				continue // stable latest is never hijacked by a pre-release
+			}
+			if util.PrereleaseChannel(dv.Version) != latestChannel {
+				continue // different pre-release channel (alpha vs rc) never promotes
+			}
+		}
+		if util.CompareSemver(dv.Version, existing.Latest) > 0 {
 			existing.Latest = dv.Version
 			latestUpdated = true
+			latestIsPre = util.IsPrereleaseVersion(existing.Latest)
+			latestChannel = util.PrereleaseChannel(existing.Latest)
 		}
 	}
 

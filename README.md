@@ -173,14 +173,14 @@ E:\XDev\
 
 Host-scan 会列出 PATH 上的每一个实例（本机 leftover 与 xdev 管理副本并存），而不是只认 `LookPath` 的第一个命中。包管理器详情里可在 xdev 实例与本地实例之间切换。
 
-## 支持的工具（51 个 catalog + 本机包管理器）
+## 支持的工具（52 个 catalog + 本机包管理器）
 
 | 分类 | 工具 |
 |------|------|
 | 编程语言 | Java, Python, Node.js, Go, Rust, .NET, PHP, Ruby, Lua, Perl, Dart, Kotlin, Bun, Deno, Zig, Julia, Haskell, Scala, Erlang, TypeScript, 仓颉 |
 | 移动开发 | Android SDK（platform-tools / build-tools / platforms / ndk / cmdline-tools / emulator）、Flutter |
 | 构建工具 | Gradle, Maven, CMake, Make, Ninja, Git, LLVM/Clang, MinGW, sbt |
-| 开发工具 | VS Code, Cursor, Zed, IntelliJ IDEA Community, PyCharm Community, GoLand, CLion, WebStorm, RubyMine, Claude Code, Codex, OpenCode, GitHub Copilot CLI |
+| 开发工具 | VS Code, Cursor, Zed, IntelliJ IDEA Community, PyCharm Community, GoLand, CLion, WebStorm, RubyMine, Claude Code, Codex, OpenCode, GitHub Copilot CLI, DSH（DeepSeek Harness，npm 托管安装） |
 | 包管理器 | UV（catalog）；Scoop / Homebrew / Chocolatey 可自动安装；yarn / pnpm 经 xdev Node 的 corepack 或 `npm i -g` 启用；pipx 经 pip / uv 安装 |
 
 GUI 工具目录按「编程语言 / 构建工具 / 开发工具 / 移动开发 / 系统工具 / 本地工具 / 包管理器」分组。安装、启用、更新在详情抽屉中操作。

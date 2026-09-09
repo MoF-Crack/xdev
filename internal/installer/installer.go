@@ -459,10 +459,15 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		}
 	}
 
-	log.Printf("[install] Starting download phase")
-	if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts.BatchIndex, opts.BatchTotal); err != nil {
-		log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
-		return nil, err
+	// Spec 039: npm-kind installs never download the archive — the entry is
+	// metadata only and npm fetches the dependency tree itself (verifying
+	// registry integrity per package).
+	if ResolveKind(arch) != manifest.InstallKindNPM {
+		log.Printf("[install] Starting download phase")
+		if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts.BatchIndex, opts.BatchTotal); err != nil {
+			log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
+			return nil, err
+		}
 	}
 
 	// Security (M-3 fix): serialize the remove/extract/verify span for the
@@ -497,11 +502,13 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			log.Printf("[install] ERROR: install-by-kind failed for %s@%s: %v", p.Name(), ver, err)
 			return err
 		}
-		// Hard gate for archive extracts only. Executable/script installers
-		// may populate the install tree asynchronously or outside installPath
-		// (e.g. rustup), so binary-presence checks would false-fail them.
+		// Hard gate for archive extracts and npm installs. Executable/script
+		// installers may populate the install tree asynchronously or outside
+		// installPath (e.g. rustup), so binary-presence checks would
+		// false-fail them. npm is synchronous — the tree is complete when
+		// the npm CLI returns (Spec 039).
 		kind := ResolveKind(arch)
-		if kind == manifest.InstallKindArchive {
+		if kind == manifest.InstallKindArchive || kind == manifest.InstallKindNPM {
 			if err := ensureInstallIntegrity(p, installPath, arch.Strip); err != nil {
 				log.Printf("[install] ERROR: %v", err)
 				// Best-effort cleanup so the broken dir is not left as "installed".
@@ -1027,11 +1034,14 @@ func ResolveKind(a *manifest.Archive) string {
 //   - archive (default): extract the cached file into the install dir
 //   - executable: verify SHA-256, then run the cached binary
 //   - script: verify SHA-256, then execute the cached script via "sh"
+//   - npm: run the npm CLI against the install dir (no download; Spec 039)
 func (i *Installer) installByKind(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
 	kind := ResolveKind(a)
 	switch kind {
 	case manifest.InstallKindExecutable, manifest.InstallKindScript:
 		return i.runInstaller(ctx, p, a, ver, installPath)
+	case manifest.InstallKindNPM:
+		return i.installViaNPM(ctx, p, a, ver, installPath)
 	default:
 		return i.extract(p.Name(), a, ver, installPath)
 	}
@@ -1422,6 +1432,10 @@ func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver
 		if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
 			return fmt.Errorf("installer run failed: %w", err)
 		}
+	case manifest.InstallKindNPM:
+		// Spec 039: npm-kind 工具没有「已下载归档」可解压——调用方应改走
+		// InstallNPMPackage（预检 → npm install → 完整性门 → 激活）。
+		return fmt.Errorf("npm-kind tool %s must be installed via InstallNPMPackage (no archive to extract)", p.Name())
 	default:
 		if err := i.extract(p.Name(), a, ver, installPath); err != nil {
 			return fmt.Errorf("extraction failed: %w", err)

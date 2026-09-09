@@ -164,6 +164,7 @@ export default {
   'detail.no_versions_installed': '未安装任何版本',
   'detail.show_more': '显示更多（剩余 {count} 个）',
   'detail.active': '当前激活',
+  'detail.prerelease': '预发行',
   'detail.versions_count': '{count} 个版本',
   'detail.custom_version_placeholder': '例如 3.11.5',
   'detail.incomplete': '不完整',

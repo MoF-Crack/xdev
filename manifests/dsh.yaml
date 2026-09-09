@@ -1,0 +1,66 @@
+# dsh (DeepSeek Harness) — Spec 039：npm 托管安装。
+# 分类对齐 opencode（development_tools）。
+#
+# 安装策略（install_kind: npm）：dsh 是纯 JS npm 包（bin: lib/bin.js，
+# 运行时依赖 180+ 包），平台 tgz 只含 lib/*.js——直接解压得到残缺安装。
+# 故安装委托 npm CLI：npm install --global --prefix <install>/<version>
+# <pkg>@<version>；npm 负责依赖树解析、registry 完整性校验（自带
+# sha512 签名验证，优于归档 TOFU）与启动器生成（win: dsh.cmd/.ps1，
+# unix: bin/dsh——均命中 shim FindInDir 与完整性检查的候选布局）。
+# 安装前预检 node+npm（xdev 管理的 Node 优先，见 installer/npm_install.go）。
+#
+# 版本现实（频繁更新 + 预发布，2026-09 实测）：
+#   - 一个月 17 个版本，全部为预发布（X.Y.Z-rc.N / -alpha.N）；
+#   - npm dist-tags：latest=0.1.2-rc.1（latest 本身就是 rc），
+#     alpha=0.1.5-alpha.1——remote pattern 必须接受预发布，否则零版本可发现；
+#   - 稳定标志：rc/alpha 一律 stable: false（GUI 预发行徽标）；
+#   - latest 提升：嗅探合并对预发布有抢占保护（稳定 latest 不被
+#     alpha/rc 抢占；latest 本身为预发布时按 SemVer 2.0.0 正常推进）。
+#
+# archive 条目为元数据/嗅探模板：URL 指向 registry tgz（供 {version}
+# 模板推导），sha256 留空——npm-kind 不下载该归档，npm 自带完整性校验。
+name: dsh
+display_name: DeepSeek Harness
+description: dsh is the DeepSeek Harness CLI — an AI agent harness with profile boot, plugin management, and a browser UI (dsh web), running coding agents interactively in the terminal.
+homepage: https://github.com/deepseek-ai/deepseek-harness
+category: development_tools
+shims:
+  - dsh
+form_factor:
+  - cli
+  - tui
+depends:
+  - tool: node
+    min_version: "22.0.0"
+    install_path: npm
+latest: "0.1.2-rc.1"
+lts: ""
+versions:
+  - version: "0.1.2-rc.1"
+    stable: false
+    release: "2026-09-03"
+    archives:
+      - os: any
+        arch: any
+        format: tar.gz
+        url: https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.2-rc.1.tgz
+        mirror_url: https://registry.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.2-rc.1.tgz
+        sha256: ""
+        size: 0
+        install_kind: npm
+  - version: "0.1.1-rc.2"
+    stable: false
+    release: "2026-08-21"
+    archives:
+      - os: any
+        arch: any
+        format: tar.gz
+        url: https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.1-rc.2.tgz
+        mirror_url: https://registry.npmmirror.com/@deepseek-ai/dsh/-/dsh-0.1.1-rc.2.tgz
+        sha256: ""
+        size: 0
+        install_kind: npm
+remote:
+  type: npm
+  package: "@deepseek-ai/dsh"
+  pattern: "^(\\d+\\.\\d+\\.\\d+)(-(alpha|beta|rc)\\.\\d+)?$"

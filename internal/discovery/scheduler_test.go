@@ -457,6 +457,173 @@ func TestMergeIntoManifest_UpdateLatestMultiple(t *testing.T) {
 	}
 }
 
+// Spec 039（dsh 预发布版本流）：latest 本身是预发布（rc）时，同通道的更新
+// 预发布按 SemVer 2.0.0 正常推进 latest——修复 IsVersionNewer 对任何含
+// "-" 的版本串恒 false 导致 rc-only 流 latest 永不前进的问题。异通道
+// （alpha）候选不参与提升。
+func TestMergeIntoManifest_PrereleaseAdvancesPrereleaseLatest(t *testing.T) {
+	dir := t.TempDir()
+
+	tool := &manifest.Tool{
+		Name:   "dsh",
+		Latest: "0.1.2-rc.1",
+		VersionList: []manifest.Version{
+			{Version: "0.1.2-rc.1", Stable: false},
+		},
+	}
+	data, _ := manifest.MarshalTool(tool)
+	manifestPath := filepath.Join(dir, "dsh.yaml")
+	os.WriteFile(manifestPath, data, 0o644)
+
+	// 发现批次（npm 列表降序形态）：0.1.3-rc.1 与 rc 同通道、semver 更高
+	// → 提升；0.1.3-alpha.1 虽 semver 更高但为 alpha 通道 → 不提升。
+	discovered := []DiscoveredVersion{
+		{Version: "0.1.3-rc.1", Source: "npm", Unverified: true},
+		{Version: "0.1.3-alpha.1", Source: "npm", Unverified: true},
+		{Version: "0.1.2-alpha.5", Source: "npm", Unverified: true}, // 更旧
+	}
+	if err := mergeIntoManifest(tool, discovered, dir); err != nil {
+		t.Fatalf("mergeIntoManifest failed: %v", err)
+	}
+
+	readData, _ := os.ReadFile(manifestPath)
+	var updated manifest.Tool
+	yaml.Unmarshal(readData, &updated)
+
+	if updated.Latest != "0.1.3-rc.1" {
+		t.Errorf("expected latest=0.1.3-rc.1, got %q", updated.Latest)
+	}
+}
+
+// Spec 039（真实 dsh 数据形态）：npm dist-tags latest=0.1.2-rc.1 而
+// alpha=0.1.5-alpha.1（semver 更高的 alpha 通道）。alpha-only 发现批次
+// 不得劫持 rc-latest——用户 `xdev install dsh` 默认装 latest，不能装到
+// registry 不认作 latest 的 alpha。
+func TestMergeIntoManifest_AlphaChannelNeverHijacksRCLatest(t *testing.T) {
+	dir := t.TempDir()
+
+	tool := &manifest.Tool{
+		Name:   "dsh",
+		Latest: "0.1.2-rc.1",
+		VersionList: []manifest.Version{
+			{Version: "0.1.2-rc.1", Stable: false},
+		},
+	}
+	data, _ := manifest.MarshalTool(tool)
+	manifestPath := filepath.Join(dir, "dsh.yaml")
+	os.WriteFile(manifestPath, data, 0o644)
+
+	discovered := []DiscoveredVersion{
+		{Version: "0.1.5-alpha.1", Source: "npm", Unverified: true},
+		{Version: "0.1.3-alpha.2", Source: "npm", Unverified: true},
+	}
+	if err := mergeIntoManifest(tool, discovered, dir); err != nil {
+		t.Fatalf("mergeIntoManifest failed: %v", err)
+	}
+
+	readData, _ := os.ReadFile(manifestPath)
+	var updated manifest.Tool
+	yaml.Unmarshal(readData, &updated)
+
+	if updated.Latest != "0.1.2-rc.1" {
+		t.Errorf("alpha channel must not hijack the rc-latest, got %q", updated.Latest)
+	}
+	// alpha 版本仍进入版本列表（用户可显式选择安装 alpha 通道）。
+	found := false
+	for _, v := range updated.VersionList {
+		if v.Version == "0.1.5-alpha.1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 0.1.5-alpha.1 appended to the version list")
+	}
+}
+
+// Spec 039：稳定 latest 不被预发布版本抢占（npm dist-tags 语义：alpha/rc
+// 走独立通道）。dsh 未来发布 1.0.0 稳定版后，1.1.0-alpha.1 不得劫持 latest。
+func TestMergeIntoManifest_PrereleaseNeverHijacksStableLatest(t *testing.T) {
+	dir := t.TempDir()
+
+	tool := &manifest.Tool{
+		Name:   "testtool",
+		Latest: "1.0.0",
+		VersionList: []manifest.Version{
+			{Version: "1.0.0", Stable: true},
+		},
+	}
+	data, _ := manifest.MarshalTool(tool)
+	manifestPath := filepath.Join(dir, "testtool.yaml")
+	os.WriteFile(manifestPath, data, 0o644)
+
+	discovered := []DiscoveredVersion{
+		{Version: "1.1.0-alpha.1", Source: "npm", Unverified: true},
+		{Version: "1.0.1-rc.1", Source: "npm", Unverified: true},
+		{Version: "1.0.0-beta.9", Source: "npm", Unverified: true},
+	}
+	if err := mergeIntoManifest(tool, discovered, dir); err != nil {
+		t.Fatalf("mergeIntoManifest failed: %v", err)
+	}
+
+	readData, _ := os.ReadFile(manifestPath)
+	var updated manifest.Tool
+	yaml.Unmarshal(readData, &updated)
+
+	if updated.Latest != "1.0.0" {
+		t.Errorf("stable latest must not be hijacked, got %q", updated.Latest)
+	}
+	// 预发布版本仍然进入版本列表（用户可显式选择安装）。
+	found := map[string]bool{}
+	for _, v := range updated.VersionList {
+		found[v.Version] = true
+	}
+	for _, want := range []string{"1.1.0-alpha.1", "1.0.1-rc.1"} {
+		if !found[want] {
+			t.Errorf("expected %s appended to the version list", want)
+		}
+	}
+}
+
+// Spec 039：追加版本的 stable 标志按版本串推导——稳定 → true，
+// 预发布（rc/alpha）→ false。
+func TestMergeIntoManifest_StableFlagFromVersionString(t *testing.T) {
+	dir := t.TempDir()
+
+	tool := &manifest.Tool{
+		Name:   "dsh",
+		Latest: "0.1.2-rc.1",
+		VersionList: []manifest.Version{
+			{Version: "0.1.2-rc.1", Stable: false},
+		},
+	}
+	data, _ := manifest.MarshalTool(tool)
+	manifestPath := filepath.Join(dir, "dsh.yaml")
+	os.WriteFile(manifestPath, data, 0o644)
+
+	discovered := []DiscoveredVersion{
+		{Version: "0.1.3-rc.1", Source: "npm", Unverified: true},
+		{Version: "1.0.0", Source: "npm", Unverified: true},
+	}
+	if err := mergeIntoManifest(tool, discovered, dir); err != nil {
+		t.Fatalf("mergeIntoManifest failed: %v", err)
+	}
+
+	readData, _ := os.ReadFile(manifestPath)
+	var updated manifest.Tool
+	yaml.Unmarshal(readData, &updated)
+
+	byVer := map[string]manifest.Version{}
+	for _, v := range updated.VersionList {
+		byVer[v.Version] = v
+	}
+	if v := byVer["0.1.3-rc.1"]; v.Stable {
+		t.Error("appended rc version must have Stable=false")
+	}
+	if v := byVer["1.0.0"]; !v.Stable {
+		t.Error("appended stable version must have Stable=true")
+	}
+}
+
 func TestMergeIntoManifest_SkipNonSemver(t *testing.T) {
 	dir := t.TempDir()
 

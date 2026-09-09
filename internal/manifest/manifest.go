@@ -225,6 +225,12 @@ type Version struct {
 //     run with InstallArgs; it is expected to install itself.
 //   - "script":    the downloaded file is a shell script (e.g. sh.rustup.rs).
 //     After SHA-256 verification it is executed via "sh".
+//   - "npm":       the archive entry is metadata only — no file is
+//     downloaded. The tool is an npm package (e.g. @deepseek-ai/dsh)
+//     installed by running the npm CLI against the version directory:
+//     npm resolves the dependency tree, verifies registry integrity,
+//     and generates its launcher shims (dsh.cmd / bin/dsh). Requires
+//     Node.js + npm (checked before install, Spec 039).
 //
 // Unknown values always fall back to "archive" so that a typo or a future
 // kind string can never accidentally cause code execution (trust model:
@@ -233,6 +239,7 @@ const (
 	InstallKindArchive    = "archive"
 	InstallKindExecutable = "executable"
 	InstallKindScript     = "script"
+	InstallKindNPM        = "npm"
 )
 
 // Archive is one downloadable file (the manifest can list several
@@ -260,12 +267,13 @@ type Archive struct {
 
 // EffectiveKind returns the resolved install kind, defaulting to
 // InstallKindArchive when the field is empty or holds an unrecognised
-// value. Only "executable" and "script" are returned as-is; everything
-// else collapses to the safe "archive" default so that execution of
-// downloaded code always requires an explicit manifest declaration.
+// value. Only "executable", "script", and "npm" are returned as-is;
+// everything else collapses to the safe "archive" default so that
+// execution of downloaded code (or delegation to a package manager)
+// always requires an explicit manifest declaration.
 func (a Archive) EffectiveKind() string {
 	switch a.InstallKind {
-	case InstallKindExecutable, InstallKindScript:
+	case InstallKindExecutable, InstallKindScript, InstallKindNPM:
 		return a.InstallKind
 	default:
 		return InstallKindArchive

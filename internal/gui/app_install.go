@@ -214,6 +214,13 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		}
 	}
 
+	// Spec 039: npm-kind installs never go through the download manager —
+	// npm resolves and fetches the dependency tree itself (registry integrity
+	// verified by npm). Event contract matches the download pipeline.
+	if installer.ResolveKind(arch) == manifest.InstallKindNPM {
+		return a.installNPMPackage(taskID, p, arch, ver, installPath)
+	}
+
 	// Proxy warning: if the archive explicitly requires a proxy but none
 	// is configured (either via env vars or xdev config), warn the user
 	// (shared helper with the CLI path, Spec 021 D7).
@@ -453,7 +460,38 @@ func versionUnverified(t *manifest.Tool, version string) bool {
 		return false
 	}
 	v, found := t.FindVersion(version)
-	return found && v.Unverified
+	if !found {
+		return false
+	}
+	// Spec 039: npm-kind 安装不下载归档条目（依赖树与完整性由 npm 负责），
+	// 「归档 URL 未验证」确认弹窗不适用。按该版本的归档判定；版本缺
+	// archives（auto_archive_fill 关闭）时回退按工具任一归档判定。
+	if versionArchivesNPMManaged(t, v) {
+		return false
+	}
+	return v.Unverified
+}
+
+// versionArchivesNPMManaged reports whether the given version's archives
+// declare an npm-managed install (install_kind: npm); versions without
+// archives fall back to the tool's other versions.
+func versionArchivesNPMManaged(t *manifest.Tool, v *manifest.Version) bool {
+	for _, a := range v.Archives {
+		if a.EffectiveKind() == manifest.InstallKindNPM {
+			return true
+		}
+	}
+	if len(v.Archives) > 0 {
+		return false
+	}
+	for _, other := range t.VersionList {
+		for _, a := range other.Archives {
+			if a.EffectiveKind() == manifest.InstallKindNPM {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *App) lookupToolManifest(toolName string) *manifest.Tool {

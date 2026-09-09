@@ -36,6 +36,7 @@ import (
 	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -407,6 +408,11 @@ func checkUnverifiedVersion(cmd *cobra.Command, tool, ver string, skipConfirm bo
 	if !found || !v.Unverified {
 		return nil
 	}
+	// Spec 039: npm-kind 安装不下载归档（依赖树与完整性由 npm 负责），
+	// 「归档 URL 未验证」提示与确认不适用。
+	if versionNPMManaged(t, v) {
+		return nil
+	}
 	fmt.Printf("⚠ This version (%s@%s) was discovered by sniffing.\n", tool, ver)
 	fmt.Printf("  The archive URL has not been verified — downloads may fail.\n")
 	fmt.Printf("  If the download fails, update the manifest manually or wait for the next xdev release.\n")
@@ -420,4 +426,27 @@ func checkUnverifiedVersion(cmd *cobra.Command, tool, ver string, skipConfirm bo
 		}
 	}
 	return nil
+}
+
+// versionNPMManaged reports whether the version's archives declare an
+// npm-managed install (install_kind: npm); versions without archives
+// fall back to the tool's other versions (mirrors the GUI's
+// versionArchivesNPMManaged semantics, Spec 039).
+func versionNPMManaged(t *manifest.Tool, v *manifest.Version) bool {
+	for _, a := range v.Archives {
+		if a.EffectiveKind() == manifest.InstallKindNPM {
+			return true
+		}
+	}
+	if len(v.Archives) > 0 {
+		return false
+	}
+	for _, other := range t.VersionList {
+		for _, a := range other.Archives {
+			if a.EffectiveKind() == manifest.InstallKindNPM {
+				return true
+			}
+		}
+	}
+	return false
 }
