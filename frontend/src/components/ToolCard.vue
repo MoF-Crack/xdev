@@ -22,13 +22,12 @@ const status = computed(() => props.tool.installed ? props.t('status.installed')
 </script>
 
 <style scoped>
-.tool-card { display: grid; grid-template-columns: 1fr auto; gap: var(--xdev-space-3); padding: var(--xdev-space-4); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-panel); }
+.tool-card { display: grid; grid-template-columns: 1fr auto; gap: var(--xdev-space-3); padding: var(--xdev-space-4); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-card); }
 .tool-card p { margin: 4px 0 0; color: var(--xdev-text-muted); font-size: 12px; }
 .form-badges { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-left: 6px; }
-.form-badge { padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; border: 1px solid var(--xdev-border-strong); color: var(--xdev-text-muted); }
+.form-badge { padding: 1px 6px; border-radius: var(--xdev-radius-sm); font-size: 10px; font-weight: 600; letter-spacing: 0.04em; border: 1px solid var(--xdev-border-strong); color: var(--xdev-text-muted); }
 .form-badge[data-form="gui"] { color: var(--xdev-accent); border-color: var(--xdev-accent); }
 .tool-card__actions { grid-column: 1 / -1; display: flex; gap: var(--xdev-space-2); }
 .tool-card__hint { align-self: center; color: var(--xdev-text-muted); font-size: 11px; }
-button { padding: 6px 10px; border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-sm); background: transparent; color: var(--xdev-text-primary); cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 </style>

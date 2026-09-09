@@ -112,7 +112,7 @@ onBeforeUnmount(() => document.removeEventListener('focusin', keepFocusInside));
 
 <style scoped>
 .command-palette-backdrop { position: fixed; inset: 0; z-index: 3200; display: grid; place-items: start center; padding-top: min(18vh, 140px); background: var(--xdev-overlay); }
-.command-palette { width: min(680px, calc(100vw - 40px)); padding: 12px; border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-panel); box-shadow: var(--xdev-shadow-soft); }
+.command-palette { width: min(680px, calc(100vw - 40px)); padding: 12px; border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-lg); background: var(--xdev-bg-panel); box-shadow: var(--xdev-shadow-lg); }
 .command-palette__search { display: flex; align-items: center; gap: var(--xdev-space-2); padding: 0 var(--xdev-space-3); border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-md); color: var(--xdev-text-muted); }
 .command-palette__search svg { width: 20px; flex: none; }
 .command-palette__search input { width: 100%; min-height: 44px; border: 0; outline: 0; background: transparent; color: var(--xdev-text-primary); font: inherit; }

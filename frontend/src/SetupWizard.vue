@@ -184,7 +184,7 @@ onMounted(async () => {
 .setup-nav__spacer { flex: 1; }
 .button { min-height: 36px; padding: 7px 14px; border: 1px solid transparent; border-radius: var(--xdev-radius-md); font: inherit; font-weight: 600; cursor: pointer; }
 .button.primary { color: var(--xdev-text-on-accent); background: var(--xdev-accent); }
-[data-theme="dark"] .button.primary { background: #1f6feb; }
+.button.primary:hover { background: var(--xdev-accent-hover); }
 .button.secondary { color: var(--xdev-text-primary); background: transparent; border-color: var(--xdev-border-strong); }
 .button:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 480px) { .custom-path { align-items: stretch; flex-direction: column; } .path-summary { grid-template-columns: 1fr; } .path-summary dt { padding-bottom: 2px; border-bottom: 0; } .path-summary dd { padding-top: 2px; } }

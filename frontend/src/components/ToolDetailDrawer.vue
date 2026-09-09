@@ -137,7 +137,7 @@ watch(() => props.show, async (show, was) => {
 </script>
 <style scoped>
 .detail-section { padding: var(--xdev-space-3); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); }
-h3 { margin: 0 0 var(--xdev-space-3); font-size: var(--xdev-font-size-md); }
+h3 { margin: 0 0 var(--xdev-space-3); color: var(--xdev-text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
 .deps-list { display: grid; gap: var(--xdev-space-2); }
 .dep-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--xdev-space-2); align-items: center; }
 .dep-reason, .dep-install { grid-column: 1 / -1; color: var(--xdev-text-muted); font-size: var(--xdev-font-size-xs); }

@@ -99,6 +99,7 @@ import { useSniffSession } from './composables/useSniffSession.js';
 import AppShell from './layouts/AppShell.vue';
 import PageToolbar from './layouts/PageToolbar.vue';
 import { commandPaletteEntries, createNavigationGroups, findPageDefinition } from './navigation/navigation.js';
+import { DEFAULT_THEME, isKnownTheme, THEMES } from './theme/themes.js';
 import { sameEnvIdentity } from './pages/envIdentity.js';
 import { createLatestRequestController } from './pages/settingsState.js';
 
@@ -178,14 +179,14 @@ onMounted(async () => {
 
 const selectedView = ref('dashboard');
 const storedTheme = localStorage.getItem('xdev-theme');
-const themeName = ref(storedTheme === 'true' ? 'dark' : storedTheme === 'false' ? 'light' : ['light', 'dark', 'eye-care'].includes(storedTheme) ? storedTheme : 'dark');
+const themeName = ref(storedTheme === 'true' ? 'dark' : storedTheme === 'false' ? 'light' : isKnownTheme(storedTheme) ? storedTheme : DEFAULT_THEME);
 
 function applyThemeToDocument() {
   document.documentElement.setAttribute('data-theme', themeName.value);
 }
 
 function setTheme(name) {
-  if (!['light', 'dark', 'eye-care'].includes(name)) return;
+  if (!isKnownTheme(name)) return;
   themeName.value = name;
   localStorage.setItem('xdev-theme', name);
   applyThemeToDocument();
@@ -719,9 +720,22 @@ const localizedNavigationGroups = computed(() => mergedNavigationGroups.value.ma
 })));
 const currentPage = computed(() => findPageDefinition(selectedView.value, localizedNavigationGroups.value));
 const headerTitle = computed(() => currentPage.value?.label ?? selectedView.value);
-const commandPaletteOptions = computed(() => commandPaletteEntries(localizedNavigationGroups.value, t));
+const commandPaletteOptions = computed(() => [
+  ...commandPaletteEntries(localizedNavigationGroups.value, t),
+  // Spec 040: quick theme switching from the palette (Ctrl+K).
+  ...THEMES.map((theme) => ({
+    key: `theme:${theme.value}`,
+    label: t(theme.labelKey),
+    group: t('settings.theme'),
+  })),
+]);
 
 async function onCommandSelect(key) {
+  if (key.startsWith('theme:')) {
+    const name = key.slice('theme:'.length);
+    if (isKnownTheme(name)) setTheme(name);
+    return;
+  }
   await onMenuSelect(key);
 }
 

@@ -286,6 +286,20 @@ test('command palette supports keyboard navigation and restores trigger focus', 
   await expect(trigger).toBeFocused();
 });
 
+test('command palette switches the active theme end to end', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 1024, height: 640 }, theme: 'dark', locale: 'en' });
+  await page.getByRole('button', { name: 'Open command palette' }).click();
+  const combobox = page.getByRole('combobox', { name: 'Search commands, pages, and tools' });
+  await combobox.fill('nord');
+  await combobox.press('Enter');
+
+  // The document attribute, the persisted choice and the rendered surface
+  // (Nord's polar night app background) all follow the selection.
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'nord');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('xdev-theme'))).toBe('nord');
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(46, 52, 64)');
+});
+
 test('installation progress visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
   await openToolCatalog(page);

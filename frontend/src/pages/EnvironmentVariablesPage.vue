@@ -86,7 +86,7 @@ th:nth-child(4),td:nth-child(4){width:24%;min-width:132px;white-space:nowrap}
 .env-table-wrap td:nth-child(2) code{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .env-table-wrap td:nth-child(4) .actions{min-width:132px;white-space:nowrap}
 .env-table-wrap td:nth-child(4) .actions > .xdev-btn{white-space:nowrap}
-.env-table-wrap tbody tr:hover{background:var(--xdev-accent-soft)}
+.env-table-wrap tbody tr:hover{background:var(--xdev-bg-hover)}
 .status-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;vertical-align:middle;cursor:help}
 .status-dot--success{background:var(--xdev-success)}
 .status-dot--warning{background:var(--xdev-warning)}

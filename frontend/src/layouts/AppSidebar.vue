@@ -23,19 +23,20 @@ defineEmits(['select', 'toggle-compact']);
 </script>
 
 <style scoped>
-.app-sidebar { width: 216px; min-width: 216px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--xdev-border-subtle); background: color-mix(in srgb, var(--xdev-bg-panel) 92%, var(--xdev-bg-app)); box-shadow: 8px 0 30px color-mix(in srgb, var(--xdev-accent-soft) 22%, transparent); transition: width var(--xdev-motion-normal) var(--xdev-ease-standard), min-width var(--xdev-motion-normal) var(--xdev-ease-standard); }
+.app-sidebar { width: 216px; min-width: 216px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--xdev-border-subtle); background: var(--xdev-bg-panel); transition: width var(--xdev-motion-normal) var(--xdev-ease-standard), min-width var(--xdev-motion-normal) var(--xdev-ease-standard); }
 .app-sidebar--compact { width: 56px; min-width: 56px; }
-.app-sidebar__brand { min-height: 72px; display: flex; align-items: center; gap: var(--xdev-space-2); padding: 0 var(--xdev-space-4); border-bottom: 1px solid var(--xdev-border-subtle); }
-.app-sidebar__brand :deep(svg) { width: 28px; height: 28px; flex: 0 0 28px; }
-nav { flex: 1; padding: var(--xdev-space-5) var(--xdev-space-3); }
+.app-sidebar__brand { min-height: 64px; display: flex; align-items: center; gap: var(--xdev-space-2); padding: 0 var(--xdev-space-4); border-bottom: 1px solid var(--xdev-border-subtle); }
+.app-sidebar__brand strong { color: var(--xdev-text-primary); font-size: var(--xdev-font-size-md); font-weight: 650; letter-spacing: 0.01em; }
+.app-sidebar__brand :deep(svg) { width: 26px; height: 26px; flex: 0 0 26px; }
+nav { flex: 1; padding: var(--xdev-space-4) var(--xdev-space-3); }
 section { margin-bottom: var(--xdev-space-3); }
-.app-sidebar__group { margin: var(--xdev-space-2); color: var(--xdev-text-secondary); font-size: var(--xdev-font-size-xs); text-transform: uppercase; }
-button { width: 100%; min-height: 40px; display: flex; align-items: center; gap: var(--xdev-space-3); margin: 3px 0; padding: 0 var(--xdev-space-3); border: 0; border-radius: var(--xdev-radius-md); background: transparent; color: var(--xdev-text-secondary); cursor: pointer; text-align: left; transition: background var(--xdev-motion-fast), color var(--xdev-motion-fast), transform var(--xdev-motion-fast); }
+.app-sidebar__group { margin: var(--xdev-space-2) var(--xdev-space-3); color: var(--xdev-text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+button { width: 100%; min-height: 36px; display: flex; align-items: center; gap: var(--xdev-space-3); margin: 2px 0; padding: 0 var(--xdev-space-3); border: 0; border-radius: var(--xdev-radius-sm); background: transparent; color: var(--xdev-text-secondary); cursor: pointer; text-align: left; transition: background var(--xdev-motion-fast) var(--xdev-ease-standard), color var(--xdev-motion-fast) var(--xdev-ease-standard); }
 button svg { width: 18px; height: 18px; flex: 0 0 18px; }
-button:hover { background: var(--xdev-bg-elevated); color: var(--xdev-text-primary); transform: translateX(2px); }
-button.active { background: var(--xdev-accent-soft); color: var(--xdev-accent); box-shadow: inset 3px 0 0 var(--xdev-accent); }
-[data-theme="light"] button.active { color: var(--xdev-accent-pressed); }
-button:focus-visible { background: var(--xdev-accent-soft); color: var(--xdev-text-primary); outline: 2px solid var(--xdev-focus-ring); outline-offset: -2px; }
+button:hover { background: var(--xdev-bg-hover); color: var(--xdev-text-primary); }
+button.active { background: var(--xdev-accent-soft); color: var(--xdev-accent); box-shadow: inset 2px 0 0 var(--xdev-accent); font-weight: 600; }
+[data-theme="light"] button.active, [data-theme="eye-care"] button.active { color: var(--xdev-accent-pressed); }
+button:focus-visible { background: var(--xdev-accent-soft); color: var(--xdev-text-primary); }
 .app-sidebar__toggle { margin: var(--xdev-space-3); width: calc(100% - var(--xdev-space-6)); border-top: 1px solid var(--xdev-border-subtle); border-radius: 0; }
 @media (max-width: 799px) { .app-sidebar { width: 56px; min-width: 56px; } .app-sidebar strong, .app-sidebar__group, .app-sidebar button span:not([aria-hidden]) { display: none; } }
 </style>

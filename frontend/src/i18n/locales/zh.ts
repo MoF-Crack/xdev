@@ -540,9 +540,14 @@ export default {
   'window.close': '关闭',
 
   // Theme controls
-  'theme.dark': '暗色',
-  'theme.light': '浅色',
+  'theme.dark': '石墨',
+  'theme.midnight': '午夜',
+  'theme.nord': '极夜',
+  'theme.ember': '余烬',
+  'theme.light': '日光',
   'theme.eye_care': '护眼',
+  'theme.family_dark': '暗色',
+  'theme.family_light': '浅色',
   'settings.load_failed': '加载设置失败',
   'settings.mirror_saved': '镜像配置已保存',
   'settings.diagnostics_failed': '诊断失败',

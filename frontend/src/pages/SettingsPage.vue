@@ -246,7 +246,7 @@ const diagColumns = computed(() => [
 .settings-page { width: 100%; max-width: var(--xdev-content-max-width); display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: clamp(var(--xdev-space-5), 3vw, var(--xdev-space-8)); align-items: start; }
 .settings-page nav { position: sticky; top: var(--xdev-space-4); align-self: start; display: grid; gap: var(--xdev-space-1); padding: var(--xdev-space-2) 0; }
 .settings-page nav a { padding: var(--xdev-space-2) var(--xdev-space-3); border-left: 2px solid transparent; border-radius: 0 var(--xdev-radius-sm) var(--xdev-radius-sm) 0; color: var(--xdev-text-secondary); text-decoration: none; transition: color var(--xdev-motion-fast), background var(--xdev-motion-fast), border-color var(--xdev-motion-fast); }
-.settings-page nav a:hover { color: var(--xdev-accent); background: var(--xdev-accent-soft); border-left-color: var(--xdev-accent); }
+.settings-page nav a:hover { color: var(--xdev-accent); background: var(--xdev-bg-hover); border-left-color: var(--xdev-accent); }
 .settings-page main { display: grid; gap: var(--xdev-section-gap); min-width: 0; }
 .settings-page__section { min-width: 0; }
 .sniff-status { display: flex; align-items: center; gap: var(--xdev-space-3); flex-wrap: wrap; margin-top: var(--xdev-space-3); }
@@ -273,11 +273,11 @@ input[type="checkbox"] { min-height: auto; }
 .ct-grid select:focus { border-color: var(--xdev-accent); outline: none; }
 .ct-actions { display: flex; gap: var(--xdev-space-3); margin-top: var(--xdev-space-4); }
 .ct-actions button { min-height: 34px; padding: 0 var(--xdev-space-4); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-sm); background: var(--xdev-bg-elevated); color: var(--xdev-text-primary); cursor: pointer; font-size: var(--xdev-font-size-md); transition: border-color var(--xdev-motion-fast), color var(--xdev-motion-fast); white-space: nowrap; }
-.ct-actions button:hover:not(:disabled) { border-color: var(--xdev-accent); color: var(--xdev-accent); }
+.ct-actions button:hover:not(:disabled) { border-color: var(--xdev-border-strong); color: var(--xdev-text-primary); }
 .ct-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 .ct-preview { padding: var(--xdev-space-4) 0; border-bottom: 1px solid var(--xdev-border-subtle); }
 .ct-preview__list { display: flex; flex-wrap: wrap; gap: var(--xdev-space-2); margin: var(--xdev-space-2) 0 0; padding: 0; list-style: none; }
-.ct-preview__item { display: inline-block; padding: var(--xdev-space-1) var(--xdev-space-3); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-sm); background: var(--xdev-bg-panel); color: var(--xdev-text-primary); font-size: var(--xdev-font-size-sm); font-family: monospace; }
+.ct-preview__item { display: inline-block; padding: var(--xdev-space-1) var(--xdev-space-3); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-sm); background: var(--xdev-bg-panel); color: var(--xdev-text-primary); font-size: var(--xdev-font-size-sm); font-family: var(--xdev-font-mono); }
 .ct-empty { padding: var(--xdev-space-4) 0; color: var(--xdev-text-muted); font-size: var(--xdev-font-size-sm); }
 .ct-item { display: flex; align-items: center; justify-content: space-between; gap: var(--xdev-space-3); padding: var(--xdev-space-3) 0; border-bottom: 1px solid var(--xdev-border-subtle); }
 .ct-item:last-child { border-bottom: none; }

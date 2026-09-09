@@ -32,9 +32,10 @@ defineEmits(['update:modelValue']);
 
 <style scoped>
 .drive-option { display: flex; gap: 12px; padding: 12px 14px; border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); cursor: pointer; }
-.drive-option:hover { background: var(--xdev-accent-soft); border-color: var(--xdev-border-strong); }
+.drive-option:hover { background: var(--xdev-bg-hover); border-color: var(--xdev-border-strong); }
 .drive-option:focus-within { box-shadow: var(--xdev-focus-ring); }
-.drive-option.selected { background: var(--xdev-accent-soft); border-color: var(--xdev-accent); }
+.drive-option.selected { background: var(--xdev-bg-elevated); border-color: var(--xdev-accent); box-shadow: 0 0 0 1px var(--xdev-accent); }
+.drive-option.selected .drive-option__space, .drive-option.selected .drive-option__reason { color: var(--xdev-text-secondary); }
 .drive-option input { flex: 0 0 auto; margin-top: 4px; accent-color: var(--xdev-accent); }
 .drive-option__content { display: grid; min-width: 0; gap: 3px; }
 .drive-option__heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
