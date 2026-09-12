@@ -1,6 +1,6 @@
 # 11 CleanupUserPath home 锚定
 
-Status: open
+Status: resolved
 Type: task
 批次: B2
 对应修复项: P0-13（方案 §4 P0-13）
@@ -19,3 +19,10 @@ CleanupUserPath 按 `\xdev\install\`、`\xdev\current\`、`\reverseeng\xmdevenvm
 ## 守卫测试
 
 负向：shimDir=E:\XDev\shims 时 PATH 含 `d:\xdev` 不被删；`e:\xdev\install\go\1.22` 被删。
+
+## Comments（Batch 2 实施记录）
+
+- 改动：签名 `CleanupUserPath(home, shimDir, pathMode)`（Windows 实现 + Unix stub 同步）；`cleanupUserPathLocked` 匹配逻辑重写为 **home 锚定三规则**——`<home>\install\` 前缀无条件删、`<home>\current\` 前缀仅 shim 模式删（保留 `<home>\current\xdev` 自身 junction）、`normalized == homeClean` 删裸 home 根（替代任意盘符的 isXDevRoot 规则）；保留三个历史子串规则（`\ximulocaldev\xmdevenvmt\shims`、`\reverseeng\xmdevenvmt`、`\testinitconfig_nodeadlock`）。调用方三处传 home：`internal/cli/install.go`（`Cfg().Core.XMDevDir`）、`internal/cli/doctor.go`（`cfg.Core.XMDevDir`）、`internal/gui/app_migration.go`（`baseDir`）。
+- 守卫测试：`internal/env/win_path_test.go` — TestCleanupUserPath_KeepsUnrelatedXdevDir（H1）/ _RemovesUnderHome（H2）/ _KeepsHistoricalSubstrings（H3）/ _CaseInsensitiveHomePrefix（H4）；既有四处用例（ShimMode/DirectMode/RemoveXDevRoot/KeepCurrentXdev）按新签名改写并保持原断言语义（direct 模式 current 条目保留 = 行为等价性硬约束）。
+- **PoC 先红后绿（H1）**：临时把 home 等值规则换回旧 `isXDevRoot(normalized)` 后运行 → 红：`unrelated D:\xdev directory was deleted — home anchoring regression: PATH="E:\XDev\shims;C:\Windows\System32"`；恢复后 → `--- PASS: TestCleanupUserPath_KeepsUnrelatedXdevDir (1.05s)`。
+- Release note 条目：**home 迁移后旧 home 的 install/current PATH 残留不再被清理**（新 home 之外的 xdev 形态目录一律视为用户资产保留）；`\reverseeng\xmdevenvmt` 子串规则保留意味着本仓库 clone 的 PATH 条目仍会被删（历史规则，已在 b2.md 记录为备选收紧项）。

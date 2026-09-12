@@ -22,19 +22,45 @@ export function installWailsMocks(appOverrides = {}, runtimeOverrides = {}) {
   };
   // Spec 037: parallel sessions register multiple listeners per event —
   // defaultRuntime's single-slot EventsOn would drop all but the last.
+  //
+  // Ticket 12 (audit-fixes / G-01): the mock also counts live/total
+  // subscriptions so specs can assert that batch sessions unsubscribe
+  // (the leak guard B-1). window.runtime.__subscriptions() returns the
+  // counters; EventsOff and the returned unsubscribe function both
+  // decrement the live count.
   const unitListeners = {};
+  let activeSubscriptions = 0;
+  let totalSubscriptions = 0;
   window.runtime = {
     ...defaultRuntime,
-    EventsOn: (name, callback) => { (unitListeners[name] ||= new Set()).add(callback); return () => unitListeners[name]?.delete(callback); },
-    EventsOff: (name) => { delete unitListeners[name]; },
+    EventsOn: (name, callback) => {
+      (unitListeners[name] ||= new Set()).add(callback);
+      activeSubscriptions++;
+      totalSubscriptions++;
+      return () => {
+        if (unitListeners[name]?.delete(callback)) activeSubscriptions--;
+      };
+    },
+    EventsOff: (name) => {
+      const set = unitListeners[name];
+      if (set) {
+        activeSubscriptions -= set.size;
+        delete unitListeners[name];
+      }
+    },
+    __subscriptions: () => ({ active: activeSubscriptions, total: totalSubscriptions }),
     ...runtimeOverrides,
   };
+  // Emit helper for specs: deliver an event to every live listener of the
+  // name (mirrors the real Wails runtime fan-out).
+  window.__wailsEmit = (name, data) => unitListeners[name]?.forEach((fn) => fn(data));
   return { app: window.go.gui.App, runtime: window.runtime };
 }
 
 export function cleanupWailsMocks() {
   delete window.go;
   delete window.runtime;
+  delete window.__wailsEmit;
 }
 
 export function createWailsBrowserMocks() {

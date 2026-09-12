@@ -421,6 +421,19 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
   // The parallel property: both installs launched before any completion.
   expect(await page.evaluate(() => window.__wailsCalls.InstallToolConfirmed.length)).toBe(2);
 
+  // Ticket 12 / B-7 (G-02): while the batch runs, re-entry is blocked at
+  // the UI level — the dashboard's "Update All" button is disabled even
+  // after the dialog is backgrounded (the composable guards are the
+  // authoritative gate; the disabled button is what the user sees).
+  await expect(installAll).toBeDisabled();
+  await page.locator('.n-modal--wide [data-action="background"]').click();
+  await expect(modal).toBeHidden();
+  await expect(installAll).toBeDisabled();
+
+  // Re-open the dialog through the toolbar indicator to finish the batch.
+  await page.locator('[data-action="show-install-progress"]').click();
+  await expect(modal).toBeVisible();
+
   // Complete both — the batch resolves, reports the truthful summary,
   // and the finally net closes the progress dialog.
   await page.evaluate(() => window.__wailsEmit('installProgress', {
@@ -430,6 +443,8 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
     taskId: 'go@1.26.0', tool: 'go', version: '1.26.0', phase: 'Completed', percent: 100,
   }));
   await expect(modal).toBeHidden();
+  // The batch settled → the button is usable again.
+  await expect(installAll).toBeEnabled();
 });
 
 test('narrow app shell is compact, contained, and has no serious accessibility violations', async ({ page }, testInfo) => {

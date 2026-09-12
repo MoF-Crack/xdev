@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,19 +48,39 @@ func CopyFile(src, dst string) error {
 // Symlinks/junctions are resolved to their targets and copied as real
 // files/directories (needed for Scoop apps/*/current junctions).
 func CopyDir(src, dst string) error {
-	return copyDir(src, dst, nil)
+	return copyDir(src, dst, nil, nil)
 }
 
 // CopyDirProgress recursively copies a directory tree and reports progress.
 // onProgress is called with (copiedFiles, totalFiles) after each file is
 // copied; a nil onProgress skips progress reporting.
 func CopyDirProgress(src, dst string, onProgress func(copied, total int)) error {
-	return copyDir(src, dst, onProgress)
+	return copyDir(src, dst, onProgress, nil)
+}
+
+// CopyDirReport recursively copies a directory tree and additionally
+// reports how many files were copied and how many link entries were
+// skipped (broken or unresolvable links — ticket 09 / N-01: every skip
+// must be observable because callers may RemoveAll the source right
+// after a "successful" copy).
+func CopyDirReport(src, dst string, onProgress func(copied, total int)) (files, skipped int, err error) {
+	var stats copyStats
+	if err := copyDir(src, dst, onProgress, &stats); err != nil {
+		return stats.files, stats.skipped, err
+	}
+	return stats.files, stats.skipped, nil
+}
+
+// copyStats accumulates per-copy statistics for CopyDirReport.
+type copyStats struct {
+	files   int
+	skipped int
 }
 
 // copyDir is the single implementation behind CopyDir and CopyDirProgress.
 // When onProgress is non-nil it is invoked after every copied file.
-func copyDir(src, dst string, onProgress func(copied, total int)) error {
+// stats, when non-nil, receives the copied-file and skipped-link counts.
+func copyDir(src, dst string, onProgress func(copied, total int), stats *copyStats) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -83,24 +104,64 @@ func copyDir(src, dst string, onProgress func(copied, total int)) error {
 		}
 		target := filepath.Join(dst, rel)
 
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Junction / symlink：解析到实体后再拷，避免 scoop apps/*/current
-			// 这类目录 junction 被整棵跳过。
-			real, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return nil
+		// Ticket 09 (audit-fixes / P0-04 + N-01): symlink AND Windows
+		// junction entries (junctions surface as ModeIrregular, not
+		// ModeSymlink) are resolved to their real targets and copied as
+		// real content — needed for Scoop apps/*/current junctions.
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			resolved, rerr := filepath.EvalSymlinks(path)
+			if rerr != nil || resolved == path {
+				// EvalSymlinks returns a trailing junction unchanged
+				// (verified empirically on Go 1.26/Windows) and fails on
+				// cyclic/dangling links — fall back to os.Readlink,
+				// which understands junctions.
+				if target, lerr := os.Readlink(path); lerr == nil && target != path {
+					if abs, aerr := filepath.Abs(target); aerr == nil {
+						resolved = abs
+					} else {
+						resolved = target
+					}
+					rerr = nil
+				} else {
+					// Unresolvable link entry (self-referential, cyclic,
+					// or a non-link ModeIrregular file): visible skip
+					// rather than a silent drop (N-01) — callers may
+					// RemoveAll the source right after a "successful"
+					// copy, so every loss must be observable.
+					log.Printf("[copydir] WARN: unresolvable link entry %s: %v", path, rerr)
+					if stats != nil {
+						stats.skipped++
+					}
+					return nil
+				}
 			}
-			fi, err := os.Stat(real)
-			if err != nil {
+			fi, serr := os.Stat(resolved)
+			if serr != nil {
+				// Broken link entry — same visibility rule as above
+				// (N-01): warn and count instead of silently skipping.
+				log.Printf("[copydir] WARN: broken link entry %s -> %s: %v", path, resolved, serr)
+				if stats != nil {
+					stats.skipped++
+				}
 				return nil
 			}
 			if fi.IsDir() {
-				if err := copyDir(real, target, onProgress); err != nil {
+				if samePath(resolved, path) {
+					// Self-recursion guard (semantic ambiguity — the
+					// resolved target IS the link entry itself).
+					return nil
+				}
+				if err := copyDir(resolved, target, onProgress, stats); err != nil {
 					return err
 				}
-				return filepath.SkipDir
+				// Ticket 09 (P0-04): NOT filepath.SkipDir — returning
+				// SkipDir from a non-directory entry makes filepath.Walk
+				// skip the REMAINING SIBLINGS of the parent directory,
+				// silently losing everything sorted after the link
+				// (unrecoverable when the caller removes the source).
+				return nil
 			}
-			tasks = append(tasks, copyTask{src: real, dst: target})
+			tasks = append(tasks, copyTask{src: resolved, dst: target})
 			return nil
 		}
 		if info.IsDir() {
@@ -144,18 +205,32 @@ func copyDir(src, dst string, onProgress func(copied, total int)) error {
 				}
 				errMu.Unlock()
 			}
+			copiedMu.Lock()
+			copied++
+			c := copied
+			copiedMu.Unlock()
 			if onProgress != nil {
-				copiedMu.Lock()
-				copied++
-				c := copied
-				copiedMu.Unlock()
 				onProgress(c, total)
 			}
 		}(task)
 	}
 	wg.Wait()
 
+	if stats != nil {
+		stats.files += copied
+	}
 	return firstErr
+}
+
+// samePath reports whether two paths refer to the same entry
+// (case-insensitive on Windows, exact elsewhere). EvalSymlinks may return
+// a normalized string that differs from the input while referring to the
+// same entry, so a plain == comparison is not reliable.
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // FileSHA256 computes the SHA-256 hash of a file and returns it as a

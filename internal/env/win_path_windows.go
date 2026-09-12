@@ -83,6 +83,7 @@ func withUserPathLock(fn func() error) error {
 	if err != nil {
 		// Cannot resolve the lock location — degrade to the unprotected
 		// call rather than failing PATH management entirely.
+		log.Printf("[env] WARN: userpath lock degraded (cannot resolve home dir): %v — proceeding without cross-process PATH serialization", err)
 		return fn()
 	}
 	lockPath := filepath.Join(home, ".xdev", ".locks", "userpath.lock")
@@ -90,6 +91,7 @@ func withUserPathLock(fn func() error) error {
 	if err != nil {
 		// Contention beyond 10s: proceed without the lock (the registry
 		// write itself is atomic; only the read-modify-write window races).
+		log.Printf("[env] WARN: userpath lock degraded (acquire %s: %v) — proceeding without cross-process PATH serialization", lockPath, err)
 		return fn()
 	}
 	defer fl.Release()
@@ -111,9 +113,11 @@ func SetWindowsUserPath(shimDir string) error {
 			return fmt.Errorf("read user PATH: %w", err)
 		}
 
-		// Already present?
+		// Already present? C-13 (ticket 10 / N-11): Windows path comparison
+		// is case-insensitive — an exact == let "e:\xdev\shims" coexist
+		// with "E:\XDev\shims" and be prepended again as a duplicate.
 		for _, p := range strings.Split(current, ";") {
-			if filepath.Clean(p) == shimDir {
+			if strings.EqualFold(filepath.Clean(p), shimDir) {
 				return nil
 			}
 		}
@@ -141,7 +145,10 @@ func RemoveFromWindowsUserPath(shimDir string) error {
 		parts := strings.Split(current, ";")
 		var kept []string
 		for _, p := range parts {
-			if filepath.Clean(p) != shimDir {
+			// C-13 (ticket 10 / N-11): case-insensitive match — a
+			// case-variant entry ("E:\XDEV\SHIMS" vs "e:\xdev\shims") was
+			// previously left behind as a stale duplicate.
+			if !strings.EqualFold(filepath.Clean(p), shimDir) {
 				kept = append(kept, p)
 			}
 		}
@@ -1092,7 +1099,24 @@ func WriteSystemPath(path string) error {
 //  3. Removing corrupted entries (e.g. entries that start with " but don't end with ")
 //
 // Returns (changed, error). Requires admin privileges to write.
+//
+// Ticket 10 (audit-fixes / P0-11): the whole read-modify-write cycle runs
+// under withUserPathLock, like the other PATH mutators — two concurrent
+// xdev processes previously raced the registry and silently rolled back
+// each other's entries. The same lock as the user-PATH writers is reused
+// deliberately: the registry keys differ, so this only adds serialization
+// (no deadlock risk).
 func CleanupSystemPath() (bool, error) {
+	var changed bool
+	err := withUserPathLock(func() error {
+		c, err := cleanupSystemPathLocked()
+		changed = c
+		return err
+	})
+	return changed, err
+}
+
+func cleanupSystemPathLocked() (bool, error) {
 	current, err := ReadSystemPath()
 	if err != nil {
 		return false, err
@@ -1151,19 +1175,40 @@ func CleanupSystemPath() (bool, error) {
 	return changed, nil
 }
 
-// CleanupUserPath cleans up the user PATH by:
-//  1. Removing xdev install directory entries (\xdev\install\)
-//  2. Removing xdev current directory entries (\xdev\current\) — only in shim mode, except \xdev\current\xdev
-//  3. Removing legacy xmdevenvmt shim paths (\ximulocaldev\xmdevenvmt\shims)
-//  4. Removing legacy xmdevenvmt source/build directory entries
-//  5. Removing bare XDev root directory entries (e.g. E:\XDev) — replaced by current\xdev junction
-//  6. Fixing double-backslash paths (\\)
-//  7. Removing quoted paths
-//  8. Ensuring shimDir is the first entry (shim mode only)
+// CleanupUserPath cleans up the user PATH by removing xdev-owned entries
+// that are anchored at the given home directory:
+//  1. Removing <home>\install\ subtree entries (always)
+//  2. Removing <home>\current\ subtree entries — only in shim mode,
+//     except <home>\current\xdev (the xdev self junction)
+//  3. Removing the bare home root entry itself
+//  4. Removing legacy xmdevenvmt entries (historical substrings, kept
+//     intentionally — see release note)
+//  5. Fixing double-backslash paths (\\) and quoted entries
+//  6. Ensuring shimDir is the first entry (shim mode only)
+//
+// Ticket 11 (audit-fixes / P0-13): the match used to be drive-agnostic
+// substring rules ("\xdev\install\", "\xdev\current\" plus isXDevRoot
+// matching ANY drive's \xdev root) — an unrelated user directory like
+// D:\xdev was silently deleted from PATH on every install/doctor run.
+// The rules are now anchored at the caller-provided home; nothing outside
+// home is ever touched (except the documented legacy substrings).
 //
 // pathMode should be "shim" or "direct".
 // Returns true if any changes were made.
-func CleanupUserPath(shimDir string, pathMode string) (bool, error) {
+//
+// Ticket 10 (audit-fixes / P0-11): the whole read-modify-write cycle runs
+// under withUserPathLock, like the other PATH mutators.
+func CleanupUserPath(home, shimDir, pathMode string) (bool, error) {
+	var changed bool
+	err := withUserPathLock(func() error {
+		c, err := cleanupUserPathLocked(home, shimDir, pathMode)
+		changed = c
+		return err
+	})
+	return changed, err
+}
+
+func cleanupUserPathLocked(home, shimDir, pathMode string) (bool, error) {
 	current, err := ReadUserPath()
 	if err != nil {
 		return false, err
@@ -1173,6 +1218,13 @@ func CleanupUserPath(shimDir string, pathMode string) (bool, error) {
 	var cleanParts []string
 	changed := false
 	shimDirClean := strings.ToLower(filepath.Clean(shimDir))
+
+	// Home-anchored match prefixes (ticket 11 / P0-13).
+	homeClean := strings.ToLower(filepath.Clean(home))
+	sep := string(os.PathSeparator)
+	homeInstallPrefix := homeClean + sep + "install" + sep
+	homeCurrentPrefix := homeClean + sep + "current" + sep
+	homeCurrentXdev := homeClean + sep + "current" + sep + "xdev"
 
 	for _, p := range parts {
 		trimmed := strings.TrimSpace(p)
@@ -1192,23 +1244,31 @@ func CleanupUserPath(shimDir string, pathMode string) (bool, error) {
 
 		normalized := strings.ToLower(filepath.Clean(trimmed))
 
-		// Skip xdev install directory entries (e.g. E:\XDev\install\java\25)
-		if strings.Contains(normalized, "\\xdev\\install\\") {
+		// Skip <home>\install\ subtree entries (e.g. E:\XDev\install\java\25)
+		if strings.HasPrefix(normalized, homeInstallPrefix) {
 			changed = true
 			continue
 		}
 
-		// Skip xdev current directory entries (e.g. E:\XDev\current\java\bin)
-		// Only in shim mode — in direct mode these are needed
-		// 但保留 \xdev\current\xdev（xdev 自身的 junction 路径）
-		if pathMode == "shim" && strings.Contains(normalized, "\\xdev\\current\\") {
-			if !strings.HasSuffix(normalized, "\\xdev\\current\\xdev") && normalized != "xdev\\current\\xdev" {
-				changed = true
-				continue
-			}
+		// Skip <home>\current\ subtree entries (e.g. E:\XDev\current\java\bin)
+		// Only in shim mode — in direct mode these are needed.
+		// 但保留 <home>\current\xdev（xdev 自身的 junction 路径）
+		if pathMode == "shim" && strings.HasPrefix(normalized, homeCurrentPrefix) && normalized != homeCurrentXdev {
+			changed = true
+			continue
 		}
 
-		// Skip legacy xmdevenvmt shim paths
+		// Skip the bare home root entry itself (e.g. E:\XDev) — the old
+		// implementation copied xdev.exe into the root and added the root
+		// to PATH; the current layout uses current/xdev instead. Unlike
+		// the old isXDevRoot rule, ONLY the actual home is matched.
+		if normalized == homeClean {
+			changed = true
+			continue
+		}
+
+		// Skip legacy xmdevenvmt shim paths (historical substrings —
+		// documented release-note exception)
 		if strings.Contains(normalized, "\\ximulocaldev\\xmdevenvmt\\shims") {
 			changed = true
 			continue
@@ -1216,15 +1276,6 @@ func CleanupUserPath(shimDir string, pathMode string) (bool, error) {
 
 		// Skip legacy xmdevenvmt source/build directory entries
 		if strings.Contains(normalized, "\\reverseeng\\xmdevenvmt") {
-			changed = true
-			continue
-		}
-
-		// Skip bare XDev root directory entries (e.g. E:\XDev)
-		// 旧的实现将 xdev.exe 复制到根目录并添加根目录到 PATH
-		// 新实现使用 current/xdev junction，不再需要根目录在 PATH 中
-		// 条件：路径以 \xdev 结尾，且不包含子目录（即恰好是根目录）
-		if isXDevRoot(normalized) {
 			changed = true
 			continue
 		}
@@ -1355,7 +1406,17 @@ func BroadcastEnvironmentChange() {
 }
 
 // UpdateShimDirInUserPath replaces the old shim directory in user PATH with the new one.
+//
+// Ticket 10 (audit-fixes / P0-11): the read-modify-write cycle runs under
+// withUserPathLock, like the other PATH mutators.
 func UpdateShimDirInUserPath(oldDir, newDir string) {
+	_ = withUserPathLock(func() error {
+		updateShimDirInUserPathLocked(oldDir, newDir)
+		return nil
+	})
+}
+
+func updateShimDirInUserPathLocked(oldDir, newDir string) {
 	oldShimDir := filepath.Join(oldDir, "shims")
 	newShimDir := filepath.Join(newDir, "shims")
 

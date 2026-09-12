@@ -15,7 +15,7 @@
 //
 // 单装路径不受影响（仍走 AppContent 的单会话）。
 
-import { computed, reactive } from 'vue';
+import { computed, effectScope, reactive } from 'vue';
 
 export function useParallelBatch({ sessionFactory, message, t }) {
   const items = reactive([]);
@@ -28,24 +28,52 @@ export function useParallelBatch({ sessionFactory, message, t }) {
       bytes: 0, totalBytes: 0,
       active: true, paused: false, error: null,
       session: null,
+      // effect scope owning the session's watchers/disposers (G-01)
+      _scope: null,
       // internal promise plumbing
       _started: null, _waiter: null,
     });
+  }
+
+  // disposeRow releases one row's subscriptions: the effect scope (which
+  // stops the mirror watchers and triggers useInstall's onScopeDispose →
+  // EventsOn unsubscription) plus a direct session dispose for good
+  // measure (both are idempotent). Row STATE (phase/percent/error) stays
+  // visible for the dialog until clear()/run() resets the list.
+  function disposeRow(row) {
+    row._scope?.stop?.();
+    row.session?.dispose?.();
+  }
+
+  function disposeAll() {
+    for (const row of items) disposeRow(row);
   }
 
   // run executes the confirmed list in parallel. Returns summary
   // { done, failed, cancelled } — one entry per outcome per item.
   async function run(confirmedList) {
     if (!confirmedList?.length) return { done: 0, failed: 0, cancelled: 0 };
+    // Ticket 12 (G-02 layer 3): never reset a running batch — a second
+    // entry must not wipe the live rows.
+    if (items.some((it) => it.active)) return { done: 0, failed: 0, cancelled: 0 };
+    // Ticket 12 (G-01): dispose leftover rows from the previous batch
+    // before resetting the list (subscriptions leaked forever before).
+    disposeAll();
     items.length = 0;
 
     const waiters = confirmedList.map((entry) => {
       const row = makeRow(entry.tool, entry.version, entry.formFilter || '');
       items.push(row);
 
-      // Create a dedicated session per item and mirror its reactive
-      // state onto the row for the multi-item dialog.
-      const session = sessionFactory(row);
+      // Ticket 12 (G-01): each session (and its mirror watchers) is
+      // created inside a DEDICATED effect scope. Outside a scope the
+      // watchers attach to nothing and useInstall's onScopeDispose
+      // never registers — every batch row leaked 2 EventsOn
+      // subscriptions + 5 watchers on every run. The scope is stored on
+      // the row so disposeRow can stop everything later.
+      const scope = effectScope();
+      const session = scope.run(() => sessionFactory(row));
+      row._scope = scope;
       row.session = session;
 
       // Start the install; capture the completion waiter.
@@ -78,6 +106,10 @@ export function useParallelBatch({ sessionFactory, message, t }) {
       else if (value === 'cancelled' || value === 'disposed') cancelled++;
       else failed++; // 'error' | 'idle' | 'failed' | exception
     }
+    // Ticket 12 (G-01): the batch has settled — release the row
+    // subscriptions now. The rows themselves stay visible (final state)
+    // until the user closes the dialog / clear() / the next run.
+    for (const row of items) disposeRow(row);
     // Rows keep their final state (completed/error/cancelled) visible in
     // the dialog until the user closes it.
     return { done, failed, cancelled };
@@ -96,6 +128,8 @@ export function useParallelBatch({ sessionFactory, message, t }) {
   }
 
   function clear() {
+    // Ticket 12 (G-01): release subscriptions before dropping the rows.
+    disposeAll();
     items.length = 0;
   }
 

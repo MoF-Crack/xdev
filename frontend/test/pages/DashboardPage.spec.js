@@ -32,4 +32,21 @@ describe('DashboardPage', () => {
     expect(wrapper.emitted('scan-local')).toHaveLength(1);
     expect(wrapper.emitted('check-update')).toHaveLength(1);
   });
+
+  // Ticket 12 (audit-fixes / G-02) — B-5: the "Update All" button is
+  // disabled while a batch is running, so the re-entry path is blocked at
+  // the UI level too (the composable guards remain the authoritative gate).
+  it('disables the update-all button while a batch install is running', async () => {
+    const updates = [{ tool: 'node', currentVersion: '20.0.0', latestVersion: '22.0.0', command: 'xdev install node@22.0.0' }];
+    const wrapper = mount(DashboardPage, { props: { t, updates } });
+    const button = wrapper.get('[data-action="install-all-updates"]');
+    expect(button.attributes('disabled')).toBeUndefined();
+
+    await wrapper.setProps({ batchInstalling: true });
+    expect(wrapper.get('[data-action="install-all-updates"]').attributes('disabled')).toBeDefined();
+
+    // …and it re-enables once the batch settles.
+    await wrapper.setProps({ batchInstalling: false });
+    expect(wrapper.get('[data-action="install-all-updates"]').attributes('disabled')).toBeUndefined();
+  });
 });

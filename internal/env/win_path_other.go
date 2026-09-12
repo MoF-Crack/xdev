@@ -63,8 +63,17 @@ func WriteUserPath(path string) error {
 func BroadcastEnvironmentChange() {}
 
 // CleanupUserPath is a no-op on non-Windows platforms.
-func CleanupUserPath(shimDir string, pathMode string) (bool, error) {
+// The home parameter anchors the xdev-owned entries to clean (ticket 11).
+func CleanupUserPath(home, shimDir, pathMode string) (bool, error) {
 	return false, nil
+}
+
+// withUserPathLock is a pass-through on non-Windows platforms: the PATH
+// read-modify-write lock only guards the Windows registry-backed PATH.
+// The stub exists so cross-platform files (e.g. migrate.go, which has no
+// build tag) can call it without build-tag friction (ticket 10 / P0-11).
+func withUserPathLock(fn func() error) error {
+	return fn()
 }
 
 // SetUserEnvVar is not supported on non-Windows platforms; shell RC

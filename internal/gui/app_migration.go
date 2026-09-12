@@ -307,7 +307,9 @@ func (a *App) InitConfig(baseDir string) error {
 func (a *App) cleanupUserPath(cfg *config.Config, baseDir string) {
 	mode := cfg.GetPathMode()
 	shimDir := filepath.Join(baseDir, "shims")
-	changed, err := env.CleanupUserPath(shimDir, mode)
+	// 票 11（P0-13）：home 锚定——仅清理 baseDir 下的 xdev 自有条目，
+	// 用户无关目录（如 D:\xdev）不再被误删。
+	changed, err := env.CleanupUserPath(baseDir, shimDir, mode)
 	if err != nil {
 		logWarn("[cleanupUserPath] 清理用户 PATH 失败: %v", err)
 	} else if changed {
@@ -567,8 +569,10 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 	if err := os.Rename(localPath, targetPath); err != nil {
 		logInfo("[MigrateLocalToolByMove] Rename 失败（可能跨盘符），回退到复制+删除: %v", err)
 		movedByRename = false
-		// 回退：复制目录（带进度反馈）
-		err := util.CopyDirProgress(localPath, targetPath, func(copied, total int) {
+		// 回退：复制目录（带进度反馈 + 断链可见化——票 09/N-01：
+		// 复制报告携带被跳过的链接条目数，在源目录即将被 RemoveAll
+		// 之前把潜在数据损失显式暴露出来）
+		_, skippedLinks, copyErr := util.CopyDirReport(localPath, targetPath, func(copied, total int) {
 			if a.ctx != nil {
 				wailsRuntime.EventsEmit(a.ctx, "migrationProgress", map[string]interface{}{
 					"tool":    tool.Name,
@@ -579,8 +583,11 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 				})
 			}
 		})
-		if err != nil {
-			return fmt.Errorf("复制目录失败: %v", err)
+		if copyErr != nil {
+			return fmt.Errorf("复制目录失败: %v", copyErr)
+		}
+		if skippedLinks > 0 {
+			logWarn("[MigrateLocalToolByMove] 复制完成但跳过了 %d 个无法解析/断链的条目（详见 [copydir] 日志）——请确认这些内容不需要", skippedLinks)
 		}
 		// 复制成功后删除原始目录
 		if err := os.RemoveAll(localPath); err != nil {

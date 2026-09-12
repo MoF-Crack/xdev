@@ -169,7 +169,7 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Println("\n--- Fixing PATH issues ---")
 
 				// Fix user PATH
-				changed, err := env.CleanupUserPath(cfg.Core.ShimDir, cfg.GetPathMode())
+				changed, err := env.CleanupUserPath(cfg.Core.XMDevDir, cfg.Core.ShimDir, cfg.GetPathMode())
 				if err != nil {
 					fmt.Printf("✘ Failed to fix user PATH: %v\n", err)
 				} else if changed {

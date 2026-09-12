@@ -156,7 +156,7 @@ func newUseCmd() *cobra.Command {
 			// 清理用户 PATH 中残留的 xdev install 目录条目
 			if !NoPathFix() {
 				shimDir := filepath.Join(Cfg().Core.XMDevDir, "shims")
-				if changed, _ := env.CleanupUserPath(shimDir, Cfg().GetPathMode()); changed {
+				if changed, _ := env.CleanupUserPath(Cfg().Core.XMDevDir, shimDir, Cfg().GetPathMode()); changed {
 					fmt.Println("  (cleaned up stale PATH entries)")
 				}
 			}
