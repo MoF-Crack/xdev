@@ -379,6 +379,21 @@ func replaceBinary(currentExe, newBinary string) error {
 func replaceBinaryWindows(currentExe, newBinary string) error {
 	backup := currentExe + ".old"
 
+	// 票 32（P1-25 / E-06）崩溃自愈：上一次更新若在「currentExe → .old」
+	// 之后、「新二进制 → currentExe」之前中断（断电/杀进程/蓝屏），
+	// currentExe 会永久缺失而 .old 完好。旧实现紧接着就 os.Remove(backup)
+	// ——把唯一的可恢复副本删掉，再走 copyAndReplace 新建文件，崩溃被
+	// 固化成「二进制丢失」。现在先把 .old 恢复回 currentExe 再继续。
+	if healed, err := restoreFromBackup(currentExe); err != nil {
+		log.Printf("[update] WARNING: recover %s from %s: %v", currentExe, backup, err)
+	} else if healed {
+		log.Printf("[update] recovered %s from an interrupted previous update", currentExe)
+	}
+
+	// 票 32（E-06）：清理上一次中断留下的 .new 半成品（copyAndReplace 的
+	// 中间文件），避免把陈旧内容当成新二进制发布。
+	_ = os.Remove(currentExe + ".new")
+
 	// Remove any leftover backup from a previous update
 	_ = os.Remove(backup)
 
@@ -406,23 +421,72 @@ func replaceBinaryWindows(currentExe, newBinary string) error {
 	return nil
 }
 
+// restoreFromBackup renames currentExe+".old" back to currentExe when the live
+// binary is missing (票 32 / P1-25 / E-06).  Reports whether a restore
+// happened.  A missing live binary together with a present backup is the
+// signature of an interrupted update; without this step the only recoverable
+// copy gets deleted by the caller.
+func restoreFromBackup(currentExe string) (bool, error) {
+	if _, err := os.Stat(currentExe); err == nil {
+		return false, nil // 活二进制在位：无需自愈
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	backup := currentExe + ".old"
+	fi, err := os.Stat(backup)
+	if err != nil {
+		return false, nil // 没有可恢复的副本
+	}
+	if fi.IsDir() {
+		return false, nil
+	}
+	if err := os.Rename(backup, currentExe); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // copyAndReplace copies the new binary over the current one.
 // This is a fallback for Windows when rename fails.
+//
+// 票 32（E-06）：旧实现直接以 O_TRUNC 打开 currentExe 覆盖写——中途失败
+// （磁盘满/被中断）会留下半截损坏的二进制，而且运行中的 exe 更是写不通。
+// 现在改为「写 <currentExe>.new → rename 覆盖」：rename 是原子发布点，
+// 失败时 currentExe 保持原样（或缺失由 restoreFromBackup 自愈），
+// 只留下一个可被启动清理的 .new 中间文件。
 func copyAndReplace(currentExe, newBinary string) error {
+	staging := currentExe + ".new"
+	_ = os.Remove(staging)
+
 	src, err := os.Open(newBinary)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(currentExe, os.O_WRONLY|os.O_TRUNC, 0o755)
+	dst, err := os.OpenFile(staging, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-
-	_, err = io.Copy(dst, src)
-	return err
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		os.Remove(staging)
+		return err
+	}
+	if err := dst.Sync(); err != nil {
+		dst.Close()
+		os.Remove(staging)
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		os.Remove(staging)
+		return err
+	}
+	if err := os.Rename(staging, currentExe); err != nil {
+		os.Remove(staging)
+		return err
+	}
+	return nil
 }
 
 // semverLess reports whether version a is less than version b

@@ -27,6 +27,14 @@ type EnvironmentSpec struct {
 	Tools      map[string]string `json:"tools"`      // tool name -> version
 	Env        map[string]string `json:"env"`        // env var name -> value
 	WorkingDir string            `json:"workingDir"` // working directory inside the environment
+
+	// Force lets Setup overwrite files that already exist (C-07 / P1-34):
+	// a hand-written flake.nix or devcontainer.json is the user's, and both
+	// Setup and the following Teardown used to clobber it. It is carried on
+	// the spec (not as new Isolator API surface) so the CLI `isolate setup
+	// --force` flag and the GUI can both opt in; the zero value is the safe
+	// default (refuse).
+	Force bool `json:"force,omitempty"`
 }
 
 // ExecResult holds the output of a command executed in an isolated environment.

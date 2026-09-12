@@ -441,6 +441,23 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 func downloadOnce(ctx context.Context, opts Options) error {
 	partPath := opts.Dest + ".part"
 
+	// Ticket 21 (audit-fixes / P1-01): exclusive lock on the partial file.
+	// Two xdev processes sharing one cache destination (GUI + CLI, or a
+	// batch item + a manual install) used to interleave Range requests and
+	// writes into the same .part — both reported success while the archive
+	// was a mix of two responses.
+	//
+	// The lock is stale-safe: AcquireFileLock uses OS byte-range locks
+	// (LockFileEx/flock), released by the kernel when a holder dies — a
+	// leftover .part.lock from a crashed process never blocks a takeover,
+	// which is exactly what keeps crash-resume working (ticket 23
+	// inventory conclusion).
+	partLock, lockErr := util.AcquireFileLock(partPath+".lock", 1*time.Second)
+	if lockErr != nil {
+		return fmt.Errorf("another download is already in progress for %s (lock %s: %w) — retry once it finishes, or delete the .part/.part.lock files if no download is running", opts.ProgressDesc, partPath+".lock", lockErr)
+	}
+	defer partLock.Release()
+
 	// Security (M-6): Open the .part file first, then stat the open handle
 	// to avoid TOCTOU race between os.Stat and os.OpenFile.
 	// Use O_EXCL for fresh downloads to prevent symlink attacks.
@@ -453,6 +470,9 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// would redirect the archive write to an arbitrary file. Only
 		// resume when the existing .part is a regular file (lstat, not
 		// stat); otherwise remove the impostor and start fresh with O_EXCL.
+		// Ticket 21: this branch stays INSIDE the .part lock — the lock is
+		// never treated as "another download in progress" for a crash
+		// residue (that is the whole point of taking it over).
 		if fi, stErr := os.Lstat(partPath); stErr == nil && fi.Mode().IsRegular() {
 			flags = os.O_CREATE | os.O_WRONLY
 			f, openErr = os.OpenFile(partPath, flags, 0o644)
@@ -689,22 +709,52 @@ func downloadOnce(ctx context.Context, opts Options) error {
 }
 
 // writeSidecarHash writes the SHA-256 sidecar file for TOFU (Trust On First
-// Use) verification. If the file already exists (from a previous download)
-// and is read-only (0o444 from a prior run), the read-only attribute is
-// cleared before writing so the update succeeds.
+// Use) verification.
 //
-// Security (L-10): After writing, the file is set to read-only (0o444) to
-// hinder casual tampering. This is not a strong security boundary — an
-// attacker who can write to the directory can still clear the attribute —
+// Ticket 23 (audit-fixes / D-08): the write is atomic so a concurrent reader
+// (another xdev process checking the pin, or the same process after a crash)
+// can never observe a half-written sidecar — a torn pin would either reject
+// a good archive or, worse, look like a valid user-edited pin. Steps:
+//
+//	1. write <sidecar>.tmp
+//	2. fsync it
+//	3. clear the read-only attribute of an existing target (0o444 from a
+//	   previous run; Windows would otherwise fail the rename)
+//	4. rename over the target
+//	5. mark the result read-only (0o444)
+//
+// Security (L-10): the read-only attribute is not a strong security
+// boundary — an attacker who can write to the directory can still clear it —
 // but it raises the bar for opportunistic modification.
 func writeSidecarHash(sidecarPath, gotHash, dest string) {
 	content := gotHash + "  " + filepath.Base(dest) + "\n"
-	// Clear read-only attribute if the file exists from a previous run
-	if _, err := os.Stat(sidecarPath); err == nil {
+
+	tmpPath := sidecarPath + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		log.Printf("[download] WARNING: failed to create sidecar temp %s: %v", tmpPath, err)
+		return
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		_ = os.Remove(tmpPath)
+		log.Printf("[download] WARNING: failed to write sidecar temp %s: %v", tmpPath, err)
+		return
+	}
+	// fsync so the rename cannot expose an empty/partial file after a crash.
+	if err := f.Sync(); err != nil {
+		log.Printf("[download] WARNING: failed to sync sidecar temp %s: %v", tmpPath, err)
+	}
+	if err := f.Close(); err != nil {
+		log.Printf("[download] WARNING: failed to close sidecar temp %s: %v", tmpPath, err)
+	}
+	// A previous pin is read-only — clear the attribute or the rename fails.
+	if _, statErr := os.Stat(sidecarPath); statErr == nil {
 		_ = os.Chmod(sidecarPath, 0o644)
 	}
-	if err := os.WriteFile(sidecarPath, []byte(content), 0o644); err != nil {
-		log.Printf("[download] WARNING: failed to write sidecar hash file %s: %v", sidecarPath, err)
+	if err := os.Rename(tmpPath, sidecarPath); err != nil {
+		_ = os.Remove(tmpPath)
+		log.Printf("[download] WARNING: failed to replace sidecar %s: %v", sidecarPath, err)
 		return
 	}
 	// Set sidecar read-only to hinder casual tampering

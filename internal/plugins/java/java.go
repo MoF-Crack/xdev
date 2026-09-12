@@ -45,7 +45,9 @@ func (p *Plugin) ArchiveFor(version string) (*manifest.Archive, error) {
 //   - the version has empty archives (placeholder — no pinned SHA)
 //   - no archive matches the requested os/arch
 func (p *Plugin) ArchiveForPlatform(version, osName, arch string) (*manifest.Archive, error) {
-	v, ok := p.M.FindVersion(version)
+	// Ticket 24: go through the accessor rather than the raw field so the
+	// (potential) plugin lock is honoured uniformly.
+	v, ok := p.Manifest().FindVersion(version)
 	if !ok {
 		return nil, fmt.Errorf("version %s not in manifest", version)
 	}

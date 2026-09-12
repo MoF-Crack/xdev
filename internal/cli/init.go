@@ -4,7 +4,7 @@
 //  1. Choose XDev Home directory (interactive drive selection on Windows)
 //  2. Create directory structure (install/, shims/, cache/, downloads/, etc.)
 //  3. Write config.yaml with defaults
-//  4. Self-install xdev into current/xdev/ (gated by !flagNoPathFix)
+//  4. Self-install xdev into current/xdev/ (gated by NoPathFix())
 //  5. Interactive tool selection and installation
 //  6. Shell RC injection (cd hook) for automatic version switching
 //
@@ -20,6 +20,12 @@
 // When set, Step 4 (self-install to PATH) and Step 6 (shell RC injection)
 // are skipped. This is used by integration tests to avoid polluting the
 // host environment.
+//
+// 票 31（P1-23 / E-04）：本命令不再定义同名局部 flag——局部定义会遮蔽
+// root.go 的持久 flag，导致 `xdev init --no-path-fix` 只让「自装门」生效、
+// 而向导内的安装/注册表阶段读到 false（NoPathFix()==false），出现
+// 「部分生效」。现在三处门（SetNoEnvWrite / shell RC 注入 / Windows PATH）
+// 全部读同一个持久 flag 值（经 initContext 写入 globalCtx）。
 package cli
 
 import (
@@ -42,7 +48,6 @@ func newInitCmd() *cobra.Command {
 	var (
 		flagDownloadDir string
 		flagInstallDir  string
-		flagNoPathFix   bool
 		flagForce       bool
 		flagYes         bool
 	)
@@ -63,21 +68,20 @@ recommendation.
 Override with --xmdevenv-dir, the XMDEV_HOME environment variable,
 or XMDEV_FORCE_HOME=1 to fall back to ~/.xdev.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInitWizard(cmd, flagDownloadDir, flagInstallDir, flagNoPathFix, flagForce, flagYes)
+			return runInitWizard(cmd, flagDownloadDir, flagInstallDir, flagForce, flagYes)
 		},
 	}
 	cmd.Flags().StringVar(&flagDownloadDir, "download-dir", "",
 		"override the default download directory (can also be set in config.yaml)")
 	cmd.Flags().StringVar(&flagInstallDir, "install-dir", "",
 		"override the default install directory (can also be set in config.yaml)")
-	cmd.Flags().BoolVar(&flagNoPathFix, "no-path-fix", false, "do not modify the shell RC file")
 	cmd.Flags().BoolVar(&flagForce, "force", false, "overwrite an existing config without prompting")
 	cmd.Flags().BoolVar(&flagYes, "yes", false,
 		"non-interactive: use the recommended drive (largest non-system drive) without prompting")
 	return cmd
 }
 
-func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, flagNoPathFix, flagForce, flagYes bool) error {
+func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, flagForce, flagYes bool) error {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("Welcome to xdev! Let's set up your development environment.")
@@ -216,7 +220,9 @@ func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, f
 	}
 
 	// Step 3: Shell RC injection
-	if !flagNoPathFix {
+	// 票 31（E-04）：与 :169/:254 同源——读 root 持久 flag（NoPathFix()），
+	// 不再读会被遮蔽的局部 flag。
+	if !NoPathFix() {
 		fmt.Print("\nInject into shell RC? (Y/n): ")
 		inject, _ := reader.ReadString('\n')
 		if !strings.EqualFold(strings.TrimSpace(inject), "n") {
@@ -251,7 +257,7 @@ func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, f
 			if isNew {
 				fmt.Printf("✔ installed xdev to %s\n", installDir)
 			}
-			if runtime.GOOS == "windows" && !flagNoPathFix {
+			if runtime.GOOS == "windows" && !NoPathFix() {
 				xdevBinDir := filepath.Join(cfg.Core.XMDevDir, "current", "xdev")
 				if err := env.AppendToUserPath(xdevBinDir); err != nil {
 					fmt.Printf("⚠ failed to add xdev dir to Windows user PATH: %v\n", err)

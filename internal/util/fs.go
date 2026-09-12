@@ -23,6 +23,11 @@ var bufPool = sync.Pool{
 }
 
 // CopyFile copies a single file from src to dst using a pooled 1MB buffer.
+//
+// Ticket 38 (P2-32): permission bits come from the SOURCE file (forcing
+// 0755 turned copied data/config files executable), and an existing
+// destination keeps its own mode (a copy must not re-permission a file the
+// user or another component already owns).
 func CopyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -30,7 +35,15 @@ func CopyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	mode := os.FileMode(0o755)
+	if fi, statErr := in.Stat(); statErr == nil {
+		mode = fi.Mode().Perm()
+	}
+	if fi, statErr := os.Stat(dst); statErr == nil {
+		mode = fi.Mode().Perm()
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
@@ -248,21 +261,20 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// IsAllZeroHash returns true if s consists entirely of '0' characters
-// (optionally prefixed with "0x"). This is used to detect placeholder
-// SHA-256 values in manifests that should be skipped.
+// IsAllZeroHash reports whether s is the canonical all-zero SHA-256
+// placeholder: exactly 64 hexadecimal zeros, optionally prefixed with
+// "0x"/"0X". Used to detect placeholder hashes in manifests that should be
+// skipped (and TOFU-pinned) rather than verified.
+//
+// Ticket 39 (P2-12): the previous version accepted ANY all-zero string —
+// including a single "0" or a truncated value — so a malformed hash was
+// silently treated as "placeholder, skip verification". Requiring the
+// canonical 64-digit width (what the signing side emits) makes a truncated
+// value fail loudly instead.
 func IsAllZeroHash(s string) bool {
 	s = strings.TrimPrefix(s, "0x")
 	s = strings.TrimPrefix(s, "0X")
-	if len(s) == 0 {
-		return false
-	}
-	for _, c := range s {
-		if c != '0' {
-			return false
-		}
-	}
-	return true
+	return len(s) == 64 && strings.Trim(s, "0") == ""
 }
 
 // CreateJunction creates a Windows junction (directory symlink) from

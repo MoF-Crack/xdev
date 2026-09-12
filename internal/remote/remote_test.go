@@ -142,7 +142,8 @@ func TestCachePutAndGet(t *testing.T) {
 	body := []byte(`[{"tag_name":"v1.0.0"}]`)
 	etag := `"abc123"`
 
-	cachePut(key, body, etag)
+	// P2-08: the 4th argument is the cached next-page cursor ("" = last page).
+	cachePut(key, body, etag, "")
 
 	entry, ok := cacheGet(key)
 	if !ok {

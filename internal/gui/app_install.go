@@ -153,8 +153,11 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 	if formFilter != "" {
 		// 形态筛选路径：必须命中 Form==filter 或 Form=="" 的 archive。
 		// 找不到时直接报错，禁止静默回退到另一种形态的默认包。
-		if g, ok := p.(*plugin.Generic); ok && g.M != nil {
-			if v, found := g.M.FindVersion(ver); found {
+		// Ticket 24: read the manifest through the plugin accessor
+		// (g.Manifest() takes the Generic RWMutex) instead of touching the
+		// M field directly.
+		if g, ok := p.(*plugin.Generic); ok && g.Manifest() != nil {
+			if v, found := g.Manifest().FindVersion(ver); found {
 				if a2, ok2 := v.ArchiveForCurrentWithForm(plugin.HostOS(), plugin.HostArch(), formFilter); ok2 {
 					arch = a2
 				}
@@ -182,13 +185,19 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 				logWarn("[install] activation of existing install failed: %v", err)
 				return fmt.Errorf("activation failed for existing install: %w", err)
 			}
-			wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-				TaskID:  taskID,
-				Tool:    toolName,
-				Version: version,
-				Phase:   "Completed",
-				Percent: 100,
-			})
+			// Ticket 29/30 follow-up: guard the emit with a nil-ctx check —
+			// Wails' getEvents log.Fatalf's on a nil context, which in tests
+			// (no Wails runtime) killed the whole process silently (exit 1,
+			// no FAIL line). app.go already guards its own emits this way.
+			if a.ctx != nil {
+				wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
+					TaskID:  taskID,
+					Tool:    toolName,
+					Version: version,
+					Phase:   "Completed",
+					Percent: 100,
+				})
+			}
 			a.invalidateDashboardCache()
 			a.refreshAndSaveLocalCache()
 			return nil
@@ -208,9 +217,23 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		}
 		// User confirmed repair (or force was requested): remove the
 		// existing directory and reinstall from scratch.
+		//
+		// Ticket 19 (audit-fixes / B-02): the removal runs under the per-tool
+		// lock so a concurrent install of the same tool (CLI force install,
+		// GUI batch item, migration) cannot interleave with it. The lock is
+		// released before the download/install phase, which re-acquires it —
+		// keeping the existing "remove first, then fetch" behaviour while
+		// adding mutual exclusion. F-03 residual: the Windows named mutex is
+		// thread-affine, so this is best-effort (disclosed in the PR notes).
 		logInfo("[install] removing existing %s install dir %s for reinstall", toolName, installPath)
-		if err := os.RemoveAll(installPath); err != nil {
-			return fmt.Errorf("failed to remove existing install dir: %w", err)
+		removeLock, removeLockErr := util.AcquireToolLock(cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
+		if removeLockErr != nil {
+			return fmt.Errorf("reinstall removal lock %s: %w", p.Name(), removeLockErr)
+		}
+		removeErr := os.RemoveAll(installPath)
+		removeLock.Release()
+		if removeErr != nil {
+			return fmt.Errorf("failed to remove existing install dir: %w", removeErr)
 		}
 	}
 
@@ -504,8 +527,10 @@ func versionArchivesNPMManaged(t *manifest.Tool, v *manifest.Version) bool {
 }
 
 func (a *App) lookupToolManifest(toolName string) *manifest.Tool {
-	if a.cat != nil {
-		if t, ok := a.cat.Tool(toolName); ok {
+	// Ticket 24: read the catalog through getCat() so the snapshot is taken
+	// under catMu (reloadCatalog may swap the pointer concurrently).
+	if cat := a.getCat(); cat != nil {
+		if t, ok := cat.Tool(toolName); ok {
 			return t
 		}
 	}
@@ -549,8 +574,17 @@ func (a *App) UseVersion(toolName, version string) error {
 		return err
 	}
 	cfg := a.getCfg()
-	ins := a.newInstaller(cfg)
 	installPath := p.InstallDir(cfg.Core.InstallDir, version)
+	// B-06（票 29 / P1-19）：存在性门 —— 未安装的版本必须在动任何东西之前
+	// 就明确报「未安装」。旧代码把不存在的 installPath 直接交给
+	// Activate：Activate 先建 current/<tool> 链接（失败路径还会尝试 symlink/
+	// 拷贝兜底），于是错误信息来自链接层（"symlink … failed"）甚至留下悬挂
+	// 链接，把「切换到一个没装的版本」误报成文件系统故障。
+	// 措辞与 SwitchToXdevVersion 的存在性门保持一致。
+	if fi, statErr := os.Stat(installPath); statErr != nil || !fi.IsDir() {
+		return fmt.Errorf("version %s of %s is not installed", version, toolName)
+	}
+	ins := a.newInstaller(cfg)
 	if err := ins.Activate(p, installPath, version); err != nil {
 		return err
 	}

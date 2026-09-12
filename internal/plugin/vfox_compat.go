@@ -160,35 +160,47 @@ func promotePluginMethods(L *lua.LState, pluginTable lua.LValue) {
 
 // --- LuaEngine: shared call helpers ---
 
+// Default Lua execution timeouts (Security M-12). These are the production
+// values; LuaEngine.callTimeout applies a test override when one is set
+// (票 20 / F-04).
+const (
+	availableCallTimeout = 30 * time.Second
+	archiveCallTimeout   = 60 * time.Second
+	envVarsCallTimeout   = 10 * time.Second
+)
+
 // callAvailable runs the Lua available() function. For vfox plugins,
 // each entry may be a string or a table with a "version" field.
 func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
-	L, done, err := e.vmFor(p.path, p.specs.vfoxFormat)
+	L, cv, err := e.vmFor(p.path, p.specs.vfoxFormat)
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer cv.mu.Unlock()
 
 	// Security (M-12): Add execution timeout
 	doneCh := make(chan error, 1)
-	go func() {
+	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
 			Fn:      L.GetGlobal("available"),
 			NRet:    1,
 			Protect: true,
 		}); err != nil {
-			doneCh <- fmt.Errorf("available(): %w", err)
-			return
+			return fmt.Errorf("available(): %w", err)
 		}
-		doneCh <- nil
-	}()
+		return nil
+	})
 	select {
 	case err := <-doneCh:
 		if err != nil {
 			return nil, err
 		}
-	case <-time.After(30 * time.Second):
-		return nil, fmt.Errorf("available() timed out after 30s for plugin %s", p.name)
+	case <-time.After(e.callTimeout(availableCallTimeout)):
+		// 票 20 / F-04: the abandoned goroutine still runs on this LState,
+		// so flag the VM before cv.mu is released — the next caller must
+		// rebuild it instead of sharing the corrupted stack.
+		cv.poisoned = true
+		return nil, fmt.Errorf("available() timed out after %s for plugin %s", e.callTimeout(availableCallTimeout), p.name)
 	}
 
 	result := L.Get(-1)
@@ -221,33 +233,34 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 
 // callArchive runs the Lua archive() or install() function (based on specs).
 func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*LuaArchive, error) {
-	L, done, err := e.vmFor(p.path, p.specs.vfoxFormat)
+	L, cv, err := e.vmFor(p.path, p.specs.vfoxFormat)
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer cv.mu.Unlock()
 
 	fnName := p.specs.archiveFn
 	// Security (M-12): Add execution timeout
 	doneCh := make(chan error, 1)
-	go func() {
+	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
 			Fn:      L.GetGlobal(fnName),
 			NRet:    1,
 			Protect: true,
 		}, lua.LString(version), lua.LString(goos), lua.LString(arch)); err != nil {
-			doneCh <- fmt.Errorf("%s(%s,%s,%s): %w", fnName, version, goos, arch, err)
-			return
+			return fmt.Errorf("%s(%s,%s,%s): %w", fnName, version, goos, arch, err)
 		}
-		doneCh <- nil
-	}()
+		return nil
+	})
 	select {
 	case err := <-doneCh:
 		if err != nil {
 			return nil, err
 		}
-	case <-time.After(60 * time.Second):
-		return nil, fmt.Errorf("%s() timed out after 60s for plugin %s", fnName, p.name)
+	case <-time.After(e.callTimeout(archiveCallTimeout)):
+		// 票 20 / F-04: poison before releasing cv.mu (see callAvailable).
+		cv.poisoned = true
+		return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(archiveCallTimeout), p.name)
 	}
 
 	result := L.Get(-1)
@@ -279,33 +292,34 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 
 // callEnvVars runs the optional Lua env_vars() or env_keys() function.
 func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[string]string, error) {
-	L, done, err := e.vmFor(p.path, p.specs.vfoxFormat)
+	L, cv, err := e.vmFor(p.path, p.specs.vfoxFormat)
 	if err != nil {
 		return nil, err
 	}
-	defer done()
+	defer cv.mu.Unlock()
 
 	fnName := p.specs.envVarsFn
 	// Security (M-12): Add execution timeout
 	doneCh := make(chan error, 1)
-	go func() {
+	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
 			Fn:      L.GetGlobal(fnName),
 			NRet:    1,
 			Protect: true,
 		}, lua.LString(installPath)); err != nil {
-			doneCh <- fmt.Errorf("%s(%s): %w", fnName, installPath, err)
-			return
+			return fmt.Errorf("%s(%s): %w", fnName, installPath, err)
 		}
-		doneCh <- nil
-	}()
+		return nil
+	})
 	select {
 	case err := <-doneCh:
 		if err != nil {
 			return nil, err
 		}
-	case <-time.After(10 * time.Second):
-		return nil, fmt.Errorf("%s() timed out after 10s for plugin %s", fnName, p.name)
+	case <-time.After(e.callTimeout(envVarsCallTimeout)):
+		// 票 20 / F-04: poison before releasing cv.mu (see callAvailable).
+		cv.poisoned = true
+		return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(envVarsCallTimeout), p.name)
 	}
 
 	result := L.Get(-1)

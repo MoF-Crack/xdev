@@ -38,6 +38,58 @@ type CustomToolInfo struct {
 	SourceType  string `json:"sourceType"`
 }
 
+// customToolRemote builds the manifest RemoteSource for a custom tool out of
+// the GUI's single "source URL" field.
+//
+// B-07（票 29 / P1-20）：自定义工具的 RemoteSource 有**三个构造点**——
+// Preview 的版本发现、AddCustomTool 的版本发现、以及落盘 manifest 的持久化
+// 块（tool.Remote = …）。三点必须逐字段一致，尤其是 npm 的 Package：
+// 只改前两处时「预览能出结果」，但落盘 manifest 缺 package，之后
+// sniff/mergeIntoManifest 重新发现版本时仍报 "npm remote: package is
+// required"——死功能只修了一半。三点统一走本构造函数，从结构上排除
+// 「只改一处」的可能。
+func customToolRemote(sourceURL, sourceType, pattern string) manifest.RemoteSource {
+	return manifest.RemoteSource{
+		Type:    sourceType,
+		URL:     sourceURL,
+		Pattern: pattern,
+		Package: npmPackageFromSource(sourceURL, sourceType),
+	}
+}
+
+// npmPackageFromSource 推导 npm 远程类型的包名；非 npm 类型返回 ""。
+//
+// 为什么需要推导：前端自定义工具表单只有「源 URL」一个输入框
+// （frontend/src/pages/SettingsPage.vue 的 ct-url，没有 path/package 字段；
+// 前端不在本票白名单内，仅记录在报告里），因此 npm 包名只能由服务端从该
+// 字段派生。接受带 registry 前缀的 URL 形式
+// （"https://registry.npmjs.org/typescript" → "typescript"），作用域包
+// （"…/@scope/pkg" → "@scope/pkg"）保留 scope 段。
+//
+// registry 地址本身不参与请求：discoverNPM 使用固定的 registry base
+// （SSRF 姿态，manifest 不得让 xdev 请求任意主机），只有包名进入请求路径。
+func npmPackageFromSource(sourceURL, sourceType string) string {
+	if sourceType != "npm" {
+		return ""
+	}
+	s := strings.TrimSpace(sourceURL)
+	if s == "" {
+		return ""
+	}
+	// 去掉 scheme://host，只保留路径部分（即包名）。
+	if i := strings.Index(s, "://"); i >= 0 {
+		rest := s[i+3:]
+		if j := strings.Index(rest, "/"); j >= 0 {
+			s = rest[j+1:]
+		} else {
+			s = ""
+		}
+	}
+	s = strings.Trim(s, "/")
+	s = strings.TrimSuffix(s, ".git")
+	return s
+}
+
 // PreviewCustomToolVersions discovers available versions from a remote
 // source without writing any manifest.  Returns the version list or nil
 // on error.
@@ -61,11 +113,7 @@ func (a *App) PreviewCustomToolVersions(sourceURL, sourceType, pattern string) [
 		pattern = `v?(\d+\.\d+\.\d+)$`
 	}
 
-	rs := manifest.RemoteSource{
-		Type:    sourceType,
-		URL:     sourceURL,
-		Pattern: pattern,
-	}
+	rs := customToolRemote(sourceURL, sourceType, pattern)
 	versions, err := remote.DiscoverVersions(context.Background(), rs)
 	if err != nil {
 		logWarn("[PreviewCustomToolVersions] discover failed: %v", err)
@@ -85,6 +133,51 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 		return &CustomToolResult{
 			Success: false,
 			Message: "tool name must match ^[a-z0-9-]+$ (lowercase letters, digits, hyphens only)",
+		}
+	}
+
+	// --- B-05（票 29 / P1-18 + N-13）三重存在性门 ---
+	//
+	// 同名工具可以从三条不同路径混进 catalog/manifest 目录，任一条命中都
+	// 必须在**写盘之前**拒绝：
+	//   1) catalog 命中 —— 与内置（嵌入）manifest 或已加载的第三方 manifest
+	//      同名。嵌入优先的合并语义会把自定义工具追加的 Discovered 版本并进
+	//      内置版本表，等于污染内置工具；
+	//   2) cfg.CustomTools 命中 —— 上一次添加留下 config 记录（磁盘 yaml 可能
+	//      已被手工删除）。旧代码（:211-220）在这里无条件 append，N-13：
+	//      config 里出现两条同名记录；
+	//   3) 磁盘 manifest 已存在 —— 同名 yaml 未进 catalog（坏 yaml 被 loader
+	//      跳过、第三方手工放置）。catalog 检查看不见它，旧代码会用本次生成的
+	//      manifest 覆盖掉别人的文件。
+	// 第 3 条同时把「回滚只删本次新建的文件」变成平凡真值：越过此门后
+	// manifestPath 一定不存在，cfg.Save 失败时的 os.Remove 不可能删掉旧文件。
+	cfg := a.getCfg()
+	manifestPath := filepath.Join(cfg.Core.ManifestDir, name+".yaml")
+	if cat := a.getCat(); cat != nil {
+		if _, exists := cat.Tool(name); exists {
+			return &CustomToolResult{
+				Success: false,
+				Message: fmt.Sprintf("tool %q already exists in the catalog (built-in or loaded manifest); choose another name", name),
+			}
+		}
+	}
+	for _, ct := range cfg.CustomTools {
+		if ct.Name == name {
+			return &CustomToolResult{
+				Success: false,
+				Message: fmt.Sprintf("custom tool %q is already registered in the config", name),
+			}
+		}
+	}
+	if _, statErr := os.Stat(manifestPath); statErr == nil {
+		return &CustomToolResult{
+			Success: false,
+			Message: fmt.Sprintf("manifest %s already exists on disk; remove it before adding %q again", manifestPath, name),
+		}
+	} else if !os.IsNotExist(statErr) {
+		return &CustomToolResult{
+			Success: false,
+			Message: fmt.Sprintf("cannot inspect manifest path %s: %v", manifestPath, statErr),
 		}
 	}
 
@@ -136,11 +229,8 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 	}
 
 	// --- Discover versions ---
-	rs := manifest.RemoteSource{
-		Type:    sourceType,
-		URL:     sourceURL,
-		Pattern: pattern,
-	}
+	// B-07：与 Preview 及下面的落盘块共用同一构造函数，三点字段完全一致。
+	rs := customToolRemote(sourceURL, sourceType, pattern)
 	versions, err := remote.DiscoverVersions(context.Background(), rs)
 	if err != nil {
 		return &CustomToolResult{
@@ -178,11 +268,11 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 			Message: fmt.Sprintf("parse generated manifest: %v", err),
 		}
 	}
-	tool.Remote = manifest.RemoteSource{
-		Type:    sourceType,
-		URL:     sourceURL,
-		Pattern: pattern,
-	}
+	// B-07（持久化块）：这里是三构造点的第三处——落盘 manifest 的 remote
+	// 段。npm 类型必须写出 package，否则工具落盘后再做版本发现
+	// （sniff/mergeIntoManifest）仍会因 "npm remote: package is required"
+	// 失败，即死功能只修一半。
+	tool.Remote = customToolRemote(sourceURL, sourceType, pattern)
 	finalYaml, err := yaml.Marshal(&tool)
 	if err != nil {
 		return &CustomToolResult{
@@ -192,8 +282,8 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 	}
 
 	// --- Write manifest to disk ---
-	cfg := a.getCfg()
-	manifestPath := filepath.Join(cfg.Core.ManifestDir, name+".yaml")
+	// 复用三重门已取的配置快照（getCfg 返回深拷贝），保证「门检查的路径」
+	// 与「写入的路径」是同一个值。
 	if err := os.MkdirAll(cfg.Core.ManifestDir, 0o755); err != nil {
 		return &CustomToolResult{
 			Success: false,
@@ -219,7 +309,18 @@ func (a *App) AddCustomTool(name, displayName, sourceURL, sourceType, pattern, s
 		EnvVar:      envVar,
 	})
 	if err := a.cfg.Save(); err != nil {
+		// B-05 回滚：Save 失败必须撤销本次的两处副作用，否则磁盘上留下
+		// 一份「config 里没有」的孤儿 manifest，而三重门的第 3 条会让下一次
+		// 添加直接报「manifest 已存在」——用户被自己的失败操作卡住。
+		//   - 内存：截掉本次 append 的 config 记录（「cfg 未变」）；
+		//   - 磁盘：删除本次新建的 manifest。第 3 条门保证进入写入段时
+		//     manifestPath 不存在，因此这里的 Remove 不可能删掉既有文件，
+		//     「只删本次新建的文件」是平凡真值。
+		a.cfg.CustomTools = a.cfg.CustomTools[:len(a.cfg.CustomTools)-1]
 		a.cfgMu.Unlock()
+		if rmErr := os.Remove(manifestPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			logWarn("[custom-tool] rollback of %s failed: %v", manifestPath, rmErr)
+		}
 		return &CustomToolResult{
 			Success: false,
 			Message: fmt.Sprintf("save config: %v", err),

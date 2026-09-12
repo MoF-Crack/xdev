@@ -414,10 +414,18 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 					path := filepath.Join(dir, name)
 					data, readErr := os.ReadFile(path)
 					if readErr != nil {
+						// D-06（审计 P1-11）：容错语义保留（坏的单条跳过，
+						// 不影响整体加载），但必须可见——静默跳过时坏
+						// manifest 完全查不出原因（用户只看到工具"不见了"）。
+						// log 包自带互斥，可安全用于这里的并行 goroutine。
+						log.Printf("[manifest] WARNING: skip unreadable %s: %v", name, readErr)
 						return nil // 单文件读失败跳过（与原 continue 一致）
 					}
 					var t Tool
 					if err := yaml.Unmarshal(data, &t); err != nil {
+						// D-06（审计 P1-11）：同上，解析失败也只跳过该条 +
+						// 告警，不回退为整体加载失败。
+						log.Printf("[manifest] WARNING: skip unparseable %s: %v", name, err)
 						return nil // 单文件解析失败跳过（与原 continue 一致）
 					}
 					if t.Name == "" {
@@ -608,25 +616,44 @@ func (t *Tool) Versions() []string {
 	return out
 }
 
-// SortVersionsByRelease orders versions newest-first by release date,
-// falling back to semver when dates are missing or equal. Used after
-// sniff-merge so available-version lists are not YAML-append order.
+// SortVersionsByRelease orders versions newest-first using the total order
+// implemented by versionReleaseNewer. Used after sniff-merge so
+// available-version lists are not YAML-append order.
 func SortVersionsByRelease(versions []Version) {
 	sort.SliceStable(versions, func(i, j int) bool {
 		return versionReleaseNewer(versions[i], versions[j])
 	})
 }
 
+// versionReleaseNewer is the comparator behind SortVersionsByRelease
+// (audit-fixes ticket 27 / P1-10).
+//
+// Keys, in order:
+//  1. semver (SemVer 2.0.0, pre-release aware) — the PRIMARY key;
+//  2. release date — a tie-break only, with a missing date counting as the
+//     zero time so a dated entry sorts before an undated one;
+//  3. the raw version string — final deterministic tie-break.
+//
+// The pre-fix comparator put the DATE first. That relation is NOT
+// transitive on real manifest data: with A(1.0.0, 2024-06), B(2.0.0,
+// 2024-01) and C(1.5.0, no date) it yields A>B (date), B>C (semver), C>A
+// (semver) — a cycle. Sort order then depended on input order, and the
+// list top (used for `latest` and UpdatePackageManager) could resolve to an
+// OLDER version merely because its release string was newer. Ordering by
+// the (semver, date, string) tuple is a total order by construction.
 func versionReleaseNewer(a, b Version) bool {
-	ta, oka := parseReleaseDate(a.Release)
-	tb, okb := parseReleaseDate(b.Release)
-	// 仅当两端都有日期且不相等时按发布时间；嗅探版本常缺日期，
-	// 不能把带日期的旧内置版本排到无日期的新版本前面。
-	if oka && okb && !ta.Equal(tb) {
-		return ta.After(tb)
-	}
 	if c := util.CompareSemver(a.Version, b.Version); c != 0 {
 		return c > 0
+	}
+	ta, oka := parseReleaseDate(a.Release)
+	tb, okb := parseReleaseDate(b.Release)
+	if oka != okb {
+		// Equal semver, only one side carries a date: the dated entry
+		// sorts first (an absent date is the zero time).
+		return oka
+	}
+	if oka && okb && !ta.Equal(tb) {
+		return ta.After(tb)
 	}
 	return a.Version > b.Version
 }
@@ -782,7 +809,20 @@ func MarshalTool(t *Tool) ([]byte, error) {
 var manifestMu sync.Mutex
 
 // UpdateArchiveSHA256 updates the sha256 field of a specific archive entry
-// in the on-disk manifest YAML. Uses atomic write (temp file + rename).
+// in the on-disk manifest YAML.
+//
+// Concurrency (audit-fixes ticket 23 / D-03): the read-modify-write cycle
+// is protected by TWO locks — the in-process manifestMu (goroutines inside
+// one binary) and a cross-process file lock on <tool>.yaml.lock (this
+// process vs another xdev process, e.g. the sniff scheduler appending a
+// newly discovered version). Both this function and the scheduler's
+// mergeIntoManifest take them in the same order (manifestMu → file lock),
+// so there is no lock-order inversion.
+//
+// Every write in this function (including the initial baseline copy) is
+// atomic (temp file + rename) — the function previously claimed atomicity
+// while writing the baseline with a bare os.WriteFile.
+//
 // Tool name is validated against existing catalog — rejects unknown tools
 // to prevent path traversal.
 //
@@ -809,6 +849,17 @@ func UpdateArchiveSHA256(manifestDir, toolName, version, osName, arch, sha256 st
 	manifestMu.Lock()
 	defer manifestMu.Unlock()
 
+	// Ticket 23 (D-03): cross-process lock — the in-process mutex alone let
+	// another xdev process (sniff scheduler / a second installer) lose this
+	// hash update. Stale-safe: OS byte-range locks are released by the
+	// kernel when a holder dies.
+	lockPath := manifestPath + ".lock"
+	fileLock, lockErr := util.AcquireFileLock(lockPath, 30*time.Second)
+	if lockErr != nil {
+		return fmt.Errorf("manifest lock %s: %w", lockPath, lockErr)
+	}
+	defer fileLock.Release()
+
 	// --- Read or create from embedded ---
 	var tool Tool
 	data, err := os.ReadFile(manifestPath)
@@ -824,11 +875,12 @@ func UpdateArchiveSHA256(manifestDir, toolName, version, osName, arch, sha256 st
 		if embErr != nil {
 			return fmt.Errorf("manifest %s not found on disk or embedded", manifestPath)
 		}
-		// Create on-disk copy from embedded.
+		// Create on-disk copy from embedded — atomic (ticket 23: was a bare
+		// os.WriteFile that could leave a truncated manifest on a crash).
 		if err := os.MkdirAll(manifestDir, 0o755); err != nil {
 			return fmt.Errorf("create manifest dir: %w", err)
 		}
-		if err := os.WriteFile(manifestPath, embData, 0o644); err != nil {
+		if err := util.AtomicWriteFile(manifestPath, embData, 0o644); err != nil {
 			return fmt.Errorf("write initial manifest %s: %w", manifestPath, err)
 		}
 		data = embData

@@ -76,8 +76,23 @@ func Resolve(spec Spec, available []string, latest, lts string) (string, error) 
 		}
 		return highest(available), nil
 	case KindExact:
+		// D-09（审计 P1-14，方案 B）：先原始串全等——内置清单与 available
+		// 列表的既有形态（两侧都不带 v）走原路径，零回归；miss 后再做
+		// **双侧** 去 "v" 前缀比较。原因是预填/自定义工具（remote.Pattern
+		// 捕获组可能含 v）产出的版本可能带前缀（v3.12.0），而 available
+		// 是不带前缀的 3.12.0，反之亦然——单侧去前缀只能修一半。
+		//
+		// 刻意不规范化 available 本身：返回值必须是列表里的**原始字符串**，
+		// 调用方（installer/isolator）用它拼安装目录名；也保证自定义工具
+		// 带 v 的产出仍可被匹配到。
 		for _, v := range available {
 			if v == spec.Raw {
+				return v, nil
+			}
+		}
+		want := strings.TrimPrefix(spec.Raw, "v")
+		for _, v := range available {
+			if strings.TrimPrefix(v, "v") == want {
 				return v, nil
 			}
 		}

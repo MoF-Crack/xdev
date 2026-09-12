@@ -3,11 +3,15 @@
 //
 // # Stale Message Detection
 //
-// Both InstallResultMsg and InstallProgressMsg carry an ID field that
-// matches InstallState.ID. The Update handler checks this ID and discards
-// messages that don't match the current install. This prevents race
-// conditions when the user rapidly switches between tools while an
-// install is in progress.
+// Install/uninstall results and install progress messages carry an ID field
+// that matches Model.currentOpID (set when the operation starts). The Update
+// handler checks this ID and discards messages that don't match the current
+// operation. This prevents race conditions when the user rapidly switches
+// between tools, cancels an install, or uninstalls while a previous
+// operation's result is still in flight.
+//
+// 票 40（P2-19 / E-15）：判定必须覆盖**成功与错误两条分支**，且卸载使用
+// 独立的 UninstallResultMsg —— 详见 app.go 的 Update。
 //
 // # Message Flow
 //
@@ -21,10 +25,24 @@ package tui
 
 // InstallResultMsg is sent when an install operation completes.
 type InstallResultMsg struct {
-	ID      int64 // matches InstallState.ID to discard stale results
+	ID      int64 // matches Model.currentOpID to discard stale results
 	Tool    string
 	Version string
 	Path    string
+	Err     error
+}
+
+// UninstallResultMsg is sent when an uninstall operation completes.
+//
+// 票 40（P2-19 / E-15）：卸载结果原先复用 InstallResultMsg（且
+// installState==nil 时 ID 取 0）——两个操作空间共用一种消息类型，任何一侧
+// 的判定放宽都会让另一侧的迟到消息被当成自己的结果。拆成独立类型后，
+// 「install 的结果」与「uninstall 的结果」在类型层面就不再可能撞号；两者
+// 仍各自带 ID，与 Model.currentOpID 比对。
+type UninstallResultMsg struct {
+	ID      int64 // matches Model.currentOpID to discard stale results
+	Tool    string
+	Version string
 	Err     error
 }
 

@@ -162,11 +162,28 @@ func (m *Manager) runDownload(task *Task) {
 		}
 	}
 
-	err := Download(task.ctx, task.opts)
+	// Ticket 21 (P1-02): capture the context THIS goroutine runs under.
+	// Pause/Resume/Cancel replace task.ctx; a late-finishing goroutine from
+	// a previous generation must not overwrite the state the newer
+	// generation has already established.
+	task.mu.Lock()
+	dlCtx := task.ctx
+	task.mu.Unlock()
+
+	err := Download(dlCtx, task.opts)
 
 	task.mu.Lock()
+	// Superseded generation: the task moved on (Pause → Resume, or Cancel
+	// already wrote a terminal state). Stay silent — writing here is what
+	// used to resurrect "Cancelled" after a pause, deleting the .part file
+	// the resumed download was using.
+	if task.ctx != dlCtx {
+		task.mu.Unlock()
+		log.Printf("[download] 上一代下载 goroutine 收尾（已过期，跳过终态写入）")
+		return
+	}
 	if err != nil {
-		if task.ctx.Err() == context.Canceled {
+		if dlCtx.Err() == context.Canceled {
 			// 检查是否是暂停（pausedAt > 0）还是取消
 			if task.pausedAt > 0 {
 				task.Status = StatusPaused
@@ -175,7 +192,12 @@ func (m *Manager) runDownload(task *Task) {
 				task.Status = StatusCancelled
 				// 取消时清理临时文件
 				partPath := task.opts.Dest + ".part"
-				os.Remove(partPath)
+				// Ticket 21 (N-06): log instead of silently ignoring — on
+				// Windows the writer may still hold the handle. The
+				// .part.lock takeover semantics make the residue harmless.
+				if rmErr := os.Remove(partPath); rmErr != nil && !os.IsNotExist(rmErr) {
+					log.Printf("[download] WARNING: 取消后删除临时文件失败 %s: %v", partPath, rmErr)
+				}
 				log.Printf("[download] 已取消下载并清理临时文件: %s", partPath)
 			}
 		} else {
@@ -190,6 +212,17 @@ func (m *Manager) runDownload(task *Task) {
 }
 
 // Pause 暂停下载任务
+//
+// Ordering (ticket 21 / P1-02): the paused state is written BEFORE the
+// context is cancelled. runDownload decides between "paused" and
+// "cancelled" by reading pausedAt after the cancellation lands, so the
+// reverse order left a window where it observed pausedAt==0 and deleted
+// the .part file of a download the user only paused.
+//
+// The status gate (`!= StatusDownloading`) now also covers repeated Pause
+// calls for free: the first call flips the status synchronously, so a
+// second Pause is rejected and cannot overwrite pausedAt with a later
+// byte count (N-07).
 func (m *Manager) Pause(id string) error {
 	m.mu.RLock()
 	task, exists := m.tasks[id]
@@ -206,8 +239,9 @@ func (m *Manager) Pause(id string) error {
 		return fmt.Errorf("cannot pause task in status %s", task.Status)
 	}
 
-	// 记录暂停时已下载的字节数
+	// 记录暂停时已下载的字节数（必须先于 cancel —— 见上）
 	task.pausedAt = task.Downloaded
+	task.Status = StatusPaused
 	task.cancel()
 	log.Printf("[download] 暂停下载: %s, 已下载 %d 字节", id, task.pausedAt)
 	return nil
@@ -237,12 +271,25 @@ func (m *Manager) Resume(id string) error {
 	task.pausedAt = 0
 	task.mu.Unlock()
 
+	// Resume starts a NEW download goroutine generation while the paused one
+	// may still be unwinding: its final Write can land after the fresh
+	// goroutine seeks, interleaving one stale block into the new transfer.
+	// This residual window is accepted and documented (ticket 21): the
+	// SHA-256 gate (or the TOFU pin) rejects the resulting archive, and the
+	// .part.lock (P1-01) keeps two live writers out of the same file.
 	go m.runDownload(task)
 	log.Printf("[download] 恢复下载: %s", id)
 	return nil
 }
 
 // Cancel 取消下载任务并清理临时文件
+//
+// Ticket 21 (N-06): task.cancel is read and invoked under task.mu — Resume
+// reassigns that field, so the previous unlocked read raced with it. The
+// partial file is removed outside the lock (I/O), and a failed removal is
+// logged rather than ignored: on Windows the writer may still hold the
+// handle (no FILE_SHARE_DELETE), and the .part.lock takeover semantics
+// make the residue harmless.
 func (m *Manager) Cancel(id string) error {
 	m.mu.RLock()
 	task, exists := m.tasks[id]
@@ -253,24 +300,22 @@ func (m *Manager) Cancel(id string) error {
 	}
 
 	task.mu.Lock()
-	status := task.Status
-	task.mu.Unlock()
-
-	if status == StatusCompleted || status == StatusCancelled {
+	if task.Status == StatusCompleted || task.Status == StatusCancelled {
+		task.mu.Unlock()
 		return nil
 	}
 
-	// 取消 context
+	// 取消 context（锁内：与 Resume 的重新赋值互斥）
 	task.cancel()
-
-	// 清理临时文件
-	partPath := task.opts.Dest + ".part"
-	os.Remove(partPath)
-
-	task.mu.Lock()
 	task.Status = StatusCancelled
 	task.pausedAt = 0 // 确保 pausedAt 为 0，这样 runDownload 不会将其标记为 paused
 	task.mu.Unlock()
+
+	// 清理临时文件
+	partPath := task.opts.Dest + ".part"
+	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[download] WARNING: 删除临时文件失败 %s: %v（下次下载将接管该残留）", partPath, err)
+	}
 
 	log.Printf("[download] 取消下载并清理临时文件: %s", id)
 	return nil
@@ -319,20 +364,29 @@ func (m *Manager) RemoveTask(id string) error {
 }
 
 // CleanupOnExit 在程序退出时清理所有活跃的下载任务
+//
+// Ticket 21 (N-06): status read and cancel happen under one task.mu
+// acquisition (previously the field was read unlocked). task.mu is a leaf
+// lock — nothing else is acquired while holding it — so taking it under
+// m.mu.RLock cannot deadlock.
 func (m *Manager) CleanupOnExit() {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	for id, task := range m.tasks {
 		task.mu.Lock()
-		status := task.Status
+		active := task.Status == StatusDownloading || task.Status == StatusPaused
+		if active {
+			task.cancel()
+		}
 		task.mu.Unlock()
 
-		if status == StatusDownloading || status == StatusPaused {
-			task.cancel()
+		if active {
 			// 清理临时文件
 			partPath := task.opts.Dest + ".part"
-			os.Remove(partPath)
+			if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("[download] WARNING: 退出清理删除临时文件失败 %s: %v", partPath, err)
+			}
 			log.Printf("[download] 退出清理: 取消下载 %s 并删除临时文件 %s", id, partPath)
 		}
 	}

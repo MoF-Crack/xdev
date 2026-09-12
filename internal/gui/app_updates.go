@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/discovery"
@@ -259,9 +260,81 @@ func (a *App) GetSniffConfig() *SniffConfigInfo {
 	return info
 }
 
+// loadCatalogFn 是 manifest.LoadCatalog 的间接引用。生产路径不变（与
+// reloadCatalog 用的是同一个函数），存在的理由是让 P2-07 的守卫测试能
+// 统计"磁盘 catalog 被加载了几次"（并发 N 个调用者必须只加载一次）。
+var loadCatalogFn = manifest.LoadCatalog
+
+// catalogFlight 表示一次正在进行中的共享 LoadCatalog。
+type catalogFlight struct {
+	dir  string
+	done chan struct{}
+	cat  *manifest.Catalog
+	err  error
+}
+
+var (
+	catalogSFMu     sync.Mutex
+	catalogSFFlight *catalogFlight
+)
+
+// catalogSharedWaitHook 在「调用者加入一次在途加载、即成为等待者」的瞬间触发，
+// 仅供 P2-07 守卫测试做确定性同步：等待者全部被观测到之后测试才放行领飞者，
+// 于是「N 个并发调用者只加载一次」是确定性判据，而不是「睡 50ms 赌调度」。
+// 生产路径为 nil（守卫测试赋值并在结束时还原）。读取发生在 catalogSFMu
+// 临界区内，与测试的「先赋值再起 goroutine、Wait 之后再还原」构成 happens-before。
+var catalogSharedWaitHook func()
+
+// loadCatalogShared 是单飞（singleflight）式的 catalog 共享加载（P2-07）。
+//
+// 背景：GetLatestVersionForTool 修复前**每次调用**都 manifest.LoadCatalog
+// （读盘 + 解析全部 YAML）。GUI 批量刷新时前端会为每个包管理器行分别调用
+// 本函数，N 个 goroutine 各自读盘解析同一份 catalog——磁盘 I/O 与 YAML
+// 解析被放大 N 倍，抢占 UI 线程。
+//
+// 语义：同一 manifestDir 上同时到达的调用共享同一次 LoadCatalog，等待者
+// 复用同一次结果（不是各自加载后再比较）。加载完成后立即清空共享槽——
+// 这里只合并**在途**的重复加载，不做结果缓存（结果缓存归 reloadCatalog
+// 的 a.cat 快照负责，避免引入第二个可能过期的 catalog 源）。
+func loadCatalogShared(dir string) (*manifest.Catalog, error) {
+	catalogSFMu.Lock()
+	if f := catalogSFFlight; f != nil && f.dir == dir {
+		hook := catalogSharedWaitHook // 临界区内读取（见该变量的 happens-before 说明）
+		catalogSFMu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		<-f.done // 等待同一次加载完成（close 提供 happens-before，结果可见）
+		return f.cat, f.err
+	}
+	f := &catalogFlight{dir: dir, done: make(chan struct{})}
+	catalogSFFlight = f
+	catalogSFMu.Unlock()
+
+	cat, err := loadCatalogFn(dir)
+
+	catalogSFMu.Lock()
+	f.cat, f.err = cat, err
+	close(f.done)
+	catalogSFFlight = nil
+	catalogSFMu.Unlock()
+	return cat, err
+}
+
 // GetLatestVersionForTool returns the latest discovered version for a tool,
 // or the latest from the catalog if no sniff result is available.
 // Uses semver comparison to find the true latest version (SC-006).
+//
+// P2-07（票 24 的续修）：
+//  1. 先读内存快照 a.getCat()（catMu.RLock，票 24 引入的快照读方法）——
+//     命中即零 I/O 返回；
+//  2. 快照 miss（cat 为 nil，或快照里没有该工具）时才落盘，且走
+//     loadCatalogShared 单飞：并发调用共享同一次 LoadCatalog。
+//
+// 副作用（已知并接受）：快照命中路径读到的是 reloadCatalog 时的 catalog，
+// 因此 HasUpdate 徽标最多滞后到下一次 reloadCatalog（嗅探完成/配置变更都会
+// 触发）。这与"徽标偶尔晚一拍"相比，换来的是批量刷新时不再 N 次读盘解析；
+// 若要即时性，请调用方在变更后显式 reloadCatalog，而不是让本函数每次读盘。
 func (a *App) GetLatestVersionForTool(toolName string) string {
 	cfg := a.getCfg()
 	scheduler := a.sniffScheduler()
@@ -277,7 +350,12 @@ func (a *App) GetLatestVersionForTool(toolName string) string {
 			return latest
 		}
 	}
-	cat, err := manifest.LoadCatalog(cfg.Core.ManifestDir)
+	if cat := a.getCat(); cat != nil {
+		if t, ok := cat.Tool(toolName); ok {
+			return t.Latest
+		}
+	}
+	cat, err := loadCatalogShared(cfg.Core.ManifestDir)
 	if err != nil {
 		return ""
 	}

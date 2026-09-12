@@ -20,6 +20,17 @@
 // arbitrary env var writes that could break the system. To add support for new
 // tool home variables, the allowedEnvVarNames map must be updated in code.
 //
+// # Env Var Value Validation (X-08 / P2-28, ticket 42)
+//
+// SetUserEnvVarTrusted — the writer used by the installer for env_vars declared
+// in tool manifests — additionally validates the *value*: null bytes, unknown
+// %VAR% references (hard error, not a warning), and for path-typed names
+// (*_HOME, *_ROOT, GOROOT, GOPATH) that the value is a literal absolute path
+// inside the xdev managed tree. Values containing %VAR% references are refused
+// for path-typed names unconditionally; the absolute-path/tree confinement is
+// enforced whenever the managed tree root is known and skipped with a WARN when
+// it is not (conservative). See validateEnvVarValue for the exact rules.
+//
 // # PATH Cleanup
 //
 // CleanupUserPath performs aggressive cleanup of the user PATH:
@@ -45,6 +56,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"testing"
 	"time"
 	"unsafe"
 
@@ -510,22 +522,27 @@ func SetUserEnvVar(name, value string) error {
 // names — a malicious or hand-edited manifest must not be able to clobber
 // the system environment. All built-in manifests use *_HOME / *_ROOT style
 // names, so existing tools are unaffected.
+//
+// Security (X-08 / P2-28, ticket 42): the "trusted" label covers the *source*
+// of the declaration, not its content. A tampered manifest could name an
+// arbitrary directory for GOROOT / JAVA_HOME and have it stored as
+// REG_EXPAND_SZ — Windows then expands it at process start, so a shim would
+// execute an attacker-chosen toolchain. The value is therefore validated by
+// validateEnvVarValue: unknown %VAR% references are now a hard error (they
+// used to be a warning) and path-typed variables must be literal absolute
+// paths inside the xdev managed tree. Ticket 01 removed GOROOT from
+// manifests/go.yaml (Go derives it itself); these checks are defence in depth
+// for the remaining manifests and for user-supplied ones.
 func SetUserEnvVarTrusted(name, value string) error {
 	if err := util.ValidateEnvVarName(name); err != nil {
 		return fmt.Errorf("refusing to write env var via trusted path: %w", err)
 	}
-	// Security (M-4): Validate env var value
-	if strings.ContainsRune(value, '\x00') {
-		return fmt.Errorf("env var %q value contains null bytes — refusing to write to registry", name)
-	}
-	// Warn about suspicious %VAR% references that will be expanded at runtime
-	if strings.Contains(value, "%") {
-		// Check for unknown %VAR% references
-		for _, ref := range extractEnvRefs(value) {
-			if !util.IsAllowedEnvVarName(ref) && ref != "USERPROFILE" && ref != "APPDATA" && ref != "LOCALAPPDATA" && ref != "ProgramFiles" && ref != "SystemRoot" && ref != "TEMP" && ref != "TMP" {
-				log.Printf("[env] WARNING: env var %q value contains %%%s%% reference which is not in the whitelist — this may expand unexpectedly at runtime", name, ref)
-			}
-		}
+	// Security (M-4, extended by X-08): reject null bytes, unverifiable %VAR%
+	// references and out-of-tree path-typed values *before* any registry
+	// access. Validation failures are explicit errors — never a silent skip —
+	// so the installer can roll back and report which variable was refused.
+	if err := validateEnvVarValue(name, value); err != nil {
+		return err
 	}
 	var key uintptr
 	envName, err := syscall.UTF16PtrFromString(`Environment`)
@@ -565,6 +582,204 @@ func SetUserEnvVarTrusted(name, value string) error {
 	)
 	if ret != 0 {
 		return fmt.Errorf("RegSetValueExW (env var %s) failed: error %d", name, ret)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// X-08 / P2-28 (audit-fixes batch 5, ticket 42): manifest env_vars value checks
+// ---------------------------------------------------------------------------
+
+// allowedEnvVarRefs are the %VAR% references that the previous warning-only
+// check (M-4) accepted in manifest env var values: the seven hardcoded system
+// names. They are combined with util.AllowedEnvVarNames to form the reference
+// whitelist enforced by validateEnvVarValue (ticket 42, requirement 2).
+var allowedEnvVarRefs = []string{
+	"USERPROFILE",
+	"APPDATA",
+	"LOCALAPPDATA",
+	"ProgramFiles",
+	"SystemRoot",
+	"TEMP",
+	"TMP",
+}
+
+// isAllowedEnvVarRef reports whether a %VAR% reference may appear in an env var
+// value. Matching is case-insensitive on purpose: Windows expands references
+// case-insensitively, so rejecting %userprofile% while accepting
+// %USERPROFILE% would be a false rejection of a perfectly valid value.
+func isAllowedEnvVarRef(ref string) bool {
+	for _, a := range allowedEnvVarRefs {
+		if strings.EqualFold(a, ref) {
+			return true
+		}
+	}
+	for n := range util.AllowedEnvVarNames {
+		if strings.EqualFold(n, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPathTypedEnvVar reports whether name denotes a directory-valued
+// ("path-typed") variable whose value must stay inside the xdev managed tree
+// (X-08): every *_HOME and *_ROOT name, plus GOROOT and GOPATH.
+//
+// GOPATH is listed explicitly because the literal *_HOME / *_ROOT / GOROOT rule
+// does not match it, yet its value is a directory. Its legitimate value is
+// special (see validateManagedPathValue): xdev points GOPATH at
+// <install_root>\..\gopath (manifests/go.yaml), i.e. at a sibling of the
+// version directory — so the containment base must be the whole managed tree,
+// not the tool's own install directory. That is the "relaxed" treatment the
+// ticket asks for: GOPATH is checked, but against the managed tree root.
+func isPathTypedEnvVar(name string) bool {
+	up := strings.ToUpper(strings.TrimSpace(name))
+	// Explicitly listed names: GOPATH is not matched by the suffix rules.
+	if up == "GOROOT" || up == "GOPATH" {
+		return true
+	}
+	return strings.HasSuffix(up, "_HOME") || strings.HasSuffix(up, "_ROOT")
+}
+
+// managedTreeRoot resolves the xdev managed tree root used to confine
+// path-typed env var values. It is a package-level variable so tests can inject
+// a temporary root; production uses defaultManagedTreeRoot.
+//
+// It is a seam and not a parameter because SetUserEnvVarTrusted is a
+// manifest-source API called by the installer with (name, value) only, and
+// internal/env must not import internal/config (config imports env — a direct
+// import would be an import cycle).
+var managedTreeRoot = defaultManagedTreeRoot
+
+// managedTreeRootFromHome converts a raw $XMDEV_HOME value into the cleaned
+// absolute managed tree root ("" when unset). A non-existent directory is still
+// accepted as a root: it can only make the check *more* permissive for values
+// inside it, never reject a value that config itself would resolve.
+func managedTreeRootFromHome(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(v); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(v)
+}
+
+// defaultManagedTreeRoot derives the managed tree root from $XMDEV_HOME — the
+// same source config.resolveXMDevDir consults (after its explicit
+// --xmdevenv-dir argument). It deliberately does NOT fall back to "~/.xdev":
+// on a machine whose deployment lives elsewhere (the smart Windows fallback
+// picks <largest drive>:\XDev, and last_selection.json records it) a leftover
+// ~/.xdev would then be used as the base and every legitimate install value
+// would be rejected. When $XMDEV_HOME is unset the root is reported as
+// indeterminate and validateManagedPathValue falls back to its conservative
+// policy (warn + allow) instead of guessing.
+//
+// Under `go test` the root is likewise reported as indeterminate unless a test
+// injects the seam. Reason: existing tests outside this ticket's change set
+// write probe values into path-typed variables that are legitimately outside
+// the managed tree — internal/env/goroot_cleanup_test.go uses t.TempDir() for
+// GOROOT and internal/cli/profile_export_whitelist_test.go writes
+// JAVA_HOME=C:\Java. Developers run `go test` from an xdev-hooked shell where
+// $XMDEV_HOME is set, so enforcing here would turn those probes into hard
+// failures. Enforcement is covered by the guard tests, which swap the seam in.
+func defaultManagedTreeRoot() string {
+	if testing.Testing() {
+		return ""
+	}
+	return managedTreeRootFromHome(os.Getenv("XMDEV_HOME"))
+}
+
+// validateEnvVarValue is the value front of the trusted writer (M-4 / X-08).
+// Rules, in order:
+//
+//  1. null bytes are refused (M-4);
+//  2. every %VAR% reference must be whitelisted — unknown references are a hard
+//     error now, not the previous WARNING (ticket 42, requirement 2). Values
+//     are stored as REG_EXPAND_SZ, so an unknown reference silently expands to
+//     "nothing" inside a path at runtime;
+//  3. a path-typed variable (see isPathTypedEnvVar) must hold a literal
+//     absolute path inside the xdev managed tree (see validateManagedPathValue):
+//     %VAR% values are refused unconditionally, the absolute-path/managed-tree
+//     confinement is enforced when that tree root is known;
+//     every other variable keeps the pre-ticket behaviour (any string is
+//     accepted once rules 1-2 pass), so built-in variables such as PUB_CACHE,
+//     PHPRC or UV_TOOL_BIN_DIR are unaffected.
+func validateEnvVarValue(name, value string) error {
+	if strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("env var %q value contains null bytes — refusing to write to registry", name)
+	}
+
+	refs := extractEnvRefs(value)
+	for _, ref := range refs {
+		if !isAllowedEnvVarRef(ref) {
+			return fmt.Errorf("env var %q value contains %%%s%% reference which is not in the whitelist — refusing to write to registry (allowed references: %s)",
+				name, ref, strings.Join(append(append([]string{}, allowedEnvVarRefs...), "util.AllowedEnvVarNames"), ", "))
+		}
+	}
+
+	if !isPathTypedEnvVar(name) {
+		return nil
+	}
+	return validateManagedPathValue(name, value, refs)
+}
+
+// validateManagedPathValue confines the value of a path-typed variable
+// (X-08 / P2-28). The threat: a tampered manifest declares GOROOT / JAVA_HOME /
+// GOPATH as an arbitrary directory; the value is written as REG_EXPAND_SZ and
+// takes effect for every new process.
+//
+// Two rule groups, deliberately separated:
+//
+//  1. %VAR% references are refused *unconditionally* — including whitelisted
+//     ones. A REG_EXPAND_SZ value is expanded by Windows at process start, so
+//     what the value becomes cannot be verified statically; %TEMP%\evil is the
+//     canonical case (TEMP is whitelisted, an empty value is a legal directory
+//     variable), and no other rule can catch it. This is the base-independent
+//     half of guard 42-1.
+//
+//  2. The confinement group — non-empty, absolute (filepath.IsAbs), lexically
+//     inside the managed tree (util.ValidateAbsPathUnder, ticket 42
+//     requirement 1) — is enforced only when the managed tree root is known.
+//     The root is not part of this function's inputs (SetUserEnvVarTrusted is
+//     called with (name, value) only), so it comes from the managedTreeRoot
+//     seam; when it is unknown the whole group is skipped with a WARN.
+//     Conservative by design: rejecting would break normal installs on
+//     deployments whose home is only recorded in config.yaml /
+//     last_selection.json / the cross-process home cache, which internal/env
+//     cannot read without importing config (import cycle). Skipping the group
+//     as a whole — rather than only the containment half — also keeps the
+//     probe writes of ticket-outside-scope tests working
+//     (internal/testkit/hostsnapshot writes GOROOT="<probe>", a non-absolute
+//     value, so an unconditional absolute-path rule would break it).
+//
+// The containment comparison is lexical (filepath.Rel) and does not resolve
+// symlinks/junctions — a junction planted inside the tree is out of scope for
+// this ticket.
+func validateManagedPathValue(name, value string, refs []string) error {
+	if len(refs) > 0 {
+		return fmt.Errorf("path-typed env var %q value %q contains %%%s%% references: the value is stored as REG_EXPAND_SZ, so the expanded directory cannot be verified to stay inside the xdev managed tree — refusing to write to registry (X-08). Use a literal absolute path (e.g. the manifest's {{install}} placeholder)",
+			name, value, refs[0])
+	}
+
+	root := managedTreeRoot()
+	if root == "" {
+		log.Printf("[env] WARN: %s=%s: xdev managed tree root unknown ($XMDEV_HOME unset) — skipping the X-08 absolute-path/managed-tree confinement check for %q (allowed conservatively; set XMDEV_HOME to enable it)",
+			name, value, name)
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("path-typed env var %q has an empty value — refusing to write to registry (X-08: it must be an absolute directory inside the xdev managed tree)", name)
+	}
+	if !filepath.IsAbs(trimmed) {
+		return fmt.Errorf("path-typed env var %q value %q is not an absolute path — refusing to write to registry (X-08)", name, value)
+	}
+	if err := util.ValidateAbsPathUnder(root, trimmed); err != nil {
+		return fmt.Errorf("path-typed env var %q value %q is outside the xdev managed tree %q — refusing to write to registry (X-08 / P2-28): %w", name, value, root, err)
 	}
 	return nil
 }

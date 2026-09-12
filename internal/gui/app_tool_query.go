@@ -167,10 +167,17 @@ func (a *App) GetLogPath() string {
 
 // GetDebugInfo returns diagnostic information about the internal state.
 // Used for troubleshooting when the GUI shows no categories.
+//
+// 票 24（P1-16 / P2-07）：cat 经 getCat() 读（RLock），并为 nil 加门——
+// 这是排障入口，catalog 未加载/加载失败时恰是最可能为 nil 的时刻，
+// 修复前 a.cat.Tools() 会 panic，把排障路径本身变成崩溃点。
 func (a *App) GetDebugInfo() DebugInfo {
 	cfg := a.getCfg()
 	tools := a.registry.All()
-	catTools := a.cat.Tools()
+	var catTools []*manifest.Tool
+	if cat := a.getCat(); cat != nil {
+		catTools = cat.Tools()
+	}
 	regNames := make([]string, 0, len(tools))
 	for _, t := range tools {
 		regNames = append(regNames, t.Name())
@@ -400,8 +407,16 @@ func (a *App) CheckInstallIntegrity(toolName, version string) IntegrityInfo {
 }
 
 // GetAvailableVersions returns all available versions from the manifest for a tool.
+//
+// 票 24（P1-16 / P2-07）：cat 经 getCat() 读（RLock）；cat 为 nil
+// （catalog 未加载/加载失败）时返回 nil，而不是 panic——版本列表是
+// 排障时首先会打开的入口，崩溃会让用户连原因都看不到。
 func (a *App) GetAvailableVersions(toolName string) []VersionInfo {
-	t, ok := a.cat.Tool(toolName)
+	cat := a.getCat()
+	if cat == nil {
+		return nil
+	}
+	t, ok := cat.Tool(toolName)
 	if !ok {
 		return nil
 	}

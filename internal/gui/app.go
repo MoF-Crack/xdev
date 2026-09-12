@@ -398,7 +398,13 @@ type App struct {
 	registry *plugin.Registry
 	localMu  sync.RWMutex
 	localMap map[string]localInfo // cached local tool detection results
-	dlMgr    *downloader.Manager  // 下载管理器
+	// cacheWriteMu 串行化 tool_scan_cache.json 的落盘（票 22 / P1-16 / D-08）。
+	// GUI 包有 15 个 saveLocalCache 调用点分布在 7 个文件，且批量迁移是并发
+	// 执行的（MigrateAllLocalTools 最多 4 路并发 worker），并发写会让
+	// util.AtomicWriteFile 的固定 "<path>.tmp" 临时文件互相截断。用互斥锁
+	// 让写请求排队（不是 TryLock 跳过），保证每次调用都真正落盘。
+	cacheWriteMu sync.Mutex
+	dlMgr        *downloader.Manager // 下载管理器
 
 	// rootCtx 是应用级根上下文（F-20 / D18）：在 startup 创建、shutdown
 	// 取消。所有后台任务（安装轮询、延迟刷新等）应派生自它，以便应用
@@ -584,7 +590,14 @@ func (a *App) shutdown(ctx context.Context) {
 	logInfo("[shutdown] 清理完成")
 }
 
-// saveLocalCache 将本地工具扫描结果保存到缓存文件
+// saveLocalCache 将本地工具扫描结果保存到缓存文件。
+//
+// 票 22（P1-16 / D-08）：改为「临时文件 + 原子重命名」写入（util.AtomicWriteFile），
+// 并用 cacheWriteMu 串行化并发写。修复前用 os.WriteFile 直接截断写目标文件，
+// 并发调用（批量迁移 4 路 worker + 刷新路径）或写中途崩溃会留下空/半截 JSON，
+// 下次启动 loadLocalCache 解析失败 → 本地工具状态整体丢失。
+// 并发读方（其他进程 / 排障工具）在原子重命名下只会看到「旧的完整内容」或
+// 「新的完整内容」，不会看到撕裂状态。
 func (a *App) saveLocalCache() {
 	cfg := a.getCfg()
 	os.MkdirAll(cfg.Core.CacheDir, 0o755)
@@ -598,7 +611,11 @@ func (a *App) saveLocalCache() {
 		return
 	}
 	cachePath := filepath.Join(cfg.Core.CacheDir, "tool_scan_cache.json")
-	if err := os.WriteFile(cachePath, data, 0o644); err != nil {
+
+	// 排队写（票 22）：所有调用点共用同一把锁，后到者等待而非丢弃。
+	a.cacheWriteMu.Lock()
+	defer a.cacheWriteMu.Unlock()
+	if err := util.AtomicWriteFile(cachePath, data, 0o644); err != nil {
 		logWarn("[saveLocalCache] 写入缓存文件失败: %v", err)
 	} else {
 		logInfo("[saveLocalCache] 缓存已保存到 %s", cachePath)
@@ -702,10 +719,24 @@ func (a *App) waitForLocalCache() {
 	}
 }
 
+// localCacheRefreshHook 是票 22 守卫测试的计数 seam：非 nil 时在每次
+// refreshAndSaveLocalCache 完成后被调用一次。生产代码从不赋值（恒为 nil），
+// 因此不改变任何生产行为；测试用它断言「批量迁移每批只刷新一次、
+// 单工具迁移刷一次」的契约（TestMigrateAllLocalTools_RefreshOncePerBatch）。
+var localCacheRefreshHook func()
+
 // refreshAndSaveLocalCache refreshes the local cache and saves it to disk.
+//
+// 票 22：这是「刷新」的唯一语义单元。批量迁移（MigrateAllLocalTools）在
+// 全部 worker 结束后调用一次，单工具迁移在入口（MigrateLocalToolByJunction /
+// MigrateLocalToolByMove）调用一次——worker（migrateLocalToolByJunction /
+// migrateLocalToolByMove）内部不再刷新，避免 N 个工具触发 N 次全盘扫描。
 func (a *App) refreshAndSaveLocalCache() {
 	a.refreshLocalCache()
 	a.saveLocalCache()
+	if localCacheRefreshHook != nil {
+		localCacheRefreshHook()
+	}
 }
 
 // mustGetPlugin returns the plugin for the given tool name, or an error if not found.
@@ -779,6 +810,19 @@ func (a *App) mutateCfg(fn func(cfg *config.Config) error) error {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	return fn(a.cfg)
+}
+
+// getCat 返回当前 catalog 指针（票 24 / P1-16 / P2-07）。
+//
+// 读方一律经由此函数取 cat：reloadCatalog 会在 catMu 写锁内整体替换
+// a.cat（嗅探合并后 SetManifest + 换指针），裸读 a.cat 会与之竞争。
+// 必须用 RLock（读锁），不能用 Lock——写路径只在 reloadCatalog 中。
+// 返回值可能为 nil（catalog 尚未加载 / 加载失败），调用方必须自行
+// 做 nil 判断。
+func (a *App) getCat() *manifest.Catalog {
+	a.catMu.RLock()
+	defer a.catMu.RUnlock()
+	return a.cat
 }
 
 // setCfg updates the config with write lock protection.

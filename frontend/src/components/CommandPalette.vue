@@ -102,6 +102,8 @@ watch(filteredOptions, () => { activeIndex.value = 0; });
 watch(() => props.show, (visible) => {
   document.removeEventListener('focusin', keepFocusInside);
   if (visible) {
+    // P2-25：每次打开都清空过滤词——Esc/背景关闭后重开不该带回上一轮的旧过滤结果。
+    query.value = '';
     activeIndex.value = 0;
     document.addEventListener('focusin', keepFocusInside);
     inputRef.value?.focus();

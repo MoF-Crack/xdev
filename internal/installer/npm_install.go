@@ -369,9 +369,20 @@ func (i *Installer) installViaNPM(ctx context.Context, p plugin.Plugin, a *manif
 
 	// PATH: node dir first so npm launchers/scripts resolve `node` to the
 	// same toolchain that is running the install.
+	//
+	// Ticket 26 (A-15b): prepend the directory that actually CONTAINS the
+	// node binary. On Windows nodeBin is <dir>\node.exe (Dir = <dir>), but
+	// on Unix it is <dir>/bin/node — prepending <dir> there put a directory
+	// without executables at the front of PATH and the managed node was not
+	// found first.
 	env := os.Environ()
 	if tc.nodeDir != "" {
 		env = prependEnvPath(env, tc.nodeDir)
+	}
+	if tc.nodeBin != "" {
+		if binDir := filepath.Dir(tc.nodeBin); binDir != "" && binDir != tc.nodeDir {
+			env = prependEnvPath(env, binDir)
+		}
 	}
 	// Proxy injection (same contract as runInstaller): respect the user's
 	// explicit env, otherwise let npm use the xdev-configured proxy.
@@ -401,19 +412,25 @@ func (i *Installer) installViaNPM(ctx context.Context, p plugin.Plugin, a *manif
 // prependEnvPath inserts dir at the front of the PATH entry in a
 // "KEY=value" environment slice. When PATH is missing a new entry is
 // appended.
+//
+// Ticket 26 (A-15): the key match is case-insensitive and compares the whole
+// "PATH=" prefix. Windows environments commonly carry the variable as
+// "Path=" (mixed case) — the previous case-sensitive HasPrefix missed it and
+// appended a SECOND PATH entry, leaving the managed node dir at the end (the
+// opposite of the intent).
 func prependEnvPath(env []string, dir string) []string {
-	const prefix = "PATH="
+	const key = "PATH="
 	out := make([]string, 0, len(env)+1)
 	inserted := false
 	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			e = prefix + dir + string(os.PathListSeparator) + e[len(prefix):]
+		if len(e) >= len(key) && strings.EqualFold(e[:len(key)], key) {
+			e = e[:len(key)] + dir + string(os.PathListSeparator) + e[len(key):]
 			inserted = true
 		}
 		out = append(out, e)
 	}
 	if !inserted {
-		out = append(out, prefix+dir)
+		out = append(out, key+dir)
 	}
 	return out
 }

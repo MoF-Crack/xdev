@@ -141,5 +141,10 @@ func (a *App) loadFavorites() {
 	if err := a.loadJSONFromCache("favorites.json", &favs); err != nil {
 		return
 	}
+	// Ticket 38 (P2-04): publish the slice under favMu. Wails runs every
+	// bound method in its own goroutine, so this assignment raced the
+	// readers (GetFavorites / toggleFavorite) that take favMu.RLock.
+	a.favMu.Lock()
 	a.favorites = favs
+	a.favMu.Unlock()
 }

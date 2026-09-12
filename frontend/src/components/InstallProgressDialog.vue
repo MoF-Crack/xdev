@@ -57,7 +57,8 @@ const emit = defineEmits(['update:show', 'pause', 'resume', 'cancel', 'cancel-it
 // Spec 037 阶段 1：多项模式派生态。
 const multiItems = computed(() => (Array.isArray(props.items) ? props.items : []));
 const anyActive = computed(() => multiItems.value.some((r) => r.active));
-const completedCount = computed(() => multiItems.value.filter((r) => !r.active).length);
+// P2-24：失败行不算「已完成」——否则「5/5」会与同屏的红色 error 行自相矛盾。
+const completedCount = computed(() => multiItems.value.filter((r) => !r.active && !r.error).length);
 function localizedRowPhase(row) {
   const key = phaseKeyMap[row.phase];
   return key ? props.t(key) : row.phase || '';

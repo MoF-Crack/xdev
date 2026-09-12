@@ -3,6 +3,7 @@ package isolator
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,10 @@ type nixIsolator struct {
 	spec       *EnvironmentSpec
 	projectDir string
 	xmdeDir    string
+
+	// writtenFiles records path → SHA-256 of everything generateFlake wrote
+	// (C-07), so the persisted state can prove ownership at Teardown time.
+	writtenFiles map[string]string
 }
 
 func newNixIsolator() (*nixIsolator, error) {
@@ -55,19 +60,44 @@ func (n *nixIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) error {
 	}
 
 	saveState(n.xmdeDir, string(ModeNix), persistedState{
-		FlakeDir:   n.flakeDir,
-		ProjectDir: n.projectDir,
+		FlakeDir:     n.flakeDir,
+		ProjectDir:   n.projectDir,
+		WrittenFiles: n.writtenFiles,
 	})
 	return nil
 }
 
+// Teardown removes the flake files this isolator wrote (C-07 / P1-34).
+//
+// Ownership rule: a path is deleted only while its content still matches the
+// SHA-256 recorded at Setup time. State files written before C-07 carry no
+// hashes — ownership cannot be proven, so flake.nix is left alone and the
+// degradation is logged (deleting a user's own flake.nix is worse than
+// leaving a generated one behind).
+//
+// Exception: flake.lock is a `nix develop` build product (xdev never writes it
+// itself), so it is removed unconditionally whenever a flake dir is known.
+// It is regenerable and carries no user content of its own.
 func (n *nixIsolator) Teardown(ctx context.Context) error {
-	// Remove generated flake files if they exist
-	if n.flakeDir != "" {
-		flakePath := filepath.Join(n.flakeDir, "flake.nix")
-		os.Remove(flakePath)
-		lockPath := filepath.Join(n.flakeDir, "flake.lock")
-		os.Remove(lockPath)
+	state := loadState(n.xmdeDir, string(ModeNix))
+	flakeDir := state.FlakeDir
+	if flakeDir == "" {
+		flakeDir = n.flakeDir
+	}
+	if flakeDir != "" {
+		flakePath := filepath.Join(flakeDir, "flake.nix")
+		if len(state.WrittenFiles) == 0 {
+			// Legacy state (pre-C-07): only known-safe action is to skip.
+			if _, err := os.Stat(flakePath); err == nil {
+				logLegacyTeardownSkip(string(ModeNix), flakePath)
+			}
+		} else {
+			removeIfContentUnchanged(flakePath, writtenHash(state.WrittenFiles, flakePath))
+		}
+		lockPath := filepath.Join(flakeDir, "flake.lock")
+		if err := os.Remove(lockPath); err == nil {
+			log.Printf("isolate teardown (nix): removed nix develop artifact %s", lockPath)
+		}
 	}
 	clearState(n.xmdeDir, string(ModeNix))
 	return nil
@@ -167,7 +197,19 @@ func (n *nixIsolator) generateFlake() error {
 `, pkgsStr, envBlock)
 
 	flakePath := filepath.Join(n.flakeDir, "flake.nix")
-	return os.WriteFile(flakePath, []byte(flakeContent), 0o644)
+	// C-07 / P1-34: a pre-existing flake.nix is the user's file — refuse to
+	// overwrite it unless --force was passed. The check runs before the write
+	// so a refused Setup leaves the project untouched and persists no state.
+	if err := ensureOverwritable(flakePath, n.spec != nil && n.spec.Force); err != nil {
+		return err
+	}
+	if err := os.WriteFile(flakePath, []byte(flakeContent), 0o644); err != nil {
+		return err
+	}
+	// Remember exactly what we wrote: Teardown deletes this file only while it
+	// still hashes to this value (C-07).
+	n.writtenFiles = recordWrittenFile(n.writtenFiles, flakePath, []byte(flakeContent))
+	return nil
 }
 
 // escapeNixString escapes a string for safe use inside a Nix double-quoted

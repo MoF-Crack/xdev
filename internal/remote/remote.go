@@ -107,31 +107,85 @@ var httpClient = &http.Client{
 	CheckRedirect: util.SecureRedirectCheck(10),
 }
 
-// init is intentionally empty — effectiveGitHubToken reads env each time,
-// so there is no need to eagerly capture the env token at package init.
-func init() {}
+// init 只做一件事：给单例 transport 装上**只读**的代理判定分发器。
+// 其余初始化刻意留空——effectiveGitHubToken 每次现读环境变量，无需在包
+// 初始化时捕获 token。
+func init() {
+	httpTransport.Proxy = func(req *http.Request) (*url.URL, error) {
+		httpTransportMu.Lock()
+		fn := currentProxyFn
+		httpTransportMu.Unlock()
+		return fn(req)
+	}
+}
 
 // configuredProxyURL stores the last proxy URL passed to ConfigureHTTPClient,
 // used in error messages when proxy connection fails.
 var configuredProxyURL string
+
+// httpTransport is the process-wide transport reused by every
+// ConfigureHTTPClient call (P2-30 / N-08).
+//
+// 修复前每次调用都新建一个 *http.Transport 再挂到 httpClient.Transport：
+// 被替换掉的旧 transport 的空闲连接池（socket + 后台读 goroutine）没有任何
+// 人调用 CloseIdleConnections，只能等 GC 终结器回收。GUI 每次改代理/重载配置
+// 都会调用本函数，于是连接与句柄随调用次数一路累积。改为单例后，无论调用
+// 多少次，进程里只有这一个 transport。
+//
+// 字段在 init 里装好之后**永不改写**：代理口径的切换走 currentProxyFn，
+// 这样请求路径（RoundTrip 会读 transport 字段）与配置路径之间不产生数据
+// 竞争——直接原地改写 transport.Proxy 会与并发请求构成竞争。
+var httpTransport = &http.Transport{}
+
+// httpTransportMu 保护 currentProxyFn 的读写（配置侧写、请求侧读）。
+var httpTransportMu sync.Mutex
+
+// currentProxyFn 是当前生效的代理判定，默认 http.ProxyFromEnvironment。
+// 通过 httpTransportMu 读写（见 httpTransport 注释）。
+var currentProxyFn = http.ProxyFromEnvironment
+
+// proxyUserinfoPattern 匹配 URL 的 userinfo 段（`//user:pass@`），用于日志脱敏。
+var proxyUserinfoPattern = regexp.MustCompile(`//[^/@\s]*@`)
+
+// redactProxyCredentials 把日志文案里的 `user:pass@` 替换为 `<redacted>@`。
+//
+// 这里刻意不用 util.SanitizeURL：它在 url.Parse 失败时原样返回输入，而
+// 「URL 畸形到解析失败」恰恰是最需要脱敏的场景（错误文本里带着原始 URL）。
+// 与 internal/cli/config.go 的同名函数同款实现——跨包复用会引入 cli→remote
+// 方向的反向依赖，故在 remote 包内就地保留一份（P2-16 后半）。
+func redactProxyCredentials(msg string) string {
+	return proxyUserinfoPattern.ReplaceAllString(msg, "//<redacted>@")
+}
 
 // ConfigureHTTPClient sets up the HTTP client's proxy transport.
 // When proxyURL is non-empty, it is used as the HTTP proxy for all
 // requests (the remote package only makes HTTPS requests to GitHub
 // APIs); when empty, http.ProxyFromEnvironment is used instead.
 // Call this at startup after loading configuration.
+//
+// P2-30（N-08）：不再每次新建 transport（见 httpTransport 注释）；每次
+// 重新配置后调用 CloseIdleConnections——代理口径变了以后，池里残留的空闲
+// 连接可能仍指向旧代理/旧直连目标，复用它们会绕过新配置。在途请求不受影响
+// （它们持有的连接仍归自己，这与 net/http 的语义一致）。
 func ConfigureHTTPClient(proxyURL string) {
 	configuredProxyURL = proxyURL
-	transport := &http.Transport{}
-	if proxyURL != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err == nil {
-			transport.Proxy = http.ProxyURL(parsed)
-		}
+	httpTransportMu.Lock()
+	if proxyURL == "" {
+		currentProxyFn = http.ProxyFromEnvironment
+	} else if parsed, err := url.Parse(proxyURL); err != nil {
+		// P2-16（后半）：解析失败必须告警——修复前这里静默忽略，用户以为
+		// 代理已生效，实际每个请求都在直连（配置错误被吞掉，只表现为"变慢/
+		// 连不上"）。语义不变：与"新建裸 transport"等价，Proxy 为 nil = 直连。
+		// url.Parse 的错误文本会原样回显含凭据的 URL，故先脱敏再进日志。
+		log.Printf("[remote] WARNING: invalid proxy URL, falling back to direct connection: %s",
+			redactProxyCredentials(err.Error()))
+		currentProxyFn = func(*http.Request) (*url.URL, error) { return nil, nil }
 	} else {
-		transport.Proxy = http.ProxyFromEnvironment
+		currentProxyFn = http.ProxyURL(parsed)
 	}
-	httpClient.Transport = transport
+	httpTransportMu.Unlock()
+	httpTransport.CloseIdleConnections()
+	httpClient.Transport = httpTransport
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +199,11 @@ type cacheEntry struct {
 	body      []byte
 	etag      string
 	expiresAt time.Time
+	// nextURL 是该页响应 Link 头里的 rel="next" 目标（无下一页则为空）。
+	// P2-08 / C-11：304 响应不携带 Link 头，所以分页游标必须随缓存一起
+	// 保存——否则命中缓存的每一次翻页都会在第一页之后断掉，第二页及更后
+	// 的版本永远发现不到。
+	nextURL string
 }
 
 var (
@@ -176,13 +235,16 @@ func cacheGet(key string) (*cacheEntry, bool) {
 }
 
 // cachePut stores an entry in the cache with the standard TTL.
-func cachePut(key string, body []byte, etag string) {
+// nextURL 是该页的下一页链接（Link 头 rel="next"，无下一页传 ""），
+// 供 304 命中时恢复分页游标（P2-08 / C-11）。
+func cachePut(key string, body []byte, etag string, nextURL string) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	cache[key] = &cacheEntry{
 		body:      body,
 		etag:      etag,
 		expiresAt: time.Now().Add(cacheTTL),
+		nextURL:   nextURL,
 	}
 }
 
@@ -308,18 +370,46 @@ func hasProxyConfigured() bool {
 // connections to a local test server.
 var testHookDirectTransport http.RoundTripper
 
-// retryDirect clones the request and sends it using a default transport
-// (no proxy). Used as a fallback when the proxy connection fails.
-func retryDirect(ctx context.Context, originalReq *http.Request) (*http.Response, error) {
-	directTransport := testHookDirectTransport
-	if directTransport == nil {
+// directTransport 是 retryDirect 用的包级单例直连 transport（P2-11）。
+//
+// 修复前每次代理回退都新建 &http.Transport{}：每个被丢弃的 transport 都
+// 带着自己的空闲连接池（socket + 后台读 goroutine），而 retryDirect 从不
+// 关闭它们——代理不稳定时会话里会反复回退，连接/句柄一路累积到 GC 才回收。
+// 单例后无论回退多少次都只有一个直连池（同时保留 keep-alive 收益；这也是
+// 没有选"N 次响应后 CloseIdleConnections"方案的原因：那样每次回退都拆掉
+// 连接池，直连路径退化为每请求一次 TCP+TLS 握手）。
+var (
+	directTransportOnce sync.Once
+	directTransport     http.RoundTripper
+)
+
+// directTransportForRetry 返回直连（显式无代理）transport。
+//
+// testHookDirectTransport 优先——remote_test.go 的
+// TestDiscoverVersions_GitHub_ProxyFallback / _ProxyFallbackBothFail 靠它把
+// "直连"引到 httptest 服务器；P2-11 明确要求保留该检查，漏掉这两个测试即红。
+func directTransportForRetry() http.RoundTripper {
+	if hook := testHookDirectTransport; hook != nil {
+		return hook
+	}
+	directTransportOnce.Do(func() {
 		directTransport = &http.Transport{
 			Proxy: nil, // explicitly no proxy
 		}
-	}
+	})
+	return directTransport
+}
+
+// retryDirect clones the request and sends it using a default transport
+// (no proxy). Used as a fallback when the proxy connection fails.
+//
+// 每次调用仍新建 *http.Client：client 自身不持有连接池（池在 transport
+// 上，见 directTransport），因此这不是泄漏点，也保证 Timeout/CheckRedirect
+// 每次取当前值。
+func retryDirect(ctx context.Context, originalReq *http.Request) (*http.Response, error) {
 	directClient := &http.Client{
 		Timeout:       30 * time.Second,
-		Transport:     directTransport,
+		Transport:     directTransportForRetry(),
 		CheckRedirect: httpClient.CheckRedirect,
 	}
 	// Clone the request body (it should be nil for GET/HEAD, but handle
@@ -739,8 +829,17 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 				return nil, fmt.Errorf("github remote: decode cached JSON from %s: %w", currentURL, err)
 			}
 			allReleases = append(allReleases, pageReleases...)
-			// No pagination change on 304 – the Link header is not present.
-			break
+			// P2-08 / C-11：304 响应**没有** Link 头（RFC 9110：304 只回
+			// 缓存相关头），所以下一页游标只能来自缓存条目——由产生该条目的
+			// 那次 200 响应写入（写入前已过 M-1 同主机校验，见下）。
+			// 修复前这里直接 break：命中缓存的第二次调用永远停在第一页，
+			// 第二页及更后页的版本发现不到（表现为"sniff 结果变少"）。
+			nextURL := cached.nextURL
+			if nextURL == "" {
+				break // 该页本就没有下一页
+			}
+			currentURL = nextURL
+			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -755,9 +854,24 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			return nil, fmt.Errorf("github remote: read body from %s: %w", currentURL, err)
 		}
 
-		// Store in cache with ETag.
+		// Store in cache with ETag, together with this page's next-page cursor
+		// (P2-08 / C-11: a 304 carries no Link header, so the cursor must be
+		// cached alongside the body).
+		//
+		// Security (M-1 fix): the Link header is attacker-influenceable
+		// (compromised upstream, MITM, or a configured proxy) and the next
+		// request still carries the Bearer token — never follow a pagination
+		// URL that leaves the host the loop started on (api.github.com in
+		// production, the test server in tests). Validating here is the
+		// single gate: only same-host cursors are ever cached, hence only
+		// same-host cursors can be replayed on a 304 hit.
 		etag := resp.Header.Get("ETag")
-		cachePut(currentURL, bodyBytes, etag)
+		nextURL, hasNext := parseNextURL(resp.Header.Get("Link"))
+		if hasNext && !sameHostURL(apiURL, nextURL) {
+			log.Printf("[remote] WARNING: ignoring cross-host pagination URL in Link header: %s", util.SanitizeURL(nextURL))
+			hasNext, nextURL = false, ""
+		}
+		cachePut(currentURL, bodyBytes, etag, nextURL)
 
 		var pageReleases []struct {
 			TagName string `json:"tag_name"`
@@ -776,19 +890,8 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			break
 		}
 
-		// Check for next page.
-		linkHeader := resp.Header.Get("Link")
-		nextURL, hasNext := parseNextURL(linkHeader)
+		// Check for next page (cursor parsed and host-validated above).
 		if !hasNext {
-			break
-		}
-		// Security (M-1 fix): the Link header is attacker-influenceable
-		// (compromised upstream, MITM, or a configured proxy). The next
-		// request still carries the Bearer token — never follow a
-		// pagination URL that leaves the host the loop started on
-		// (api.github.com in production, the test server in tests).
-		if !sameHostURL(apiURL, nextURL) {
-			log.Printf("[remote] WARNING: ignoring cross-host pagination URL in Link header: %s", util.SanitizeURL(nextURL))
 			break
 		}
 		currentURL = nextURL

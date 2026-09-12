@@ -128,17 +128,8 @@ func (s *Scheduler) OnStartup(ctx context.Context) {
 }
 
 func (s *Scheduler) onStartupInterval(ctx context.Context) {
-	cache, err := s.LoadCache()
-	if err != nil {
-		// Failed to load cache — proceed with sniffing (no log).
-	} else if !cache.LastSniffAt.IsZero() {
-		interval, err := time.ParseDuration(s.cfg.Interval)
-		if err != nil || interval <= 0 {
-			interval = 24 * time.Hour
-		}
-		if time.Since(cache.LastSniffAt) < interval {
-			return
-		}
+	if !s.intervalElapsed() {
+		return
 	}
 
 	s.startupCtx, s.startupCancel = context.WithTimeout(ctx, 120*time.Second)
@@ -149,6 +140,43 @@ func (s *Scheduler) onStartupInterval(ctx context.Context) {
 	}()
 }
 
+// intervalElapsed reports whether the interval strategy's TTL has expired
+// (no cache / unreadable cache / missing LastSniffAt / LastSniffAt older than
+// cfg.Interval → true).  onStartupInterval and StartupSniffPending share this
+// single judgement so the predicate always equals the real spawn condition.
+func (s *Scheduler) intervalElapsed() bool {
+	cache, err := s.LoadCache()
+	if err != nil || cache == nil {
+		// Failed to load cache — proceed with sniffing (no log).
+		return true
+	}
+	if cache.LastSniffAt.IsZero() {
+		return true
+	}
+	interval, err := time.ParseDuration(s.cfg.Interval)
+	if err != nil || interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	return time.Since(cache.LastSniffAt) >= interval
+}
+
+// StartupSniffPending reports whether OnStartup would launch a background
+// sniff for the configured strategy (票 34 / P1-30 / E-11).
+//
+// interval 策略的 TTL 到期条件必须计入（与 onStartupInterval 同一判定
+// intervalElapsed），否则 cli.HasStartupSniff / main.go 的等待条件不完整：
+// 缓存新鲜时不 spawn 就不该等待。strategy=manual/service 不自动触发。
+func (s *Scheduler) StartupSniffPending() bool {
+	switch Strategy(s.cfg.Strategy) {
+	case StrategyStartup:
+		return true
+	case StrategyInterval:
+		return s.intervalElapsed()
+	default:
+		return false
+	}
+}
+
 func (s *Scheduler) onStartupStartup(ctx context.Context) {
 	s.startupCtx, s.startupCancel = context.WithCancel(ctx)
 	s.startupDone = make(chan struct{})
@@ -156,6 +184,16 @@ func (s *Scheduler) onStartupStartup(ctx context.Context) {
 		defer close(s.startupDone)
 		_ = s.sniffAllWithForce(s.startupCtx, false) // auto: respect per-tool TTL
 	}()
+}
+
+// StartupSniffSpawned reports whether OnStartup actually launched a background
+// sniff in this process (票 34 / P1-30 / E-11).  Kept for diagnostics/tests:
+// the interval strategy's TTL condition is inherent here because
+// onStartupInterval only sets startupCancel when the TTL has expired.
+// cli.HasStartupSniff uses the pure predicate StartupSniffPending instead
+// (it must be evaluated before Shutdown rewrites the cache).
+func (s *Scheduler) StartupSniffSpawned() bool {
+	return s.startupCancel != nil
 }
 
 // Shutdown cancels the startup background sniff and waits up to 2 seconds
@@ -726,6 +764,25 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 
 	path := filepath.Join(manifestDir, t.Name+".yaml")
 
+	// Ticket 23 (audit-fixes / D-03): the whole read-modify-write cycle runs
+	// under a cross-process file lock. The sniff scheduler (this process)
+	// and a TOFU write-back from another xdev process (installer →
+	// manifest.UpdateArchiveSHA256) used to race the same YAML: one side's
+	// newly appended versions or hashes were silently lost.
+	//
+	// The lock is stale-safe by construction: AcquireFileLock uses OS
+	// byte-range locks (LockFileEx on Windows, flock on Unix), which the
+	// kernel releases when the holder dies — a leftover .lock file never
+	// blocks a later process (inventory conclusion reused by ticket 21's
+	// .part.lock). Lock order is a single edge here (no nesting with the
+	// sniff-cache lock: merge runs first, updateCacheEntry afterwards).
+	lockPath := path + ".lock"
+	lock, lockErr := util.AcquireFileLock(lockPath, 30*time.Second)
+	if lockErr != nil {
+		return fmt.Errorf("manifest lock %s: %w", lockPath, lockErr)
+	}
+	defer lock.Release()
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -736,8 +793,14 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 			if data2, marshalErr := manifest.MarshalTool(t); marshalErr == nil {
 				data = data2
 				// Write the base manifest so it exists on disk.
-				_ = os.MkdirAll(manifestDir, 0o755)
-				_ = os.WriteFile(path, data, 0o644)
+				// Ticket 23: atomic write + logged errors (the old
+				// `_ =` discards hid a failed baseline write).
+				if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+					log.Printf("[discovery] warning: failed to create manifest dir %s: %v", manifestDir, err)
+				}
+				if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
+					log.Printf("[discovery] warning: failed to write baseline manifest %s: %v", path, err)
+				}
 			} else {
 				return fmt.Errorf("marshal base manifest %s: %w", path, marshalErr)
 			}
@@ -843,7 +906,9 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 	}
 
 	bakPath := path + ".bak"
-	if err := os.WriteFile(bakPath, data, 0o644); err != nil {
+	// Ticket 23: the backup write is atomic too — a torn .bak is worse than
+	// no backup (it would look like a valid restore source).
+	if err := util.AtomicWriteFile(bakPath, data, 0o644); err != nil {
 		log.Printf("[discovery] warning: failed to write backup %s: %v", bakPath, err)
 	}
 

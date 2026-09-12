@@ -12,5 +12,7 @@ import (
 func TestMain(m *testing.M) {
 	// Suite-level host snapshot for Spec 005 / Constitution principle II.
 	// Default go test ./internal/... does not build this file (integration tag).
-	os.Exit(hostsnapshot.RunWithHostSnapshot(m, hostsnapshot.DefaultOptions()))
+	// RunWithPinnedHome additionally pins XMDEV_HOME so the suite can never
+	// latch (and then write into) the developer's real xdev home.
+	os.Exit(hostsnapshot.RunWithPinnedHome(m))
 }

@@ -79,6 +79,23 @@ describe('CommandPalette', () => {
     expect(wrapper.emitted('update:show')).toEqual([[false]]);
   });
 
+  // Ticket 41 (audit-fixes / P2-25): Esc/backdrop close keeps the old filter
+  // word in the component state, so reopening used to show the previous
+  // results instead of the fresh default list.
+  it('clears the previous filter when the palette is reopened', async () => {
+    const wrapper = mountPalette();
+    await wrapper.get('[role="combobox"]').setValue('settings');
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(1);
+
+    await wrapper.setProps({ show: false }); // Esc / 背景关闭
+    await wrapper.setProps({ show: true }); // 重开
+
+    const input = wrapper.get('[role="combobox"]');
+    expect(input.element.value).toBe('');
+    expect(input.attributes('aria-activedescendant')).toBe('command-option-dashboard');
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(options.length);
+  });
+
   it('keeps Tab and programmatic focus inside until unmounted', async () => {
     const outside = document.createElement('button');
     document.body.append(outside);

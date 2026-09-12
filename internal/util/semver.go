@@ -1,6 +1,10 @@
 package util
 
-import "strings"
+import (
+	"math"
+	"strconv"
+	"strings"
+)
 
 // CompareSemver compares two version strings using SemVer 2.0.0 rules:
 // major.minor.patch first, then pre-release precedence.
@@ -45,13 +49,21 @@ func ParseSemverParts(s string) [3]int {
 		if i >= 3 {
 			break
 		}
+		// Ticket 39 (P2-23): saturating accumulation. A component with a
+		// 30-digit number used to WRAP AROUND on int overflow and could then
+		// sort below a small version. Clamp at the practical ceiling for a
+		// version component so ordering stays monotonic.
+		const maxPart = math.MaxInt32
 		n := 0
 		for _, c := range p {
-			if c >= '0' && c <= '9' {
-				n = n*10 + int(c - '0')
-			} else {
+			if c < '0' || c > '9' {
 				break
 			}
+			if n > (maxPart-int(c-'0'))/10 {
+				n = maxPart
+				break
+			}
+			n = n*10 + int(c-'0')
 		}
 		result[i] = n
 	}
@@ -169,18 +181,20 @@ func allDigits(s string) bool {
 	return true
 }
 
-// numericValue parses a digit-only string into an int (0 on overflow /
-// non-digit input; callers gate on allDigits first).
-func numericValue(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return n
-		}
-		n = n*10 + int(c - '0')
-		if n > 1<<30 {
-			return n
-		}
+// numericValue parses a digit-only string into a uint64 with SATURATION:
+// anything above the uint64 ceiling clamps to math.MaxUint64 (callers gate
+// on allDigits first, so non-digit input never reaches here).
+//
+// Ticket 39 (P2-14/P2-23): the previous version stopped accumulating once
+// the value passed 1<<30 and returned that PARTIAL value, so two
+// long-but-different numeric identifiers could compare EQUAL (and their
+// ordering depended on where the cut-off happened to land). Saturating at
+// one shared ceiling keeps the comparison monotonic — different magnitudes
+// stay ordered, and only genuinely unrepresentable values tie.
+func numericValue(s string) uint64 {
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return math.MaxUint64
 	}
-	return n
+	return v
 }

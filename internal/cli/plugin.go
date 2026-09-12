@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,19 +133,15 @@ func newPluginInstallCmd() *cobra.Command {
 				return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 			}
 
-			f, err := os.Create(dest)
-			if err != nil {
-				return fmt.Errorf("create file: %w", err)
-			}
-			defer f.Close()
-
 			// Security (H-3 fix): cap the download at 4 MiB — Lua plugin
-			// scripts are small text files; an unbounded io.Copy lets a
+			// scripts are small text files; an unbounded copy lets a
 			// hostile server fill the disk.
-			const maxPluginSize = 4 << 20
-			if _, err := io.Copy(f, io.LimitReader(resp.Body, maxPluginSize)); err != nil {
-				os.Remove(dest)
-				return fmt.Errorf("write file: %w", err)
+			//
+			// 票 40（P2-17 / E-13）：落盘 + 4 MiB 上限 + 失败清理统一收进
+			// downloadPluginBody；其中在拷贝之后探测是否仍有剩余字节，
+			// 超限即明确报错（详见该函数注释）。
+			if err := downloadPluginBody(dest, resp.Body); err != nil {
+				return err
 			}
 
 			// Validate the plugin loads correctly.
@@ -159,6 +156,50 @@ func newPluginInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// maxPluginSize 是 Lua 插件下载的硬上限（4 MiB）。
+const maxPluginSize = 4 << 20
+
+// downloadPluginBody 把 HTTP 响应体写入 dest，并强制 maxPluginSize 上限。
+//
+// 票 40（P2-17 / E-13）：H-3 的 4 MiB 上限原先只靠 io.LimitReader 实现，
+// 而 LimitReader 到达上限即报 EOF 且不返回错误——超限响应因此被「静默
+// 腰斩」并当作下载成功（io.Copy 返回 nil），随后 Lua 校验失败，把「响应
+// 超过 4 MiB」这个真实原因伪装成语法错误。这里在拷贝之后用 io.ReadFull
+// 探测 1 字节：还能读到内容 → 响应体超限，明确报错；读到 io.EOF → 完整
+// 落地。任何失败路径都清理半截文件（既有 os.Remove(dest) 清理语义保留），
+// 避免留下无法加载的残缺 .lua 让用户误以为装好了。
+func downloadPluginBody(dest string, body io.Reader) error {
+	f, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+
+	if _, err := io.Copy(f, io.LimitReader(body, maxPluginSize)); err != nil {
+		f.Close()
+		os.Remove(dest)
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	var probe [1]byte
+	n, readErr := io.ReadFull(body, probe[:])
+	switch {
+	case n > 0:
+		f.Close()
+		os.Remove(dest)
+		return fmt.Errorf("plugin download exceeds the %d MiB limit", maxPluginSize>>20)
+	case readErr != nil && !errors.Is(readErr, io.EOF):
+		f.Close()
+		os.Remove(dest)
+		return fmt.Errorf("read plugin body: %w", readErr)
+	}
+
+	if err := f.Close(); err != nil {
+		os.Remove(dest)
+		return fmt.Errorf("close file: %w", err)
+	}
+	return nil
 }
 
 // newPluginCreateCmd implements `xdev plugin create <name>`.

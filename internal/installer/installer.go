@@ -417,6 +417,11 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	resURL := arch.URL
 	resSHA := arch.SHA256
 
+	// Ticket 26 (A-07): force reinstall defers the removal of the existing
+	// install tree until the replacement archive has been downloaded and
+	// verified (see the installLock critical section below).
+	forceReinstall := false
+
 	if _, err := os.Stat(installPath); err == nil {
 		// Already installed. Verify integrity: an incomplete install must
 		// not be silently activated — return ErrIncompleteInstall so the
@@ -434,12 +439,14 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			}
 		}
 		if opts.Force {
-			// Force reinstall: remove the existing directory (complete or
-			// incomplete) and fall through to a full download + install.
-			log.Printf("[install] Force reinstall requested for %s@%s — removing existing install dir", p.Name(), ver)
-			if err := os.RemoveAll(installPath); err != nil {
-				return nil, fmt.Errorf("force reinstall: remove existing install dir: %w", err)
-			}
+			// Force reinstall (ticket 26 / A-07): DO NOT delete the existing
+			// install here. Removing before the download meant a failed
+			// download (offline / 404 / hash mismatch) destroyed a working
+			// installation and left `current` dangling. The removal now
+			// happens after the archive is downloaded and verified, inside
+			// the install lock, right before extraction.
+			log.Printf("[install] Force reinstall requested for %s@%s — deferring removal until the new archive is verified", p.Name(), ver)
+			forceReinstall = true
 		} else {
 			// Intact install — just activate (unless NoActivate).
 			log.Printf("[install] Already installed at %s", installPath)
@@ -488,6 +495,18 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	err = func() error {
 		defer installLock.Release()
 		log.Printf("[install] Download complete, starting install-by-kind")
+
+		// Ticket 26 (A-07): the deferred force-reinstall removal. By this
+		// point the archive is downloaded, SHA-verified and cached, so a
+		// failure here is recoverable by re-running install; a failure
+		// BEFORE this point leaves the previous installation intact.
+		if forceReinstall {
+			log.Printf("[install] Force reinstall: removing previous install dir %s (archive verified)", installPath)
+			if rmErr := os.RemoveAll(installPath); rmErr != nil {
+				return fmt.Errorf("force reinstall: remove existing install dir: %w", rmErr)
+			}
+		}
+
 		// 阶段语义：archive 走"解压"；executable/script（rustup 等滚动安装器）
 		// 走"正在安装"——运行安装器可能耗时数分钟（下载 toolchain）且无确定
 		// 进度，percent=-1 通知前端保持当前进度条、仅切换阶段文案。
@@ -794,15 +813,13 @@ func (i *Installer) TOFUArchiveIfNeeded(tool, ver string, a *manifest.Archive, d
 		return fmt.Errorf("computed SHA-256 is empty")
 	}
 
-	// Determine OS and arch from the archive entry.
+	// Ticket 26 (A-11/D-10): pass the entry's ORIGINAL os/arch. Substituting
+	// "any" with the host platform made the update target a concrete entry
+	// that may not exist, so the TOFU pin was silently not written back and
+	// the next install re-ran TOFU. The manifest-side matcher now falls back
+	// to an "any" entry when the requested key is the host platform.
 	osName := a.OS
 	arch := a.Arch
-	if osName == "" || osName == "any" {
-		osName = plugin.HostOS()
-	}
-	if arch == "" || arch == "any" {
-		arch = plugin.HostArch()
-	}
 
 	// Write to on-disk manifest. Ticket 13 (N-04): use the configured
 	// manifest dir (the pre-fix code hard-coded <home>/manifests, so a
@@ -810,7 +827,20 @@ func (i *Installer) TOFUArchiveIfNeeded(tool, ver string, a *manifest.Archive, d
 	// and the next install re-ran TOFU instead of verifying).
 	manifestDir := i.cfg.Core.ManifestDir
 	if err := manifest.UpdateArchiveSHA256(manifestDir, tool, ver, osName, arch, actualSHA); err != nil {
-		return fmt.Errorf("UpdateArchiveSHA256: %w", err)
+		// Host-platform fallback (ticket 26 / A-11): entries declared with
+		// the host platform but requested as "any" (or vice versa) must still
+		// pin. Retry once with the host platform before giving up.
+		hostOS, hostArch := plugin.HostOS(), plugin.HostArch()
+		if (osName == "" || osName == "any" || arch == "" || arch == "any") && (osName != hostOS || arch != hostArch) {
+			if retryErr := manifest.UpdateArchiveSHA256(manifestDir, tool, ver, hostOS, hostArch, actualSHA); retryErr == nil {
+				log.Printf("[install] TOFU: pinned %s@%s via host-platform fallback (%s/%s)", tool, ver, hostOS, hostArch)
+				osName, arch = hostOS, hostArch
+			} else {
+				return fmt.Errorf("UpdateArchiveSHA256: %w (host-platform fallback also failed: %v)", err, retryErr)
+			}
+		} else {
+			return fmt.Errorf("UpdateArchiveSHA256: %w", err)
+		}
 	}
 
 	log.Printf("[install] TOFU: computed SHA256 for %s@%s (%s/%s): %s", tool, ver, osName, arch, actualSHA)
@@ -1022,15 +1052,13 @@ func (i *Installer) extract(tool string, a *manifest.Archive, ver, dest string) 
 	// The cache filename uses the tool name (matching downloadWithProgress)
 	src := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", tool, ver, a.Format))
 	if _, err := os.Stat(src); os.IsNotExist(err) {
-		// Fallback: try matching by glob in case of naming mismatch
-		matches, _ := filepath.Glob(filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("*-%s.%s", ver, a.Format)))
-		if len(matches) > 0 {
-			src = matches[0]
-			log.Printf("[install] Extract: matched cache file by glob: %s", src)
-		} else {
-			log.Printf("[install] ERROR: cache miss for extraction, tried: %s", src)
-			return fmt.Errorf("cache miss: %s", src)
-		}
+		// Ticket 26 (A-09): NO glob fallback. The removed glob
+		// (`*-<ver>.<fmt>`) could match ANOTHER tool's cache file — a
+		// malformed name such as "lld_is_a_generic_driver._" would be
+		// extracted into this tool's install tree (wrong content, wrong
+		// integrity outcome). A cache miss is now a hard, actionable error.
+		log.Printf("[install] ERROR: cache miss for extraction, expected: %s", src)
+		return fmt.Errorf("cache miss: %s not found — clear the cache entry and reinstall (`xdev install %s@%s`)", src, tool, ver)
 	}
 	log.Printf("[install] Extracting: src=%s dest=%s format=%s strip=%d", src, dest, a.Format, a.Strip)
 	err := extractor.Extract(src, dest, a.Format, a.Strip)
@@ -1121,8 +1149,21 @@ func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manife
 		if err != nil {
 			return fmt.Errorf("compute SHA-256 of %s: %w", src, err)
 		}
-		if !strings.EqualFold(got, a.SHA256) {
-			return fmt.Errorf("SHA-256 mismatch for %s: expected %s, got %s", p.Name(), a.SHA256, got)
+		// Ticket 38 (P2-03): a mirror URL may legitimately serve a
+		// byte-identical rebuild under its own mirror_sha256 — accept the
+		// SHA-256 OR the declared mirror SHA-256 (whichever the manifest
+		// provided). Pre-fix only a.SHA256 was accepted, so an installer
+		// fetched from a mirror was rejected even when its hash matched the
+		// manifest's mirror entry.
+		matched := strings.EqualFold(got, a.SHA256)
+		if !matched && a.MirrorSHA256 != "" && !util.IsAllZeroHash(a.MirrorSHA256) {
+			matched = strings.EqualFold(got, a.MirrorSHA256)
+			if matched {
+				log.Printf("[install] %s SHA-256 verified against the mirror hash", p.Name())
+			}
+		}
+		if !matched {
+			return fmt.Errorf("SHA-256 mismatch for %s: expected %s (mirror %s), got %s", p.Name(), a.SHA256, a.MirrorSHA256, got)
 		}
 	}
 
@@ -1476,34 +1517,65 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 //   - err != nil 且解压已成功：err 是激活错误（版本已安装）
 //   - err != nil 且解压失败：err 是解压错误（版本未安装）
 func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
-	kind := ResolveKind(a)
-	switch kind {
-	case manifest.InstallKindExecutable, manifest.InstallKindScript:
-		// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
-		// 跳过解压与完整性硬门（安装器可能异步/在 installPath 外写文件）。
-		if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
-			return fmt.Errorf("installer run failed: %w", err)
-		}
-	case manifest.InstallKindNPM:
-		// Spec 039: npm-kind 工具没有「已下载归档」可解压——调用方应改走
-		// InstallNPMPackage（预检 → npm install → 完整性门 → 激活）。
-		return fmt.Errorf("npm-kind tool %s must be installed via InstallNPMPackage (no archive to extract)", p.Name())
-	default:
-		if err := i.extract(p.Name(), a, ver, installPath); err != nil {
-			return fmt.Errorf("extraction failed: %w", err)
-		}
-		// Hard gate after extract (same as InstallWithProgress): broken trees
-		// must not be treated as successful installs.
-		if err := ensureInstallIntegrity(p, installPath, a.Strip); err != nil {
-			log.Printf("[install] ERROR: %v", err)
-			_ = os.RemoveAll(installPath)
-			return err
-		}
+	// Ticket 19 (audit-fixes / B-02, A-04): the ENTIRE pre-activation span —
+	// extraction, the executable/script installer run, the integrity gate and
+	// the post-install hook — runs under the same per-tool lock used by
+	// InstallWithProgress, InstallNPMPackage and Activate. Without it a GUI
+	// ExtractAndActivate (local-tool migration / custom-tool install) could
+	// interleave with a concurrent force install of the same tool and leave a
+	// half-written tree behind.
+	//
+	// The lock is released BEFORE Activate, which takes the same lock
+	// internally (nested acquisition self-deadlocks — Unix flock is per open
+	// file description, the Windows named mutex is reentrant only
+	// per-thread; see the InstallWithProgress comment for the full story).
+	//
+	// Known residual (F-03, disclosed): the Windows named mutex is
+	// thread-affine, so a goroutine migration between acquisition and release
+	// can still let a concurrent installer slip through. The minimal
+	// hardening (Release return-value logging) lives in mutex_windows.go.
+	toolLock, lockErr := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
+	if lockErr != nil {
+		return fmt.Errorf("extract lock %s: %w", p.Name(), lockErr)
 	}
-	// Post-install hook — run even if activation will fail later.
-	if err := p.PostInstall(context.Background(), installPath); err != nil {
-		log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+	err := func() error {
+		defer toolLock.Release()
+
+		kind := ResolveKind(a)
+		switch kind {
+		case manifest.InstallKindExecutable, manifest.InstallKindScript:
+			// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
+			// 跳过解压与完整性硬门（安装器可能异步/在 installPath 外写文件）。
+			if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
+				return fmt.Errorf("installer run failed: %w", err)
+			}
+		case manifest.InstallKindNPM:
+			// Spec 039: npm-kind 工具没有「已下载归档」可解压——调用方应改走
+			// InstallNPMPackage（预检 → npm install → 完整性门 → 激活）。
+			return fmt.Errorf("npm-kind tool %s must be installed via InstallNPMPackage (no archive to extract)", p.Name())
+		default:
+			if err := i.extract(p.Name(), a, ver, installPath); err != nil {
+				return fmt.Errorf("extraction failed: %w", err)
+			}
+			// Hard gate after extract (same as InstallWithProgress): broken trees
+			// must not be treated as successful installs.
+			if err := ensureInstallIntegrity(p, installPath, a.Strip); err != nil {
+				log.Printf("[install] ERROR: %v", err)
+				_ = os.RemoveAll(installPath)
+				return err
+			}
+		}
+		// Post-install hook — run even if activation will fail later.
+		if err := p.PostInstall(context.Background(), installPath); err != nil {
+			log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
+
+	// Activation runs WITHOUT the extract lock (it re-acquires the same lock).
 	if err := i.Activate(p, installPath, ver); err != nil {
 		log.Printf("[install] WARNING: activation failed for %s@%s (version installed, not activated): %v", p.Name(), ver, err)
 		return &ActivationError{Tool: p.Name(), Version: ver, Err: err}

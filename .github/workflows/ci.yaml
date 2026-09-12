@@ -411,8 +411,20 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          # Download appimagetool (use continuous build, more reliable on CI)
-          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+          # F-10: pin appimagetool to an immutable release tag and verify the
+          # artifact hash before executing it. The old URL pointed at the
+          # mutable "continuous" release of AppImage/AppImageKit, so an upstream
+          # republish silently changed one of our build inputs (supply-chain
+          # risk: the tool is executed with the packaging directory in scope).
+          # SHA-256 measured 2026-09-12 with:
+          #   sha256sum appimagetool-x86_64.AppImage
+          # and cross-checked against the GitHub release asset digest (API).
+          APPIMAGETOOL_TAG="1.9.1"
+          APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+          wget -O appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_TAG}/appimagetool-x86_64.AppImage"
+          # Fails the step (bash -e) if the artifact does not match the pin.
+          echo "${APPIMAGETOOL_SHA256}  appimagetool" | sha256sum -c -
           chmod +x appimagetool
 
           # --appimage-extract-and-run avoids FUSE requirement on CI runners
@@ -693,7 +705,17 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+          # F-10: same pinning as the amd64 job. This job runs on a native
+          # arm64 runner (ubuntu-24.04-arm), so it needs the aarch64 artifact,
+          # whose SHA-256 was measured separately (2026-09-12) with:
+          #   sha256sum appimagetool-aarch64.AppImage
+          # and cross-checked against the GitHub release asset digest (API).
+          APPIMAGETOOL_TAG="1.9.1"
+          APPIMAGETOOL_SHA256="f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"
+          wget -O appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_TAG}/appimagetool-aarch64.AppImage"
+          # Fails the step (bash -e) if the artifact does not match the pin.
+          echo "${APPIMAGETOOL_SHA256}  appimagetool" | sha256sum -c -
           chmod +x appimagetool
 
           ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-${VER}-aarch64.AppImage"

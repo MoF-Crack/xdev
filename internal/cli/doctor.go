@@ -94,14 +94,14 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			// 5. shim binaries look right
-			shimOK = true
-			shimMsg := ""
-			if entries, err := os.ReadDir(cfg.Core.ShimDir); err == nil && len(entries) > 0 {
-				shimMsg = fmt.Sprintf("%d shim(s) installed", len(entries))
-			} else {
-				shimMsg = "no shims installed yet"
-			}
-			check("shims", shimOK, shimMsg)
+			//
+			// 票 40（P2-18 / E-14）：此处原先写死 shimOK=true——ShimDir 被
+			// 删除/权限不足时 doctor 仍报 ✔，安装树残迹（llvm 装错工具、
+			// typescript 空目录等）因此更不可见。改为由 os.ReadDir 的结果
+			// 推导；「零 shim」（新装用户首跑）仍是 info 而非 fail——doctor
+			// 的退出码被首跑体验与 CI 断言依赖，不能因零 shim 变化。
+			shimsOK, shimMsg := shimDirCheck(cfg.Core.ShimDir)
+			check("shims", shimsOK, shimMsg)
 
 			// 6. catalog is non-empty
 			cat := loadCatalog()
@@ -261,6 +261,29 @@ func diagnosePathEntries(pathStr, xdevDir string) []string {
 		}
 	}
 	return issues
+}
+
+// shimDirCheck reports the health of the shim directory for the doctor
+// "shims" check.
+//
+// 票 40（P2-18 / E-14）：检查结论必须来自磁盘事实，而不是常量：
+//   - 目录不可读（不存在 / 权限不足 / 路径不是目录）→ ok=false，消息带原因；
+//   - 目录可读但没有任何条目 → ok=true 且消息保持「尚无 shim」的 info
+//     语义：新装用户首跑时 shim 目录本就为空，这不是故障，改判 fail 会让
+//     doctor 退出码从 0 变非 0，破坏首跑体验与既有 CI 断言；
+//   - 目录可读且有 N 个条目 → ok=true，消息报告数量。
+//
+// 拆成独立函数是为了让守卫测试能直接驱动文件系统分支——测试不得构造
+// root 命令（进程级 OnInitialize 会把配置解析回真实 home）。
+func shimDirCheck(dir string) (bool, string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, fmt.Sprintf("cannot read shim dir %s: %v", dir, err)
+	}
+	if len(entries) == 0 {
+		return true, "no shims installed yet (shim dir is empty — nothing to check on a fresh install)"
+	}
+	return true, fmt.Sprintf("%d shim(s) installed", len(entries))
 }
 
 // pathContainsShim reports whether the shim dir appears in the

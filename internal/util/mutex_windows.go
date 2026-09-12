@@ -4,6 +4,7 @@ package util
 
 import (
 	"fmt"
+	"log"
 	"syscall"
 	"time"
 	"unsafe"
@@ -55,7 +56,18 @@ func acquireWindowsMutex(toolName string, timeout time.Duration) (*ToolLock, err
 		// which is fine — we now own the mutex)
 		return &ToolLock{
 			release: func() error {
-				procReleaseMutex.Call(handle)
+				// Ticket 19 (F-03 minimal hardening): ReleaseMutex fails
+				// when the calling thread does not own the mutex — which
+				// happens if the goroutine that acquired it migrated to
+				// another OS thread before releasing (Go's scheduler does
+				// this freely). The handle is still closed below so the
+				// resource is not leaked, but the failure must be visible:
+				// silently ignoring it is how the lock appeared to work
+				// while another installer slipped through.
+				relRet, _, relErr := procReleaseMutex.Call(handle)
+				if relRet == 0 {
+					log.Printf("[util] WARNING: ReleaseMutex failed for a tool lock (goroutine migrated threads?) — the lock may not have been released cleanly: %v", relErr)
+				}
 				procCloseHandle.Call(handle)
 				return nil
 			},

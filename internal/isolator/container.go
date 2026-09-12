@@ -20,6 +20,11 @@ type containerIsolator struct {
 	spec        *EnvironmentSpec
 	projectDir  string
 	xmdeDir     string
+
+	// writtenFiles records path → SHA-256 of the file generateDevcontainer
+	// wrote (C-07). Teardown deliberately deletes no files (see below), but
+	// the state stays truthful about what Setup created.
+	writtenFiles map[string]string
 }
 
 func newContainerIsolator() (*containerIsolator, error) {
@@ -97,13 +102,19 @@ func (c *containerIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) er
 	}
 	c.containerID = strings.TrimSpace(string(out))
 	saveState(c.xmdeDir, string(ModeContainer), persistedState{
-		ContainerID: c.containerID,
-		Image:       c.image,
-		ProjectDir:  c.projectDir,
+		ContainerID:  c.containerID,
+		Image:        c.image,
+		ProjectDir:   c.projectDir,
+		WrittenFiles: c.writtenFiles,
 	})
 	return nil
 }
 
+// Teardown stops and removes the container. Per the C-07 review it deletes
+// **no files**: `.devcontainer/devcontainer.json` is left in place on purpose
+// (users commit it to version control, and the pre-existing content was never
+// ours to remove). Setup's existence gate — not a deletion — is what protects
+// a user-authored devcontainer.json.
 func (c *containerIsolator) Teardown(ctx context.Context) error {
 	if c.containerID == "" {
 		return nil
@@ -139,6 +150,14 @@ func (c *containerIsolator) Exec(ctx context.Context, cmd []string) (*ExecResult
 // .devcontainer directory.
 func (c *containerIsolator) generateDevcontainer() error {
 	dcDir := filepath.Join(c.projectDir, ".devcontainer")
+	dcPath := filepath.Join(dcDir, "devcontainer.json")
+
+	// C-07 / P1-34 existence gate: this runs before MkdirAll and before any
+	// docker work, so Setup aborts without touching an existing user file
+	// unless --force was passed.
+	if err := ensureOverwritable(dcPath, c.spec != nil && c.spec.Force); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dcDir, 0o755); err != nil {
 		return err
 	}
@@ -161,7 +180,13 @@ func (c *containerIsolator) generateDevcontainer() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dcDir, "devcontainer.json"), data, 0o644)
+	if err := os.WriteFile(dcPath, data, 0o644); err != nil {
+		return err
+	}
+	// C-07: record what we wrote (see the struct comment: Teardown removes no
+	// files, this keeps the persisted session an accurate inventory).
+	c.writtenFiles = recordWrittenFile(c.writtenFiles, dcPath, data)
+	return nil
 }
 
 // containerName generates a deterministic container name from the project dir.

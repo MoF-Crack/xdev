@@ -200,11 +200,7 @@ func IsDockerAvailable() bool {
 // Ensure DockerAdapter satisfies Adapter interface.
 var _ Adapter = (*DockerAdapter)(nil)
 
-// SaveInstance persists an instance ID to the xdev home for later lookup.
-func SaveInstance(xmdeDir string, inst *Instance) error {
-	dir := xmdeDir + string(os.PathSeparator) + "remote"
-	os.MkdirAll(dir, 0o755)
-	// Write a simple marker file with the container ID
-	marker := dir + string(os.PathSeparator) + inst.ID
-	return os.WriteFile(marker, []byte(inst.Status), 0o644)
-}
+// SaveInstance — the persisted instance store — moved to instance_store.go
+// (ticket 35 / C-08): it is shared by every adapter, not docker-specific, and
+// now writes <home>/instances/<id>.json instead of a bare <home>/remote/<ID>
+// status marker.

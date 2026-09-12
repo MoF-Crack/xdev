@@ -62,8 +62,38 @@ func (p *luaBasePlugin) ResolveVersion(spec string) (string, error) {
 		return "", err
 	}
 
-	latest := versions[len(versions)-1]
+	// 票 20 / F-05: "latest" used to be resolved to versions[len-1] (the
+	// table tail), which silently picked the OLDEST version for plugins
+	// that list versions newest-first (the common vfox layout). Leaving
+	// the hint empty makes resolver.Resolve apply its KindLatest →
+	// highest(available) semantics, which orders the list itself.
+	//
+	// Deterministic fallback: the resolver's highest() can only order
+	// semver-parsable entries. When nothing in the list parses (e.g.
+	// {"r29","r28"}) keep the old table-tail behaviour rather than depend
+	// on an unspecified order for unparsable entries. The plugin's order
+	// is never mutated.
+	latest := ""
+	if !hasParsableSemver(versions) {
+		latest = versions[len(versions)-1]
+	}
 	return resolver.Resolve(parsed, versions, latest, "")
+}
+
+// hasParsableSemver reports whether at least one entry is a version the
+// resolver can order. resolver.Parse is the exported entry point that
+// mirrors the resolver's internal parseSemver: a plain semver string
+// (with optional "v" prefix or pre-release) parses as KindExact, while
+// non-semver plugin versions such as "r29" fail to parse. The
+// "latest"/"lts" keywords also parse but are not versions, so only
+// KindExact counts.
+func hasParsableSemver(versions []string) bool {
+	for _, v := range versions {
+		if parsed, err := resolver.Parse(v); err == nil && parsed.Kind == resolver.KindExact {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *luaBasePlugin) ArchiveFor(version string) (*manifest.Archive, error) {

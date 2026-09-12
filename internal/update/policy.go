@@ -137,7 +137,11 @@ func readJSON(path string, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// writeJSONAtomic 原子写 JSON：临时文件 + rename（与 gui cache 同模式，防并发撕裂）。
+// writeJSONAtomic 原子写 JSON：唯名临时文件 + rename（与 gui cache 同模式，防并发撕裂）。
+//
+// 票 31（P1-24 收敛核验）：补 Sync 与权限还原——os.CreateTemp 建出的是
+// 0600，旧实现让落盘缓存恒为 0600（与其它 0644 缓存不一致），且缺 Sync
+// 时崩溃可能发布空文件。与 util.AtomicWriteFile 的 CreateTemp 版本同型。
 func writeJSONAtomic(path string, v interface{}) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -153,8 +157,15 @@ func writeJSONAtomic(path string, v interface{}) error {
 		tmp.Close()
 		return fmt.Errorf("encode: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
 	}
 	return os.Rename(tmpName, path)
 }

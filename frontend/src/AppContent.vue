@@ -2,7 +2,7 @@
   <AppShell :selected-view="selectedView" :navigation-groups="localizedNavigationGroups" :t="t"
     :minimize="minimizeWindow" :toggle-maximize="toggleMaximize" :close="closeWindow"
     :minimize-label="t('window.minimize')" :maximize-label="isMaximized ? t('window.restore') : t('window.maximize')" :close-label="t('window.close')"
-    @select-view="onMenuSelect" @open-command-palette="openCommandPalette" @escape="setCommandPaletteVisible(false)">
+    @select-view="onMenuSelect" @open-command-palette="openCommandPalette" @escape="() => { /* G-05: Escape 只归命令面板所有——无条件调用 setCommandPaletteVisible(false) 会把焦点抢到 Ctrl+K 触发器上，破坏自行处理 Escape 的抽屉/对话框的焦点返还契约。 */ if (showCommandPalette) setCommandPaletteVisible(false); }">
     <template #toolbar>
       <PageToolbar :title="headerTitle">
         <n-space>
@@ -445,10 +445,19 @@ async function openFavVersionManager(fav, force = false) {
       window.go.gui.App.GetInstalledVersions(fav.name),
       window.go.gui.App.GetAvailableVersions(fav.name),
     ]);
+    // 票 25 (P1-22) 竞态守卫：慢响应期间用户可能已展开另一个收藏项，
+    // 无条件落盘会用旧条目覆盖新条目的版本列表（交错污染）。守卫失败
+    // 静默丢弃（对照本文件 toolDeps 的既有守卫写法）。
+    if (favVersionExpanded.value !== fav.name) {
+      console.debug('[AppContent] discarding stale fav versions response for', fav.name);
+      return;
+    }
     favInstalledVers.value = installed || [];
     favAvailableVers.value = available || [];
   } catch (e) {
     console.error('Failed to load fav versions:', e);
+    // 同上：失败清零也必须落在当前展开的条目上。
+    if (favVersionExpanded.value !== fav.name) return;
     favInstalledVers.value = [];
     favAvailableVers.value = [];
   }
@@ -465,10 +474,17 @@ async function openDashVersionManager(tool, force = false) {
       window.go.gui.App.GetInstalledVersions(tool.name),
       window.go.gui.App.GetAvailableVersions(tool.name),
     ]);
+    // 票 25 (P1-22) 竞态守卫：同 openFavVersionManager，比对仪表盘当前
+    // 展开的工具名，避免旧响应覆盖新工具的版本列表。
+    if (dashVersionExpanded.value !== tool.name) {
+      console.debug('[AppContent] discarding stale dashboard versions response for', tool.name);
+      return;
+    }
     dashInstalledVers.value = installed || [];
     dashAvailableVers.value = available || [];
   } catch (e) {
     console.error('Failed to load dashboard versions:', e);
+    if (dashVersionExpanded.value !== tool.name) return;
     dashInstalledVers.value = [];
     dashAvailableVers.value = [];
   }
@@ -936,6 +952,13 @@ async function loadVersions(toolName) {
       window.go.gui.App.GetInstalledVersions(toolName),
       window.go.gui.App.GetAvailableVersions(toolName),
     ]);
+    // 票 25 (P1-22) 竞态守卫：两个入口是异步的，慢响应期间用户可能已切换
+    // 选中工具；此时无条件落盘会把旧工具的版本列表写进抽屉，造成交错污染
+    // （对照 openDetail 里 toolDeps 的同型守卫）。
+    if (selectedTool.value?.name !== toolName) {
+      console.debug('[AppContent] discarding stale versions response for', toolName);
+      return;
+    }
     installedVersions.value = installed || [];
     availableVersions.value = available || [];
   } catch (e) {

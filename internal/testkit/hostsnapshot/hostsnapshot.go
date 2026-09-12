@@ -20,11 +20,15 @@ type Snapshot struct {
 	Files map[string]FileMeta
 }
 
-// FileMeta records whether a path exists and a simple size/mode fingerprint.
+// FileMeta records whether a path exists and a simple size/mtime/mode
+// fingerprint. ModTime is included because a same-size rewrite (e.g. a
+// config.yaml overwritten with equally long but different content) would
+// otherwise be invisible to the diff.
 type FileMeta struct {
-	Exists bool
-	Size   int64
-	Mode   os.FileMode
+	Exists  bool
+	Size    int64
+	ModTime int64 // UnixNano; 0 when the path is missing
+	Mode    os.FileMode
 }
 
 // Change is one difference between two snapshots.
@@ -66,10 +70,31 @@ func Capture(opts Options) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("hostsnapshot: stat %s: %w", clean, err)
 		}
 		s.Files[clean] = FileMeta{
-			Exists: true,
-			Size:   fi.Size(),
-			Mode:   fi.Mode(),
+			Exists:  true,
+			Size:    fi.Size(),
+			ModTime: fi.ModTime().UnixNano(),
+			Mode:    fi.Mode(),
 		}
+	}
+	// 派生缓存（.home.cache / shim-index.v1）只记存在性：它们本来就会在每次
+	// xdev/shim 调用时被合法重写，做 mtime 指纹只会制造假红。见 Options.VolatilePaths。
+	for _, p := range opts.VolatilePaths {
+		if p == "" {
+			continue
+		}
+		clean := filepath.Clean(p)
+		if excluded(clean, opts.ExcludePathPrefixes) {
+			continue
+		}
+		_, err := os.Lstat(clean)
+		if err != nil {
+			if os.IsNotExist(err) {
+				s.Files[clean] = FileMeta{Exists: false}
+				continue
+			}
+			return Snapshot{}, fmt.Errorf("hostsnapshot: stat %s: %w", clean, err)
+		}
+		s.Files[clean] = FileMeta{Exists: true}
 	}
 	return s, nil
 }
@@ -174,7 +199,7 @@ func formatFile(m FileMeta) string {
 	if !m.Exists {
 		return "missing"
 	}
-	return fmt.Sprintf("exists size=%d mode=%v", m.Size, m.Mode)
+	return fmt.Sprintf("exists size=%d mtime=%d mode=%v", m.Size, m.ModTime, m.Mode)
 }
 
 func excluded(path string, prefixes []string) bool {

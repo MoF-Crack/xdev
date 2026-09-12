@@ -9,6 +9,7 @@ package update
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,12 +91,17 @@ func ReplaceStaleCLICopyWithProbe(currentExe, homeDir string, probe probeVersion
 		return nil // 已是当前版本的镜像：不动
 	}
 
-	// 替换：用当前可执行文件覆盖旧副本，前后 SHA-256 校验一致。
+	// 替换：用当前可执行文件覆盖旧副本（票 32 / P1-26 / E-07）。
+	// 旧实现直接用 util.CopyFile 覆盖写 copyPath：写失败/中断会留下半截
+	// 文件，而半截副本在下次启动探测失败 → 永久跳过，损坏状态无法自愈。
+	// 现在先写唯名临时文件并校验 SHA-256，通过后才 rename 覆盖；
+	// 任何失败都清理 .tmp 并删除损坏副本，使 EnsureSelfInstalled 的
+	// 「缺失即复制」分支下次重拷自愈。
 	beforeHash, err := util.FileSHA256(currentExe)
 	if err != nil {
 		return fmt.Errorf("stale replace: hash current exe: %w", err)
 	}
-	if err := util.CopyFile(currentExe, copyPath); err != nil {
+	if err := replaceCopyAtomic(currentExe, copyPath, beforeHash); err != nil {
 		return fmt.Errorf("stale replace: copy %s -> %s: %w", currentExe, copyPath, err)
 	}
 	afterHash, err := util.FileSHA256(copyPath)
@@ -106,6 +112,74 @@ func ReplaceStaleCLICopyWithProbe(currentExe, homeDir string, probe probeVersion
 		return fmt.Errorf("stale replace: hash mismatch after copy (%s)", copyPath)
 	}
 	return nil
+}
+
+// replaceCopyAtomic publishes src at dst atomically after verifying the bytes
+// against wantSHA (SHA-256 of src).
+//
+// 票 32（P1-26 / E-07）：
+//  1. 写 dst 同目录的唯名临时文件（os.CreateTemp，票 31/P1-24 已确立
+//     「固定 <path>.tmp 会被并发写者互相截断」的教训）；
+//  2. 校验临时文件的 SHA-256 == wantSHA（不匹配视为损坏，不发布）；
+//  3. 校验通过才 os.Rename 覆盖 dst（原子发布点）。
+//
+// 任一环节失败：删除 .tmp，并删除已损坏的 dst（仅普通文件，绝不碰目录），
+// 让 EnsureSelfInstalled 的下一次调用重新拷贝，而不是把损坏副本留成永久状态。
+func replaceCopyAtomic(src, dst, wantSHA string) error {
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, filepath.Base(dst)+".tmp-*")
+	if err != nil {
+		removeDamagedCopy(dst)
+		return fmt.Errorf("create temp in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+
+	if err := util.CopyFile(src, tmpName); err != nil {
+		os.Remove(tmpName)
+		removeDamagedCopy(dst)
+		return err
+	}
+	// CreateTemp 建出的是 0600，CopyFile 对已存在文件不改权限——必须显式
+	// 还原可执行位，否则 home 根的 CLI 副本将不可执行（源文件权限为准）。
+	perm := os.FileMode(0o755)
+	if fi, statErr := os.Stat(src); statErr == nil {
+		perm = fi.Mode().Perm()
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		removeDamagedCopy(dst)
+		return fmt.Errorf("chmod temp copy: %w", err)
+	}
+	got, err := util.FileSHA256(tmpName)
+	if err != nil {
+		os.Remove(tmpName)
+		removeDamagedCopy(dst)
+		return fmt.Errorf("hash temp copy: %w", err)
+	}
+	if wantSHA != "" && !strings.EqualFold(got, wantSHA) {
+		os.Remove(tmpName)
+		removeDamagedCopy(dst)
+		return fmt.Errorf("hash mismatch for %s: want %s, got %s", dst, wantSHA, got)
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		os.Remove(tmpName)
+		removeDamagedCopy(dst)
+		return fmt.Errorf("rename %s -> %s: %w", tmpName, dst, err)
+	}
+	return nil
+}
+
+// removeDamagedCopy deletes a damaged CLI copy so the next
+// EnsureSelfInstalled call re-copies it.  Directories are never removed.
+func removeDamagedCopy(path string) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		log.Printf("[update] WARNING: remove damaged copy %s: %v", path, err)
+	}
 }
 
 // samePath 比较两个已解析路径是否同一文件（Windows 大小写不敏感）。

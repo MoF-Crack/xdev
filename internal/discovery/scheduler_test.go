@@ -765,13 +765,12 @@ func TestSchedulerOnStartup_IntervalSkip(t *testing.T) {
 }
 
 func TestSchedulerOnStartup_Startup(t *testing.T) {
-	// Startup strategy should launch async goroutine.
-	// We verify by checking that OnStartup returns immediately (non-blocking).
-	// The background goroutine will complete via context cancellation.
-
-	// Channel to track when OnStartup returns.
-	startupReturned := make(chan struct{})
-
+	// Startup strategy should launch an async goroutine.
+	//
+	// 判据是确定性的：把后台嗅探按在 loadCatalog 里，直到测试确认 OnStartup
+	// 已返回。于是「OnStartup 在嗅探仍在飞行时就已经返回」成为可证事实——
+	// 同步实现不可能满足。原先的「500ms 内返回」是与机器负载赛跑的墙钟断言：
+	// 全量 go test ./... 并发跑 30 个包时会被调度饥饿打成假红。
 	dir := t.TempDir()
 	cfg := &config.SniffConfig{
 		Strategy:       "startup",
@@ -781,27 +780,46 @@ func TestSchedulerOnStartup_Startup(t *testing.T) {
 	}
 	s := NewScheduler(cfg, dir, dir)
 
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s.loadCatalog = func(string) (*manifest.Catalog, error) {
+		close(started)
+		<-release // 一直按住，直到测试确认 OnStartup 已返回
+		return &manifest.Catalog{}, nil
+	}
+
 	// Create a context that will be cancelled after OnStartup returns.
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Run OnStartup in a goroutine and signal when done.
+	startupReturned := make(chan struct{})
 	go func() {
 		s.OnStartup(ctx)
 		close(startupReturned)
 	}()
 
-	// Wait briefly for OnStartup to return (it should be immediate).
+	// 先等后台嗅探真的开始（证明它确实被 spawn 了）。
 	select {
-	case <-startupReturned:
-		// Good — OnStartup returned immediately (non-blocking).
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("OnStartup blocked for startup strategy")
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("background sniff never started for startup strategy")
 	}
 
-	// Cancel the context to stop the background goroutine.
+	// 嗅探仍被按住：此时 OnStartup 若同步执行就绝不可能已经返回。
+	select {
+	case <-startupReturned:
+		// Good — OnStartup returned while the sniff was still in flight.
+	case <-time.After(10 * time.Second):
+		t.Fatal("OnStartup blocked for startup strategy")
+	}
+	if !s.StartupSniffSpawned() {
+		t.Error("StartupSniffSpawned() = false after a spawned startup sniff (票 34 / P1-30)")
+	}
+
+	// 放行后台嗅探并取消上下文，让 goroutine 干净收尾。
+	close(release)
 	cancel()
-	// Give a short grace period for the goroutine to clean up.
-	time.Sleep(50 * time.Millisecond)
+	s.Shutdown()
 }
 
 func TestSchedulerOnStartup_IntervalExpiredIsAsync(t *testing.T) {
@@ -817,8 +835,13 @@ func TestSchedulerOnStartup_IntervalExpiredIsAsync(t *testing.T) {
 		Tools:       make(map[string]ToolSniffResult),
 		LastSniffAt: time.Now().Add(-2 * time.Hour),
 	})
+
+	// 确定性判据（同上）：嗅探被按住不放，OnStartup 必须已经返回。
+	started := make(chan struct{})
+	release := make(chan struct{})
 	s.loadCatalog = func(string) (*manifest.Catalog, error) {
-		time.Sleep(2 * time.Second)
+		close(started)
+		<-release
 		return &manifest.Catalog{}, nil
 	}
 
@@ -827,11 +850,20 @@ func TestSchedulerOnStartup_IntervalExpiredIsAsync(t *testing.T) {
 		s.OnStartup(context.Background())
 		close(returned)
 	}()
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("background sniff never started after cache expiry (Spec 030)")
+	}
 	select {
 	case <-returned:
-	case <-time.After(500 * time.Millisecond):
+		// Good — 返回时嗅探仍在飞行，确证非阻塞。
+	case <-time.After(10 * time.Second):
 		t.Fatal("interval OnStartup blocked after cache expiry (Spec 030)")
 	}
+
+	close(release)
 	s.Shutdown()
 }
 

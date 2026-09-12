@@ -85,12 +85,12 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
     const toolName = tool?.name;
     const displayName = tool?.displayName || tool?.name;
     if (!toolName) return;
-    // Entry guard: pmOperating is only set later (inside updatePm, after
-    // the version/preview awaits). Without this guard two rapid clicks on
-    // the Update button run two parallel chains — two confirm dialogs and
-    // two UpdatePackageManager IPC calls.
+    // G-06 (P1-38) 入口守卫：pmOperating 由本函数入口置位（不再等到 updatePm），
+    // 否则 GetAvailableVersions/PreviewInstall 这段慢 IPC 期间连点两次 Update
+    // 会并行跑两条链——弹两个确认框、发两次 UpdatePackageManager。
     if (pmOperating.value) return;
     const catalogName = tool?.toolName || toolName;
+    pmOperating.value = catalogName;
     let latest = '';
     let unverified = false;
     try {
@@ -104,15 +104,25 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
       console.error('Preview PM update failed:', e);
     }
     if (unverified && latest) {
+      // G-06 (P1-38) 守卫所有权：本函数已 return，pmOperating 的复位权交给弹窗回调——
+      // onPositiveClick 转 updatePm（由其 finally 复位），onNegativeClick 就地复位。
+      // 因此弹窗必须关闭所有会绕过 onNegativeClick 的关闭路径：naive-ui 的
+      // closable / closeOnEsc / maskClosable 默认均为 true，任一条生效都会隐藏弹窗
+      // 而不触发回调 → pmOperating 永不复位 → Update 按钮永久锁死。
       dialog.warning({
         title: t('install.unverified_title') || 'Unverified Version',
         content: t('install.unverified_content', { tool: catalogName, version: latest }) || `Version ${catalogName}@${latest} was discovered by sniffing. Continue?`,
         positiveText: t('btn.update'),
         negativeText: t('btn.cancel'),
+        closable: false,
+        closeOnEsc: false,
+        maskClosable: false,
         onPositiveClick: () => updatePm(toolName, displayName),
+        onNegativeClick: () => { pmOperating.value = ''; },
       });
       return;
     }
+    // 直连路径：updatePm 自身在 finally 复位守卫。
     await updatePm(toolName, displayName);
   }
 

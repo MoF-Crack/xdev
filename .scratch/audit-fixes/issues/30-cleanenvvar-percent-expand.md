@@ -1,6 +1,6 @@
 # 30 CleanEnvVarPath %VAR% 展开
 
-Status: open
+Status: resolved
 Type: task
 批次: B5
 对应修复项: P1-21（B-08）（方案 §5 主题 C）
@@ -18,3 +18,11 @@ Go 的 `os.ExpandEnv` 只展开 `$var`，**%VAR% 从不触发展开**——`%JAV
 ## 守卫测试
 
 含 `%JAVA_HOME%\bin`（注册表定义、进程未定义）的合法条目不再被删；真正失效条目仍被清理（不退化为 no-op）。
+
+## Comments（Batch 5 实施记录）
+
+- 改动（`internal/gui/app_env_vars.go`）：新增 `percentVarRe` + `expandPercentVars`（合并环境 = **进程 env 为底，machine/user 注册表覆盖**；键大写归一即大小写不敏感；**未命中保留原样**并由 `percentVarsUnresolved` 判无效）+ `pathEntryExists`（`%VAR%` → `os.ExpandEnv`（`$VAR` 形式）→ `os.Stat`）；`percentExpander` 惰性快照，`CleanAllInvalidEnvVars` 整批**共享一次枚举**（消除 N² 开销）；`CleanEnvVarPath` / `ValidateEnvVar` / `buildPathEntries` / `GetAllEnvVars` **三处同病同修**；新增 5 个包级可替换 seam（合并环境快照/枚举/读/写/删，默认全为生产实现）。**未**采用定制 getenv 回调方案（会让全部 %-引用落入保守跳过 → 清理退化 no-op）。
+- 守卫测试：`app_env_vars_percent_test.go`（`TestCleanEnvVarPath_PercentVarEntrySurvives` / `TestValidateEnvVar_PercentVarEntryValid` / `TestCleanEnvVarPath_UndefinedPercentVarStillRemoved`（**防 no-op 回归**）/ `TestExpandPercentVars_CaseInsensitiveAndPreservingUnresolved` / `TestCleanAllInvalidEnvVars_EnumeratesMergedEnvOnce`）。
+- **红线先红后绿**：旧行为 → `合法条目 %JAVA_HOME%\bin 被误删（清理后 = ""）`、`buildPathEntries … Exists:false`；缓存未共享 → `合并环境枚举次数 = 14, want 1`。还原后全绿，无探针残留。
+- 有意的行为副作用：`validationStatus` 与 `ValidateEnvVar` 共用 `looksLikePathValue`，含 `%VAR%\...` 的值现在给出 valid/invalid 而非 not-applicable（这正是 B-08 的目的）。
+- 已知边界：`%VAR:~0,3%` 之类 cmd 子串语法不展开（保留原样 → 判无效 → 清理）；注册表 PATH 本不应存此形态，已记录。

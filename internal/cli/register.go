@@ -70,11 +70,13 @@ func RegisterAll(r *plugin.Registry, catalog *manifest.Catalog) {
 	// 与 `xdev plugin install` 的写入目录 pluginDir() 完全一致。修复前
 	// 注册侧扫描 $XMDEV_HOME 或 ~/.xdev/plugins，默认部署下安装好的
 	// 插件永不被加载）。旧目录仍存在且非空时输出迁移提示。
+	//
+	// 票 39 / P2-31（N-09）：xdev 原生格式与 vfox 兼容格式的注册合并为
+	// 一次目录扫描 + 一个 LuaEngine（见 registerUserPlugins）——修复前
+	// 两个函数各扫一遍目录、各建一个引擎，同一个 .lua 被 DoFile 两次
+	// （顶层代码执行两遍、VM 缓存两份），且 vfox 侧加载失败静默 continue。
 	hintLegacyPluginsDir()
-	registerLuaPlugins(r)
-
-	// 4. 扫描同一目录下的 vfox 格式 Lua 插件。
-	registerVfoxPlugins(r)
+	registerUserPlugins(r)
 }
 
 // isRegisterableTool 报告 t 是否为可安装的真实工具：至少要有
@@ -138,11 +140,29 @@ func hintLegacyPluginsDir() {
 	log.Printf("[plugin] 迁移提示：检测到旧插件目录 %s 仍含 %d 个条目，而当前插件目录 %s 不存在。请手动把需要的 .lua 插件复制到 %s 后使用（不自动搬移，以避免双扫描注册重复）。", legacy, len(entries), dir, dir)
 }
 
-// registerLuaPlugins scans the plugins directory for .lua files
-// and registers them.  Errors are logged but do not prevent startup.
-func registerLuaPlugins(r *plugin.Registry) {
+// pluginsReadDir 是 os.ReadDir 的测试接缝（票 39 / P2-31 守卫：目录只扫
+// 一次）。生产路径不使用替换值。
+var pluginsReadDir = os.ReadDir
+
+// registerUserPlugins 扫描插件目录一次，把其中每个 .lua 注册到 r。
+//
+// 票 39 / P2-31（N-09）——修复前是两个平行函数（registerLuaPlugins +
+// registerVfoxPlugins），各自 os.ReadDir 一次、各自 plugin.NewLuaEngine()
+// 一次、各自对该文件 DoFile 一次：
+//
+//   - 一个文件被 DoFile 两次（顶层代码执行两遍；两次都可能产生副作用，
+//     且引擎里缓存两份 VM）；
+//   - xdev 插件先注册成功、随后 vfox 侧再加载一遍：vfox 加载失败是静默
+//     `continue`，写坏的 vfox 插件完全没有任何提示，用户只能看到"插件没
+//     生效"。
+//
+// 现改为：一次扫描 + 一个引擎，每个文件**先按 xdev 原生格式加载**，失败再
+// 按 vfox 兼容格式加载；加载成功的文件只 DoFile 一次。两种格式都失败时把
+// 两个错误一起报出来（不再静默）。注册冲突警告与旧目录迁移提示的既有语义
+// 保持不变（hintLegacyPluginsDir 仍在 RegisterAll 里先执行）。
+func registerUserPlugins(r *plugin.Registry) {
 	dir := pluginsDir()
-	entries, err := os.ReadDir(dir)
+	entries, err := pluginsReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "warning: failed to read plugins dir %s: %v\n", dir, err)
@@ -156,45 +176,33 @@ func registerLuaPlugins(r *plugin.Registry) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		p, err := engine.LoadPlugin(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load Lua plugin %s: %v\n", e.Name(), err)
-			continue
-		}
-		if _, exists := r.Get(p.Name()); exists {
-			fmt.Fprintf(os.Stderr, "warning: Lua plugin %s conflicts with built-in plugin, skipping\n", p.Name())
-			continue
-		}
-		r.Register(p)
-	}
-}
 
-// registerVfoxPlugins scans the plugins directory for vfox-format
-// Lua plugins and registers them.  A vfox plugin is identified by
-// having a PLUGIN.info table instead of PLUGIN.name.  Errors are
-// logged but do not prevent startup.
-func registerVfoxPlugins(r *plugin.Registry) {
-	dir := pluginsDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
+		// 1) xdev 原生格式（多数插件）。成功即注册，不再尝试 vfox
+		//    ——"成功加载的文件只 DoFile 一次"。
+		p, xdevErr := engine.LoadPlugin(path)
+		if xdevErr == nil {
+			if _, exists := r.Get(p.Name()); exists {
+				fmt.Fprintf(os.Stderr, "warning: Lua plugin %s conflicts with built-in plugin, skipping\n", p.Name())
+				continue
+			}
+			r.Register(p)
+			continue
+		}
 
-	engine := plugin.NewLuaEngine()
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".lua") {
+		// 2) vfox 兼容格式（PLUGIN.info + install()/env_keys()）。
+		vfoxPlugin, vfoxErr := engine.LoadVfoxPlugin(path)
+		if vfoxErr != nil {
+			// 修复前这里是静默 continue——两种格式都读不出来时必须让用户
+			// 看到原因（两个错误都打印，便于判断是格式写错还是脚本报错）。
+			fmt.Fprintf(os.Stderr, "warning: failed to load Lua plugin %s: %v; vfox format also failed: %v\n",
+				e.Name(), xdevErr, vfoxErr)
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
-		p, err := engine.LoadVfoxPlugin(path)
-		if err != nil {
+		if _, exists := r.Get(vfoxPlugin.Name()); exists {
+			fmt.Fprintf(os.Stderr, "warning: vfox plugin %s conflicts with existing plugin, skipping\n", vfoxPlugin.Name())
 			continue
 		}
-		if _, exists := r.Get(p.Name()); exists {
-			fmt.Fprintf(os.Stderr, "warning: vfox plugin %s conflicts with existing plugin, skipping\n", p.Name())
-			continue
-		}
-		r.Register(p)
-		fmt.Fprintf(os.Stderr, "info: loaded vfox plugin %s from %s\n", p.Name(), e.Name())
+		r.Register(vfoxPlugin)
+		fmt.Fprintf(os.Stderr, "info: loaded vfox plugin %s from %s\n", vfoxPlugin.Name(), e.Name())
 	}
 }

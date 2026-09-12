@@ -231,11 +231,20 @@ func TestIsAllZeroHex(t *testing.T) {
 	}{
 		{"", false}, // empty is not a placeholder
 		{"0000000000000000000000000000000000000000000000000000000000000000", true},
+		// Ticket 39 (P2-12): "0x"-prefixed 64 zeros stays a valid placeholder
+		// (TrimPrefix leaves exactly 64 zeros, matching the signing side).
 		{"0x0000000000000000000000000000000000000000000000000000000000000000", true},
 		{"0000000000000000000000000000000000000000000000000000000000000001", false},
 		{"f5cea43414cc33024bbe5867f208d1c9c915d6a38e92abeee07ed9e5563662297", false},
 		{"abc", false},
-		{"0", true},
+		// Ticket 39 (P2-12) — the red line: a single "0" is NOT the canonical
+		// placeholder. The old implementation treated ANY all-zero string as a
+		// placeholder, so a truncated/malformed hash silently skipped
+		// verification instead of failing loudly.
+		{"0", false},
+		{"00", false},
+		// A truncated zero string is likewise not a placeholder.
+		{"00000000000000000000000000000000000000000000000000000000000000", false},
 	}
 	for _, c := range cases {
 		if got := util.IsAllZeroHash(c.in); got != c.want {

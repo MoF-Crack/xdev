@@ -54,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/util"
@@ -256,6 +257,11 @@ func (c *Config) GetPathMode() string {
 }
 
 // SetPathMode updates the PATH management mode and saves the config.
+//
+// 票 33（P1-28 / E-09）：枚举单一化——只接受 shim | direct | auto。
+// "symlink" 是历史遗留值（无任何实现），此处与 cli/config.go setPathField
+// 同源拒绝；存量 config.yaml 里的 "symlink" 由 GetPathMode 静默降级为
+// "shim"（保持现状，不破坏既有安装）。
 func (c *Config) SetPathMode(mode string) error {
 	if mode != "shim" && mode != "direct" && mode != "auto" {
 		return fmt.Errorf("invalid path mode: %q", mode)
@@ -599,7 +605,30 @@ func (c *Config) ResolvePaths(xmdeDir string) {
 //
 // Set the environment variable XMDEV_FORCE_HOME=1 to bypass the
 // heuristic and always use ~/.xdev.
+//
+// 票 33（P1-27 / E-08）：返回前统一 filepath.Abs——本函数是所有路径的
+// 单一来源（config.yaml / last_selection.json / 缓存 / 驱动器扫描），
+// 一旦返回相对路径，后续 Join 出的 shim/install/cache 路径都会相对 CWD
+// 漂移（跨进程注册表与缓存写入落到错误位置）。归一失败（CWD 不可用等
+// 极端情况）时保留原值，不因归一失败而拒绝启动。
 func resolveXMDevDir(explicit string) (string, error) {
+	dir, err := resolveXMDevDirRaw(explicit)
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		return "", nil
+	}
+	abs, absErr := filepath.Abs(dir)
+	if absErr != nil {
+		return dir, nil
+	}
+	return abs, nil
+}
+
+// resolveXMDevDirRaw implements the precedence chain documented above;
+// callers must use resolveXMDevDir so the absolute-path invariant holds.
+func resolveXMDevDirRaw(explicit string) (string, error) {
 	if explicit != "" {
 		return expandHome(explicit)
 	}
@@ -812,7 +841,10 @@ func UpdateConfigPaths(dir string) {
 	content = strings.ReplaceAll(content, "XimuLocalDev/xdev", "XDev")
 	content = strings.ReplaceAll(content, ".xmdevenvmt", ".xdev")
 	if err := util.AtomicWriteFile(configPath, []byte(content), 0o644); err != nil {
-		log.Printf("[config] WARNING: failed to save last_selection.json: %v", err)
+		// 票 40（P2-33 / N-18）：文案原先误写成 last_selection.json，而这里
+		// 写的是 configPath（<home>/config.yaml）——出错时日志必须指向真正
+		// 失败的文件，否则用户会去排查一个从未被写过的文件。
+		log.Printf("[config] WARNING: failed to save config.yaml: %v", err)
 	}
 }
 
@@ -1179,19 +1211,32 @@ func readHomeCache() string {
 
 // readCacheFile reads and validates a single cache file.
 // Returns the cached home directory or "" if invalid.
+//
+// 票 43：写入端的内容是 `dir + "\n" + os.Getenv("XMDEV_HOME")`，而生产环境的
+// 正常情形是 XMDEV_HOME **未设置**（home 是「被发现」的，不是配置的），此时
+// 文件只有一行。本函数原先要求 `len(lines) >= 2`，于是单行缓存永远被拒收——
+// 跨进程缓存从未生效：每个 xdev/shim/CLI/GUI 进程都重新全盘扫描
+// （saferWindowsHome 对 8 个盘符求剩余空间 / scanForExistingInstall 逐盘 stat）
+// 并重写该文件。现在接受单行形式（缺第二行 = 记录时环境变量为空），并对读到的
+// 两行做 TrimSpace（Windows 写出的 CRLF 同样能对上）。
 func readCacheFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) < 2 {
+	if len(lines) == 0 {
 		return ""
 	}
-	cachedHome := lines[0]
-	cachedEnv := lines[1]
-	currentEnv := os.Getenv("XMDEV_HOME")
-	if currentEnv != cachedEnv {
+	cachedHome := strings.TrimSpace(lines[0])
+	cachedEnv := ""
+	if len(lines) >= 2 {
+		cachedEnv = strings.TrimSpace(lines[1])
+	}
+	if cachedHome == "" {
+		return ""
+	}
+	if os.Getenv("XMDEV_HOME") != cachedEnv {
 		return ""
 	}
 	if fi, err := os.Stat(cachedHome); err != nil || !fi.IsDir() {
@@ -1200,16 +1245,84 @@ func readCacheFile(path string) string {
 	return cachedHome
 }
 
+// PeekCachedHomeDir returns the xdev home directory that previous runs
+// recorded, WITHOUT performing discovery and WITHOUT writing anything.
+//
+// It exists for host-pollution auditing (internal/testkit/hostsnapshot): a
+// test suite must be able to watch the developer's real xdev home for writes
+// even when XMDEV_HOME is pinned to a temp directory for the test process.
+// Unlike ResolveHomeDir it never calls writeHomeCache, and unlike
+// readHomeCache it does not invalidate an entry when the current process's
+// XMDEV_HOME differs from the value recorded in the cache file.
+func PeekCachedHomeDir() string {
+	if homeVal != "" {
+		return homeVal
+	}
+	var candidates []string
+	if v := os.Getenv("XMDEV_HOME"); v != "" {
+		candidates = append(candidates, filepath.Join(v, ".home.cache"))
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
+			candidates = append(candidates, filepath.Join(appData, "xdev", "home.cache"))
+		}
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			candidates = append(candidates, filepath.Join(appData, "xdev", "home.cache"))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".xdev", "home.cache"))
+	}
+	for _, c := range candidates {
+		if dir := rawCachedDir(c); dir != "" {
+			return dir
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if dir := scanForExistingInstall(); dir != "" {
+			return dir
+		}
+	}
+	return ""
+}
+
+// rawCachedDir reads the home directory recorded in a cache file without
+// validating it against the current XMDEV_HOME. Returns "" when the file is
+// missing/malformed or when the recorded directory no longer exists.
+func rawCachedDir(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	dir := strings.TrimSpace(lines[0])
+	if dir == "" {
+		return ""
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return dir
+}
+
 // writeHomeCache atomically writes the home directory cache file.
 // When the cache is written to the xdev home directory (non-C: drive),
 // it also removes the legacy LOCALAPPDATA cache to avoid stale entries.
+//
+// 票 31（P1-24 收敛核验）：本处原为「固定 path+".tmp" + os.WriteFile」克隆，
+// 多进程（GUI/shim/CLI 并发启动）会互相截断同一中间文件，rename 方拿到
+// 半截内容或直接失败。改用唯名临时文件（CreateTemp）+ 权限还原 + rename；
+// 与 internal/util.AtomicWriteFile 的 CreateTemp 版本同型（该本体由
+// internal/util 域负责，见票 31 报告的白名单外清单）。
 func writeHomeCache(dir string) {
 	path := homeCachePath()
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	content := dir + "\n" + os.Getenv("XMDEV_HOME")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err == nil {
-		os.Rename(tmp, path)
+	if err := writeFileCreateTemp(path, []byte(content), 0o644); err != nil {
+		log.Printf("[config] WARNING: write home cache %s: %v", path, err)
 	}
 	// Clean up legacy LOCALAPPDATA cache if we're now writing elsewhere.
 	if fallback := fallbackCachePath(); fallback != path {
@@ -1217,22 +1330,87 @@ func writeHomeCache(dir string) {
 	}
 }
 
-// expandHome replaces a leading "~" or "~/" with the user's home dir.
-func expandHome(p string) (string, error) {
-	if !strings.HasPrefix(p, "~") {
-		return p, nil
-	}
-	home, err := os.UserHomeDir()
+// writeFileCreateTemp writes data to path atomically using a uniquely named
+// temporary file in the same directory (CreateTemp gives the 0600 default,
+// so the requested perm is restored explicitly; on Windows the read-only bit
+// is not part of FileMode perm, so there is no side effect).
+// 票 31: 固定 "<path>.tmp" 会被并发写者互相截断，唯名临时文件消除该竞态。
+func writeFileCreateTemp(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return "", err
+		return fmt.Errorf("create temp in %s: %w", dir, err)
 	}
-	if p == "~" {
-		return home, nil
+	tmpName := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpName)
 	}
-	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
-		return filepath.Join(home, p[2:]), nil
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return fmt.Errorf("write tmp %s: %w", tmpName, err)
 	}
-	return p, nil
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync tmp %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close tmp %s: %w", tmpName, err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod tmp %s: %w", tmpName, err)
+	}
+	if err := renameWithRetry(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename %s -> %s: %w", tmpName, path, err)
+	}
+	return nil
+}
+
+// renameWithRetry renames with a short bounded retry window.
+//
+// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一
+// 目标时会偶发 ERROR_ACCESS_DENIED（已知行为，不是调用方的错）：直接冒泡
+// 会把这个正常的并发写当失败。重试窗口 ~55ms，超时后原样返回错误。
+func renameWithRetry(oldPath, newPath string) error {
+	const attempts = 10
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(oldPath, newPath); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return err
+}
+
+// expandHome replaces a leading "~" or "~/" with the user's home dir,
+// and（票 33 / P1-27 / E-08）normalises the result to an absolute path so
+// that a relative --xmdevenv-dir / $XMDEV_HOME never propagates into the
+// rest of the config (which would resolve relative to the process CWD).
+func expandHome(p string) (string, error) {
+	out := p
+	if strings.HasPrefix(p, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case p == "~":
+			out = home
+		case strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\"):
+			out = filepath.Join(home, p[2:])
+		}
+	}
+	if out == "" {
+		return "", nil
+	}
+	if abs, err := filepath.Abs(out); err == nil {
+		return abs, nil
+	}
+	return out, nil
 }
 
 // IsWindows reports whether we are on Windows.  Small helper to avoid

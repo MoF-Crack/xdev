@@ -41,6 +41,27 @@ describe('InstallProgressDialog', () => {
     expect(wrapper.text()).toContain(key);
   });
 
+  // Ticket 41 (audit-fixes / P2-24): a failed row is NOT a completed row —
+  // otherwise the "N/M" headline claims "5/5" next to a red error row.
+  // The counter only exists in multi-item (batch) mode.
+  it('counts only settled-success rows in the (N/M) batch counter', async () => {
+    const rows = [
+      { tool: 'node', version: '20.18.0', active: false, percent: 100 },
+      { tool: 'go', version: '1.24.0', active: false, error: { message: 'HTTP 503' } },
+      { tool: 'lua', version: '5.4.8', active: true, phase: 'Installing', percent: 40 },
+    ];
+    const wrapper = mount(InstallProgressDialog, { global: { stubs: { teleport: true } }, props: { show: true, t, items: rows } });
+
+    expect(wrapper.get('.batch-count').text()).toBe('(1/3)');
+    expect(wrapper.get('h2').text()).toContain('(1/3)');
+    // 失败行确实渲染成 error 行（否则上面的计数断言可能是「行没渲染」造成的假绿）
+    expect(wrapper.get('[data-batch-item="go"]').classes()).toContain('install-row--error');
+
+    // 正向对照：只有失败行消失时计数才 +1，证明差异来自 error 过滤而非行数。
+    await wrapper.setProps({ items: [rows[0], rows[2]] });
+    expect(wrapper.get('.batch-count').text()).toBe('(1/2)');
+  });
+
   it('focuses an active control, traps focus, and cannot close while active', async () => {
     const trigger = document.createElement('button');
     document.body.append(trigger);

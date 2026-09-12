@@ -155,6 +155,12 @@ func promptDriveWith(in io.Reader, out io.Writer, drives []config.DriveInfo) (Dr
 				fmt.Fprintln(out, "  empty path, please try again.")
 				continue
 			}
+			// 票 33（P1-27 / E-08）：拒绝相对路径与 UNC 路径——home 一旦是
+			// 相对路径，派生目录会随 CWD 漂移；UNC 无法承载 shim/注册表语义。
+			if err := validateLocalAbsPath(p); err != nil {
+				fmt.Fprintf(out, "  %v\n", err)
+				continue
+			}
 			return DriveChoice{Path: p}, nil
 		}
 		// Treat as a drive letter.

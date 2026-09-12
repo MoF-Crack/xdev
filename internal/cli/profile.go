@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -155,15 +156,55 @@ func newExportCmd() *cobra.Command {
 	}
 }
 
+// profileImportMaxSize 是 `xdev profile import` 允许的导入文件上限。
+//
+// 票 40（P2-33 / N-18）：GUI 侧的 ImportProfile 用 profileMaxSize（10 MB，
+// internal/gui/app_profile.go）限制导入大小，CLI 侧原先直接 os.ReadFile
+// 任意大小文件——同一个产品两条路径不对称，且一个被误选/恶意构造的超大
+// JSON 会直接把 CLI 读爆内存。此处对齐同一个 10 MB 上限。
+const profileImportMaxSize = 10 << 20
+
+// readProfileForImport 读取导入文件，并强制 10 MB 上限。
+//
+// 先用 os.Stat 做一次廉价检查（能报出确切字节数），再用
+// io.LimitReader 多读 1 字节兜住 Stat 与读取之间的 TOCTOU（文件在两次
+// 调用之间长大时仍然只读入上限 + 1 字节即判定超限，不会把超大文件整体
+// 读进内存）。超限一律返回明确错误，不做截断——截断后的 JSON 会以
+// 「解析失败」误导用户。
+func readProfileForImport(path string) ([]byte, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	if fi.Size() > profileImportMaxSize {
+		return nil, fmt.Errorf("profile file is too large: %d bytes exceeds the %d MiB limit",
+			fi.Size(), profileImportMaxSize>>20)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, profileImportMaxSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	if int64(len(data)) > profileImportMaxSize {
+		return nil, fmt.Errorf("profile file is too large: exceeds the %d MiB limit", profileImportMaxSize>>20)
+	}
+	return data, nil
+}
+
 func newImportCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "import <file>",
 		Short: "Import environment profile from a JSON file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := os.ReadFile(args[0])
+			data, err := readProfileForImport(args[0])
 			if err != nil {
-				return fmt.Errorf("read file: %w", err)
+				return err
 			}
 
 			var profile struct {

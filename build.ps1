@@ -22,7 +22,11 @@ if ($versionLine -match '"([^"]+)"') {
     exit 1
 }
 
-$buildDate = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+# F-13: stamp BuildDate in real UTC. The previous `Get-Date -Format
+# "yyyy-MM-ddTHH:mm:ssZ"` formatted local time but appended a literal "Z",
+# so builds carried a local-time value falsely labelled as UTC. Convert first,
+# then format, so the trailing Z is honest.
+$buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $ldflags = "-s -w -X github.com/xmdemt/xdev/internal/version.BuildDate=$buildDate"
 
 # Security (C-5): Inject the Ed25519 public key for manifest signature

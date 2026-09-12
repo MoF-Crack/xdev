@@ -238,6 +238,12 @@ func diskShimIndexPath(xmdeHome string) string {
 
 // writeDiskShimIndex serialises the current reverse index to disk.
 // Best-effort: missing cache dir or write failure is logged, not fatal.
+//
+// C-04（审计 P1-15）：写盘改用 util.AtomicWriteFile（临时文件 + rename）。
+// 磁盘索引是并发 shim 进程直接读取的共享文件，裸 os.WriteFile 在写入
+// 过程中被另一个 shim 读到会拿到半截索引（缺行 → 该别名解析失败）；
+// 崩溃时更会留下截断文件。rename 在同一目录内是原子的，读者要么看到
+// 旧内容、要么看到新内容。
 func writeDiskShimIndex(xmdeHome string) {
 	shimIndexMu.RLock()
 	idx := shimIndex
@@ -270,7 +276,7 @@ func writeDiskShimIndex(xmdeHome string) {
 		sb.WriteString(e.path)
 		sb.WriteByte('\n')
 	}
-	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+	if err := util.AtomicWriteFile(path, []byte(sb.String()), 0o644); err != nil {
 		log.Printf("[shim] write disk index %s: %v", path, err)
 	}
 }
@@ -395,8 +401,29 @@ func scanFor(xmdeHome, alias string) (string, string, bool) {
 	// Spec 032: prefer the on-disk reverse index so short shim
 	// processes do not re-walk current/*. The in-process sync.Once
 	// build is the fallback for long-lived CLI/GUI processes.
+	//
+	// C-04（审计 P1-15）：磁盘索引只是 InvalidateShimIndex 时刻的快照。
+	// 工具被卸载/换版本后索引里的路径会变成死路径，而 shim 分发到不存在的
+	// 文件时报的是"找不到文件"而不是 xdev 自己的安装提示——排障极难。
+	// 因此命中后必须先验证目标仍存在。
 	if entry, ok := lookupDiskShimIndex(xmdeHome, alias); ok {
-		return entry.path, entry.toolName, true
+		if _, statErr := os.Stat(entry.path); statErr == nil {
+			return entry.path, entry.toolName, true
+		}
+		// 陈旧索引：以 buildShimIndexMap 的**现扫**结果为准。刻意不回落到
+		// 下面的 sync.Once 内存索引——内存索引可能正是这条陈旧路径的来源
+		// （回环：内存里的旧条目把死路径反复还给自己），只有真正重扫
+		// current/* 才能得到权威答案。buildShimIndexMap 是纯函数、只读
+		// 目录、不取任何包级锁，仅在"索引陈旧"这一条路径上执行；正常命中
+		// 不产生额外开销，也不存在递归/死锁。
+		if fresh := buildShimIndexMap(xmdeHome); fresh != nil {
+			if e, ok := fresh[alias]; ok {
+				return e.path, e.toolName, true
+			}
+		}
+		// 现扫也没有该别名：明确"未命中"。绝不返回死路径——由 Lookup
+		// 报"not installed"，再由 MaybeExec 走 PATH 透传（Spec 038）。
+		return "", "", false
 	}
 	shimIndexOnce.Do(func() {
 		buildShimIndex(xmdeHome)

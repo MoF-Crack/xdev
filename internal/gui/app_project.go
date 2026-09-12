@@ -216,6 +216,16 @@ func (a *App) CreateRemoteInstance(adapter, image, sshHost string, sshPort int, 
 	if err != nil {
 		return nil, err
 	}
+	// Ticket 35 (C-08): persist the instance into the SHARED store
+	// (<home>/instances/<id>.json) so `xdev remote list` (CLI) sees instances
+	// created from the GUI. Before this the GUI never wrote anything, so
+	// "CLI and GUI see the same instance" only held in the CLI→GUI direction.
+	// SaveInstance deliberately never persists credentials (SSHTarget
+	// password is excluded).
+	if saveErr := orchestrator.SaveInstance(a.getCfg().Core.XMDevDir, inst); saveErr != nil {
+		// Non-fatal: the instance exists, only the persisted record failed.
+		logWarn("[CreateRemoteInstance] failed to persist instance %s: %v", inst.ID, saveErr)
+	}
 	return &RemoteCreateResult{
 		ID:      inst.ID,
 		Message: fmt.Sprintf("Remote environment created: %s (%s)", inst.ID, adapter),

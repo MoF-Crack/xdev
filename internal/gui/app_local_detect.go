@@ -1963,66 +1963,14 @@ func (a *App) FixLocalVersions() []FixedVersion {
 		if !entry.IsDir() {
 			continue
 		}
-		toolName := entry.Name()
-		localPath := filepath.Join(installDir, toolName, "local")
-
-		fi, err := os.Stat(localPath)
-		if err != nil || !fi.IsDir() {
-			continue
+		// Ticket 38 (P2-06): each tool is fixed under its own cross-process
+		// tool lock. Renaming a version directory and re-pointing current/
+		// races a concurrent install/activate of the same tool; a busy lock
+		// means another operation owns this tool right now — skip it and let
+		// the next FixLocalVersions run retry.
+		if fv, ok := a.fixLocalVersionForTool(cfg.Core.XMDevDir, installDir, currentDir, entry.Name()); ok {
+			fixed = append(fixed, fv)
 		}
-
-		// Found a "local" version directory — try to detect real version
-		detectedVer := a.detectToolVersion(toolName, localPath)
-		// Also try reading the junction target path for version hints
-		if detectedVer == "local" {
-			currentLink := filepath.Join(currentDir, toolName)
-			if target, err := os.Readlink(currentLink); err == nil {
-				if ver := extractVersionFromPath(target); ver != "" {
-					detectedVer = sanitizeVersionStr(ver)
-				}
-			}
-		}
-
-		if detectedVer == "local" {
-			logInfo("[FixLocalVersions] %s: cannot detect version, keeping 'local'", toolName)
-			continue
-		}
-
-		newPath := filepath.Join(installDir, toolName, detectedVer)
-
-		// Check if the target directory already exists
-		if _, err := os.Stat(newPath); err == nil {
-			logInfo("[FixLocalVersions] %s: target %s already exists, skipping", toolName, detectedVer)
-			continue
-		}
-
-		// Rename the directory
-		if err := os.Rename(localPath, newPath); err != nil {
-			logWarn("[FixLocalVersions] %s: rename failed: %v", toolName, err)
-			continue
-		}
-
-		logInfo("[FixLocalVersions] %s: renamed local → %s", toolName, detectedVer)
-
-		// Update the current junction if it was pointing to "local"
-		currentLink := filepath.Join(currentDir, toolName)
-		if target, err := os.Readlink(currentLink); err == nil {
-			// Check if the current junction points to the "local" directory
-			if filepath.Base(target) == "local" && filepath.Dir(target) == filepath.Join(installDir, toolName) {
-				os.Remove(currentLink)
-				if err := createJunctionForFix(currentLink, newPath); err != nil {
-					logWarn("[FixLocalVersions] %s: failed to update current junction: %v", toolName, err)
-				} else {
-					logInfo("[FixLocalVersions] %s: updated current junction → %s", toolName, detectedVer)
-				}
-			}
-		}
-
-		fixed = append(fixed, FixedVersion{
-			Tool:   toolName,
-			OldVer: "local",
-			NewVer: detectedVer,
-		})
 	}
 
 	// Refresh cache after fixing
@@ -2031,6 +1979,78 @@ func (a *App) FixLocalVersions() []FixedVersion {
 	}
 
 	return fixed
+}
+
+// fixLocalVersionForTool performs the "local" → detected-version rename for
+// one tool under the tool lock. Returns (FixedVersion, true) when the tool
+// was actually fixed.
+func (a *App) fixLocalVersionForTool(xmdeDir, installDir, currentDir, toolName string) (FixedVersion, bool) {
+	toolLock, lockErr := util.AcquireToolLock(xmdeDir, toolName, 20*time.Second)
+	if lockErr != nil {
+		logWarn("[FixLocalVersions] %s: skipping (tool lock busy: %v)", toolName, lockErr)
+		return FixedVersion{}, false
+	}
+	defer toolLock.Release()
+
+	localPath := filepath.Join(installDir, toolName, "local")
+
+	fi, err := os.Stat(localPath)
+	if err != nil || !fi.IsDir() {
+		return FixedVersion{}, false
+	}
+
+	// Found a "local" version directory — try to detect real version
+	detectedVer := a.detectToolVersion(toolName, localPath)
+	// Also try reading the junction target path for version hints
+	if detectedVer == "local" {
+		currentLink := filepath.Join(currentDir, toolName)
+		if target, err := os.Readlink(currentLink); err == nil {
+			if ver := extractVersionFromPath(target); ver != "" {
+				detectedVer = sanitizeVersionStr(ver)
+			}
+		}
+	}
+
+	if detectedVer == "local" {
+		logInfo("[FixLocalVersions] %s: cannot detect version, keeping 'local'", toolName)
+		return FixedVersion{}, false
+	}
+
+	newPath := filepath.Join(installDir, toolName, detectedVer)
+
+	// Check if the target directory already exists
+	if _, err := os.Stat(newPath); err == nil {
+		logInfo("[FixLocalVersions] %s: target %s already exists, skipping", toolName, detectedVer)
+		return FixedVersion{}, false
+	}
+
+	// Rename the directory
+	if err := os.Rename(localPath, newPath); err != nil {
+		logWarn("[FixLocalVersions] %s: rename failed: %v", toolName, err)
+		return FixedVersion{}, false
+	}
+
+	logInfo("[FixLocalVersions] %s: renamed local → %s", toolName, detectedVer)
+
+	// Update the current junction if it was pointing to "local"
+	currentLink := filepath.Join(currentDir, toolName)
+	if target, err := os.Readlink(currentLink); err == nil {
+		// Check if the current junction points to the "local" directory
+		if filepath.Base(target) == "local" && filepath.Dir(target) == filepath.Join(installDir, toolName) {
+			os.Remove(currentLink)
+			if err := createJunctionForFix(currentLink, newPath); err != nil {
+				logWarn("[FixLocalVersions] %s: failed to update current junction: %v", toolName, err)
+			} else {
+				logInfo("[FixLocalVersions] %s: updated current junction → %s", toolName, detectedVer)
+			}
+		}
+	}
+
+	return FixedVersion{
+		Tool:   toolName,
+		OldVer: "local",
+		NewVer: detectedVer,
+	}, true
 }
 
 // FixedVersion represents a tool whose "local" version was renamed to a real version.

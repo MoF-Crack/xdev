@@ -2,7 +2,17 @@
 # Build script for xdev on Linux/macOS（单二进制模型：GUI+TUI+CLI 一个文件）
 set -e
 
-VERSION=$(grep -oP 'Version = "\K[^"]+' internal/version/version.go)
+# F-11: POSIX-portable version extraction. The previous form
+# `grep -oP 'Version = "\K[^"]+'` is GNU-only: BSD/macOS grep has no -P (PCRE)
+# support and aborts with "invalid option -- P", which aborted build.sh on
+# macOS before it built anything. sed BRE (s///p) and `head -n 1` are in the
+# POSIX subset, so GNU sed (Linux/CI) and BSD sed (macOS) behave identically.
+VERSION=$(sed -n 's/^[[:space:]]*const Version = "\([^"]*\)".*$/\1/p' internal/version/version.go | head -n 1)
+if [ -z "$VERSION" ]; then
+    echo "[ERROR] cannot parse Version from internal/version/version.go" >&2
+    exit 1
+fi
+
 LDFLAGS="-s -w -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SKIP_AUDIT="${SKIP_AUDIT:-0}"
 

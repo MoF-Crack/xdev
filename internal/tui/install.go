@@ -18,7 +18,9 @@
 // # doUninstall
 //
 // Uninstall runs synchronously in a tea.Cmd and returns an
-// InstallResultMsg with the same ID scheme for consistency.
+// UninstallResultMsg carrying the same ID scheme (Model.currentOpID) so the
+// Update handler can apply the identical stale-message guard — see ticket 40
+// (P2-19 / E-15).
 package tui
 
 import (
@@ -69,7 +71,9 @@ func (ps *progressState) load() (phase int, percent float64, speed, eta string) 
 // doInstall starts an asynchronous install operation with progress reporting.
 func (m Model) doInstall(ctx context.Context, p plugin.Plugin, ver string) tea.Cmd {
 	toolName := p.Name()
-	installID := m.installState.ID
+	// 票 40（P2-19 / E-15）：ID 取 currentOpID（beginOp 分配，同时写入
+	// installState.ID）——单一来源，避免结果 ID 与操作槽位来源分叉。
+	installID := m.currentOpID
 	ps := &progressState{}
 
 	return tea.Batch(
@@ -114,18 +118,20 @@ func (m Model) progressTickCmd(ps *progressState, tool, ver string, installID in
 }
 
 // doUninstall starts an asynchronous uninstall operation.
+//
+// 票 40（P2-19 / E-15）：结果改用独立的 UninstallResultMsg，并携带
+// beginOp 分配的 currentOpID（旧实现复用 InstallResultMsg 且
+// installState==nil 时 ID 恒为 0——既依赖安装侧判定的漏洞被接受，又与安装
+// 结果共用一个消息空间）。
 func (m Model) doUninstall(p plugin.Plugin, ver string) tea.Cmd {
-	installID := int64(0)
-	if m.installState != nil {
-		installID = m.installState.ID
-	}
+	opID := m.currentOpID
 	return func() tea.Msg {
 		ins := installer.New(m.config, m.registry)
 		if err := ins.Uninstall(p, ver); err != nil {
-			return InstallResultMsg{ID: installID, Err: err}
+			return UninstallResultMsg{ID: opID, Tool: p.Name(), Version: ver, Err: err}
 		}
-		return InstallResultMsg{
-			ID:      installID,
+		return UninstallResultMsg{
+			ID:      opID,
 			Tool:    p.Name(),
 			Version: ver,
 		}
