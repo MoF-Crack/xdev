@@ -74,7 +74,11 @@ function focusTarget() {
 function keepFocusInside(event) {
   if (props.show && !dialog.value?.contains(event.target)) focusTarget()?.focus();
 }
-const phaseKeyMap = { Downloading: 'installing_downloading', 'Downloading...': 'installing_downloading', Extracting: 'installing_extracting', 'Extracting...': 'installing_extracting', Installing: 'installing_installing', 'Installing...': 'installing_installing', Completed: 'installing_completed' };
+// Ticket 08 (audit-fixes / P1-36): the map must cover every phase the
+// backend/frontend can emit — useInstall.js locally sets 'Cancelled',
+// 'Paused' and 'error' after cancel/pause/failure; previously those fell
+// through and the raw phase word was shown untranslated.
+const phaseKeyMap = { Downloading: 'installing_downloading', 'Downloading...': 'installing_downloading', Extracting: 'installing_extracting', 'Extracting...': 'installing_extracting', Installing: 'installing_installing', 'Installing...': 'installing_installing', Completed: 'installing_completed', Cancelled: 'installing_cancelled', Paused: 'installing_paused', error: 'installing_error', Error: 'installing_error' };
 const localizedPhase = computed(() => { const key = phaseKeyMap[props.phase]; return key ? props.t(key) : props.phase; });
 function runInBackground() { emit('update:show', false); }
 function requestClose(show) { if (props.active || anyActive.value) return; emit('update:show', show); }

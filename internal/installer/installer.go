@@ -1299,6 +1299,19 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	log.Printf("[install] Activation complete: %s@%s (%d shims)", p.Name(), ver, len(p.Shims()))
 	shim.InvalidateShimIndex()
 
+	// Ticket 01 (audit-fixes / X-07): for the go tool, self-heal the stale
+	// GOROOT registry value left by the pre-v2 manifest (GOROOT pointed one
+	// level above the real toolchain because the archives keep their
+	// top-level go/ directory). The manifest no longer writes GOROOT —
+	// Go >= 1.26 self-derives it from the go binary location — so existing
+	// installs recover on the next `xdev use go` / activate.
+	if p.Name() == "go" && !i.noEnvWrite {
+		if err := env.CleanupStaleGOROOT(); err != nil {
+			// Non-fatal: activation itself succeeded.
+			log.Printf("[install] WARNING: stale GOROOT cleanup failed: %v", err)
+		}
+	}
+
 	// 广播 WM_SETTINGCHANGE 让新终端感知 PATH 变化
 	if !i.noEnvWrite {
 		env.BroadcastEnvironmentChange()
@@ -1541,6 +1554,20 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 		if otherVer := i.findOtherVersion(p); otherVer != "" {
 			otherPath := p.InstallDir(i.cfg.Core.InstallDir, otherVer)
 			log.Printf("[install] Re-pointing %s to %s@%s", p.Name(), p.Name(), otherVer)
+			// Ticket 03 (audit-fixes / P0-05): Release the uninstall lock
+			// before re-acquiring inside Activate — Activate takes the
+			// same tool lock internally, and a nested acquisition self-
+			// deadlocks (Unix flock locks are per open-file-description,
+			// so a second acquire from the same process blocks the full
+			// 30s timeout; the Windows named mutex is reentrant only
+			// per-thread, and goroutine migration between the two
+			// acquisitions hangs the same way). Same pattern as the
+			// InstallWithProgress critical section (Spec 037).
+			// ToolLock.Release is idempotent (nil release check), so the
+			// deferred release at the top of Uninstall becomes a no-op.
+			// The lock is intentionally NOT re-acquired afterwards: the
+			// remainder of Uninstall only touches shim-index memory state.
+			lock.Release()
 			if err := i.Activate(p, otherPath, otherVer); err != nil {
 				log.Printf("[install] WARNING: failed to re-activate %s@%s: %v", p.Name(), otherVer, err)
 			}

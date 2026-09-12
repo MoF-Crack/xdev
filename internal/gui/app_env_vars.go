@@ -476,6 +476,23 @@ func (a *App) GetOSEnvVars(level string) []EnvVarInfo {
 
 func (a *App) SwitchToLocalVersion(toolName, localPath string) error {
 	logInfo("[SwitchToLocalVersion] switching %s to local version", toolName)
+
+	// Ticket 06 (audit-fixes / P0-08): validate everything BEFORE touching
+	// the filesystem. Previously toolName was used to build
+	// current/<toolName> and the link was removed/re-created before the
+	// plugin lookup ran — a traversal name (e.g. "..\\current\\node")
+	// attacked the real link, and an unregistered tool name still left the
+	// link dangling after the late failure.
+	if err := util.ValidateShimName(toolName); err != nil {
+		return fmt.Errorf("invalid tool name %q: %w", toolName, err)
+	}
+	// Reject unknown tools up front: the plugin also drives the shim
+	// refresh below, so a "switch" for an unknown tool can never be valid.
+	p, err := a.mustGetPlugin(toolName)
+	if err != nil {
+		return err
+	}
+
 	cfg := a.getCfg()
 
 	path := strings.TrimSpace(localPath)
@@ -499,17 +516,18 @@ func (a *App) SwitchToLocalVersion(toolName, localPath string) error {
 	}
 
 	currentLink := a.currentLink(toolName)
+	// Ticket 06: a failed link removal must fail the switch — the old code
+	// only logged, leaving CreateJunction to run against a live link.
 	if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {
-		logWarn("[SwitchToLocalVersion] removing current link %s: %v", currentLink, err)
+		return fmt.Errorf("removing current link %s: %w", currentLink, err)
 	}
+	// Ticket 06: a failed junction creation must fail the switch — the old
+	// code logged "falling back" (there was no fallback) and returned nil,
+	// reporting success with the tool's link now missing entirely.
 	if err := util.CreateJunction(currentLink, path); err != nil {
-		logWarn("[SwitchToLocalVersion] creating junction failed: %v, falling back", err)
+		return fmt.Errorf("creating junction %s -> %s: %w", currentLink, path, err)
 	}
 
-	p, err := a.mustGetPlugin(toolName)
-	if err != nil {
-		return err
-	}
 	for _, shimName := range p.Shims() {
 		cmdPath := filepath.Join(cfg.Core.ShimDir, shimName+".cmd")
 		os.Remove(cmdPath)

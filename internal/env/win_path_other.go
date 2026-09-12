@@ -158,6 +158,12 @@ func DeleteEnvVar(name, level string) error {
 	return fmt.Errorf("persistent environment variable deletion is not supported on this platform (Windows registry only)")
 }
 
+// CleanupStaleGOROOT is a no-op on non-Windows platforms: the stale value
+// lives in HKCU\Environment, which only exists on Windows.
+func CleanupStaleGOROOT() error {
+	return nil
+}
+
 // EnumEnvVars is a no-op on non-Windows platforms.
 func EnumEnvVars(level string) ([]EnvPair, error) {
 	return nil, nil

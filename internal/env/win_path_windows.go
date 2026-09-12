@@ -918,7 +918,7 @@ func EnumEnvVars(level string) ([]EnvPair, error) {
 	nameBuf := make([]uint16, 32768)
 
 	for index := uint32(0); ; index++ {
-		bufSize := uint32(len(buf))
+		bufSize := uint32(len(buf)) * 2 // bytes
 		nameSize := uint32(len(nameBuf))
 		ret, _, _ = procRegEnumValueW.Call(
 			key,
@@ -930,7 +930,45 @@ func EnumEnvVars(level string) ([]EnvPair, error) {
 			uintptr(unsafe.Pointer(&buf[0])),
 			uintptr(unsafe.Pointer(&bufSize)),
 		)
-		if ret != 0 {
+		if ret == _ERROR_NO_MORE_ITEMS {
+			break
+		}
+		// Ticket 05 (N-10): value data larger than the 64 KiB buffer makes
+		// RegEnumValueW return ERROR_MORE_DATA with the required size in
+		// bufSize. Grow the buffer and retry the same index once — the
+		// previous code silently broke, truncating the whole enumeration
+		// (everything after the large value was missing).
+		//
+		// Both size parameters are IN/OUT and must be reset to the real
+		// buffer lengths before the retry: nameSize because the first call
+		// already wrote the actual name length back (without the NUL —
+		// passing it again would trip ERROR_MORE_DATA for the name), and
+		// bufSize per the same systematic-short-by-one rule as the name
+		// buffer above.
+		if ret == _ERROR_MORE_DATA {
+			need := bufSize // required size in bytes, as written by the API
+			if need < 65538 {
+				need = 65538 // degenerate value: ensure growth past the old size
+			}
+			buf = make([]uint16, need/2+1)
+			nameSize = uint32(len(nameBuf))
+			bufSize = uint32(len(buf)) * 2
+			ret, _, _ = procRegEnumValueW.Call(
+				key,
+				uintptr(index),
+				uintptr(unsafe.Pointer(&nameBuf[0])),
+				uintptr(unsafe.Pointer(&nameSize)),
+				0,
+				0,
+				uintptr(unsafe.Pointer(&buf[0])),
+				uintptr(unsafe.Pointer(&bufSize)),
+			)
+			if ret != 0 {
+				log.Printf("[env] WARN: enum %s: value at index %d needs %d bytes of data — skipped (ret=%d)", level, index, need, ret)
+				continue
+			}
+		} else if ret != 0 {
+			log.Printf("[env] WARN: enum %s aborted at index %d: ret=%d", level, index, ret)
 			break
 		}
 		name := syscall.UTF16ToString(nameBuf[:nameSize])
@@ -1387,7 +1425,42 @@ func GetAllUserEnvVars() map[string]string {
 		if ret == _ERROR_NO_MORE_ITEMS {
 			break
 		}
-		if ret != 0 && ret != _ERROR_MORE_DATA {
+		// Ticket 05 (audit-fixes / P0-07): a value name longer than the
+		// 256-char buffer makes RegEnumValueW return ERROR_MORE_DATA.
+		// Empirically (and per the API contract) lpcchValueName is NOT
+		// written back with the required length in this case — it keeps
+		// its input value — so the buffer must be grown geometrically
+		// rather than resized to a reported length. Retries stay bounded
+		// by the 16,383-char registry name cap; previously this path
+		// panicked (slice bounds out of range on nameBuf[:nameBufSize]).
+		//
+		// Note lpcchValueName is IN/OUT: each retry resets it to the new
+		// buffer length.
+		if ret == _ERROR_MORE_DATA {
+			for grow := uint32(512); grow <= 16384 && ret == _ERROR_MORE_DATA; grow *= 2 {
+				nameBuf = make([]uint16, grow)
+				nameBufSize = grow
+				ret, _, _ = procRegEnumValueW.Call(
+					key,
+					uintptr(index),
+					uintptr(unsafe.Pointer(&nameBuf[0])),
+					uintptr(unsafe.Pointer(&nameBufSize)),
+					0,
+					uintptr(unsafe.Pointer(&valType)),
+					0,
+					uintptr(unsafe.Pointer(&dataBufSize)),
+				)
+			}
+			if ret != 0 {
+				log.Printf("[env] WARN: enum HKCU\\Environment: value at index %d has an over-long name (>=%d chars) — skipped (ret=%d)", index, nameBufSize, ret)
+				index++
+				continue
+			}
+		} else if ret != 0 {
+			// Any other failure aborts the enumeration — but never silently:
+			// this loop runs on every Windows shim execution (hot path),
+			// so a broken key must be diagnosable.
+			log.Printf("[env] WARN: enum HKCU\\Environment aborted at index %d: ret=%d", index, ret)
 			break
 		}
 

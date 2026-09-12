@@ -43,6 +43,17 @@ func newDoctorCmd() *cobra.Command {
 			cfg := Cfg()
 			allOK := true
 
+			// 0. Self-heal stale GOROOT residue (ticket 01 / audit X-07): the
+			//    pre-v2 go.yaml wrote a GOROOT one level above the real
+			//    toolchain (strip:0 nested layout), which breaks every
+			//    `go build` with "package fmt is not in std". Idempotent and
+			//    conservative — only deletes values that provably point at
+			//    the parent of a real GOROOT.
+			if err := env.CleanupStaleGOROOT(); err != nil {
+				fmt.Printf("✘ GOROOT registry cleanup failed: %v\n", err)
+				allOK = false
+			}
+
 			check := func(name string, ok bool, msg string) {
 				if ok {
 					fmt.Printf("✔ %s\n  %s\n", name, msg)

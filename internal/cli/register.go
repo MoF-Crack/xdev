@@ -13,8 +13,9 @@
 //     registered automatically without code changes.  Tools backed by
 //     a dedicated plugin (java) and non-tool YAML entries (index.yaml)
 //     are skipped.
-//  3. User-installed Lua plugins — loaded from $XMDEV_HOME/plugins/,
-//     supporting both xdev-native format and vfox-compatible format
+//  3. User-installed Lua plugins — loaded from <XMDevDir>/plugins/
+//     (single source with `xdev plugin install`), supporting both
+//     xdev-native format and vfox-compatible format
 //
 // Tools that need a custom install sub-directory (e.g. Android SDK
 // components that live under android/) set install_root in their
@@ -23,6 +24,7 @@ package cli
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -64,10 +66,14 @@ func RegisterAll(r *plugin.Registry, catalog *manifest.Catalog) {
 		r.Register(plugin.NewGeneric(t))
 	}
 
-	// 3. 扫描 $XMDEV_HOME/plugins/ 下的 Lua 插件。
+	// 3. 扫描 <Cfg().XMDevDir>/plugins/ 下的 Lua 插件（票 04 / P0-06 单源：
+	// 与 `xdev plugin install` 的写入目录 pluginDir() 完全一致。修复前
+	// 注册侧扫描 $XMDEV_HOME 或 ~/.xdev/plugins，默认部署下安装好的
+	// 插件永不被加载）。旧目录仍存在且非空时输出迁移提示。
+	hintLegacyPluginsDir()
 	registerLuaPlugins(r)
 
-	// 4. 扫描 $XMDEV_HOME/plugins/ 下的 vfox 格式 Lua 插件。
+	// 4. 扫描同一目录下的 vfox 格式 Lua 插件。
 	registerVfoxPlugins(r)
 }
 
@@ -79,8 +85,27 @@ func isRegisterableTool(t *manifest.Tool) bool {
 		len(t.VersionList) > 0 || t.Remote.Type != ""
 }
 
-// pluginsDir resolves the user plugin directory ($XMDEV_HOME/plugins).
-func pluginsDir() string {
+// pluginsDirFn resolves the canonical user plugin directory. It is a
+// package-level variable so tests can replace it without touching global
+// config state (ticket 04).
+//
+// Ticket 04 / P0-06 single source of truth: registration scans and
+// `xdev plugin install`/`create` write the SAME directory —
+// Cfg().Core.XMDevDir/plugins (identical to pluginDir() in plugin.go).
+// The previous implementation scanned $XMDEV_HOME or ~/.xdev/plugins,
+// so in default deployments (no XMDEV_HOME env) installed plugins were
+// never loaded.
+var pluginsDirFn = func() string {
+	return filepath.Join(Cfg().Core.XMDevDir, "plugins")
+}
+
+// pluginsDir returns the user plugin directory (read side of the single
+// source; the write side is pluginDir() in plugin.go).
+func pluginsDir() string { return pluginsDirFn() }
+
+// legacyPluginsDir returns the pre-single-source plugin directory that
+// older xdev releases scanned ($XMDEV_HOME/plugins or ~/.xdev/plugins).
+func legacyPluginsDir() string {
 	home := os.Getenv("XMDEV_HOME")
 	if home == "" {
 		if runtime.GOOS == "windows" {
@@ -90,6 +115,27 @@ func pluginsDir() string {
 		}
 	}
 	return filepath.Join(home, "plugins")
+}
+
+// hintLegacyPluginsDir logs a migration hint when the legacy plugin
+// directory still holds entries while the canonical directory does not
+// exist. Plugins are never moved automatically: a silent double scan
+// could register duplicates. Registration itself always uses the
+// canonical directory (pluginsDir).
+func hintLegacyPluginsDir() {
+	dir := pluginsDir()
+	if _, err := os.ReadDir(dir); err == nil {
+		return // canonical dir exists (even if empty) — nothing to hint
+	}
+	legacy := legacyPluginsDir()
+	if dir == legacy {
+		return // same path (XMDEV_HOME deployment) — nothing to migrate
+	}
+	entries, err := os.ReadDir(legacy)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	log.Printf("[plugin] 迁移提示：检测到旧插件目录 %s 仍含 %d 个条目，而当前插件目录 %s 不存在。请手动把需要的 .lua 插件复制到 %s 后使用（不自动搬移，以避免双扫描注册重复）。", legacy, len(entries), dir, dir)
 }
 
 // registerLuaPlugins scans the plugins directory for .lua files

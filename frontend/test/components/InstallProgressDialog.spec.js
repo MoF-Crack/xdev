@@ -28,6 +28,19 @@ describe('InstallProgressDialog', () => {
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('Install failed'));
   });
 
+  // Ticket 08 (audit-fixes / P1-36): useInstall.js locally sets the
+  // 'Cancelled', 'Paused' and 'error' phases after cancel/pause/failure —
+  // the phaseKeyMap must map them to i18n keys instead of showing the
+  // raw untranslated phase word.
+  it.each([
+    ['Cancelled', 'installing_cancelled'],
+    ['Paused', 'installing_paused'],
+    ['error', 'installing_error'],
+  ])('localizes the %s phase through phaseKeyMap', (phase, key) => {
+    const wrapper = mount(InstallProgressDialog, { global: { stubs: { teleport: true } }, props: { show: true, active: false, paused: phase === 'Paused', phase, t } });
+    expect(wrapper.text()).toContain(key);
+  });
+
   it('focuses an active control, traps focus, and cannot close while active', async () => {
     const trigger = document.createElement('button');
     document.body.append(trigger);

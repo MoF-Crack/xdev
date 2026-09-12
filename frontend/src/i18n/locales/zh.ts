@@ -62,6 +62,11 @@ export default {
   'status.version': '版本: {version}',
   'status.unknown': '未知',
 
+  // AI / assistant status
+  'ai.command': '命令',
+  'ai.available': '可用',
+  'ai.unavailable': '不可用',
+
   // Category names
   'category.language': '编程语言',
   'category.build': '构建工具',
@@ -105,6 +110,7 @@ export default {
   'settings.mirror_config': '镜像配置',
   'settings.self_update': '自我更新',
   'settings.diagnostics': '诊断',
+  'settings.check_update': '检查更新',
   'settings.cache_management': '缓存管理',
   'settings.archive_retention': '归档保留策略',
   'settings.retention_immediate': '立即删除',
@@ -220,6 +226,9 @@ export default {
   'installing_extracting': '解压中...',
   'installing_installing': '正在安装（运行安装器，可能需要数分钟）...',
   'installing_completed': '已完成',
+  'installing_cancelled': '已取消',
+  'installing_paused': '已暂停',
+  'installing_error': '失败',
   'install.background': '后台运行',
   'install.copy_error': '复制错误',
   'install.copied': '已复制',
@@ -471,6 +480,8 @@ export default {
   'favorites.show_all_versions': '查看全部 {count} 个版本',
   'favorites.no_available_version': '没有可用版本',
   'favorites.install_failed': '安装失败',
+  'favorites.details': '详情',
+  'favorites.query_failed': '收藏加载失败',
 
   // Lockfile
   'lockfile.title': '锁定文件',
@@ -593,6 +604,12 @@ export default {
   'updates.service_status_not_installed': '未安装',
   'updates.sniff_completed': '嗅探完成',
   'updates.sniff_failed': '嗅探失败',
+  'updates.sniffed_tool': '已嗅探 {tool}',
+  'updates.sniff_strategy_save_failed': '保存嗅探策略失败',
+  'updates.service_installed': '嗅探服务已安装',
+  'updates.service_install_failed': '安装嗅探服务失败',
+  'updates.service_uninstalled': '嗅探服务已卸载',
+  'updates.service_uninstall_failed': '卸载嗅探服务失败',
   'updates.last_sniff': '上次嗅探',
   'updates.next_run': '下次运行',
   'scan.results_title': '本地扫描结果',
@@ -643,6 +660,7 @@ export default {
   'custom_tools.env_var': '环境变量名',
   'custom_tools.preview': '预览版本',
   'custom_tools.preview_results': '发现版本',
+  'custom_tools.preview_failed': '预览版本失败',
   'custom_tools.remove': '删除',
   'custom_tools.added': '自定义工具已添加',
   'custom_tools.add_failed': '添加自定义工具失败',

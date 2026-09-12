@@ -60,6 +60,11 @@ export default {
   'status.version': 'version: {version}',
   'status.unknown': 'Unknown',
 
+  // AI / assistant status
+  'ai.command': 'Command',
+  'ai.available': 'Available',
+  'ai.unavailable': 'Unavailable',
+
   // Category names
   'category.language': 'Language',
   'category.build': 'Build',
@@ -114,6 +119,7 @@ export default {
   'settings.load_failed': 'Failed to load settings',
   'settings.mirror_saved': 'Mirror configuration saved',
   'settings.diagnostics_failed': 'Diagnostics failed',
+  'settings.check_update': 'Check for Updates',
   'btn.save_failed': 'Save failed',
   'install.failed': 'Install failed: {error}',
   'install.success': '{tool}@{version} installed successfully',
@@ -241,6 +247,9 @@ export default {
   'installing_extracting': 'Extracting...',
   'installing_installing': 'Installing (running installer, may take several minutes)...',
   'installing_completed': 'Completed',
+  'installing_cancelled': 'Cancelled',
+  'installing_paused': 'Paused',
+  'installing_error': 'Failed',
   'install.background': 'Run in background',
   'install.copy_error': 'Copy Error',
   'install.copied': 'Copied',
@@ -492,6 +501,8 @@ export default {
   'favorites.show_all_versions': 'View all {count} versions',
   'favorites.no_available_version': 'No available versions',
   'favorites.install_failed': 'Install failed',
+  'favorites.details': 'Details',
+  'favorites.query_failed': 'Failed to load favorites',
 
   // Settings - auto mode
   'settings.path_mode_auto': 'Auto Mode (automatically select best mode)',
@@ -593,6 +604,12 @@ export default {
   'updates.service_status_not_installed': 'Not installed',
   'updates.sniff_completed': 'Sniff completed',
   'updates.sniff_failed': 'Sniff failed',
+  'updates.sniffed_tool': 'Sniffed {tool}',
+  'updates.sniff_strategy_save_failed': 'Failed to save sniff strategy',
+  'updates.service_installed': 'Sniff service installed',
+  'updates.service_install_failed': 'Failed to install sniff service',
+  'updates.service_uninstalled': 'Sniff service uninstalled',
+  'updates.service_uninstall_failed': 'Failed to uninstall sniff service',
   'updates.last_sniff': 'Last sniff',
   'updates.next_run': 'Next run',
   'scan.results_title': 'Local Scan Results',
@@ -643,6 +660,7 @@ export default {
   'custom_tools.env_var': 'Env Var Name',
   'custom_tools.preview': 'Preview Versions',
   'custom_tools.preview_results': 'Found versions',
+  'custom_tools.preview_failed': 'Failed to preview versions',
   'custom_tools.remove': 'Remove',
   'custom_tools.added': 'Custom tool added',
   'custom_tools.add_failed': 'Failed to add custom tool',

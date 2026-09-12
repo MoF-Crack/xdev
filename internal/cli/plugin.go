@@ -22,7 +22,8 @@ func newPluginCmd() *cobra.Command {
 		Short: "Manage Lua plugins",
 		Long: `Manage Lua plugins that extend xdev with custom tools.
 
-Lua plugins are .lua files stored in $XMDEV_HOME/plugins/.
+Lua plugins are .lua files stored in <xdev-home>/plugins/ — the same
+directory that plugin registration scans (single source of truth).
 Each plugin defines a PLUGIN table and Lua functions that
 xdev calls to discover versions, download archives and set
 environment variables.`,

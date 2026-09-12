@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -28,18 +29,7 @@ func NewSSHAdapter(target SSHTarget) (*SSHAdapter, error) {
 	if target.Host == "" {
 		return nil, fmt.Errorf("SSH target host is required")
 	}
-	if target.User == "" {
-		target.User = os.Getenv("USER")
-		if target.User == "" {
-			target.User = os.Getenv("USERNAME")
-		}
-		if target.User == "" {
-			target.User = "root"
-		}
-	}
-	if target.Port == 0 {
-		target.Port = 22
-	}
+	target = normalizeTarget(target)
 	// Check that ssh is available
 	sshBin := sshBinary()
 	if _, err := exec.LookPath(sshBin); err != nil {
@@ -48,32 +38,77 @@ func NewSSHAdapter(target SSHTarget) (*SSHAdapter, error) {
 	return &SSHAdapter{target: target}, nil
 }
 
+// normalizeTarget applies adapter-side defaults to an SSH target: the user
+// three-step chain ("" → $USER → $USERNAME → root) and port 0 → 22. It is
+// shared by NewSSHAdapter and Create's spec-consumption path (ticket 07) so
+// a zero-user target can never be rendered as "@host". Explicit values
+// coming from CLI flags or GUI prefill always win — normalization only
+// fills empties, so the two defaulting layers do not conflict.
+func normalizeTarget(t SSHTarget) SSHTarget {
+	if t.User == "" {
+		t.User = os.Getenv("USER")
+		if t.User == "" {
+			t.User = os.Getenv("USERNAME")
+		}
+		if t.User == "" {
+			t.User = "root"
+		}
+	}
+	if t.Port == 0 {
+		t.Port = 22
+	}
+	return t
+}
+
 func (s *SSHAdapter) Name() string { return "ssh" }
+
+// sshPassArgv builds the complete sshpass argv for a wrapped ssh invocation.
+// sshpass reads the password from the SSHPASS environment variable with -e
+// (supported across the whole 1.06→1.10 line; note 1.10's optional
+// -e[env_var] suffix must be glued to the flag, so the bare "-e" form is the
+// portable choice — a space-separated "SSHPASS" word would be parsed as the
+// command to run, making password login fail 100% of the time).
+//
+// This is the ONLY place the sshpass argv prefix may be constructed
+// (audit-fixes ticket 02 / X-01): runSSH and ConnectInteractive must both
+// route through it, never hand-copying the {"-e", sshBin, ...} literal.
+func sshPassArgv(sshBin string, args []string) []string {
+	return append([]string{"-e", sshBin}, args...)
+}
 
 // runSSH executes the ssh client. When a password is configured it routes
 // through sshpass (must be installed); otherwise it uses the system ssh
 // directly. Returns an error if sshpass is required but unavailable.
-func (s *SSHAdapter) runSSH(ctx context.Context, args ...string) ([]byte, error) {
+// Both stdout and stderr are captured (ticket 02: sshpass failures such as
+// "Failed to run command" land on stderr and Exec must surface them).
+func (s *SSHAdapter) runSSH(ctx context.Context, args ...string) ([]byte, []byte, error) {
 	if s.target.Password != "" {
 		if _, err := exec.LookPath("sshpass"); err != nil {
-			return nil, fmt.Errorf("密码登录需要 sshpass（未在 PATH 中找到）。请安装 sshpass 或改用密钥登录")
+			return nil, nil, fmt.Errorf("密码登录需要 sshpass（未在 PATH 中找到）。请安装 sshpass 或改用密钥登录")
 		}
 		// Prefer env-file style (-e) so the password is not visible in
 		// the process argument list (ps / Task Manager).
-		full := append([]string{"-e", "SSHPASS", sshBinary()}, args...)
-		cmd := exec.CommandContext(ctx, "sshpass", full...)
+		cmd := exec.CommandContext(ctx, "sshpass", sshPassArgv(sshBinary(), args)...)
 		cmd.Env = append(os.Environ(), "SSHPASS="+s.target.Password)
 		util.HideWindow(cmd)
-		return cmd.Output()
+		var outBuf, errBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+		err := cmd.Run()
+		return outBuf.Bytes(), errBuf.Bytes(), err
 	}
 	cmd := exec.CommandContext(ctx, sshBinary(), args...)
 	util.HideWindow(cmd)
-	return cmd.Output()
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
 // TestConnection verifies the SSH connection by running `echo ok`.
 func (s *SSHAdapter) TestConnection(ctx context.Context) error {
-	out, err := s.runSSH(ctx, s.sshArgs("echo", "ok")...)
+	out, _, err := s.runSSH(ctx, s.sshArgs("echo", "ok")...)
 	if err != nil {
 		return fmt.Errorf("ssh connect test failed: %w", err)
 	}
@@ -84,6 +119,21 @@ func (s *SSHAdapter) TestConnection(ctx context.Context) error {
 }
 
 func (s *SSHAdapter) Create(ctx context.Context, spec *EnvironmentSpec) (*Instance, error) {
+	// Ticket 07 (audit-fixes / P0-10): consume the spec's SSHTarget when the
+	// adapter was created zero-valued via NewAdapter(AdapterSSH). Without
+	// this, targets passed through EnvironmentSpec were silently dropped:
+	// the GUI could pass "test connection" (via NewSSHAdapter) yet "create"
+	// (via NewAdapter + spec) always failed against the empty target.
+	// The Host guard keeps an explicitly constructed target (NewSSHAdapter /
+	// CLI flag / GUI prefill) intact — the spec never overwrites it.
+	if spec != nil && spec.SSHTarget.Host != "" && s.target.Host == "" {
+		t := normalizeTarget(spec.SSHTarget)
+		if err := validateSSHTarget(t); err != nil {
+			return nil, err
+		}
+		s.target = t
+	}
+
 	// For SSH, "create" means verify the connection works
 	if err := s.TestConnection(ctx); err != nil {
 		return nil, err
@@ -122,13 +172,23 @@ func (s *SSHAdapter) Exec(ctx context.Context, id string, cmd []string) (*ExecRe
 	}
 
 	sshArgs := s.sshArgs(cmd...)
-	// Password path: run through sshpass via runSSH.
+	// Password path: run through sshpass via runSSH. Ticket 02 (P1-32):
+	// ExitCode must reflect the real exit status and stderr must be
+	// surfaced — previously both were hard-coded to 0/"" even when the
+	// remote command failed. The error propagates alongside the result.
 	if s.target.Password != "" {
-		out, err := s.runSSH(ctx, sshArgs...)
-		return &ExecResult{Stdout: string(out), Stderr: "", ExitCode: 0}, err
+		stdout, stderr, err := s.runSSH(ctx, sshArgs...)
+		return &ExecResult{
+			Stdout:   string(stdout),
+			Stderr:   string(stderr),
+			ExitCode: util.ExitCode(err),
+		}, err
 	}
-	result, _ := util.RunCommand(ctx, sshBinary(), sshArgs...)
-	return &result, nil
+	// Key path (ticket 02 / N-05): the RunCommand error must propagate.
+	// Previously it was discarded (`result, _ :=`), so a failed key-based
+	// remote command looked like "success with empty output" to callers.
+	result, err := util.RunCommand(ctx, sshBinary(), sshArgs...)
+	return &result, err
 }
 
 // ConnectInteractive runs `ssh -t` with stdin/stdout/stderr wired to
@@ -142,8 +202,9 @@ func (s *SSHAdapter) ConnectInteractive(ctx context.Context, id string, shell []
 		}
 		// Security: pass the password via the SSHPASS environment variable
 		// (sshpass -e) instead of -p, so it never appears in the process
-		// argument list (ps / Task Manager) — mirrors runSSH.
-		c = exec.CommandContext(ctx, "sshpass", append([]string{"-e", "SSHPASS", sshBinary()}, args...)...)
+		// argument list (ps / Task Manager) — mirrors runSSH, via the same
+		// sshPassArgv single source (ticket 02 / X-01).
+		c = exec.CommandContext(ctx, "sshpass", sshPassArgv(sshBinary(), args)...)
 		c.Env = append(os.Environ(), "SSHPASS="+s.target.Password)
 	} else {
 		c = exec.CommandContext(ctx, sshBinary(), args...)
