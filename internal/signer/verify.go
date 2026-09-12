@@ -99,6 +99,19 @@ func HasRootKey() bool {
 	return RootPublicKey() != nil
 }
 
+// SetRootPublicKeyForTesting overrides the embedded root public key at
+// runtime (base64-encoded 32-byte Ed25519 public key). Tests use it to
+// exercise the signature-gated code paths that production builds enable
+// via -ldflags; passing "" restores the "no root key embedded" state.
+//
+// Audit-fixes ticket 13: the signature gates (signed-map membership,
+// per-URL coverage, L-10 refusal) all short-circuit when no root key is
+// embedded, so without this hook those paths would be untestable on a
+// default (placeholder-key) build.
+func SetRootPublicKeyForTesting(b64 string) {
+	rootPublicKeyB64 = b64
+}
+
 // ReadEmbeddedSignature reads a manifest signature from the embedded FS.
 // Returns nil, nil if no embedded signature is found.
 func ReadEmbeddedSignature(toolName string) (*ManifestSignature, error) {

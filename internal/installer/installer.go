@@ -664,6 +664,14 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 	}
 
 	var err error
+	// Ticket 13 (P0-02): the downloader needs the exact signed-map slot
+	// (<version> → <os>/<arch>) and the unsigned-version verdict so its
+	// three signature gates behave correctly. Derivation is shared with
+	// the GUI pipeline (DeriveUnsignedVersion).
+	var toolManifest *manifest.Tool
+	if p, ok := i.reg.Get(tool); ok {
+		toolManifest = p.Manifest()
+	}
 	err = downloader.Download(ctx, downloader.Options{
 		URL:                  url,
 		Dest:                 dest,
@@ -674,6 +682,10 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		ManifestSignature:    manifestSig,
 		IsThirdParty:         isThirdParty,
 		AllowPlaceholderTOFU: a.SHA256 == "" || util.IsAllZeroHash(a.SHA256),
+		ToolName:             tool,
+		Version:              ver,
+		OSArch:               a.OS + "/" + a.Arch,
+		UnsignedVersion:      DeriveUnsignedVersion(toolManifest, ver),
 		ProxyURL:             i.cfg.GetProxyURL("https"),
 		FallbackURLs:         fallbackURLs,
 		// Surface non-byte status updates (retries, fallback switches,
@@ -729,19 +741,43 @@ func (i *Installer) LoadManifestSignature(tool string) ([]byte, bool) {
 		log.Printf("[install] Found third-party manifest signature for %s", tool)
 	} else {
 		// Also check embedded manifests
+		embeddedHit := false
 		if embeddedSig, err := signer.ReadEmbeddedSignature(tool); err == nil && embeddedSig != nil {
 			if sigJSON, err := json.Marshal(embeddedSig); err == nil {
 				manifestSig = sigJSON
+				embeddedHit = true
 				log.Printf("[install] Found embedded manifest signature for %s", tool)
 			}
 		}
-		// Determine if this is a third-party manifest (no embedded/built-in sig)
-		if _, err := os.Stat(filepath.Join(thirdPartyDir, tool+".yaml")); err == nil {
-			isThirdParty = true
-			log.Printf("[install] Third-party manifest detected for %s (TOFU fallback if no signature)", tool)
+		// Ticket 13 (N-03): a disk manifest under third-party/ must NOT be
+		// able to downgrade a BUILT-IN tool to the third-party trust model
+		// (TOFU fallback instead of a mandatory signature). The built-in
+		// side is: an embedded manifest for this tool (embeddedHit covers
+		// the signed case) or a top-level manifest in the manifest dir.
+		// Only tools that exist SOLELY under third-party/ may fall back.
+		if !embeddedHit && !isBuiltinManifest(tool, i.cfg.Core.ManifestDir) {
+			if _, err := os.Stat(filepath.Join(thirdPartyDir, tool+".yaml")); err == nil {
+				isThirdParty = true
+				log.Printf("[install] Third-party manifest detected for %s (TOFU fallback if no signature)", tool)
+			}
+		} else {
+			log.Printf("[install] %s is a built-in tool — a third-party manifest with the same name cannot downgrade it to TOFU (rename the third-party manifest)", tool)
 		}
 	}
 	return manifestSig, isThirdParty
+}
+
+// isBuiltinManifest reports whether tool belongs to the built-in manifest
+// set: an embedded manifest, or a top-level manifest in the manifest
+// directory. Ticket 13 (N-03) — the same-name trust downgrade guard.
+func isBuiltinManifest(tool, manifestDir string) bool {
+	if manifest.HasEmbeddedManifest(tool) {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(manifestDir, tool+".yaml")); err == nil {
+		return true
+	}
+	return false
 }
 
 // TOFUArchiveIfNeeded computes the SHA-256 of the downloaded archive and
@@ -768,8 +804,11 @@ func (i *Installer) TOFUArchiveIfNeeded(tool, ver string, a *manifest.Archive, d
 		arch = plugin.HostArch()
 	}
 
-	// Write to on-disk manifest.
-	manifestDir := filepath.Join(i.cfg.Core.XMDevDir, "manifests")
+	// Write to on-disk manifest. Ticket 13 (N-04): use the configured
+	// manifest dir (the pre-fix code hard-coded <home>/manifests, so a
+	// custom --manifest-dir deployment pinned the hash into the wrong tree
+	// and the next install re-ran TOFU instead of verifying).
+	manifestDir := i.cfg.Core.ManifestDir
 	if err := manifest.UpdateArchiveSHA256(manifestDir, tool, ver, osName, arch, actualSHA); err != nil {
 		return fmt.Errorf("UpdateArchiveSHA256: %w", err)
 	}

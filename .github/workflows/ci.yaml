@@ -323,6 +323,8 @@ jobs:
           sudo apt-get install -y -qq ruby ruby-dev rpm
           sudo gem install fpm --no-document
 
+          LDFLAGS="-s -w -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
+
           for GOARCH in amd64 arm64; do
             eval "DEB_ARCH=\$ARCH_DEB_${GOARCH}"
             eval "RPM_ARCH=\$ARCH_RPM_${GOARCH}"
@@ -334,7 +336,7 @@ jobs:
               continue
             fi
 
-            GOOS=linux GOARCH="$GOARCH" go build -ldflags="-s -w" -o "xdev-${GOARCH}" .
+            GOOS=linux GOARCH="$GOARCH" go build -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
 
             PKGROOT="$(mktemp -d)"
             mkdir -p "$PKGROOT/usr/bin"
@@ -371,7 +373,8 @@ jobs:
         run: |
           VER="${TAG#v}"
           # 单二进制模型：一个产物同时提供 GUI/TUI/CLI（0.4.0 起产物名统一为 xdev-*）
-          GOARCH=amd64 go build -ldflags="-s -w" -o xdev .
+          LDFLAGS="-s -w -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
+          GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
@@ -657,7 +660,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          go build -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev .
+          go build -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY" -o xdev .
 
           APPDIR="XDev.AppDir"
           rm -rf "$APPDIR"

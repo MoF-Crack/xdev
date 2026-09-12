@@ -245,8 +245,17 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		ManifestSignature:    manifestSig,
 		IsThirdParty:         isThirdParty,
 		AllowPlaceholderTOFU: arch.SHA256 == "" || util.IsAllZeroHash(arch.SHA256),
-		ProxyURL:             cfg.GetProxyURL("https"),
-		FallbackURLs:         fallbackURLs,
+		// Ticket 13 (P0-02): same signed-map slot + unsigned-version
+		// derivation as the CLI pipeline — derived through the SHARED
+		// installer.DeriveUnsignedVersion so the two pipelines can never
+		// disagree (the older GUI-only versionUnverified helper missed
+		// Discovered and carried an npm special case).
+		ToolName:        toolName,
+		Version:         ver,
+		OSArch:          arch.OS + "/" + arch.Arch,
+		UnsignedVersion: installer.DeriveUnsignedVersion(p.Manifest(), ver),
+		ProxyURL:        cfg.GetProxyURL("https"),
+		FallbackURLs:    fallbackURLs,
 		OnProgress: func(downloaded, total int64, elapsed time.Duration) {
 			// Content-Length 缺失时 total<=0，避免进度条变成 NaN。
 			pct := -1.0

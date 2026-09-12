@@ -372,10 +372,15 @@ func LoadCatalog(dir string) (*Catalog, error) {
 }
 
 // loadMergedCatalog loads embedded manifests as the base, then overlays
-// on-disk manifests from dir.  For tools in both sources, the on-disk
-// VersionList is merged (embedded is base, disk versions appended if not
-// already present).  Other fields (DisplayName, Shims, etc.) come from
-// embedded, with disk as override.
+// on-disk manifests from dir. For tools in both sources the merge is
+// EMBEDDED-FIRST: the embedded VersionList is the base and only disk
+// versions not already present are appended; all other fields
+// (DisplayName, Shims, EnvVars, archives of existing versions, ...) come
+// from the embedded copy. A disk edit of a built-in field therefore has
+// NO effect — the practical attack/change surface of an on-disk override
+// is a NEW version entry (audit-fixes ticket 13 note; corrected here
+// because the previous wording claimed "disk as override", the opposite
+// of the implementation).
 func loadMergedCatalog(dir string) (*Catalog, error) {
 	// Step 1: Load embedded catalog as the base.
 	embedded, err := loadFromEmbedded()

@@ -28,6 +28,11 @@ import (
 // ample headroom. Var (not const) for testability.
 var githubBodyLimit = 16 << 20 // 16 MiB
 
+// jsonBodyLimit caps how much of a JSON version-discovery response is decoded
+// (票 16 / P2-15). A malicious or broken remote could otherwise stream an
+// unbounded body, which the decoder would buffer in memory (OOM / hang).
+const jsonBodyLimit = 16 << 20 // 16 MiB
+
 // perPageValues defines the per_page values to try when the response body is
 // truncated. Starting with 100 (GitHub API maximum), falling back to 50, then 30.
 var perPageValues = []int{100, 50, 30}
@@ -891,8 +896,10 @@ func discoverJSON(ctx context.Context, r manifest.RemoteSource) ([]string, error
 	}
 
 	// Decode into generic structure for path traversal.
+	// 票 16（P2-15）：限额读取 —— 超过 jsonBodyLimit 的响应在解码阶段即以
+	// unexpected EOF 报错，而不是先无界缓冲整个 body 再解析。
 	var root interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, jsonBodyLimit)).Decode(&root); err != nil {
 		return nil, fmt.Errorf("json remote: decode JSON: %w", err)
 	}
 

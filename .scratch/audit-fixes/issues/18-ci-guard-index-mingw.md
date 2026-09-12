@@ -1,6 +1,6 @@
 # 18 CI 守卫 job 四边界 + index 重建 + mingw 处置
 
-Status: open
+Status: blocked（后置于票 17；票 17 因私钥缺失阻塞）
 Type: task
 批次: B3 数据线
 对应修复项: P2-15(D-15) + P2-29 + P0-02 阶段 2 守卫规格（方案 §6 P2-15/P2-29）

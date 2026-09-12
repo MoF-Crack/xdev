@@ -20,8 +20,44 @@ import (
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
 )
+
+// collectExportEnvVars reads the HKCU user environment variables and keeps
+// only names in the xdev whitelist (util.AllowedEnvVarNames), returning the
+// entries ready to be serialized as the profile "envVars" array plus the
+// number of variables that were skipped.
+//
+// 票 14（P0-12 / 审计 E-03）: the exported profile is a shareable/backup
+// artifact, so it must only carry variables xdev itself manages. Before this
+// filter the CLI dumped every user variable (GITHUB_TOKEN, MY_SECRET, …) into
+// the file. The GUI export uses the fixed GetEnvVars enumeration and needs no
+// change.
+func collectExportEnvVars() ([]map[string]string, int) {
+	userEnv := env.GetAllUserEnvVars()
+	envVars := make([]map[string]string, 0, len(userEnv))
+	skipped := 0
+	for name, value := range userEnv {
+		if !util.IsAllowedEnvVarName(name) {
+			skipped++
+			continue
+		}
+		envVars = append(envVars, map[string]string{
+			"name":  name,
+			"value": value,
+			"level": "user",
+		})
+	}
+	return envVars, skipped
+}
+
+// profileExportSummary builds the human-readable export summary line.
+// 票 14: the summary must report how many non-xdev variables were left out,
+// so a user can tell that filtering happened.
+func profileExportSummary(path string, skipped int) string {
+	return fmt.Sprintf("Profile exported to %s (skipped %d non-xdev variables)", path, skipped)
+}
 
 func newProfileCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -79,16 +115,10 @@ func newExportCmd() *cobra.Command {
 			}
 			profile["tools"] = tools
 
-			// Collect user environment variables set by xdev
-			envVars := profile["envVars"].([]map[string]string)
-			userEnv := env.GetAllUserEnvVars()
-			for name, value := range userEnv {
-				envVars = append(envVars, map[string]string{
-					"name":  name,
-					"value": value,
-					"level": "user",
-				})
-			}
+			// Collect user environment variables set by xdev.
+			// 票 14（P0-12 / 审计 E-03）：只导出白名单内的变量名，
+			// 其余（与 xdev 无关的敏感变量）一律跳过并计入摘要。
+			envVars, skipped := collectExportEnvVars()
 			profile["envVars"] = envVars
 
 			// Collect GUI favorites and custom tools from the cache dir.
@@ -117,7 +147,9 @@ func newExportCmd() *cobra.Command {
 				return fmt.Errorf("write profile: %w", err)
 			}
 
-			fmt.Printf("Profile exported to %s\n", args[0])
+			// Printed on the command's stdout (same stream as before; cobra's
+			// default output is os.Stdout) so the summary stays testable.
+			fmt.Fprintln(cmd.OutOrStdout(), profileExportSummary(args[0], skipped))
 			return nil
 		},
 	}
@@ -174,13 +206,28 @@ func newImportCmd() *cobra.Command {
 				return fmt.Errorf("set proxy: %w", err)
 			}
 
-			// Apply mirror settings
+			// Apply mirror settings.
+			// 票 16（P1-17 / P2-15）：mirrors 来自不可信的 profile JSON，
+			// 必须逐项用 util.IsSafeHTTPSExternalURL 校验（与 GUI 的
+			// ImportProfile 同一函数、同一语义）：非 https、localhost、
+			// 内网/保留地址一律不写入 cfg.Mirror，只报告错误。
 			if len(profile.Mirrors) > 0 {
-				cfg.Mirror = profile.Mirrors
-				cfg.Save()
+				safeMirrors := make(map[string]string, len(profile.Mirrors))
+				for name, mirrorURL := range profile.Mirrors {
+					if err := util.IsSafeHTTPSExternalURL(mirrorURL); err != nil {
+						fmt.Printf("  ✗ mirror %s: %v\n", name, err)
+						continue
+					}
+					safeMirrors[name] = mirrorURL
+				}
+				// 全部被拒绝时不覆盖既有 mirrors（不写入空集合）。
+				if len(safeMirrors) > 0 {
+					cfg.Mirror = safeMirrors
+					cfg.Save()
+				}
 			}
 
-	// Install tools
+			// Install tools
 			ctx := context.Background()
 			ins = installer.New(cfg, reg)
 			var items []installer.BatchInstallItem

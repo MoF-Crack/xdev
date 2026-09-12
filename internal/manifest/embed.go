@@ -38,3 +38,18 @@ func InitEmbedded(efs fs.FS) {
 	}
 	embeddedFS = efs
 }
+
+// HasEmbeddedManifest reports whether a built-in (embedded) manifest
+// exists for the given tool name.
+//
+// Audit-fixes ticket 13 (N-03): the installer's same-name trust guard uses
+// this to decide whether a disk manifest under third-party/ may downgrade
+// a tool to the third-party (TOFU) trust model. It must be false for
+// genuinely third-party tools and true for anything shipped in the binary.
+func HasEmbeddedManifest(toolName string) bool {
+	if embeddedFS == nil || toolName == "" {
+		return false
+	}
+	_, err := fs.ReadFile(embeddedFS, toolName+".yaml")
+	return err == nil
+}

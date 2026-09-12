@@ -117,6 +117,33 @@ type Options struct {
 	// sniff-discovered versions whose archive URL was synthesised after
 	// the manifest was signed — the first download records a sidecar pin.
 	AllowPlaceholderTOFU bool
+
+	// ToolName is the tool being installed. It is compared against the
+	// signature payload's tool field so a valid signature for tool A can
+	// never authorise tool B (ticket 13 / N-02 cross-tool confusion).
+	ToolName string
+
+	// Version and OSArch identify the exact slot in the signed SHA-256
+	// map (`m[version][os/arch]`) for this archive. Both pipelines set
+	// them; a missing Version means no signed coverage can be proven
+	// (verification fails closed).
+	Version string
+	OSArch  string
+
+	// UnsignedVersion marks a manifest version that is legitimately NOT
+	// covered by the signed hash map: sniff-discovered (Discovered) or
+	// explicitly unverified versions, versions absent from a custom
+	// manifest, and Lua/vfox plugins (nil manifest).
+	//
+	// When true, three gates are skipped — the L-10 all-zero/missing-hash
+	// refusal, the signed-map membership check, and the per-URL coverage
+	// filter — so the TOFU sidecar/manifest write-back path keeps working.
+	//
+	// Derivation MUST NOT include a hash condition (ticket 13): a
+	// "hash is empty" term would flip the verdict after TOFU write-back
+	// (hash becomes real) and re-installing the same version would be
+	// misreported as hash tampering.
+	UnsignedVersion bool
 }
 
 // Download fetches opts.URL to opts.Dest.
@@ -190,6 +217,33 @@ func Download(ctx context.Context, opts Options) error {
 			continue
 		}
 		urls = append(urls, fb)
+	}
+
+	// Ticket 13 (P0-02): per-URL signature coverage filter. Every candidate
+	// URL's EFFECTIVE hash (URLShaMap[url] when present, else ExpectedSHA)
+	// must be present in the signed map for THIS version. A mirror added
+	// after signing — or an attacker-controlled mirror with its own
+	// mirror_sha256 — is dropped before a single byte is fetched; the
+	// official URL stays as the last candidate.
+	//
+	// Skipped entirely for legitimately unsigned versions (TOFU-discovered
+	// or custom tools): after a TOFU write-back the hash is real but still
+	// absent from the signed map, and filtering would evict every
+	// candidate and break re-installation (ticket 13 / G6).
+	//
+	// Also gated on HasRootKey(): with no embedded root key the whole
+	// signature chain is inert, and the pre-batch behaviour (no filtering)
+	// must be preserved exactly — that is the release-form regression
+	// anchor for this batch (ticket 13 / G5).
+	if signer.HasRootKey() && len(opts.ManifestSignature) > 0 && !opts.UnsignedVersion &&
+		opts.ExpectedSHA != "" && !util.IsAllZeroHash(opts.ExpectedSHA) {
+		urls = filterSignatureCoveredURLs(opts, urls)
+		if len(urls) == 0 {
+			return fmt.Errorf("no download URL is covered by the manifest signature for %s@%s — refusing (mirror hash not in signed map)", opts.ToolName, opts.Version)
+		}
+		if urls[0] != opts.URL {
+			log.Printf("[download] WARNING: primary URL is not signature-covered — falling through to %s", sanitizedURL(urls[0]))
+		}
 	}
 
 	ok, failures, proxyFailed := tryURLList(ctx, opts, urls, true)
@@ -541,7 +595,10 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			// archives. Sniff-discovered versions (Unverified / Discovered)
 			// intentionally ship a zero hash so the first download can
 			// establish a TOFU pin — that is not a signed-hash downgrade.
-			if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU {
+			// Ticket 13: the derivation is centralised in UnsignedVersion
+			// (Discovered || Unverified, no hash condition) so the same
+			// verdict applies before AND after the TOFU write-back.
+			if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU && !opts.UnsignedVersion {
 				log.Printf("[download] ERROR: sha256 is all-zero placeholder and signature verification is enabled — refusing download")
 				_ = os.Remove(partPath)
 				return fmt.Errorf("manifest has all-zero SHA-256 placeholder for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
@@ -582,8 +639,9 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// Security (L-10): When signature verification is enabled, refuse
 		// downloads that have no hash at all on built-in manifests —
 		// sidecar TOFU is disabled for them. Third-party manifests
-		// fall back to TOFU.
-		if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU {
+		// fall back to TOFU. Ticket 13: legitimately unsigned versions
+		// (Discovered / Unverified / custom / Lua) keep the TOFU path.
+		if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU && !opts.UnsignedVersion {
 			log.Printf("[download] ERROR: no sha256 hash provided and signature verification is enabled — refusing download")
 			_ = os.Remove(partPath)
 			return fmt.Errorf("manifest has no SHA-256 hash for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
@@ -698,35 +756,117 @@ func verifyManifestSignature(opts Options) error {
 		return fmt.Errorf("manifest signature is invalid for tool %q — possible tampering detected", ms.Tool)
 	}
 
+	// Ticket 13 (N-02): the signed payload must belong to the tool being
+	// installed. Without this check a valid signature of tool A could
+	// authorise a download for tool B (whose hash happens to appear in A's
+	// map) — cross-tool confusion.
+	if opts.ToolName != "" && ms.Tool != "" && !strings.EqualFold(ms.Tool, opts.ToolName) {
+		return fmt.Errorf("manifest signature tool mismatch: signature is for %q but the download is for %q — refusing (possible cross-tool confusion)", ms.Tool, opts.ToolName)
+	}
+
 	// Verify the ExpectedSHA matches the signed SHA-256 map.
 	// Sniff-discovered versions carry an all-zero placeholder hash that is
 	// intentionally absent from the signed map; those fall through to the
 	// existing TOFU sidecar path instead of being treated as tampering.
-	if opts.ExpectedSHA != "" && ms.SHA256Map != "" && !util.IsAllZeroHash(opts.ExpectedSHA) {
-		if !verifySHAInMap(ms.SHA256Map, opts.ExpectedSHA) {
+	//
+	// Ticket 13: legitimately unsigned versions (Discovered / Unverified /
+	// custom / Lua plugins) skip the membership check entirely — after a
+	// TOFU write-back the hash is real but still not in the signed map, so
+	// enforcing membership would report tampering on re-install.
+	if opts.ExpectedSHA != "" && ms.SHA256Map != "" && !util.IsAllZeroHash(opts.ExpectedSHA) && !opts.UnsignedVersion {
+		if !verifySHAInMapForVersion(ms.SHA256Map, opts.Version, opts.OSArch, opts.ExpectedSHA) {
 			shaPreview := opts.ExpectedSHA
 			if len(shaPreview) > 16 {
 				shaPreview = shaPreview[:16] + "..."
 			}
-			return fmt.Errorf("expected SHA-256 %s not found in signed manifest for tool %q — possible hash tampering", shaPreview, ms.Tool)
+			return fmt.Errorf("expected SHA-256 %s not found in signed manifest for tool %q version %q (%s) — possible hash tampering", shaPreview, ms.Tool, opts.Version, opts.OSArch)
 		}
 	}
 
 	return nil
 }
 
-// verifySHAInMap checks if the expected SHA-256 hash exists in the signed map.
-func verifySHAInMap(sha256MapJSON, expectedSHA string) bool {
+// signedSHA256Map extracts the sha256_map JSON payload from a manifest
+// signature, or "" when the signature carries none.
+func signedSHA256Map(opts Options) string {
+	if len(opts.ManifestSignature) == 0 {
+		return ""
+	}
+	var ms struct {
+		SHA256Map string `json:"sha256_map"`
+	}
+	if err := json.Unmarshal(opts.ManifestSignature, &ms); err != nil {
+		return ""
+	}
+	return ms.SHA256Map
+}
+
+// filterSignatureCoveredURLs drops candidate URLs whose effective hash is
+// not covered by the signed map for this version. URLs without a usable
+// hash are kept — the L-10 gate inside downloadOnce decides their fate.
+func filterSignatureCoveredURLs(opts Options, urls []string) []string {
+	signedMap := signedSHA256Map(opts)
+	if signedMap == "" {
+		// Signature without a hash map: nothing can be proven covered.
+		// Keep the list intact and let signature verification (which runs
+		// earlier) decide — it rejects a missing/invalid map upstream.
+		return urls
+	}
+	kept := make([]string, 0, len(urls))
+	for _, u := range urls {
+		effSHA := opts.ExpectedSHA
+		if opts.URLShaMap != nil {
+			if urlSHA, ok := opts.URLShaMap[u]; ok {
+				effSHA = urlSHA
+			}
+		}
+		if effSHA == "" || util.IsAllZeroHash(effSHA) {
+			kept = append(kept, u)
+			continue
+		}
+		if verifySHAInMapForVersion(signedMap, opts.Version, opts.OSArch, effSHA) {
+			kept = append(kept, u)
+			continue
+		}
+		log.Printf("[download] WARNING: candidate %s is not covered by the signed hash map for %s@%s — skipping", sanitizedURL(u), opts.ToolName, opts.Version)
+		notifyStatus(opts, "mirror hash not covered by signature — skipping %s", shortHost(u))
+	}
+	return kept
+}
+
+// verifySHAInMapForVersion checks the expected hash against the signed map
+// with exact-key semantics plus a SAME-VERSION fallback:
+//
+//  1. exact key: m[version][os/arch] exists and equals the expected hash;
+//  2. same-version fallback: any os/arch key under m[version] matches —
+//     this keeps old signatures (whose os/arch key naming may differ) and
+//     same-version cross-platform re-use working.
+//
+// Ticket 13 (P0-02 / G2): the previous implementation searched EVERY
+// version's keys, so a newly added version could reuse another version's —
+// or, since tool maps share the same shape, another tool's — signed hash.
+// Cross-version matches are now rejected, and a missing version key is a
+// hard fail (fail closed).
+func verifySHAInMapForVersion(sha256MapJSON, version, osArch, expectedSHA string) bool {
+	if sha256MapJSON == "" || version == "" || expectedSHA == "" {
+		return false
+	}
 	var m map[string]map[string]string
 	if err := json.Unmarshal([]byte(sha256MapJSON), &m); err != nil {
 		return false
 	}
-	lower := strings.ToLower(expectedSHA)
-	for _, verMap := range m {
-		for _, hash := range verMap {
-			if strings.ToLower(hash) == lower {
-				return true
-			}
+	verMap, ok := m[version]
+	if !ok {
+		return false
+	}
+	if osArch != "" {
+		if h, ok := verMap[osArch]; ok && strings.EqualFold(h, expectedSHA) {
+			return true
+		}
+	}
+	for _, h := range verMap {
+		if strings.EqualFold(h, expectedSHA) {
+			return true
 		}
 	}
 	return false

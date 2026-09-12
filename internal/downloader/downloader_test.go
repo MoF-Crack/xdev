@@ -335,10 +335,23 @@ func TestVerifyManifestSignature_PlaceholderSHAIsNotTampering(t *testing.T) {
 
 func TestVerifySHAInMap_DoesNotMatchZeroPlaceholder(t *testing.T) {
 	zero := strings.Repeat("0", 64)
-	if verifySHAInMap(`{"0.7.6":{"windows/amd64":"abc123"}}`, zero) {
+	// Ticket 13: exact-key semantics — the version slot is mandatory.
+	if verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "0.7.6", "windows/amd64", zero) {
 		t.Fatal("all-zero placeholder must not match a signed real hash")
 	}
-	if !verifySHAInMap(`{"0.7.6":{"windows/amd64":"abc123"}}`, "abc123") {
+	if !verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "0.7.6", "windows/amd64", "abc123") {
 		t.Fatal("real hash should be found in the signed map")
+	}
+	// Same-version cross-os/arch fallback still works (old-signature layout).
+	if !verifySHAInMapForVersion(`{"0.7.6":{"linux/amd64":"abc123"}}`, "0.7.6", "windows/amd64", "abc123") {
+		t.Fatal("same-version fallback should accept a hash signed under another os/arch key")
+	}
+	// Cross-version matches are rejected (ticket 13 / G2 red line).
+	if verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "3.0.0", "windows/amd64", "abc123") {
+		t.Fatal("a hash signed for another version must NOT authorise this version")
+	}
+	// Missing version context fails closed.
+	if verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "", "windows/amd64", "abc123") {
+		t.Fatal("no version context must fail closed")
 	}
 }

@@ -195,13 +195,29 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 		errors = append(errors, fmt.Sprintf("set proxy: %v", err))
 	}
 
-	// Apply mirror settings
+	// Apply mirror settings.
+	// 票 16（P1-17 / P2-15）：profile 是不可信的用户输入 JSON，mirrors 必须
+	// 逐项用 util.IsSafeHTTPSExternalURL 校验后才写入 cfg.Mirror：明文 http、
+	// localhost、内网/保留地址等不安全项一律丢弃，并把该项计入 result.Errors
+	// （保持既有 result 结构，逐项追加错误消息）。
 	if len(profile.Mirrors) > 0 {
-		if err := a.mutateCfg(func(cfg *config.Config) error {
-			cfg.Mirror = profile.Mirrors
-			return cfg.Save()
-		}); err != nil {
-			errors = append(errors, fmt.Sprintf("set mirrors: %v", err))
+		safeMirrors := make(map[string]string, len(profile.Mirrors))
+		for name, mirrorURL := range profile.Mirrors {
+			if err := util.IsSafeHTTPSExternalURL(mirrorURL); err != nil {
+				errors = append(errors, fmt.Sprintf("mirror %s: %v", name, err))
+				continue
+			}
+			safeMirrors[name] = mirrorURL
+		}
+		// 只在校验后仍有合法项时落盘；全部被拒绝时保留用户既有 mirrors，
+		// 避免 profile 里的一批坏 URL 反而清空配置。
+		if len(safeMirrors) > 0 {
+			if err := a.mutateCfg(func(cfg *config.Config) error {
+				cfg.Mirror = safeMirrors
+				return cfg.Save()
+			}); err != nil {
+				errors = append(errors, fmt.Sprintf("set mirrors: %v", err))
+			}
 		}
 	}
 
