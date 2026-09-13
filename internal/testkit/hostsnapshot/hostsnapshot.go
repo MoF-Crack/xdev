@@ -24,11 +24,18 @@ type Snapshot struct {
 // fingerprint. ModTime is included because a same-size rewrite (e.g. a
 // config.yaml overwritten with equally long but different content) would
 // otherwise be invisible to the diff.
+//
+// 目录类条目（Options.DirEntryPaths）走 Entries 字段而**不**看 Size/ModTime：
+// 目录的 mtime 会在任何子文件创建/删除时变化——包括与本测试无关的瞬时活动——
+// 用它会制造假红（本批第四轮实测到一次：全量并发跑时守卫被目录 mtime 抖动触发，
+// 而单独重跑与随后的两次全量重跑都干净）。目录真正要防的是"测试往真实 home 里
+// 落了文件"，那是**条目集合**的变化，用 Entries 精确表达。
 type FileMeta struct {
 	Exists  bool
 	Size    int64
 	ModTime int64 // UnixNano; 0 when the path is missing
 	Mode    os.FileMode
+	Entries string // 目录条目集合（排序后以 "\n" 连接）；仅 DirEntryPaths 使用
 }
 
 // Change is one difference between two snapshots.
@@ -95,6 +102,31 @@ func Capture(opts Options) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("hostsnapshot: stat %s: %w", clean, err)
 		}
 		s.Files[clean] = FileMeta{Exists: true}
+	}
+	// 目录类条目（plugins/ 等）只比较**条目集合**，不看目录 mtime/大小：
+	// 目录 mtime 会因任何子文件创建/删除而变化（含无关进程的瞬时活动）→ 假红。
+	for _, p := range opts.DirEntryPaths {
+		if p == "" {
+			continue
+		}
+		clean := filepath.Clean(p)
+		if excluded(clean, opts.ExcludePathPrefixes) {
+			continue
+		}
+		entries, err := os.ReadDir(clean)
+		if err != nil {
+			if os.IsNotExist(err) {
+				s.Files[clean] = FileMeta{Exists: false}
+				continue
+			}
+			return Snapshot{}, fmt.Errorf("hostsnapshot: read dir %s: %w", clean, err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		sort.Strings(names)
+		s.Files[clean] = FileMeta{Exists: true, Entries: strings.Join(names, "\n")}
 	}
 	return s, nil
 }
@@ -198,6 +230,10 @@ func RunWithHostSnapshot(m *testing.M, opts Options) int {
 func formatFile(m FileMeta) string {
 	if !m.Exists {
 		return "missing"
+	}
+	if m.Entries != "" || m.Size == 0 && m.ModTime == 0 {
+		// 目录条目集合条目（或空目录）：打印条目清单，便于直接看出多了/少了哪个文件。
+		return fmt.Sprintf("exists entries=[%s]", strings.ReplaceAll(m.Entries, "\n", ", "))
 	}
 	return fmt.Sprintf("exists size=%d mtime=%d mode=%v", m.Size, m.ModTime, m.Mode)
 }

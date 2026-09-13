@@ -278,10 +278,12 @@ modifying any files.`,
 						entries = append(entries, fillEntry{
 							Tool: tool.Name, Status: "failed", Error: "write manifest: " + err.Error(),
 						})
-					} else if changed != len(pending) {
-						// 定位不到条目 = 静默缺口，必须报出来（而不是假装成功）
-						detail := fmt.Sprintf("wrote %d of %d filled hashes; missed: %s",
-							changed, len(pending), strings.Join(missed, "; "))
+					} else if len(missed) > 0 {
+						// 定位不到条目 = 静默缺口，必须报出来（而不是假装成功）。
+						// 注意用 missed 判定而非 changed!=len(pending)：后者会把"值本来就一样"
+						// 的幂等情形误报为失败。
+						detail := fmt.Sprintf("wrote %d hash(es); could not locate: %s",
+							changed, strings.Join(missed, "; "))
 						fmt.Fprintf(os.Stderr, "❌ %s: %s\n", tool.Name, detail)
 						totalFailed++
 						entries = append(entries, fillEntry{Tool: tool.Name, Status: "failed", Error: detail})

@@ -168,9 +168,15 @@ func TestCapture_DetectsSameSizeRewrite(t *testing.T) {
 
 // TestDefaultOptions_TracksRealXDevHome 证明默认快照真的盯着开发者真实 xdev home
 // 的**用户自有状态**，而不是空列表（票 40 复盘：测试把真实 E:\XDev\config.yaml
-// 覆盖掉时，环境变量维度的快照完全看不见）。派生缓存另走 VolatilePaths（只记
-// 存在性）——它们本来就会被每次 xdev/shim 调用合法重写（票 43）。无缓存 home 的
-// 主机（干净 CI）跳过。
+// 覆盖掉时，环境变量维度的快照完全看不见）。
+//
+// 三类面各自的口径（第四轮复核收敛）：
+//   - 用户自有 FILES（config.yaml）→ 全指纹（size+mtime+mode），等长改写也能抓；
+//   - 用户自有 DIRS（plugins/）→ **条目集合**（不看目录 mtime：目录 mtime 会因无关进程
+//     的瞬时子文件活动抖动，实测造成过一次假红）；
+//   - 派生缓存（.home.cache / shim-index.v1）→ 只记存在性（每次 xdev 调用都会合法重写）。
+//
+// 无缓存 home 的主机（干净 CI）跳过。
 func TestDefaultOptions_TracksRealXDevHome(t *testing.T) {
 	home := config.PeekCachedHomeDir()
 	if home == "" {
@@ -182,11 +188,23 @@ func TestDefaultOptions_TracksRealXDevHome(t *testing.T) {
 	for _, p := range opts.Paths {
 		userOwned[filepath.Clean(p)] = true
 	}
-	for _, rel := range []string{"config.yaml", "plugins"} {
+	for _, rel := range []string{"config.yaml"} {
 		want := filepath.Join(home, rel)
 		if !userOwned[want] {
-			t.Errorf("默认快照未跟踪真实 xdev home 用户自有状态 %s；测试改写它不会被拦下", want)
+			t.Errorf("默认快照未跟踪真实 xdev home 用户自有文件 %s；测试改写它不会被拦下", want)
 		}
+	}
+
+	dirs := make(map[string]bool)
+	for _, p := range opts.DirEntryPaths {
+		dirs[filepath.Clean(p)] = true
+	}
+	plugins := filepath.Join(home, "plugins")
+	if !dirs[plugins] {
+		t.Errorf("plugins 目录未纳入 DirEntryPaths；测试往里落文件不会被发现")
+	}
+	if userOwned[plugins] {
+		t.Errorf("plugins 目录不应做全指纹（目录 mtime 会因无关进程的瞬时活动抖动 → 假红）")
 	}
 
 	volatile := make(map[string]bool)
@@ -201,6 +219,52 @@ func TestDefaultOptions_TracksRealXDevHome(t *testing.T) {
 		if userOwned[want] {
 			t.Errorf("%s 是派生缓存（每次 xdev 调用都会合法重写），不应做 mtime 指纹（会假红）", want)
 		}
+	}
+}
+
+// TestCapture_DirEntryPaths_MtimeChurnIgnoredButEntriesCaught（第四轮新增）：
+//   - 目录 mtime 变化（子文件改动后再改回）不得报警——否则守卫会被无关进程的
+//     瞬时活动打成假红（本批实测过一次，阻断了一次门禁运行）；
+//   - 目录**条目集合**变化必须报警——这才是"测试往真实 home 落了文件"的信号。
+func TestCapture_DirEntryPaths_MtimeChurnIgnoredButEntriesCaught(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{DirEntryPaths: []string{dir}}
+
+	// 预置一个既有文件
+	if err := os.WriteFile(filepath.Join(dir, "existing.lua"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := Capture(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1) mtime 抖动：改一个文件的内容（目录 mtime 会变）→ 不应报警
+	if err := os.WriteFile(filepath.Join(dir, "existing.lua"), []byte("yy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterChurn, err := Capture(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changes := Diff(before, afterChurn); len(changes) != 0 {
+		t.Errorf("目录 mtime 抖动被当成污染（会假红）: %#v", changes)
+	}
+
+	// 2) 条目集合变化（新增文件）→ 必须报警，且报告里能看出是哪个条目
+	if err := os.WriteFile(filepath.Join(dir, "e2eplug.lua"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	afterAdd, err := Capture(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := Diff(afterChurn, afterAdd)
+	if len(changes) != 1 {
+		t.Fatalf("新增文件必须被报出，changes=%#v", changes)
+	}
+	if !strings.Contains(changes[0].After, "e2eplug.lua") {
+		t.Errorf("报告应列出条目名以便定位，实际: %q", changes[0].After)
 	}
 }
 

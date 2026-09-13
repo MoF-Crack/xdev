@@ -3,7 +3,6 @@ package manifest
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -36,12 +35,7 @@ type ArchiveSHAUpdate struct {
 // 返回实际改动的条目数与错误。定位不到某条时**不猜**：计入未命中（调用方负责报错），
 // 因为静默跳过会让"填了却没用上"变成看不见的缺口。
 func SetArchiveSHA256InLines(src []byte, updates []ArchiveSHAUpdate) ([]byte, int, []string, error) {
-	text := string(src)
-	eol := "\n"
-	if strings.Contains(text, "\r\n") {
-		eol = "\r\n"
-	}
-	lines := strings.Split(text, "\n")
+	lines := strings.Split(string(src), "\n")
 	// 记下每行是否带 \r，改写时原样保留行尾风格。
 	hadCR := make([]bool, len(lines))
 	for i, l := range lines {
@@ -54,21 +48,25 @@ func SetArchiveSHA256InLines(src []byte, updates []ArchiveSHAUpdate) ([]byte, in
 	changed := 0
 	var missed []string
 	for _, u := range updates {
-		idx, shaIdx, insertAfter, indent, err := locateArchiveEntry(lines, u.Version, u.OS, u.Arch)
+		shaIdx, insertAfter, indent, err := locateArchiveEntry(lines, u.Version, u.OS, u.Arch)
 		if err != nil {
 			missed = append(missed, fmt.Sprintf("%s/%s/%s: %v", u.Version, u.OS, u.Arch, err))
 			continue
 		}
-		_ = idx
 		if shaIdx >= 0 {
 			if strings.TrimSpace(lines[shaIdx]) == "sha256: "+u.SHA256 {
-				continue // 已是目标值（幂等）
+				continue // 已是目标值（幂等；不计入 changed，也不算 missed）
 			}
 			lines[shaIdx] = indent + "sha256: " + u.SHA256
 			changed++
 			continue
 		}
-		// 缺 sha256 行 → 在锚点行后插入（锚点为该归档项的 url: 或 arch: 行）
+		if insertAfter < 0 {
+			missed = append(missed, fmt.Sprintf("%s/%s/%s: no anchor line to insert after", u.Version, u.OS, u.Arch))
+			continue
+		}
+		// 缺 sha256 行 → 在锚点行后插入（锚点为该归档项的 url: 或 arch: 行），
+		// 行尾风格跟随锚点行，保持整文件一致。
 		insertAt := insertAfter + 1
 		lines = append(lines[:insertAt], append([]string{indent + "sha256: " + u.SHA256}, lines[insertAt:]...)...)
 		hadCR = append(hadCR[:insertAt], append([]bool{hadCR[insertAfter]}, hadCR[insertAt:]...)...)
@@ -88,17 +86,17 @@ func SetArchiveSHA256InLines(src []byte, updates []ArchiveSHAUpdate) ([]byte, in
 			b.WriteString("\n")
 		}
 	}
-	_ = eol
 	return []byte(b.String()), changed, missed, nil
 }
 
 // locateArchiveEntry 定位某归档项的 sha256 行。
-// 返回：归档项起始行、sha256 行（-1 表示缺）、插入锚点行、字段缩进（含 null 语义）。
-func locateArchiveEntry(lines []string, version, osName, arch string) (start, shaIdx, insertAfter int, indent string, err error) {
+// 返回：sha256 行（-1 表示缺）、插入锚点行、字段缩进。
+func locateArchiveEntry(lines []string, version, osName, arch string) (shaIdx, insertAfter int, indent string, err error) {
 	verRe := regexp.MustCompile(`^(\s*)-\s*version:\s*["']?` + regexp.QuoteMeta(version) + `["']?\s*$`)
 	osRe := regexp.MustCompile(`^(\s*)-\s*os:\s*["']?` + regexp.QuoteMeta(osName) + `["']?\s*$`)
 	archRe := regexp.MustCompile(`^\s*arch:\s*["']?` + regexp.QuoteMeta(arch) + `["']?\s*$`)
 	anyVerRe := regexp.MustCompile(`^\s*-\s*version:`)
+	topKeyRe := regexp.MustCompile(`^\S`)
 
 	// 1) 找 version 块
 	verStart, verIndent := -1, 0
@@ -109,14 +107,21 @@ func locateArchiveEntry(lines []string, version, osName, arch string) (start, sh
 		}
 	}
 	if verStart < 0 {
-		return 0, 0, 0, "", fmt.Errorf("version block not found")
+		return -1, -1, "", fmt.Errorf("version block not found")
 	}
+	// 块结束 = 下一个**同缩进**的 `- version:`，或回退到顶层键（缩进 < verIndent）。
+	// 后者是第四轮复核补的边界：若版本列表之后还有别的顶层段（remote:/latest: 等），
+	// 而那段里恰好有 `- os:` 形式的列表项，仅靠"下一个 version"会把搜索范围扩到该段。
 	verEnd := len(lines)
 	for i := verStart + 1; i < len(lines); i++ {
-		if m := anyVerRe.FindStringSubmatch(lines[i]); m != nil {
-			// 同缩进的 `- version:` 才是下一个版本块
-			trimmed := strings.TrimLeft(lines[i], " ")
-			if len(lines[i])-len(trimmed) == verIndent {
+		line := lines[i]
+		if topKeyRe.MatchString(line) {
+			verEnd = i
+			break
+		}
+		if m := anyVerRe.FindStringSubmatch(line); m != nil {
+			trimmed := strings.TrimLeft(line, " ")
+			if len(line)-len(trimmed) == verIndent {
 				verEnd = i
 				break
 			}
@@ -137,26 +142,40 @@ func locateArchiveEntry(lines []string, version, osName, arch string) (start, sh
 				break
 			}
 		}
-		// 该归档项必须声明目标 arch，并定位 sha256 / 插入锚点
+		// 该归档项必须声明目标 arch，并定位 sha256 / 插入锚点。
+		//
+		// 第四轮复核加固：字段匹配必须**限定在该归档项自身的字段缩进**上，否则归档项里
+		// 的嵌套列表（例如 install_args: 下的条目、或嵌套映射里的 url:/sha256:）会被
+		// 误当成目标字段——那会把哈希写到错误的层级。
 		hasArch, sha, anchor := false, -1, -1
 		fieldIndent := ""
 		for j := i + 1; j < itemEnd; j++ {
 			l := lines[j]
+			if strings.TrimSpace(l) == "" || strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			indent := l[:len(l)-len(strings.TrimLeft(l, " "))]
+			if fieldIndent != "" && len(indent) != len(fieldIndent) {
+				continue // 更深/更浅的层级都不是本归档项的字段
+			}
 			switch {
 			case archRe.MatchString(l):
 				hasArch = true
 				if fieldIndent == "" {
-					fieldIndent = l[:len(l)-len(strings.TrimLeft(l, " "))]
+					fieldIndent = indent
 				}
 				if anchor < 0 {
 					anchor = j
 				}
 			case strings.HasPrefix(strings.TrimSpace(l), "url:"):
 				if fieldIndent == "" {
-					fieldIndent = l[:len(l)-len(strings.TrimLeft(l, " "))]
+					fieldIndent = indent
 				}
 				anchor = j // url 之后插 sha256 更贴近既有排版
 			case strings.HasPrefix(strings.TrimSpace(l), "sha256:"):
+				if fieldIndent == "" {
+					fieldIndent = indent
+				}
 				sha = j
 			}
 		}
@@ -166,9 +185,9 @@ func locateArchiveEntry(lines []string, version, osName, arch string) (start, sh
 		if fieldIndent == "" {
 			fieldIndent = strings.Repeat(" ", itemIndent+2)
 		}
-		return i, sha, anchor, fieldIndent, nil
+		return sha, anchor, fieldIndent, nil
 	}
-	return 0, 0, 0, "", fmt.Errorf("archive entry not found for %s/%s", osName, arch)
+	return -1, -1, "", fmt.Errorf("archive entry not found for %s/%s", osName, arch)
 }
 
 // UpdateArchiveSHA256InFile 在文件上应用若干归档哈希更新：加锁 → 文本级改写 → 原子写。
@@ -200,6 +219,5 @@ func UpdateArchiveSHA256InFile(path string, updates []ArchiveSHAUpdate) (int, []
 	if err := util.AtomicWriteFile(path, out, 0o644); err != nil {
 		return 0, nil, fmt.Errorf("write %s: %w", path, err)
 	}
-	_ = filepath.Dir(path)
 	return changed, missed, nil
 }

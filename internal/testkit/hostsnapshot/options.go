@@ -25,6 +25,13 @@ type Options struct {
 	// fingerprint does not report ordinary toolchain churn as pollution.
 	VolatilePaths []string
 
+	// DirEntryPaths are directories tracked by their ENTRY SET only (no
+	// directory mtime/size). A directory's mtime changes on any child
+	// create/delete — including transient activity from unrelated processes —
+	// which made the guard flaky（本批第四轮实测：一次全量并发运行被目录 mtime 抖动误报，
+	// 单独重跑即恢复）。目录真正要防的是"测试往真实 home 落了文件"，那是条目集合的变化。
+	DirEntryPaths []string
+
 	// ExcludePathPrefixes are path prefixes ignored during Diff for file entries
 	// (self-interference and system temp).
 	ExcludePathPrefixes []string
@@ -54,14 +61,27 @@ func DefaultOptions() Options {
 		EnvKeys:             keys,
 		Paths:               userOwnedPaths(),
 		VolatilePaths:       derivedCachePaths(),
+		DirEntryPaths:       userOwnedDirs(),
 		ExcludePathPrefixes: excludes,
 	}
 }
 
-// userOwnedPaths lists user-owned state in the developer's REAL xdev home:
+// userOwnedDirs lists user-owned DIRECTORIES in the real xdev home, tracked by
+// entry set (not mtime). plugins/ 的内容由用户/插件安装决定——测试往里落文件
+// （例如历史事件里被写进 plugins/e2eplug.lua）必须在条目集合上暴露出来。
+func userOwnedDirs() []string {
+	home := config.PeekCachedHomeDir()
+	if home == "" {
+		return nil
+	}
+	return []string{filepath.Join(home, "plugins")}
+}
+
+// userOwnedPaths lists user-owned FILES in the developer's REAL xdev home:
 // rewriting any of these from a test is a defect, so they get a full
 // size+mtime fingerprint (a same-size rewrite such as overwriting config.yaml
-// is caught by the mtime component).
+// is caught by the mtime component)。目录不在此列——plugins/ 走
+// DirEntryPaths（条目集合），因为目录 mtime 会因无关进程的瞬时子文件活动抖动。
 func userOwnedPaths() []string {
 	home := config.PeekCachedHomeDir()
 	if home == "" {
@@ -69,7 +89,6 @@ func userOwnedPaths() []string {
 	}
 	return []string{
 		filepath.Join(home, "config.yaml"),
-		filepath.Join(home, "plugins"),
 	}
 }
 
