@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/env"
 )
@@ -187,6 +188,41 @@ func Diff(before, after Snapshot) []Change {
 	return out
 }
 
+// 并发全量测试下判定"瞬时 vs 持久"的重采样参数：最多 5 次 × 1.5s（仅在检测到差异时
+// 才付出这个代价，正常路径零开销）。取值依据：其它包"写真实注册表再恢复"的窗口是毫秒级，
+// 5 次采样全部落在窗口内几乎不可能。
+const (
+	transientRetries    = 5
+	transientRetryDelay = 1500 * time.Millisecond
+)
+
+// classifyChanges 判定 after 相对 before 的差异是"瞬时"还是"持久"：
+// 反复重采样（最多 retries 次、每次间隔 delay），只要差异全部消失就返回空
+// （判为瞬时：另一个包正在写真实注册表且即将恢复）；否则返回仍然存在的差异（真污染）。
+//
+// 抽成独立函数是为了可测——否则"瞬时/持久"这条判定只能靠并发全量跑碰运气验证。
+func classifyChanges(before, after Snapshot, opts Options, retries int, delay time.Duration) []Change {
+	persistent := Diff(before, after)
+	if len(persistent) == 0 {
+		return nil
+	}
+	for attempt := 0; attempt < retries; attempt++ {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		now, err := Capture(opts)
+		if err != nil {
+			break
+		}
+		remaining := Diff(before, now)
+		if len(remaining) == 0 {
+			return nil
+		}
+		persistent = remaining
+	}
+	return persistent
+}
+
 // RunWithHostSnapshot wraps m.Run with before/after host snapshot checks.
 // Set XDEV_HOST_SNAPSHOT=0 to skip (CI and default suites must not set this).
 func RunWithHostSnapshot(m *testing.M, opts Options) int {
@@ -217,8 +253,23 @@ func RunWithHostSnapshot(m *testing.M, opts Options) int {
 		return code
 	}
 
+	// 持久性判定（本批第四轮复核新增）：并发跑 `go test ./...` 时，**别的包**可能正在
+	// "写真实注册表再恢复"——例如票 01 的 GOROOT 守卫（改造前）、internal/env 的真实 PATH
+	// RMW、internal/gui 的 InitConfig 追加 PATH、internal/cli 的 JAVA_HOME 用例。它们都在
+	// 几百毫秒内恢复，却足以落进本包的 before/after 窗口里，造成**假红**（实测 3 轮全量里
+	// 出现 2 次）。真正要拦的是"**留在宿主上的**污染"，所以这里对被判为变化的条目做短窗口
+	// 重采样：所有差异都自行消失 → 降级为 WARNING（仍然打印，不静默）；仍存在的差异才阻塞。
+	persistent := classifyChanges(before, after, opts, transientRetries, transientRetryDelay)
+	if len(persistent) == 0 {
+		fmt.Fprintln(os.Stderr, "host state snapshot: transient changes reverted (another package's in-flight test) — not blocking:")
+		for _, c := range changes {
+			fmt.Fprintf(os.Stderr, "  [%s] %s (before %q → after %q → restored)\n", c.Kind, c.Key, c.Before, c.After)
+		}
+		return code
+	}
+
 	fmt.Fprintln(os.Stderr, "host state snapshot: CHANGES DETECTED (blocking)")
-	for _, c := range changes {
+	for _, c := range persistent {
 		fmt.Fprintf(os.Stderr, "  [%s] %s\n    before: %q\n    after:  %q\n", c.Kind, c.Key, c.Before, c.After)
 	}
 	if code == 0 {

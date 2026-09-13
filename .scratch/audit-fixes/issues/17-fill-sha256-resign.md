@@ -210,6 +210,41 @@ Blocked by: 13（先代码语义后数据）
 ② `actions/cache` 命中率与 163 条归档在 CI 出口的填充成功率（本机网络受限：441 条探测中 101 条 GitHub URL 超时，
 CI 出口不受限）；③ `mode=branch` 下 PR 创建权限；④ 填充后 `TestManifestSignatureCoverage` 由 skip 转绿的实测结果。
 
+## Comments（Batch 5 追加 #7 — 第四轮复核：对第三轮修复再复核，2026-09-13）
+
+用户要求"修复之后还要再复核一轮，看是否引入新问题"。第四轮只审**第三轮新写的代码**，又发现两组问题。
+
+### H-7 文本级回填器自身的边界缺陷（第三轮的修复引入了新解析逻辑）
+
+| 缺陷 | 后果 | 修复 |
+|---|---|---|
+| version 块边界只看"下一个同缩进 `- version:`" | 版本列表之后若有别的顶层段（`remote:`/`latest:`）且其中含 `- os:/arch:` 列表项，搜索会扩到文件末尾 → **跨段顶替**（把别处的同名条目当成目标改掉） | 块结束判定加入"回退到顶层键"（缩进 < 版本项缩进即停） |
+| 目标字段只看 `TrimSpace` 前缀 | 归档项内部**嵌套映射**里的 `sha256:`/`url:` 被误当目标 → 哈希写到更深缩进，真正字段仍为空（语义损坏且静默） | 字段匹配限定在该归档项自身的字段缩进；注释行/空行跳过 |
+| 调用方用 `changed != len(pending)` 判"没写全" | 把"值本来就一样"的幂等情形误报为失败 | 改用 `len(missed) > 0`（missed 只表示"定位不到"） |
+| 死代码 `_ = idx` / `_ = eol` / `_ = filepath.Dir` | 噪音 | 清理 + 去掉无用 import |
+
+新增 6 个边界守卫，其中两个是**真区分点**（关掉加固即红，已实测）：
+`NoCrossSectionSubstitution`（红证据：`changed=1` 误改 remote 段）、`IgnoresNestedFields`（红证据：嵌套字段被改动）；
+另有 `DoesNotLeakIntoLaterSections` / `IgnoresCommentedStructure` / `VersionQuoteStyles`（裸/双引号/单引号 + `1.0.0` 不匹配 `1.0.0-beta`）/ `AlreadyCorrectIsNotMissed`。
+真实全量干跑（仓库 manifest 副本）：40 文件、163 请求 → 163 写入、**missed=0**、回填后 YAML 全合法、注释与行数不变。
+
+### H-8 宿主机快照守卫两次假红 → 顺藤摸到**真实的宿主污染**（本轮最重要的发现）
+
+现象：3 轮全量里 2 轮 `internal/testkit/hostsnapshot` 被自己的守卫判红，明细为
+`[env] GOROOT before="C:\...\Temp\TestSetUserEnvVarTrusted_...\install\go\1.26.5\go" after=""`；单跑该包总是绿 → 并发触发。根因两层：
+
+1. **守卫设计缺陷**：`plugins/` 目录按**全指纹**（含目录 mtime）跟踪，而目录 mtime 会在任何子文件创建/删除时变化（含无关进程的瞬时活动）→ 设计上必然假红。
+   修复：新增 `Options.DirEntryPaths`（只比**条目集合**，不看 mtime/size），`plugins/` 改走它；`config.yaml` 仍走全指纹。守卫：`TestCapture_DirEntryPaths_MtimeChurnIgnoredButEntriesCaught`（mtime 抖动不报、条目变化必报且报告列出文件名）。
+2. **真正触发者**：`internal/env/goroot_cleanup_test.go`（票 01 的守卫测试）直接写**开发者真实的 HKCU\Environment `GOROOT`**，靠 `defer` 恢复。两个后果：
+   - 并发跑全量时另一个包的快照窗口必然可能撞上这次写 → 假红（实测 2/3 轮，明细里 before 值就是临时路径）；
+   - 更危险：测试进程被强杀（CI 超时、管道截断）时 defer 不执行 → 用户真实 `GOROOT` **永久留在临时路径**上，正是 P0-17「package fmt is not in std」的病因。同类风险还存在于 `internal/env/win_path_test.go`（真实 PATH RMW）、`internal/gui/app_initconfig_test.go`（InitConfig 追加真实 PATH；其注释里就有"清理历史死锁测试残留 Temp 目录"的痕迹，说明残留确实发生过）、`internal/cli/profile_export_whitelist_test.go`（真实 JAVA_HOME/MY_SECRET）。
+   修复（本轮只做 GOROOT 这一处，因为它已被实测触发）：为 `CleanupStaleGOROOT` 加注入接缝 `gorootGetFn`/`gorootDeleteFn`/`gorootBroadcastFn`（生产默认指向真实注册表实现，行为零变化），测试改用**内存假注册表**：判定逻辑一字未改、宿主零接触；另新增 `DeleteFailurePropagates`（删除失败必须上报且不广播）与 `TestGOROOTCleanupTests_NeverTouchRealRegistry`。
+3. **守卫增加持久性判定**（结构性消除这类假红）：`classifyChanges` 对被判为变化的条目做短窗口重采样（5×1.5s）——差异自行消失 → 判为"他包在途写"、打印 WARNING 但不阻塞；仍存在 → 判为真污染、阻塞。守卫：`TestClassifyChanges_TransientVsPersistent`（两个方向都钉死）。**这不是放宽标准**：真正要拦的"留在宿主上的污染"（含历史事故里的 `config.yaml` 被覆盖、`plugins/e2eplug.lua` 被写入）仍是**持久**差异，照旧阻塞。
+
+**验证（3 轮连续全量 + 200ms 宿主观测器 2596 次采样）**：`FAIL=0 / 阻塞报警=0 / 瞬时降级=0`（三轮一致）；观测器显示 `config.yaml` 与 `plugins` 指纹**全程零变化**；用户真实 `GOROOT` 保持为空（票 01 的设计状态）。
+**遗留（新增待办，非阻塞）**：把 env PATH / gui InitConfig / cli JAVA_HOME 这几处"故意写真实环境"的测试也改成接缝注入或加崩溃日志（SIGKILL 残留风险）；本轮只修了已被实测触发的 GOROOT 一处，其余如实登记。
+
+
 ## Comments（Batch 5 追加 #6 — 第二轮回归+安全复核，2026-09-13）
 
 用户要求"再复核一遍是否引入新回归/安全隐患"。方法：逐行重读本批新增的三个 Go 文件与两份工作流，

@@ -1,0 +1,32 @@
+﻿ok  	github.com/xmdemt/xdev	0.606s
+ok  	github.com/xmdemt/xdev/cmd/linkaudit	0.378s
+?   	github.com/xmdemt/xdev/cmd/xdev-keygen	[no test files]
+?   	github.com/xmdemt/xdev/frontend	[no test files]
+ok  	github.com/xmdemt/xdev/internal/cli	2.976s
+ok  	github.com/xmdemt/xdev/internal/config	1.870s
+ok  	github.com/xmdemt/xdev/internal/discovery	2.283s
+ok  	github.com/xmdemt/xdev/internal/downloader	10.876s
+ok  	github.com/xmdemt/xdev/internal/env	7.990s
+ok  	github.com/xmdemt/xdev/internal/extractor	0.854s
+ok  	github.com/xmdemt/xdev/internal/gui	12.652s
+ok  	github.com/xmdemt/xdev/internal/hostscan	0.431s
+ok  	github.com/xmdemt/xdev/internal/i18n	0.346s
+ok  	github.com/xmdemt/xdev/internal/installer	19.185s
+ok  	github.com/xmdemt/xdev/internal/isolator	0.944s
+ok  	github.com/xmdemt/xdev/internal/linkaudit	25.184s
+ok  	github.com/xmdemt/xdev/internal/manifest	1.615s
+ok  	github.com/xmdemt/xdev/internal/mirror	0.368s
+ok  	github.com/xmdemt/xdev/internal/orchestrator	1.348s
+ok  	github.com/xmdemt/xdev/internal/plugin	2.642s
+ok  	github.com/xmdemt/xdev/internal/plugins/java	0.180s
+ok  	github.com/xmdemt/xdev/internal/remote	1.069s
+ok  	github.com/xmdemt/xdev/internal/resolver	0.220s
+ok  	github.com/xmdemt/xdev/internal/shim	1.345s [no tests to run]
+ok  	github.com/xmdemt/xdev/internal/signer	0.509s
+ok  	github.com/xmdemt/xdev/internal/testkit/hostsnapshot	0.455s
+ok  	github.com/xmdemt/xdev/internal/toolmeta	0.238s
+ok  	github.com/xmdemt/xdev/internal/tui	0.404s
+ok  	github.com/xmdemt/xdev/internal/update	0.595s
+ok  	github.com/xmdemt/xdev/internal/util	0.889s
+ok  	github.com/xmdemt/xdev/internal/version	0.122s
+?   	github.com/xmdemt/xdev/toolsHashFullCheck	[no test files]

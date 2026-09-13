@@ -268,6 +268,46 @@ func TestCapture_DirEntryPaths_MtimeChurnIgnoredButEntriesCaught(t *testing.T) {
 	}
 }
 
+// TestClassifyChanges_TransientVsPersistent（第四轮新增）：这条判定决定"假红 vs 真污染"，
+// 必须有守卫。用临时目录 + 手工构造快照把两种情形都钉死：
+//   - 差异其实已经消失（他包写完后已恢复）→ 判为瞬时，返回空 → 不阻塞；
+//   - 差异仍在（文件真的被留在宿主上）→ 判为持久，返回该差异 → 阻塞。
+func TestClassifyChanges_TransientVsPersistent(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "pollution.txt")
+	opts := Options{Paths: []string{p}}
+
+	before, err := Capture(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 情形 1：after 快照显示"曾经变化过"，但文件系统上并不存在该文件（模拟他包写后清理）。
+	stale := Snapshot{
+		Env:   map[string]string{},
+		Files: map[string]FileMeta{filepath.Clean(p): {Exists: true, Size: 42, ModTime: 1}},
+	}
+	if got := classifyChanges(before, stale, opts, 2, 0); len(got) != 0 {
+		t.Errorf("差异已消失时必须判为瞬时（否则并发全量会假红）: %#v", got)
+	}
+
+	// 情形 2：文件真的留在磁盘上 → 必须判为持久。
+	if err := os.WriteFile(p, []byte("left behind"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Capture(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := classifyChanges(before, after, opts, 2, 0)
+	if len(got) != 1 {
+		t.Fatalf("留在宿主上的污染必须被判为持久（阻塞）: %#v", got)
+	}
+	if got[0].Kind != "file" || !strings.Contains(got[0].After, "exists") {
+		t.Errorf("变化描述不对: %#v", got[0])
+	}
+}
+
 // TestCapture_VolatilePathsIgnoreChurn：派生缓存被合法重写（mtime/size 变）
 // 不应算作变化；但它被创建或删除必须被发现。
 func TestCapture_VolatilePathsIgnoreChurn(t *testing.T) {
