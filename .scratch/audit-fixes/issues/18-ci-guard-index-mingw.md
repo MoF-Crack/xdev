@@ -1,6 +1,6 @@
 # 18 CI 守卫 job 四边界 + index 重建 + mingw 处置
 
-Status: blocked（后置于票 17；票 17 因私钥缺失阻塞）
+Status: resolved（守卫规格 / index.yaml 重建 / mingw 补全 / 不可安装标记全部落地；唯一待票 17 完成后由同一守卫自动证明的断言是「重签后 52/52 覆盖」——见 Comments）
 Type: task
 批次: B3 数据线
 对应修复项: P2-15(D-15) + P2-29 + P0-02 阶段 2 守卫规格（方案 §6 P2-15/P2-29）
@@ -61,7 +61,27 @@ CI 守卫 job 在当前树 + 重签后全绿；`xdev available` 不再展示不�
 - **不可安装标记（票面第 2 项）**：`manifest.Archive.Installable()`（npm 型不要求 url/format）、`Version.Installable(goos,goarch)`、`Tool.HasInstallableVersion`、`Tool.HasCompleteArchive`（平台无关，供守卫）；`Catalog.markInstallability()` 在**三个加载出口**（磁盘/内嵌/合并）计算派生字段 `Tool.Installable`（不来自 YAML）；`xdev doctor` 新增「Not installable on this platform (N): …」提示行——**只列有版本却装不了的工具**（零版本伪条目不列），且**不算检查失败**（平台差异属正常）。实测：合成一个占位工具后 doctor 输出 `Not installable on this platform (1): placeholder-tool`。
 - 守卫测试：`internal/manifest/archive_installable_test.go`（4 例：`Installable` 9 个判据、平台匹配、`HasInstallableVersion`/`HasCompleteArchive`、`LoadCatalog` 标记生效）、`internal/cli/doctor_installable_test.go`、根守卫 `TestManifests_EveryToolHasCompleteArchive`（红态证据：补全前的探针输出 `NO-INSTALLABLE mingw.yaml versions=3 archives=3 missingURL=3 missingFormat=3`；补全后 `no-installable=0 partially-broken=0`）。
 
-### 4. 未做 / 留待后续（白名单外，仅记录）
+### 5. 附带发现：mingw 的 stale sig 会让 keyed 构建拒绝新补全的归档（实测）
+
+`manifests/mingw.yaml.sig` 是 2026-07-08 的旧签名，签名图只含 4 个条目：
+`11.2.0`/`12.2.0` × `linux/x86_64` + `windows/amd64`（且其 `windows/amd64` 哈希与今天同一上游文件名的实测值**不同**：
+旧 `12.2.0`=0d744ad7… vs 今 dc1f299e…，旧 `11.2.0`=6808e313… vs 今 2c943b1a…）。CI 发版时因 mingw 当时**无哈希可签**而
+跳过重签、保留了这个旧 sig（v0.4.0 产物内 51 个签名里唯一"不是 CI 签的"就是它，见票 17 取证 #3）。
+
+后果（实测 2026-09-13）：用 `build.ps1` 同款方式构建（`-ldflags -X …rootPublicKeyB64=$(keys/pub.key)`）后安装
+`mingw@16.2.0` 会被逐 URL 签名覆盖过滤拦下：
+
+```
+[install] Found embedded manifest signature for mingw
+[download] ERROR: manifest signature verification failed: expected SHA-256 26788998d615856a... 
+           not found in signed manifest for tool "mingw" version "16.2.0" (windows/amd64) — possible hash tampering
+```
+
+即：**mingw 补全必须与票 17 的重签一起生效**——非 keyed 的开发构建（`go build`，无内嵌根公钥）已验证可装可编译（见 §3），
+而 keyed 构建（本地 `build.ps1` / 将来嵌新根密钥的发布构建）需要新的 `.sig`。重签完成后，本卡 §1 的自激活守卫
+`TestManifestSignatureCoverage` 会自动把这类 stale sig 变成红灯（当前因 16/52 缺签名而 skip）。
+
+### 6. 未做 / 留待后续（白名单外，仅记录）
 
 - `manifests/index.yaml` 会被 `LoadCatalog` 解析成名为 `index` 的**零版本伪条目**（`register.go` 在插件注册时跳过它，`xdev available` 也不展示）；建议后续在加载层就排除非工具 YAML。
 - 7z/exe 路径的 `strip` 语义（本票只记录，不改行为——改动会影响 ruby/rust/zed 等既有条目）。
