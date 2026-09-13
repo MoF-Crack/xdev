@@ -31,7 +31,11 @@ versions:
         - os: linux
           arch: x86_64
           format: tar.xz
-          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          # 上游 22.x 起 Linux/macOS 资产改名：旧 `clang+llvm-<ver>-x86_64-linux-gnu-ubuntu-18.04.*`
+          # 已 404，现为 `LLVM-<ver>-Linux-X64.tar.xz`；Windows 仍是旧名
+          # `clang+llvm-*-x86_64-pc-windows-msvc.tar.xz`（见上一条，实测可达）。归档仍为单一
+          # 顶层目录，故 strip: 1 不变（与下方 18.1.8 的旧命名条目并存，各自只对自身版本有效）。
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
           mirror_url: ""
           sha256: ""
           size: 1050000000
@@ -39,7 +43,7 @@ versions:
         - os: darwin
           arch: arm64
           format: tar.xz
-          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/clang+llvm-22.1.8-arm64-apple-macos11.tar.xz
+          url: https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-macOS-ARM64.tar.xz
           mirror_url: ""
           sha256: ""
           size: 850000000

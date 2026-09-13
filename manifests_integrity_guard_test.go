@@ -19,6 +19,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -126,13 +128,35 @@ func TestManifestsTree_NoOrphanSignatures(t *testing.T) {
 	}
 }
 
-// TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey：内嵌签名必须可解析、
-// 可验签，且每个内嵌 .sig 都有对应的内嵌 .yaml。
-func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
+// verifyPublicKey 返回用于守卫验签的公钥。
+//
+// 默认用仓库 keys/pub.key。CI 的签名作业（.github/workflows/sign-manifests.yml）注入
+// XDEV_MANIFEST_VERIFY_PUBKEY（= 发布用公钥 XDEV_SIGNING_PUBLIC_KEY）时以它为准：CI 产出的
+// .sig 由 CI 私钥签署，而仓库 keys/pub.key 只有在同一次变更里做了信任根对齐才会相等
+// （票 17 A 方案 R2：公钥替换与签名替换必须原子）。
+//
+// 之所以用专用变量名而不是直接复用 XDEV_SIGNING_PUBLIC_KEY：release job 会导出后者，
+// 将来若有测试 job 顺带导出同一 secret，守卫语义会被无意改变。
+func verifyPublicKey(t *testing.T) (ed25519.PublicKey, string) {
+	t.Helper()
+	if v := strings.TrimSpace(os.Getenv("XDEV_MANIFEST_VERIFY_PUBKEY")); v != "" {
+		raw, err := base64.StdEncoding.DecodeString(v)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			t.Fatalf("XDEV_MANIFEST_VERIFY_PUBKEY 不是合法的 base64 Ed25519 公钥（decoded=%d, err=%v）", len(raw), err)
+		}
+		return ed25519.PublicKey(raw), "env XDEV_MANIFEST_VERIFY_PUBKEY"
+	}
 	pub, err := signer.LoadPublicKey(publicKeyRel)
 	if err != nil {
 		t.Fatalf("load %s: %v", publicKeyRel, err)
 	}
+	return pub, publicKeyRel
+}
+
+// TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey：内嵌签名必须可解析、
+// 可验签，且每个内嵌 .sig 都有对应的内嵌 .yaml。
+func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
+	pub, keySource := verifyPublicKey(t)
 	embeddedYAML := map[string]bool{}
 	for _, name := range listEmbedded(t, manifestFS, ".yaml") {
 		embeddedYAML[name] = true
@@ -158,7 +182,7 @@ func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
 			t.Errorf("embedded %s has no matching embedded %s", name, yamlName)
 		}
 		if !signer.VerifySignature(pub, &ms) {
-			t.Errorf("embedded %s does not verify against %s (tool=%q ts=%s)", name, publicKeyRel, ms.Tool, ms.Timestamp)
+			t.Errorf("embedded %s does not verify against %s (tool=%q ts=%s)", name, keySource, ms.Tool, ms.Timestamp)
 		}
 	}
 }
@@ -257,10 +281,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 			len(unsigned), len(files), firstN(unsigned, 5))
 	}
 
-	pub, err := signer.LoadPublicKey(publicKeyRel)
-	if err != nil {
-		t.Fatalf("load %s: %v", publicKeyRel, err)
-	}
+	pub, keySource := verifyPublicKey(t)
 
 	// 无哈希工具豁免（边界③）：没有任何可用哈希的 manifest（如 npm 型 dsh）没有
 	// 可签内容，sign-manifests 会跳过它，因此也不要求有 .sig。
@@ -289,7 +310,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 			continue
 		}
 		if !signer.VerifySignature(pub, ms) {
-			t.Errorf("%s 验签失败（tool=%q ts=%s）", sigPath, ms.Tool, ms.Timestamp)
+			t.Errorf("%s 验签失败（公钥来源 %s，tool=%q ts=%s）", sigPath, keySource, ms.Tool, ms.Timestamp)
 			continue
 		}
 		if ms.Tool != tool.Name {

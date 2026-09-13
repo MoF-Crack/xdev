@@ -1,0 +1,74 @@
+# 归档 URL 存活巡检（A 方案风险 R4/R9 的检测面）。
+#
+# 为什么需要：上游会改名/下线发行资产，而 manifest 里的 URL 是写死的——实测已发现
+#   - llvm 22.x：Linux/macOS 从 `clang+llvm-*` 改为 `LLVM-*`
+#   - zig 0.14+：从 `zig-<os>-<arch>` 改为 `zig-<arch>-<os>`
+# 这类漂移只在"用户点安装"时才暴露。本巡检只发 HEAD（必要时 1 字节 Range GET），
+# 不下载归档、不消耗流量，因此可以每周跑，把问题提前到发布之前。
+#
+# 豁免：把已知不可达的 URL 写进 manifests/url-allowlist.txt（每行一条，# 注释）。
+name: URL liveness
+
+on:
+  schedule:
+    # 每周一 03:17 UTC（避开整点高峰）
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      mirrors:
+        description: "同时探测 mirror_url（默认否）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Probe archive URLs
+        run: |
+          args=(--manifests-dir manifests --json url-report.json --concurrency 12 --timeout 30s)
+          if [ -f manifests/url-allowlist.txt ]; then
+            args+=(--allow-file manifests/url-allowlist.txt)
+          fi
+          if [ "${{ inputs.mirrors }}" = "true" ]; then
+            args+=(--mirrors)
+          fi
+          go run . manifest check-urls "${args[@]}"
+
+      - name: Summarize
+        if: always()
+        run: |
+          echo "### 归档 URL 巡检" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f url-report.json ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open('url-report.json'))
+          print(f"total={d['Total']} ok={d['OK']} dead={d['Dead']} error={d['Error']} allowlisted={d['Allowlisted']}")
+          for r in d['Results']:
+              if r['status'] in ('dead', 'error'):
+                  print(f"{r['status'].upper()} {r['tool']}@{r['version']} {r.get('os_arch','')} {r['url']} {r.get('error','')}")
+          PY
+          else
+            echo "（无报告产物）" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: url-report
+          path: url-report.json
+          retention-days: 30
+          if-no-files-found: warn

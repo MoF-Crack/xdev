@@ -147,6 +147,28 @@ Type: task
 对应修复项: P0-02 阶段 2 + P1-12(D-07)（方案 §4 P0-02 阶段 2）
 Blocked by: 13（先代码语义后数据）
 
+## Comments（Batch 5 追加 #4 — 逐风险的解决方案与已落地实现，2026-09-13）
+
+按上一节的风险登记逐条给出解决方案；**不需要私钥、不依赖任何用户决策的部分已实现并验证**（本批提交）。
+
+| 风险 | 解决方案 | 状态 |
+|---|---|---|
+| **R1** 私钥不可读回 / CI 成为唯一签发者 | ① 作业内私钥只以 `0600` 落在临时 `keys/priv.key`，`trap ... EXIT` 立即删除，绝不进 artifact；② 仓库侧 `.gitignore` 继续排除；③ 在 `signing-guide.md` 写"secret 丢失＝必须轮换"的应急预案（随 A′ PR 落地）；④ **可选的"一次性轮换换取可备份私钥"**（生成新对→私钥入密码管理器→更新两个 secret）保持为待决策项——它会破坏旧客户端的"新版本发现+安装"链路（旧客户端内嵌旧公钥，无法验证新签名），故默认不做 | ①②已实现；③随 A′ PR；④待决策 |
+| **R2** 公钥替换与签名替换的顺序耦合 | **结构性解决**：签名作业一次性产出「`.sig` + `index.yaml` + 可选对齐后的 `keys/pub.key`」，四者永不分开提交；`inputs.align_pubkey=true` 时作业自己把 `keys/pub.key` 写成 CI 公钥。守卫侧新增 `XDEV_MANIFEST_VERIFY_PUBKEY` 覆盖（专用变量名，避免被无关 secret 影响），使签名作业能"用发布公钥验证刚产出的签名"——实测：默认（仓库公钥）PASS，注入 CI 公钥后旧签名如实报错 | 已实现 |
+| **R3** CI 写权限 / 绕评审 | 新工作流 `sign-manifests.yml`：默认 `mode=artifact` **只要 `contents: read`（零写权限）**；`mode=branch` 才授予 write，且只推 `signing/*` 分支 + 开 PR，不碰 main；`environment: signing` 人工批准门；`concurrency` 串行化 | 已实现 |
+| **R4** fill 填不满（上游改名） | ① **已修 4 条死链**：`llvm@22.1.8` 的 `clang+llvm-22.1.8-{x86_64-linux-gnu-ubuntu-18.04,arm64-apple-macos11}.tar.xz` → `LLVM-22.1.8-Linux-X64.tar.xz` / `LLVM-22.1.8-macOS-ARM64.tar.xz`；`zig@0.15.1` 的 `zig-{linux-x86_64,macos-aarch64}-0.15.1.tar.xz` → `zig-x86_64-linux-0.15.1.tar.xz` / `zig-aarch64-macos-0.15.1.tar.xz`（并清掉实测四个路径全 404 的清华镜像 `mirror_url`）；② 新增 **URL 存活巡检**：CLI `xdev manifest check-urls`（HEAD-only、可选 `--mirrors`、`--allow-file` 豁免、`--json` 报告、dead 即非零退出）+ 每周 `url-liveness.yml` 工作流，把"上游改名"提前到发布前发现；③ 全量实测：**441 条唯一 URL，dead=0**（修好后），101 条 error 全是本机网络受限（github.com 85 / archive.apache.org 8 / go.dev 4 / services.gradle.org 4），CI 出口可达 | 已实现并实测 |
+| **R5** `fill-sha256` 失败仍 exit 0 | **改代码**：默认 `totalFailed > 0` → 返回错误（非零退出）；`--allow-partial` 显式豁免；新增 `--report <json>` 逐条机读结果（tool/version/os-arch/url/status/hash/error）；工作流再加"空 `sha256` 必须清零"的兜底门禁 | 已实现（含 6 组守卫测试） |
+| **R6** 哈希即信任锚，填错＝签死 | **改代码**：下载后按声明的 `format` 做**魔数校验**（zip/gzip/xz/zstd/tar/7z/exe-msi/dmg/shell），200 的错误页/登录页一律拒收并删除；缓存命中也要过同一校验（`--no-cache` 可完全忽略缓存）；`--retries` 处理瞬时失败。工作流把「哈希发生变化的既有 URL」写进 job summary 供人工复核 | 已实现（含 9 组用例，含 dmg 尾部 `koly` 特例、损坏缓存重下） |
+| **R7** Actions 分钟数 | 工作流缓存归档目录（`actions/cache`，key 用 manifests hash）+ 新增 `--tool` 增量填充（只重试个别工具）；`timeout-minutes: 90` | 已实现 |
+| **R8** dispatch 的 ref 竞争 | 作业开头记录 base SHA，产出前 `git rev-parse` 复核未移动，移动即报错要求重跑；artifact 名与 PR 正文都带 base SHA | 已实现 |
+| **R9** 非 GitHub 源在 CI 出口可能被挑战 | `check-urls` 区分 `dead`（4xx/5xx）与 `error`（网络），**默认只有 dead 会失败**（`--fail-on-network-error` 可切换）；`manifests/url-allowlist.txt` 提供带原因的豁免机制 | 已实现 |
+
+**下一步（需要你决策/操作）**：
+1. 选 **A′-PR**（默认 artifact，零写权限）还是 **A′-branch**（自动开 PR）；两者都只需你点一次 `Run workflow`。
+2. 报告默认用**仓库 `keys/pub.key`**；若勾选 `align_pubkey`，作业会把仓库公钥对齐为 CI 公钥（信任根收敛，本 PR 一并复核）——建议勾选，否则本地 keyed 构建仍无法验证 CI 产出的签名。
+3. 是否要我顺带把 `signing-guide.md` 改成「CI 签发」流程（含 secret 丢失应急预案与公钥指纹）——已计划随 A′ PR 落地。
+
+
 ## 内容
 
 1. `xdev manifest fill-sha256` 补全 **163** 个空 SHA256（复核实测精确数；go/node 的 linux/darwin 条目需真实下载计算哈希）。

@@ -36,6 +36,8 @@ Git repositories.`,
 		newManifestUpdateCmd(),
 		// 票 18 / P2-15：index.yaml 重新生成（守卫要求索引与工具清单同步）。
 		newManifestIndexCmd(),
+		// A 方案风险 R4/R9：归档 URL 存活探测（上游改名检测，HEAD-only 可定期跑）。
+		newManifestCheckURLsCmd(),
 	)
 
 	return cmd
