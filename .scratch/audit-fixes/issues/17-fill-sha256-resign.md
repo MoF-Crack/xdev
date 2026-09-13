@@ -96,6 +96,52 @@ Status: blocked（签名私钥 keys/priv.key 缺失——无法执行重签；�
    无副本，故只能记录为「无法证实」。唯一间接线索是导入计划（2026-07-16）里的校验步骤
    （`git check-ignore` / `git log --all --full-history -- keys/priv.key`）通常用于确认"确实存在但未入库"的
    文件，暗示当时工作树里可能确有该文件。
+## Comments（Batch 5 追加 #3 — A 方案风险评估，2026-09-13）
+
+**方案定义**：A′ = ①CI 手动触发作业跑 `fill-sha256` + `sign-manifests`（用现有 `XDEV_SIGNING_PRIVATE_KEY`），
+产出 `manifests/*.yaml` + `.sig`；②把 `keys/pub.key` 替换为 CI 公钥
+`4Ac61lOH0N9WR6MnVr0hyLykUJL1JP5gnEgp3A31kTw=`，使本地构建 / 发布产物 / 仓库内签名共用同一信任根。
+
+**收益**：一次解决 163 空哈希、16 个缺失签名、mingw stale sig、以及"仓库里有两把根密钥"；
+对已发布客户端**零影响**（CI secret 不变、产物内自洽）；纯 `git revert` 可回滚，无密钥变更。
+
+### 风险登记（概率 × 影响 → 缓解 / 检测）
+
+| # | 风险 | 概率×影响 | 缓解 / 检测 |
+|---|---|---|---|
+| R1 | **私钥不可读回**：A′ 后 CI 是唯一签发者；secret 若丢失只能轮换（旧客户端拒绝新签名） | 中×高 | 现状已如此，A′ **不新增**该风险；需在文档写应急预案。可选"一次性轮换以获得可备份私钥"（生成新对 → 私钥入密码管理器 → 更新两个 secret），代价是破坏旧客户端兼容 → **建议暂不做** |
+| R2 | **公钥替换与签名替换的顺序耦合**：先换 `keys/pub.key`、后换 `.sig` 会让"用仓库公钥验签仓库内签名"的检查立刻变红（本票新增的 `TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey` 就是这种） | 中×中 | **同一次提交原子完成**（新 sigs + 公钥 + 文档）；提交前本地跑守卫。守卫本身就是检测器 |
+| R3 | **CI 回写仓库**的写权限与分支保护：直接 push main 会绕过评审；`GITHUB_TOKEN` 推送不触发后续 workflow（掩盖 CI 状态）；分支保护可能拒绝 | 低-中×中 | **不让 CI 直接 push main**：上传 artifact + 开 PR（或推 `signing/*` 分支）由人复核；`workflow_dispatch` 手动触发，不做 push 自动触发 |
+| R4 | **fill 并非 163 全能填**（实测）：直连探测 163 条 → 133 条 200/206、**4 条 HTTP 404**、26 条本机网络受限（CI 不受限）。404 全是 **manifest 用了上游旧命名**：`llvm@22.1.8` 的 `clang+llvm-22.1.8-{x86_64-linux-gnu-ubuntu-18.04,arm64-apple-macos11}.tar.xz`（上游现为 `LLVM-22.1.8-Linux-X64.tar.xz` / `LLVM-22.1.8-macOS-ARM64.tar.xz`，实测 302 可达）；`zig@0.15.1` 的 `zig-linux-x86_64-0.15.1.tar.xz` / `zig-macos-aarch64-…`（上游 0.14+ 改为 `zig-x86_64-linux-0.15.1.tar.xz` / `zig-aarch64-macos-0.15.1.tar.xz`，实测 200） | **高**×中 | **先修这 4 条 URL**（属 mingw 同类缺陷：URL 陈旧=不可安装），否则填充后仍留空 → 覆盖守卫必红 |
+| R5 | **`fill-sha256` 失败仍 exit 0**：只在 stderr 打印 ❌ 并把 `totalFailed` 计入统计，命令仍返回 nil | 高×中 | 该命令**不可当门禁**；门禁必须是"空 sha256 == 0（或显式豁免清单）"或本票新增的覆盖守卫 |
+| R6 | **哈希即信任锚，填错＝把自己签死**：`downloadAndHash` 只校验 `StatusCode==200`，不校验内容类型/魔数（200 的登录页/错误页会被当资产哈希）；缓存目录命中即复用（不校验大小/完整性） | 低-中×高 | CI 用干净缓存；**复核 diff**：同一 URL 的哈希发生变化是强信号（上游重传或投毒），必须逐条确认；后续可给 fill 增内容类型/魔数校验（新票）。旁证：mingw 旧签名里 `12.2.0`/`11.2.0` 的哈希与今日同名资产**不同** ⇒ 上游确实会"同名换内容" |
+| R7 | **私有仓库 Actions 成本**：163 个归档 ≈ 数 GB 下载/次，单次 job 可能 10-30 分钟（私有仓库按分钟计费） | 中×低-中 | 仅手动触发；用 `actions/cache` 缓存归档；只对空哈希增量跑 |
+| R8 | **dispatch 的 ref 与 main 竞争**：签出的 `.sig` 可能对应旧哈希 | 低×中 | dispatch 显式传 `ref` + 运行前 `git pull` + 产出必须过覆盖守卫才提交 |
+| R9 | **`requires_proxy` 语义反转**：CI 直连通常无碍，但非 GitHub 源（`cangjie-lang.cn`、`downloads.cursor.com`、`update.code.visualstudio.com`、`archive.apache.org`）可能被出口 IP 挑战/限速 | 低×低-中 | 记录"CI 填不满清单"，必要时这些条目改由本机（带代理）填 |
+
+### 建议的落地形态：A′-PR（含三条守卫）
+
+1. **作业**：`workflow_dispatch`（输入 `ref`）→ 干净 checkout → 构建 xdev → `fill-sha256 --cache-dir`（配 `actions/cache`）
+   → 输出 fill 报告（成功/失败清单）→ `sign-manifests` → 跑签名守卫 → **上传 artifact / 开 PR**（不直接 push main）。
+2. **新增 CI 守卫（补 R2/R1 的根因：从来没人校验过两者一致）**：断言
+   `XDEV_SIGNING_PUBLIC_KEY == $(cat keys/pub.key)`，不一致即 fail —— 防止"仓库公钥与 CI 公钥再次漂移"。
+3. **门禁**：fill 后空 `sha256` 必须为 0（或白名单豁免）→ `TestManifestSignatureCoverage` 转绿 →
+   内嵌验签守卫 `TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey` 转绿。
+4. **提交顺序（原子）**：CI 产出的 `manifests/*.yaml` + `.sig` + `keys/pub.key` 替换 + 文档更新
+   （`docs/security/procedures/signing-guide.md` 的"本地重签"章节改写为"CI 签发"，并记录 CI 公钥指纹）。
+5. **复核清单**：① 哈希发生变化的既有 URL 逐条确认；② fill 报告里的失败条目转工单；③ `index.yaml` 重新生成（本批已加命令）。
+
+### 退路：A″（零 CI 写权限）
+
+作业**只上传 artifact**，由我在本机校验后提交（CI 不需要 `contents: write`）。风险更低（R3 消失），
+代价是仍需你点一次运行并把 artifact 交给我。
+
+### 结论
+
+A′ **风险可控、可回滚、不需私钥、不需轮换**。关键前置是**先修 4 条死链 URL**（R4）；
+关键约束是**不要让 CI 直接 push main**（R3）与**必须补"secret 公钥 == 仓库公钥"守卫**（R1/R2 的根因）。
+若要最保守，用 A″（CI 只产 artifact）。
+
 Type: task
 批次: B3 数据线
 对应修复项: P0-02 阶段 2 + P1-12(D-07)（方案 §4 P0-02 阶段 2）
