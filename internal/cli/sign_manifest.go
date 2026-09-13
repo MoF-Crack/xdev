@@ -459,11 +459,22 @@ func validateArchiveFile(path, format string) error {
 		}
 		return fmt.Errorf("validation failed: not a 7z archive (got %q)", snippet(head))
 	case "exe", "msi":
-		// NSIS/Inno 安装器是 PE（MZ）；MSI 是 OLE 复合文档（D0 CF 11 E0）。
-		if has("MZ") || has("\xd0\xcf\x11\xe0") {
+		// `format: exe` 在本项目里表示"可执行产物"，实际至少有四种载体（本批复核时被
+		// Cursor 的 Linux 条目抓到：它声明 exe，下发的却是 AppImage）：
+		//   - Windows PE（NSIS/Inno 安装器、绿色版 exe、部分自解压包）：MZ
+		//   - MSI（OLE 复合文档）：D0 CF 11 E0
+		//   - Linux AppImage / 打包二进制：ELF（\x7fELF）
+		//   - macOS Mach-O：小端/大端的 32/64 位四种 magic + fat/universal（Cafebabe）
+		//     （common 的 x86-64/arm64 是**小端**：CF FA ED FE；只认大端会把
+		//     绝大多数 macOS 二进制误判——本批的单测就抓到过这个笔误）
+		// 其余情况（HTML 下载页、JSON 错误体等）仍然拒收——这正是本校验要挡的东西。
+		if has("MZ") || has("\xd0\xcf\x11\xe0") || has("\x7fELF") ||
+			has("\xce\xfa\xed\xfe") || has("\xfe\xed\xfa\xce") ||
+			has("\xcf\xfa\xed\xfe") || has("\xfe\xed\xfa\xcf") ||
+			has("\xca\xfe\xba\xbe") {
 			return nil
 		}
-		return fmt.Errorf("validation failed: not a Windows executable/installer (got %q)", snippet(head))
+		return fmt.Errorf("validation failed: not a Windows executable/installer, ELF or Mach-O binary (got %q)", snippet(head))
 	case "dmg":
 		// UDIF 的 magic 在**尾部** 512 字节的 "koly"；少数是 xar。
 		if has("xar!") {

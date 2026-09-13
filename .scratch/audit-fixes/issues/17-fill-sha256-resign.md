@@ -168,6 +168,48 @@ Blocked by: 13（先代码语义后数据）
 2. 报告默认用**仓库 `keys/pub.key`**；若勾选 `align_pubkey`，作业会把仓库公钥对齐为 CI 公钥（信任根收敛，本 PR 一并复核）——建议勾选，否则本地 keyed 构建仍无法验证 CI 产出的签名。
 3. 是否要我顺带把 `signing-guide.md` 改成「CI 签发」流程（含 secret 丢失应急预案与公钥指纹）——已计划随 A′ PR 落地。
 
+## Comments（Batch 5 追加 #5 — 落地后回归复核，2026-09-13）
+
+**复核方法**（不只跑测试，而是把"只在 CI 才会炸"的面向也验一遍）：
+① `actionlint` v1.7.12（本机 go install 构建）静态校验**全部 4 份工作流**；
+② 自写探针抽出所有工作流的 `run:` 片段（46 段）交给 Git-bash `bash -n` 做 shell 语法校验（含 heredoc 缩进）；
+③ 用**真实二进制** `--help` 复核工作流里写的每一条命令与 flag；
+④ 全量 `go build/vet ./...` + `go test ./... -short -count=1`（29 包）+ 新增单测。
+
+**发现并修复的 4 个真回归（全部在我本批新增的代码/工作流里）**：
+
+1. **工作流命令路径错**（CI 会直接拒绝执行）：初稿写的是 `./xdev manifest fill-sha256` 与
+   `./xdev manifest sign-manifests`，但这两个是**顶层命令**（`xdev fill-sha256` / `xdev sign-manifests`），
+   只有 `manifest index` / `manifest check-urls` 在 `manifest` 子命令组下。已用真实二进制 `--help`
+   逐条核对后纠正（文档 `docs/security/procedures/signing-guide.md` 里写的 `xdev fill-sha256` 才是对的）。
+2. **`permissions` 不支持表达式**：actionlint 实测报错
+   `"${{ inputs.mode == 'branch' && 'write' || 'read' }}" is invalid as permission of scope "contents"`
+   → 工作流非法。改为**两个 job**：`sign`（固定 `contents: read`，零写权限）+ `publish`
+   （`if: inputs.mode == 'branch'`，才授予 `contents/pull-requests: write`）。
+3. **门禁口径错误（会必然失败）**：原稿用 `grep 'sha256: ""'` 当"空哈希必须清零"的硬门禁，但
+   **npm 型条目（dsh）按设计保留空 `sha256`**（不下载归档、完整性由 npm 负责）→ 每次都会红。
+   改为：以 `fill-sha256` 的退出码（失败即非零）作硬门 + summary 里**按工具列出剩余空哈希**供人工判断；
+   机器判据继续由覆盖守卫承担。
+4. **魔数校验误伤合法载体**：新加的 `exe` 校验起初只认 PE(MZ)/OLE(MSI)，而
+   **Cursor 的 Linux 条目声明 `format: exe`、实际下发 AppImage（ELF）**（本次用"format vs URL 后缀"
+   扫描发现）→ 会把原本能填的条目变成填失败。已扩为 PE/OLE/ELF/Mach-O（小端/大端 32/64 位 + fat）
+   并补单测；随后单测又抓到我漏掉 **Mach-O 小端 magic**（`CF FA ED FE`，macOS 最常见形态）的笔误，一并修正。
+5. 附带清理：删除对不存在文件 `--body-file .github/signing-pr-body.md` 的引用（改用 `--body`）；
+   `publish` job 改为**从 artifact 落地文件后再提交**（不依赖两个 job 之间隐式共享工作区）。
+
+**同批复核确认无问题的项**：
+- 495 条归档 URL 的「声明 format vs URL 后缀」冲突 = **0**（故魔数校验不会因格式声明错误而误伤）；
+- 工作流用到的 action 版本均已用 GitHub API 逐一确认存在（`download-artifact@v7`、`upload-artifact@v7`、
+  `checkout@v7`、`setup-go@v7`、`cache@v4`）；
+- 新增子命令与 flag 与工作流用法逐字对齐（`--report/--allow-partial/--no-cache/--retries/--tool` 全在）；
+- `manifests/url-allowlist.txt` 不会被任何 `*.yaml` 过滤器（LoadCatalog / 守卫 / index 生成）误读；
+- 仓库内没有断言命令清单/帮助输出的测试，故新增 `manifest check-urls`、`manifest index` 不影响既有断言；
+- `bash -n` 报出的 5 处语法失败全在 `governance.yaml`（那些步骤是 `shell: pwsh`，属探针误报），与本次改动无关。
+
+**仍只能由真实 CI 运行验证的项（本地无法证明，如实标注）**：① `environment: signing` 批准门的实际行为；
+② `actions/cache` 命中率与 163 条归档在 CI 出口的填充成功率（本机网络受限：441 条探测中 101 条 GitHub URL 超时，
+CI 出口不受限）；③ `mode=branch` 下 PR 创建权限；④ 填充后 `TestManifestSignatureCoverage` 由 skip 转绿的实测结果。
+
 
 ## 内容
 

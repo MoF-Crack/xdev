@@ -38,7 +38,13 @@ func TestValidateArchiveFile_Magic(t *testing.T) {
 		{"7z rejected", "7z", "\x1f\x8b", false},
 		{"exe (PE) ok", "exe", "MZ\x90\x00rest", true},
 		{"exe (MSI/OLE) ok", "exe", "\xd0\xcf\x11\xe0rest", true},
+		// 复核回归：Cursor 的 Linux 条目声明 format: exe，实际下发 AppImage（ELF）。
+		// 若只接受 PE/OLE，本批加固会把原本"能填"的条目变成"填失败"。
+		{"exe (AppImage/ELF) ok", "exe", "\x7fELF\x02\x01\x01rest", true},
+		{"exe (Mach-O) ok", "exe", "\xcf\xfa\xed\xferest", true},
+		{"exe (fat Mach-O) ok", "exe", "\xca\xfe\xba\xberest", true},
 		{"exe html rejected", "exe", "<html>download page</html>", false},
+		{"exe json error rejected", "exe", `{"error":"not found"}`, false},
 		{"sh ok", "sh", "#!/bin/sh\necho hi\n", true},
 		{"sh rejected", "sh", "\x00\x01\x02", false},
 		{"unknown format skipped", "weird", "\x00\x01", true},
