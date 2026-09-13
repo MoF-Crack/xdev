@@ -312,6 +312,64 @@ func TestTOFU_ReinstallAfterWriteback_Succeeds(t *testing.T) {
 	}
 }
 
+// --- Ticket 17 (P0-02 phase 2): mirror hash coverage -------------------------
+
+// TestFilterSignatureCoveredURLs_MirrorKeyKeepsMirrorCandidate 证明签名图里以
+// `os/arch#mirror` 记录的镜像哈希能被**真实过滤函数**消费：
+//
+//	java/Temurin 形态 = 官方哈希 + 独立的 mirror_sha256（镜像不是同一份字节）。
+//	只签官方哈希时，镜像候选会被判「未入签」而剔除，阶段 1 的镜像通路失效；
+//	票 17 第 3 项让签名图额外带上 `os/arch#mirror`，验证侧
+//	verifySHAInMapForVersion 的同版本值扫描即可命中它。
+//
+// 反向半例保证用例非假绿：镜像 URL 的生效哈希既不是官方也不是已签镜像哈希时，
+// 该候选仍必须被剔除。
+func TestFilterSignatureCoveredURLs_MirrorKeyKeepsMirrorCandidate(t *testing.T) {
+	s := injectTestRootKey(t)
+	const (
+		officialURL = "https://official.example/java-21.tar.gz"
+		mirrorURL   = "https://mirror.example/java-21.tar.gz"
+	)
+	official := strings.Repeat("a", 64)
+	mirror := strings.Repeat("b", 64)
+
+	sig := s.sign(t, "java", map[string]map[string]string{
+		"21.0.1": {
+			"linux/amd64":        official,
+			"linux/amd64#mirror": mirror,
+		},
+	})
+	base := Options{
+		ToolName: "java", Version: "21.0.1", OSArch: "linux/amd64",
+		ExpectedSHA: official, ManifestSignature: sig,
+		URLShaMap: map[string]string{officialURL: official, mirrorURL: mirror},
+	}
+
+	kept := filterSignatureCoveredURLs(base, []string{officialURL, mirrorURL})
+	if len(kept) != 2 {
+		t.Fatalf("kept = %v, want both URLs —— 已签的 mirror_sha256 必须让镜像候选通过 (P0-02 阶段 2)", kept)
+	}
+
+	// 反向前半（＝票 17 修复前的行为）：签名图**不含** #mirror 键时，镜像候选必须被
+	// 剔除。这一半把「签名图必须带镜像哈希」写成可执行契约，而不是注释里的约定。
+	noMirrorKey := base
+	noMirrorKey.ManifestSignature = s.sign(t, "java", map[string]map[string]string{
+		"21.0.1": {"linux/amd64": official},
+	})
+	kept = filterSignatureCoveredURLs(noMirrorKey, []string{officialURL, mirrorURL})
+	if len(kept) != 1 || kept[0] != officialURL {
+		t.Fatalf("kept = %v, want only the official URL —— 签名图缺 #mirror 键时镜像必被剔除（票 17 修复前）", kept)
+	}
+
+	// 反向后半：攻击者/新加的镜像带自己的哈希 → 必须剔除。
+	evil := base
+	evil.URLShaMap = map[string]string{officialURL: official, mirrorURL: strings.Repeat("c", 64)}
+	kept = filterSignatureCoveredURLs(evil, []string{officialURL, mirrorURL})
+	if len(kept) != 1 || kept[0] != officialURL {
+		t.Fatalf("kept = %v, want only the official URL —— 未入签的镜像哈希必须被剔除", kept)
+	}
+}
+
 // --- G9: cross-tool signature confusion ------------------------------------
 
 func TestVerifyManifestSignature_ToolMismatchRejected(t *testing.T) {

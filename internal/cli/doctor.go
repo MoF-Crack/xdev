@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,6 +31,7 @@ import (
 	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -108,6 +110,16 @@ func newDoctorCmd() *cobra.Command {
 			tools := cat.Tools()
 			check("manifest catalog", len(tools) > 0,
 				fmt.Sprintf("%d tool(s) discovered at %s", len(tools), cfg.Core.ManifestDir))
+
+			// 6a. 不可安装条目（票 18 / P2-29）：manifest 里可以有「有版本、没有
+			// url/format」的占位条目（实测 mingw 曾整条如此）——`xdev available`
+			// 会照常展示，直到用户点安装才失败。这里显式点名，且**不算检查失败**：
+			// 平台相关的不可安装（例如 Windows-only 工具在 Linux 上）属正常现象。
+			if notInstallable := notInstallableTools(tools); len(notInstallable) > 0 {
+				fmt.Printf("\n• Not installable on this platform (%d): %s\n",
+					len(notInstallable), strings.Join(notInstallable, ", "))
+				fmt.Println("  (manifest lacks url/format for a matching archive, or the tool targets another OS)")
+			}
 
 			// 6b. Available updates from sniff cache
 			updates := loadSniffUpdates(cfg)
@@ -218,6 +230,29 @@ func newDoctorCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&flagFix, "fix", false, "Attempt to fix detected issues")
 	return cmd
+}
+
+// notInstallableTools 返回本平台不可安装的工具名（排序）——票 18 / P2-29。
+//
+// 判据是 manifest 派生标记 Tool.Installable（LoadCatalog 计算：本平台上至少有一个
+// 「结构完整」的归档，即 url+format，npm 型只要求条目存在）。实测 mingw 曾整条缺失
+// url/format：`xdev available` 照常展示、点安装才失败；现在 doctor 会点名。
+func notInstallableTools(tools []*manifest.Tool) []string {
+	var out []string
+	for _, t := range tools {
+		if t == nil || t.Installable {
+			continue
+		}
+		// 零版本条目不是「看着能装其实装不了」的工具，而是非工具 YAML 被解析后的
+		// 产物（实测 manifests/index.yaml 会成为名为 "index" 的零版本条目；注册侧
+		// register.go 同样跳过它）。把它列进「不可安装」只会制造噪声。
+		if len(t.VersionList) == 0 {
+			continue
+		}
+		out = append(out, t.Name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // diagnosePathEntries checks a PATH string for common issues.

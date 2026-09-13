@@ -34,6 +34,8 @@ Git repositories.`,
 		newManifestAddCmd(),
 		newManifestRemoveCmd(),
 		newManifestUpdateCmd(),
+		// 票 18 / P2-15：index.yaml 重新生成（守卫要求索引与工具清单同步）。
+		newManifestIndexCmd(),
 	)
 
 	return cmd

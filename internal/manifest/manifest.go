@@ -50,6 +50,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -88,6 +89,10 @@ type Tool struct {
 	FormFactor []string `yaml:"form_factor,omitempty"`
 	// GUIBinary GUI 主二进制（相对 install 根），form_factor 含 gui 时使用。
 	GUIBinary string `yaml:"gui_binary,omitempty"`
+	// Installable 是**派生**标记（不来自 YAML）：本平台上是否至少有一个可安装
+	// 版本（见 Version.Installable）。LoadCatalog 会为每个工具计算它，供
+	// GUI/CLI/doctor 把「看着有版本、其实装不了」的工具显式标出来（票 18 / P2-29）。
+	Installable bool `yaml:"-"`
 }
 
 // Dependency 描述一个工具的可选依赖约束。
@@ -263,6 +268,75 @@ type Archive struct {
 	// 仅当工具的某些 archives 有 Form != "" 时（如 OpenCode 的 Desktop App
 	// 与 CLI 是独立 archive），安装时才显示形态选择器（HasFormSpecificArchives）。
 	Form string `yaml:"form,omitempty"`
+}
+
+// Installable reports whether this archive can actually be installed.
+//
+// 票 18 / P2-29：manifest 里可以存在「有 os/arch 但没有 url/format」的占位条目
+// （历史遗留、或嗅探模板尚未补全）。这类条目过去会被 `xdev available` 照常展示，
+// 直到用户点安装才失败——实测 mingw 的三个版本全部如此。安装侧要求：
+//
+//   - npm 型（install_kind: npm）：条目本身只是元数据，由 npm CLI 安装，
+//     因此不需要 url/format；
+//   - archive / executable / script：必须有 url 与 format。
+func (a Archive) Installable() bool {
+	if a.EffectiveKind() == InstallKindNPM {
+		return true
+	}
+	return strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.Format) != ""
+}
+
+// Installable reports whether this version can be installed on the given
+// platform (os/arch matching follows the manifest convention: "any" matches).
+func (v Version) Installable(goos, goarch string) bool {
+	for _, a := range v.Archives {
+		if a.OS != goos && a.OS != "any" {
+			continue
+		}
+		if a.Arch != goarch && a.Arch != "any" {
+			continue
+		}
+		if a.Installable() {
+			return true
+		}
+	}
+	return false
+}
+
+// HasInstallableVersion reports whether at least one version is installable on
+// the given platform. LoadCatalog marks such tools via Tool.Installable so the
+// GUI/CLI/doctor can flag entries that look available but cannot be installed.
+func (t *Tool) HasInstallableVersion(goos, goarch string) bool {
+	if t == nil {
+		return false
+	}
+	for _, v := range t.VersionList {
+		if v.Installable(goos, goarch) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCompleteArchive reports whether ANY version carries a structurally
+// complete archive (url + format, or npm kind) on ANY declared platform.
+//
+// 与 HasInstallableVersion 的区别：后者问「本平台能否安装」（供 UI/doctor 提示），
+// 本方法问「这个工具是不是纯占位」（供 manifests 守卫）——守卫必须与宿主平台无关，
+// 否则 Windows-only 工具在 Linux CI 上会被误判。实测（2026-09-13）52 个工具里只有
+// mingw 曾整体缺失 url/format（票 18 / P2-29）。
+func (t *Tool) HasCompleteArchive() bool {
+	if t == nil {
+		return false
+	}
+	for _, v := range t.VersionList {
+		for _, a := range v.Archives {
+			if a.Installable() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // EffectiveKind returns the resolved install kind, defaulting to
@@ -486,6 +560,7 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 		}
 	}
 
+	embedded.markInstallability()
 	return embedded, nil
 }
 
@@ -572,7 +647,27 @@ func loadFromDir(dir string) (*Catalog, error) {
 			c.tools[results[i].Name] = results[i]
 		}
 	}
+	c.markInstallability()
 	return c, nil
+}
+
+// markInstallability 计算**派生**标记 Tool.Installable：当前平台上是否至少有一个
+// 可安装版本（票 18 / P2-29）。
+//
+// 三个加载出口都必须调用——磁盘加载、内嵌加载、内嵌+磁盘合并：合并在 base 上追加
+// 磁盘版本，因此合并结果必须重新计算，否则「磁盘补上了 url/format」的工具仍被标记为
+// 不可安装（反之亦然）。
+func (c *Catalog) markInstallability() {
+	if c == nil {
+		return
+	}
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	for _, t := range c.tools {
+		if t == nil {
+			continue
+		}
+		t.Installable = t.HasInstallableVersion(goos, goarch)
+	}
 }
 
 // Tool returns a tool by name.
@@ -1251,6 +1346,7 @@ func loadFromEmbedded() (*Catalog, error) {
 			c.tools[results[i].Name] = results[i]
 		}
 	}
+	c.markInstallability()
 	return c, nil
 }
 

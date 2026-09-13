@@ -62,22 +62,7 @@ For each <tool>.yaml, this command:
 			signed := 0
 			skipped := 0
 			for _, tool := range cat.Tools() {
-				// Build SHA-256 map: version → os/arch → sha256
-				sha256Map := map[string]map[string]string{}
-				hasHash := false
-				for _, v := range tool.VersionList {
-					verMap := map[string]string{}
-					for _, a := range v.Archives {
-						key := a.OS + "/" + a.Arch
-						if a.SHA256 != "" && !isAllZeroHex(a.SHA256) {
-							verMap[key] = a.SHA256
-							hasHash = true
-						}
-					}
-					if len(verMap) > 0 {
-						sha256Map[v.Version] = verMap
-					}
-				}
+				sha256Map, hasHash := manifest.BuildSignatureHashMap(tool)
 
 				if !hasHash {
 					fmt.Fprintf(os.Stdout, "⏭️  %s: no SHA-256 hashes, skipping\n", tool.Name)
@@ -113,6 +98,10 @@ For each <tool>.yaml, this command:
 
 	return cmd
 }
+
+// buildManifestSHA256Map 已迁移为 manifest.BuildSignatureHashMap（票 17 第 3 项）：
+// 该规则（含 `os/arch#mirror` 键）同时被「重签后覆盖完整性」守卫复用，
+// 放在 manifest 域可避免守卫侧复制一份规则而与签名侧漂移。
 
 func newFillSHA256Cmd() *cobra.Command {
 	var (
