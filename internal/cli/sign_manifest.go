@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/signer"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 func newSignManifestsCmd() *cobra.Command {
@@ -315,6 +316,7 @@ func writeFillReport(path string, entries []fillEntry, filled, skipped, failed i
 // 非标准下载端点尤其容易）。现在两处加固：
 //  1. 下载后按声明的 format 做**魔数校验**（validateArchiveFile）；
 //  2. 缓存命中也要通过同一校验，否则视为损坏并重新下载（--no-cache 直接忽略缓存）。
+//
 // 另外对瞬时失败做有限重试（--retries），避免一次抖动导致整条数据线返工。
 func downloadAndHash(url, dest string, installArgs []string, format string, noCache bool, retries int) (string, error) {
 	// Check cache（校验通过才复用）
@@ -349,8 +351,29 @@ func downloadAndHash(url, dest string, installArgs []string, format string, noCa
 	return "", lastErr
 }
 
+// fillHTTPTransportHook 是测试接缝：让测试注入自定义 Transport（例如信任 httptest
+// 的自签证书），而**不影响**生产客户端的重定向策略（SecureRedirectCheck 始终生效）。
+// 与 internal/signer 的 testHookDirectTransport 同一模式。
+var fillHTTPTransportHook func() http.RoundTripper
+
+// fillHTTPClient 构造 fill 下载用的 HTTP 客户端：安全基线（H-1）在这里集中声明。
+func fillHTTPClient() *http.Client {
+	c := &http.Client{
+		Timeout:       10 * time.Minute,
+		CheckRedirect: util.SecureRedirectCheck(10),
+	}
+	if fillHTTPTransportHook != nil {
+		c.Transport = fillHTTPTransportHook()
+	}
+	return c
+}
+
 func downloadAndHashOnce(url, dest string, installArgs []string, format string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Minute}
+	// H-1（本批复核新增）：这个下载产出的是**要被签名的哈希**（信任锚），必须与仓库其它
+	// 下载路径（downloader / update）同一条安全基线：限制重定向次数、拒绝 HTTPS→HTTP 降级、
+	// 每一跳都过 IsSafeExternalURL（开放重定向 SSRF）。此前是裸 http.Client，默认会跟随
+	// 最多 10 跳到任意协议/主机——与既有审计项 H-8/N-6/N-9 的要求不一致。
+	client := fillHTTPClient()
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
@@ -542,10 +565,15 @@ func isAllZeroHex(s string) bool {
 }
 
 // writeManifestYAML writes a Tool struct back to a YAML file.
+//
+// H-3（本批复核新增）：fill 在每个工具填完哈希就整文件回写——若进程在写入中途被杀
+// （CI 超时取消是常态），非原子写会留下**半截 manifest**。票 23 已把 manifest 域的
+// 写盘收敛为原子写（UpdateArchiveSHA256 / 基线 / 合并全部走 util.AtomicWriteFile），
+// 这里对齐同一承诺：临时文件 + rename，崩溃时原文件保持完整。
 func writeManifestYAML(path string, tool *manifest.Tool) error {
 	data, err := manifest.MarshalTool(tool)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return util.AtomicWriteFile(path, data, 0o644)
 }

@@ -15,7 +15,18 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/util"
 )
+
+// isHTTPScheme 报告 URL 是否是 http/https（探测仅接受这两种；
+// 其它 scheme 一律判 error 而不是让 http.Client 报晦涩错误）。
+func isHTTPScheme(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
 
 // urlProbeResult 是单条 URL 的探测结果（--json 输出）。
 type urlProbeResult struct {
@@ -40,13 +51,13 @@ type urlProbeResult struct {
 //   - 支持白名单文件（允许已知不可达条目带原因豁免）与非零退出码，便于 CI 门禁。
 func newManifestCheckURLsCmd() *cobra.Command {
 	var (
-		manifestsDir  string
-		concurrency   int
-		timeout       time.Duration
-		jsonOut       string
-		allowFile     string
-		withMirrors   bool
-		quiet         bool
+		manifestsDir   string
+		concurrency    int
+		timeout        time.Duration
+		jsonOut        string
+		allowFile      string
+		withMirrors    bool
+		quiet          bool
 		failOnErrorNet bool
 	)
 	cmd := &cobra.Command{
@@ -118,7 +129,13 @@ comments).`,
 				}
 			}
 
-			client := &http.Client{Timeout: timeout}
+			// H-2（本批复核新增）：探测也要与仓库其它 HTTP 路径同一基线——限制重定向、
+			// 拒绝 HTTPS→HTTP 降级、每跳过 SSRF 校验；非 http(s) scheme 直接判 error
+			// （manifest 里的 URL 可被第三方改写，不能默认它安全）。
+			client := &http.Client{
+				Timeout:       timeout,
+				CheckRedirect: util.SecureRedirectCheck(10),
+			}
 			sem := make(chan struct{}, concurrency)
 			var wg sync.WaitGroup
 			for i := range targets {
@@ -130,6 +147,11 @@ comments).`,
 					res := &targets[i].result
 					if allow[res.URL] {
 						res.Status = "allowlisted"
+						return
+					}
+					if !isHTTPScheme(res.URL) {
+						res.Status = "error"
+						res.Error = "unsupported URL scheme (only http/https are probed)"
 						return
 					}
 					code, netErr := probeURL(client, res.URL)

@@ -118,3 +118,38 @@ func TestManifestCheckURLs_NetworkErrorSemantics(t *testing.T) {
 		t.Fatal("--fail-on-network-error must fail on unreachable URLs")
 	}
 }
+
+// H-2（本批复核新增）：非 http(s) scheme 一律判 error，绝不能让 http.Client
+// 去碰 file:// / ftp:// 等协议（manifest URL 可被第三方改写，不能默认它安全）。
+func TestManifestCheckURLs_RejectsNonHTTPScheme(t *testing.T) {
+	dir := t.TempDir()
+	writeURLManifest(t, dir, "fileurl", "file:///etc/passwd")
+	writeURLManifest(t, dir, "ftpurl", "ftp://example.com/x.zip")
+
+	report := filepath.Join(t.TempDir(), "schemes.json")
+	cmd := newManifestCheckURLsCmd()
+	cmd.SetArgs([]string{"--manifests-dir", dir, "--quiet", "--json", report})
+	// 非 http(s) 是 error 不是 dead → 默认退出 0（错误是"我方/数据问题"，由报告暴露）
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("scheme 错误默认不失败（应由报告与 --fail-on-network-error 控制）: %v", err)
+	}
+	raw, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Error   int `json:"Error"`
+		Results []urlProbeResult
+	}
+	if jerr := json.Unmarshal(raw, &parsed); jerr != nil {
+		t.Fatal(jerr)
+	}
+	if parsed.Error != 2 {
+		t.Fatalf("error 计数 = %d, want 2（file:// 与 ftp:// 都应判 error）", parsed.Error)
+	}
+	for _, r := range parsed.Results {
+		if !strings.Contains(r.Error, "unsupported URL scheme") {
+			t.Errorf("URL %s 的错误 = %q, want scheme 拒绝说明", r.URL, r.Error)
+		}
+	}
+}

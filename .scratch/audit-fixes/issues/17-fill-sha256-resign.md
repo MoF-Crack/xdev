@@ -210,6 +210,34 @@ Blocked by: 13（先代码语义后数据）
 ② `actions/cache` 命中率与 163 条归档在 CI 出口的填充成功率（本机网络受限：441 条探测中 101 条 GitHub URL 超时，
 CI 出口不受限）；③ `mode=branch` 下 PR 创建权限；④ 填充后 `TestManifestSignatureCoverage` 由 skip 转绿的实测结果。
 
+## Comments（Batch 5 追加 #6 — 第二轮回归+安全复核，2026-09-13）
+
+用户要求"再复核一遍是否引入新回归/安全隐患"。方法：逐行重读本批新增的三个 Go 文件与两份工作流，
+对照仓库既有安全基线（`util.SecureRedirectCheck` 的使用面、票 23 的原子写承诺、`.gitignore` 的私钥规则），
+再跑全量门禁。**结论：发现 3 个真实隐患（1 高 2 中），全部已修并加守卫。**
+
+| # | 隐患 | 等级 | 修复 |
+|---|---|---|---|
+| H-1 | **fill 的下载没有 SecureRedirectCheck**：`downloadAndHash` 用裸 `http.Client{Timeout}`，默认跟随最多 10 跳重定向到**任意协议/主机**。而仓库其它全部下载路径（`downloader.go:335`、`update.go:171/341/578`）都强制 `util.SecureRedirectCheck(10)`（限跳数、拒 HTTPS→HTTP 降级、每跳 SSRF 校验——审计项 H-8/N-6/N-9 的产物）。更严重的是：**这个函数产出的是要被签名的哈希（信任锚）**，攻击者控制重定向即可让 CI 哈希并签署任意内容 | **高** | `downloadAndHash` → `fillHTTPClient()` 集中挂 `SecureRedirectCheck(10)`；新增测试接缝 `fillHTTPTransportHook`（与 `signer.testHookDirectTransport` 同模式：只注入 Transport，不触碰重定向策略，保证测的是生产代码路径） |
+| H-2 | **check-urls 的探测同样无重定向策略**，且未限制 scheme（理论上可被 `file://` 等触发奇怪的客户端行为） | 中 | 同样挂 `SecureRedirectCheck(10)`；新增 `isHTTPScheme` 预检，非 http/https 一律判 `error` 并写明原因（不进 dead 计数） |
+| H-3 | **`writeManifestYAML` 非原子写**（`os.WriteFile`）：fill 每填完一个工具就整文件回写，CI 超时取消（常态）会留下**半截 manifest**——违背票 23 已兑现的"manifest 域写盘全部原子化"承诺 | 中（回归类） | 改用 `util.AtomicWriteFile`（同目录临时文件 + rename），补 round-trip + 无 `.tmp` 残留断言 |
+
+新增守卫：`internal/cli/fill_security_test.go`（HTTPS→HTTP 降级必须被拒 + 拒绝后不留半截文件；正常 https 不被误伤；
+原子写 round-trip）；`check_urls_test.go` 增加 `file://`/`ftp://` 判 error 用例。
+
+**复核后确认无问题的项（第二轮）**：
+- 私钥处理：`umask 077` + `trap rm`（同 step 退出即删）+ 不进 artifact；`publish` job 的 `git add` 显式只加
+  `manifests` 与 `keys/pub.key`（私钥在 .gitignore 且从未被 add）；
+- `align_pubkey` 写入 `keys/pub.key` 的是**公钥**（本来就是公开值）；
+- `publish` 只推 `signing/*` 分支并开 PR，不碰 main（分支保护不绕过）；
+- fill 报告/CI 摘要只含公开 manifest 的 URL 与哈希，无任何密钥材料；
+- `--retries` 负值有下限保护（`attempts < 1` → 1）；`--tool` 过滤不影响未选中工具的文件（不重写）；
+- 缓存目录默认在 `os.TempDir()`（非仓库内），损坏缓存会被魔数校验拒掉并重下；
+- `check-urls` 的 URL 全部来自 manifest（无用户输入 URL 参数）→ 无 SSRF 注入面；
+- `verifyPublicKey` 的 env 覆盖用专用变量名 `XDEV_MANIFEST_VERIFY_PUBKEY`（release job 导出的
+  `XDEV_SIGNING_PUBLIC_KEY` 不会误触发）；非法值会 fail-fast 报清晰错误而非静默通过。
+
+
 
 ## 内容
 
