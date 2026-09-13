@@ -189,6 +189,7 @@ modifying any files.`,
 					continue
 				}
 				toolFilled := 0 // per-tool counter to avoid needless YAML rewrites
+				var pending []manifest.ArchiveSHAUpdate
 				for vi, v := range tool.VersionList {
 					for ai, a := range v.Archives {
 						// Skip if already has a valid hash
@@ -201,10 +202,18 @@ modifying any files.`,
 							continue
 						}
 
+						// H-4（第三轮复核实测新增）：**必须用官方 URL 计算 `sha256`**。
+						//
+						// 原实现是 `if a.MirrorURL != "" { url = a.MirrorURL }` —— 有镜像时
+						// 优先下载镜像，却把结果写进表示**官方**产物哈希的 `sha256` 字段。
+						// 两个后果：
+						//  ① 语义错误：`mirror_sha256` 的存在前提就是"镜像与官方可能不同字节"，
+						//     把镜像哈希写进 `sha256`，会让从官方 URL 下载的校验失败；
+						//  ② 可用性耦断：镜像挂掉/403 会直接让填充失败（实测清华 github-release
+						//     镜像对 ninja 返回 403），把"官方可达"的条目也拖成缺口。
+						// 因此这里只认官方 URL；镜像哈希若有需要，由 `mirror_sha256` 单独承载
+						// （java.yaml 就是人工这样填的），不借用 `sha256`。
 						url := a.URL
-						if a.MirrorURL != "" {
-							url = a.MirrorURL
-						}
 						if url == "" {
 							continue
 						}
@@ -238,8 +247,11 @@ modifying any files.`,
 							continue
 						}
 
-						// Update the manifest in memory
+						// Update the manifest in memory + 记录待写回项
 						tool.VersionList[vi].Archives[ai].SHA256 = hash
+						pending = append(pending, manifest.ArchiveSHAUpdate{
+							Version: v.Version, OS: a.OS, Arch: a.Arch, SHA256: hash,
+						})
 						fmt.Fprintf(os.Stdout, "✅ %s@%s %s/%s: %s\n",
 							tool.Name, v.Version, a.OS, a.Arch, hash[:16]+"...")
 						totalFilled++
@@ -251,15 +263,28 @@ modifying any files.`,
 					}
 				}
 
-				// Write updated manifest back to YAML (only if this tool had hashes filled)
+				// 写回：**文本级、只改 sha256 那一行**（加锁 + 原子写）。
+				//
+				// 为什么不再整文件重写（本批复核的实证）：MarshalTool 往返会丢掉全部注释并
+				// 重排格式——实测 52 个 manifest 全走一遍是 5990→6989 行、220 行注释归零、
+				// 最坏文件仅 5% 行保留。那会让"重填 163 个哈希"的 PR 完全不可评审，并把
+				// manifest 里的说明性注释（上游改名依据/A-03 依赖评估/安装策略）一并抹掉。
 				if toolFilled > 0 && !dryRun {
 					yamlPath := filepath.Join(manifestsDir, tool.Name+".yaml")
-					if err := writeManifestYAML(yamlPath, tool); err != nil {
+					changed, missed, err := manifest.UpdateArchiveSHA256InFile(yamlPath, pending)
+					if err != nil {
 						fmt.Fprintf(os.Stderr, "❌ %s: write failed: %v\n", tool.Name, err)
 						totalFailed++
 						entries = append(entries, fillEntry{
 							Tool: tool.Name, Status: "failed", Error: "write manifest: " + err.Error(),
 						})
+					} else if changed != len(pending) {
+						// 定位不到条目 = 静默缺口，必须报出来（而不是假装成功）
+						detail := fmt.Sprintf("wrote %d of %d filled hashes; missed: %s",
+							changed, len(pending), strings.Join(missed, "; "))
+						fmt.Fprintf(os.Stderr, "❌ %s: %s\n", tool.Name, detail)
+						totalFailed++
+						entries = append(entries, fillEntry{Tool: tool.Name, Status: "failed", Error: detail})
 					}
 				}
 			}
@@ -564,12 +589,9 @@ func isAllZeroHex(s string) bool {
 	return true
 }
 
-// writeManifestYAML writes a Tool struct back to a YAML file.
-//
-// H-3（本批复核新增）：fill 在每个工具填完哈希就整文件回写——若进程在写入中途被杀
-// （CI 超时取消是常态），非原子写会留下**半截 manifest**。票 23 已把 manifest 域的
-// 写盘收敛为原子写（UpdateArchiveSHA256 / 基线 / 合并全部走 util.AtomicWriteFile），
-// 这里对齐同一承诺：临时文件 + rename，崩溃时原文件保持完整。
+// writeManifestYAML 已不再用于 fill 的回写路径（见 UpdateArchiveSHA256InFile 的说明：
+// 整文件 MarshalTool 会丢注释并重排格式）。保留本函数供未来需要"整文件重排"的显式场景，
+// 但它必须走原子写（H-3）。
 func writeManifestYAML(path string, tool *manifest.Tool) error {
 	data, err := manifest.MarshalTool(tool)
 	if err != nil {

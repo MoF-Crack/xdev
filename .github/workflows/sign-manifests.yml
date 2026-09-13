@@ -231,7 +231,10 @@ jobs:
           git config user.email "signing@users.noreply.github.com"
           branch="signing/manifests-$(date -u +%Y%m%dT%H%M%SZ)"
           git checkout -b "$branch"
-          git add manifests keys/pub.key
+          # 显式列文件，不用 `git add manifests`：manifest 旁会留下 0 字节的
+          # <tool>.yaml.lock（AcquireFileLock 的产物），虽然 .gitignore 已忽略 *.yaml.lock，
+          # 这里再收窄一次暂存范围，避免把任何运行时副产物带进提交。
+          git add 'manifests/*.yaml' 'manifests/*.yaml.sig' keys/pub.key
           if git diff --cached --quiet; then
             echo "::notice::无变更（哈希与签名均为最新）"
             exit 0
