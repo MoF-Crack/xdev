@@ -306,7 +306,7 @@ TEMP-RED-PROBE 标记全仓 grep 为零。
 
 - R1/R2（300 字符值名缓冲重建）的真身健壮性在默认防污染模式下不再被驱动——由逃生口模式覆盖；若未来加 CI 测试 job，runner 上设 `XMDEV_ALLOW_REAL_REGISTRY_TESTS=1` 即可常态全量覆盖（一次性环境无宿主安全顾虑）；
 - internal/cli、internal/gui 的测试二进制**不经过** env 包的 TestMain（接缝保持生产默认值）——它们的宿主安全仍由 hostsnapshot 守卫（RunWithPinnedHome/RunWithHostSnapshot）承担；若未来需要同强度闸门，可各自加 TestMain + `UseInMemory*ForTesting`；
-- **既有观察（本批只取证不修）**：`gofmt -l` 扩到 internal/gui、internal/cli 时列出 27 个**本批未触碰**的文件（如 `drive_prompt.go` 的多空格对齐漂移，均为早前批次手工格式遗留）。本批文件全部格式干净；这 27 个建议另起一个纯格式化 hygiene 提交（`gofmt -w` 机械改动），不混入本批 diff。
+- **既有观察（已收口）**：`gofmt -l` 扩到全仓时第一方共 **79 个**本批未触碰文件存在手工格式漂移（早前批次遗留）。经用户确认，以独立 hygiene 提交 `9cd1102` 全部 `gofmt -w`（纯机械改动，377+/370-）；vendor/ 明确排除（.gitignore 本就忽略；曾被误 -w 已 `go mod vendor` 从模块缓存原样重建，仓库零影响）。此后 `gofmt -l` 于第一方代码为 0。另：**历史 PATH 死条目已按用户确认清理**（36→34 条目、逐字符校验、REG_EXPAND_SZ 保持、已广播；备份在 `%TEMP%\path_backup_*.txt`）。
 
 
 
