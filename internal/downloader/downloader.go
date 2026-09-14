@@ -716,12 +716,12 @@ func downloadOnce(ctx context.Context, opts Options) error {
 // can never observe a half-written sidecar — a torn pin would either reject
 // a good archive or, worse, look like a valid user-edited pin. Steps:
 //
-//	1. write <sidecar>.tmp
-//	2. fsync it
-//	3. clear the read-only attribute of an existing target (0o444 from a
-//	   previous run; Windows would otherwise fail the rename)
-//	4. rename over the target
-//	5. mark the result read-only (0o444)
+//  1. write <sidecar>.tmp
+//  2. fsync it
+//  3. clear the read-only attribute of an existing target (0o444 from a
+//     previous run; Windows would otherwise fail the rename)
+//  4. rename over the target
+//  5. mark the result read-only (0o444)
 //
 // Security (L-10): the read-only attribute is not a strong security
 // boundary — an attacker who can write to the directory can still clear it —

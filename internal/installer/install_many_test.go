@@ -44,18 +44,18 @@ type simplePlugin struct {
 	name string
 }
 
-func (p *simplePlugin) Name() string                         { return p.name }
-func (p *simplePlugin) DisplayName() string                  { return p.name }
-func (p *simplePlugin) Description() string                  { return "test tool " + p.name }
-func (p *simplePlugin) Homepage() string                     { return "" }
-func (p *simplePlugin) Category() string                     { return "language" }
-func (p *simplePlugin) Manifest() *manifest.Tool             { return nil }
-func (p *simplePlugin) Shims() []string                      { return []string{p.name} }
-func (p *simplePlugin) DefaultVersion() string               { return "1.0.0" }
-func (p *simplePlugin) RequiredPlugin() []string             { return nil }
-func (p *simplePlugin) EnvVars(string) map[string]string     { return nil }
+func (p *simplePlugin) Name() string                              { return p.name }
+func (p *simplePlugin) DisplayName() string                       { return p.name }
+func (p *simplePlugin) Description() string                       { return "test tool " + p.name }
+func (p *simplePlugin) Homepage() string                          { return "" }
+func (p *simplePlugin) Category() string                          { return "language" }
+func (p *simplePlugin) Manifest() *manifest.Tool                  { return nil }
+func (p *simplePlugin) Shims() []string                           { return []string{p.name} }
+func (p *simplePlugin) DefaultVersion() string                    { return "1.0.0" }
+func (p *simplePlugin) RequiredPlugin() []string                  { return nil }
+func (p *simplePlugin) EnvVars(string) map[string]string          { return nil }
 func (p *simplePlugin) PostInstall(context.Context, string) error { return nil }
-func (p *simplePlugin) Deactivate(string) error              { return nil }
+func (p *simplePlugin) Deactivate(string) error                   { return nil }
 
 func (p *simplePlugin) ResolveVersion(spec string) (string, error) {
 	if spec == "" {

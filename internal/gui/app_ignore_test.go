@@ -92,14 +92,14 @@ func TestIgnore_RejectBadName(t *testing.T) {
 		name string
 		kind string
 	}{
-		{"", "update"},                    // empty
-		{"../etc", "update"},              // contains ..
-		{"path/slash", "update"},          // contains /
-		{"back\\slash", "update"},         // contains \
+		{"", "update"},                      // empty
+		{"../etc", "update"},                // contains ..
+		{"path/slash", "update"},            // contains /
+		{"back\\slash", "update"},           // contains \
 		{strings.Repeat("a", 65), "update"}, // too long
-		{"bad name", "update"},            // contains space
-		{"tool@name", "update"},           // contains @
-		{"tool$name", "update"},           // contains $
+		{"bad name", "update"},              // contains space
+		{"tool@name", "update"},             // contains @
+		{"tool$name", "update"},             // contains $
 	}
 
 	for _, tt := range tests {
@@ -364,8 +364,8 @@ func TestIgnore_GetIgnoredTools_Copy(t *testing.T) {
 
 func TestValidateIgnoreName(t *testing.T) {
 	tests := []struct {
-		name    string
-		valid   bool
+		name  string
+		valid bool
 	}{
 		{"go", true},
 		{"node.js", true},

@@ -25,14 +25,14 @@ import (
 
 // DependencyStatus 单个依赖约束的检查结果。
 type DependencyStatus struct {
-	Tool            string `json:"tool"`            // 依赖的工具名（如 "node"）
-	RequiredVersion string `json:"requiredVersion"` // manifest 声明的最低版本（可能为空=仅存在性）
-	CurrentVersion  string `json:"currentVersion"`  // 检测到的当前版本（未找到时为空）
-	Platform        string `json:"platform"`        // 限定的平台（逗号连接，可能为空）
-	InstallPath     string `json:"installPath"`     // 依赖适用的安装路径（如 "npm"，信息性字段）
-	Satisfied       bool   `json:"satisfied"`
-	Reason          string `json:"reason"`           // 兼容字段，保留空串（前端用 reasonCode 翻译）
-	ReasonCode      string `json:"reasonCode"`       // 机器可读原因码：platform/not_found/version_low/version_unknown
+	Tool            string            `json:"tool"`            // 依赖的工具名（如 "node"）
+	RequiredVersion string            `json:"requiredVersion"` // manifest 声明的最低版本（可能为空=仅存在性）
+	CurrentVersion  string            `json:"currentVersion"`  // 检测到的当前版本（未找到时为空）
+	Platform        string            `json:"platform"`        // 限定的平台（逗号连接，可能为空）
+	InstallPath     string            `json:"installPath"`     // 依赖适用的安装路径（如 "npm"，信息性字段）
+	Satisfied       bool              `json:"satisfied"`
+	Reason          string            `json:"reason"`       // 兼容字段，保留空串（前端用 reasonCode 翻译）
+	ReasonCode      string            `json:"reasonCode"`   // 机器可读原因码：platform/not_found/version_low/version_unknown
 	ReasonParams    map[string]string `json:"reasonParams"` // 原因参数（如 {"tool":"node","installed":"20","required":"22"}）
 }
 

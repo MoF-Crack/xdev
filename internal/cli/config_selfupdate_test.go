@@ -8,9 +8,9 @@ import (
 
 func newTestCore() config.Config {
 	return config.Config{Core: config.CoreConfig{
-		SelfUpdate:       true,
-		SelfUpdateMode:   "prompt",
-		SelfUpdateStale:  true,
+		SelfUpdate:      true,
+		SelfUpdateMode:  "prompt",
+		SelfUpdateStale: true,
 	}}
 }
 

@@ -655,6 +655,7 @@ func TestDiscoverVersions_GitHub_PaginationCrossHostRejected(t *testing.T) {
 		t.Fatalf("expected exactly 1 version (page 2 must not be fetched), got %d: %v", len(versions), versions)
 	}
 }
+
 // ---------------------------------------------------------------------------
 // DiscoverVersions — GitHub with rate limit exhausted
 // ---------------------------------------------------------------------------
@@ -949,8 +950,8 @@ func TestDiscoverVersions_GitHub_FloorEarlyStop(t *testing.T) {
 		if idx+1 < len(pages) {
 			page := idx + 2
 			// Real GitHub Link headers stay on api.github.com (the
-		// redirectTransport maps that host to this test server).
-		w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, page))
+			// redirectTransport maps that host to this test server).
+			w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, page))
 		}
 		body, _ := json.Marshal(pages[idx])
 		w.Write(body)
@@ -1013,8 +1014,8 @@ func TestDiscoverVersions_GitHub_NoFloorPaginatesAll(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if idx == 0 {
 			// Real GitHub Link headers stay on api.github.com (the
-		// redirectTransport maps that host to this test server).
-		w.Header().Set("Link", `<https://api.github.com/repos/x/y/releases?page=2>; rel="next"`)
+			// redirectTransport maps that host to this test server).
+			w.Header().Set("Link", `<https://api.github.com/repos/x/y/releases?page=2>; rel="next"`)
 		}
 		body, _ := json.Marshal(pages[idx])
 		w.Write(body)
@@ -1952,7 +1953,7 @@ func TestDiscoverVersions_NPM_EmptyPackage(t *testing.T) {
 
 // Spec 039（dsh 预发布版本流）：dist-tags.latest 本身是 rc；pattern 接受
 // rc/alpha 预发布（否则零版本可发现）；降序排序含预发布语义
-//（0.1.2-rc.1 > 0.1.2-alpha.5 > 0.1.1-rc.2），latest 置顶。
+// （0.1.2-rc.1 > 0.1.2-alpha.5 > 0.1.1-rc.2），latest 置顶。
 func TestDiscoverVersions_NPM_PrereleasePatternAndOrder(t *testing.T) {
 	registry := map[string]interface{}{
 		"name": "@deepseek-ai/dsh",
@@ -1962,10 +1963,10 @@ func TestDiscoverVersions_NPM_PrereleasePatternAndOrder(t *testing.T) {
 			"next":   "0.1.2-rc.1",
 		},
 		"versions": map[string]interface{}{
-			"0.1.0-rc.7":  map[string]interface{}{"version": "0.1.0-rc.7"},
-			"0.1.1-rc.2":  map[string]interface{}{"version": "0.1.1-rc.2"},
+			"0.1.0-rc.7":    map[string]interface{}{"version": "0.1.0-rc.7"},
+			"0.1.1-rc.2":    map[string]interface{}{"version": "0.1.1-rc.2"},
 			"0.1.2-alpha.5": map[string]interface{}{"version": "0.1.2-alpha.5"},
-			"0.1.2-rc.1":  map[string]interface{}{"version": "0.1.2-rc.1"},
+			"0.1.2-rc.1":    map[string]interface{}{"version": "0.1.2-rc.1"},
 			"0.1.5-alpha.1": map[string]interface{}{"version": "0.1.5-alpha.1"},
 			"0.1.3-alpha.2": map[string]interface{}{"version": "0.1.3-alpha.2"},
 		},
@@ -1990,7 +1991,7 @@ func TestDiscoverVersions_NPM_PrereleasePatternAndOrder(t *testing.T) {
 		t.Fatalf("DiscoverVersions npm prerelease: %v", err)
 	}
 	want := []string{
-		"0.1.2-rc.1",  // dist-tags.latest 置顶（versions 中的同名键去重）
+		"0.1.2-rc.1",    // dist-tags.latest 置顶（versions 中的同名键去重）
 		"0.1.5-alpha.1", // 0.1.5 > 0.1.3 > 0.1.2
 		"0.1.3-alpha.2",
 		"0.1.2-alpha.5", // 同核心：rc（已置顶）> alpha

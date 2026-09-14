@@ -54,7 +54,7 @@ func newNPMTestPlugin(name, ver string, withMinNode bool) *npmTestPlugin {
 	return &npmTestPlugin{
 		fakePlugin: &fakePlugin{name: name, shims: []string{name}},
 		m:          m,
-		ver:         ver,
+		ver:        ver,
 		archiv: &manifest.Archive{
 			OS: "any", Arch: "any", Format: "tar.gz",
 			URL:         "https://registry.example.invalid/@deepseek-ai/dsh/-/dsh-" + ver + ".tgz",

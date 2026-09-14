@@ -98,7 +98,7 @@ func b5JavaHomeWithBin(t *testing.T) string {
 
 // TestCleanEnvVarPath_PercentVarEntrySurvives（修复前红）：
 // PATH = "%JAVA_HOME%\bin;<不存在目录>"，JAVA_HOME 只由注册表定义
-//（进程 env 里没有）。B-08 前 os.ExpandEnv 不认 %VAR% → 字面量送 os.Stat
+// （进程 env 里没有）。B-08 前 os.ExpandEnv 不认 %VAR% → 字面量送 os.Stat
 // 必失败 → 合法条目被删；修复后保留合法条目、清理失效条目。
 func TestCleanEnvVarPath_PercentVarEntrySurvives(t *testing.T) {
 	javaHome := b5JavaHomeWithBin(t)

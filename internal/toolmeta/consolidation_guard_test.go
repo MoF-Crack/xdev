@@ -14,16 +14,16 @@ var guardPatterns = []struct {
 	name string
 	re   *regexp.Regexp
 }{
-	{"versionFlags map literal", regexp.MustCompile(`versionFlags\s*:=`)},       // R2
-	{"scanRules var", regexp.MustCompile(`var\s+scanRules`)},                    // R1
-	{"binaryNames map literal", regexp.MustCompile(`binaryNames\s*:=`)},         // R1
-	{"getBinNamesForTool fn", regexp.MustCompile(`getBinNamesForTool\s*\(`)},    // R1
-	{"isInsideXdevDir fn", regexp.MustCompile(`isInsideXdevDir\s*\(`)},          // R5
+	{"versionFlags map literal", regexp.MustCompile(`versionFlags\s*:=`)},                         // R2
+	{"scanRules var", regexp.MustCompile(`var\s+scanRules`)},                                      // R1
+	{"binaryNames map literal", regexp.MustCompile(`binaryNames\s*:=`)},                           // R1
+	{"getBinNamesForTool fn", regexp.MustCompile(`getBinNamesForTool\s*\(`)},                      // R1
+	{"isInsideXdevDir fn", regexp.MustCompile(`isInsideXdevDir\s*\(`)},                            // R5
 	{"func extractVersionFromOutput", regexp.MustCompile(`func\s+extractVersionFromOutput\s*\(`)}, // R3
 	{"func getCommonInstallPaths", regexp.MustCompile(`func\s+getCommonInstallPaths\s*\(`)},       // R4
-	{"func extractVersion", regexp.MustCompile(`func\s+extractVersion\s*\(`)},   // R3
-	{"func isVersionLike", regexp.MustCompile(`func\s+isVersionLike\s*\(`)},     // R3
-	{"func stripWindowsSuffix", regexp.MustCompile(`func\s+stripWindowsSuffix\s*\(`)}, // R3
+	{"func extractVersion", regexp.MustCompile(`func\s+extractVersion\s*\(`)},                     // R3
+	{"func isVersionLike", regexp.MustCompile(`func\s+isVersionLike\s*\(`)},                       // R3
+	{"func stripWindowsSuffix", regexp.MustCompile(`func\s+stripWindowsSuffix\s*\(`)},             // R3
 }
 
 // collectGoFiles 递归收集目录下所有 .go 文件（含测试）。

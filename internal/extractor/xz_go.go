@@ -28,5 +28,5 @@ type xzReadCloser struct {
 	r *xz.Reader
 }
 
-func (x *xzReadCloser) Read(p []byte) (int, error)  { return x.r.Read(p) }
-func (x *xzReadCloser) Close() error                 { return x.f.Close() }
+func (x *xzReadCloser) Read(p []byte) (int, error) { return x.r.Read(p) }
+func (x *xzReadCloser) Close() error               { return x.f.Close() }

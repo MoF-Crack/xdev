@@ -2,13 +2,13 @@ package discovery
 
 import (
 	"fmt"
+	"github.com/xmdemt/xdev/internal/util"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
-	"github.com/xmdemt/xdev/internal/util"
 )
 
 // execCommand is the command constructor used by service installers.
@@ -536,7 +536,7 @@ func (m *macosLaunchd) Status() (*ServiceStatus, error) {
 
 		// Check launchctl list for last run info.
 		cmd := execCommand("launchctl", "list", "com.xdev.sniff")
-	util.HideWindow(cmd)
+		util.HideWindow(cmd)
 		output, err := cmd.Output()
 		if err == nil {
 			// Parse "com.xdev.sniff    <PID>    <ExitCode>"

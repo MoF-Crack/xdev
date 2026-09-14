@@ -2,14 +2,15 @@
 // chain integrity and the TOFU gating verdict.
 //
 // Red lines covered here:
-//   G1  a NEW version whose mirror hash is not signed is rejected (attack
-//       server never receives a request that is accepted);
-//   G2  a new version that REUSES an already-signed hash (cross-version /
-//       cross-os-arch) is rejected — the pre-fix whole-table fallback
-//       accepted it;
-//   G6  TOFU write-back followed by a RE-INSTALL of the same version
-//       succeeds — the pre-fix code reported "hash tampering" because the
-//       written-back hash is not in the signed map.
+//
+//	G1  a NEW version whose mirror hash is not signed is rejected (attack
+//	    server never receives a request that is accepted);
+//	G2  a new version that REUSES an already-signed hash (cross-version /
+//	    cross-os-arch) is rejected — the pre-fix whole-table fallback
+//	    accepted it;
+//	G6  TOFU write-back followed by a RE-INSTALL of the same version
+//	    succeeds — the pre-fix code reported "hash tampering" because the
+//	    written-back hash is not in the signed map.
 package downloader
 
 import (

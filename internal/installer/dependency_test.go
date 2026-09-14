@@ -16,23 +16,23 @@ import (
 
 // depPlugin is a plugin.Plugin with configurable RequiredPlugin and archive.
 type depPlugin struct {
-	name      string
-	requires  []string
-	archive   *manifest.Archive
+	name     string
+	requires []string
+	archive  *manifest.Archive
 }
 
-func (p *depPlugin) Name() string                         { return p.name }
-func (p *depPlugin) DisplayName() string                  { return p.name }
-func (p *depPlugin) Description() string                  { return "test tool " + p.name }
-func (p *depPlugin) Homepage() string                     { return "" }
-func (p *depPlugin) Category() string                     { return "language" }
-func (p *depPlugin) Manifest() *manifest.Tool             { return nil }
-func (p *depPlugin) Shims() []string                      { return []string{p.name} }
-func (p *depPlugin) DefaultVersion() string               { return "1.0.0" }
-func (p *depPlugin) RequiredPlugin() []string             { return p.requires }
-func (p *depPlugin) EnvVars(string) map[string]string     { return nil }
+func (p *depPlugin) Name() string                              { return p.name }
+func (p *depPlugin) DisplayName() string                       { return p.name }
+func (p *depPlugin) Description() string                       { return "test tool " + p.name }
+func (p *depPlugin) Homepage() string                          { return "" }
+func (p *depPlugin) Category() string                          { return "language" }
+func (p *depPlugin) Manifest() *manifest.Tool                  { return nil }
+func (p *depPlugin) Shims() []string                           { return []string{p.name} }
+func (p *depPlugin) DefaultVersion() string                    { return "1.0.0" }
+func (p *depPlugin) RequiredPlugin() []string                  { return p.requires }
+func (p *depPlugin) EnvVars(string) map[string]string          { return nil }
 func (p *depPlugin) PostInstall(context.Context, string) error { return nil }
-func (p *depPlugin) Deactivate(string) error              { return nil }
+func (p *depPlugin) Deactivate(string) error                   { return nil }
 
 func (p *depPlugin) ResolveVersion(spec string) (string, error) {
 	if spec == "" {

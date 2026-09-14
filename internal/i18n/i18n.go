@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	currentLang = "en"
+	currentLang  = "en"
 	translations = map[string]map[string]string{
 		"en": enTranslations,
 		"zh": zhTranslations,
@@ -30,16 +30,16 @@ var enTranslations = map[string]string{
 	"active":        "active",
 
 	// CLI messages
-	"cli.installed_to":      "installed %s@%s to %s",
-	"cli.activated":         "activated %s@%s (current -> %s)",
-	"cli.removed":           "removed %s@%s",
-	"cli.now_active":        "%s@%s is now active",
-	"cli.no_active_version": "no active version for %s",
-	"cli.no_versions":       "(no %s versions installed)",
-	"cli.no_tools_activated": "(no tools activated)",
-	"cli.nothing_installed":  "(nothing installed yet)",
-	"cli.unsupported_tool":  "unsupported tool %q",
-	"cli.no_default_version": "no default version for %s; specify @<version>",
+	"cli.installed_to":               "installed %s@%s to %s",
+	"cli.activated":                  "activated %s@%s (current -> %s)",
+	"cli.removed":                    "removed %s@%s",
+	"cli.now_active":                 "%s@%s is now active",
+	"cli.no_active_version":          "no active version for %s",
+	"cli.no_versions":                "(no %s versions installed)",
+	"cli.no_tools_activated":         "(no tools activated)",
+	"cli.nothing_installed":          "(nothing installed yet)",
+	"cli.unsupported_tool":           "unsupported tool %q",
+	"cli.no_default_version":         "no default version for %s; specify @<version>",
 	"cli.uninstall_requires_version": "uninstall requires an explicit version (e.g. %s@3.12.0)",
 	"cli.use_requires_version":       "use requires a version, e.g. %s@3.12.0",
 	"cli.not_installed_run":          "%s@%s is not installed (run `xdev install %s@%s`)",
@@ -60,16 +60,16 @@ var zhTranslations = map[string]string{
 	"active":        "活跃",
 
 	// CLI messages
-	"cli.installed_to":       "已安装 %s@%s 到 %s",
-	"cli.activated":          "已激活 %s@%s (current -> %s)",
-	"cli.removed":            "已移除 %s@%s",
-	"cli.now_active":         "%s@%s 已激活",
-	"cli.no_active_version":  "%s 没有活跃版本",
-	"cli.no_versions":        "(未安装 %s 的任何版本)",
-	"cli.no_tools_activated": "(没有已激活的工具)",
-	"cli.nothing_installed":  "(尚未安装任何工具)",
-	"cli.unsupported_tool":   "不支持的工具 %q",
-	"cli.no_default_version": "%s 没有默认版本；请指定 @<version>",
+	"cli.installed_to":               "已安装 %s@%s 到 %s",
+	"cli.activated":                  "已激活 %s@%s (current -> %s)",
+	"cli.removed":                    "已移除 %s@%s",
+	"cli.now_active":                 "%s@%s 已激活",
+	"cli.no_active_version":          "%s 没有活跃版本",
+	"cli.no_versions":                "(未安装 %s 的任何版本)",
+	"cli.no_tools_activated":         "(没有已激活的工具)",
+	"cli.nothing_installed":          "(尚未安装任何工具)",
+	"cli.unsupported_tool":           "不支持的工具 %q",
+	"cli.no_default_version":         "%s 没有默认版本；请指定 @<version>",
 	"cli.uninstall_requires_version": "卸载需要指定版本 (例如 %s@3.12.0)",
 	"cli.use_requires_version":       "use 需要指定版本，例如 %s@3.12.0",
 	"cli.not_installed_run":          "%s@%s 未安装 (运行 `xdev install %s@%s`)",

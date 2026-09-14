@@ -44,17 +44,19 @@ type fakePlugin struct {
 	archive *manifest.Archive
 }
 
-func (f *fakePlugin) Name() string                                   { return f.name }
-func (f *fakePlugin) DisplayName() string                            { return f.name }
-func (f *fakePlugin) Description() string                            { return "fake test tool" }
-func (f *fakePlugin) Homepage() string                               { return "" }
-func (f *fakePlugin) Category() string                               { return "language" }
-func (f *fakePlugin) Manifest() *manifest.Tool                       { return nil }
-func (f *fakePlugin) ResolveVersion(spec string) (string, error)     { return "1.0.0", nil }
-func (f *fakePlugin) DefaultVersion() string                         { return "1.0.0" }
-func (f *fakePlugin) InstallDir(root, version string) string         { return filepath.Join(root, f.name, version) }
-func (f *fakePlugin) Shims() []string                                { return f.shims }
-func (f *fakePlugin) EnvVars(installPath string) map[string]string   { return nil }
+func (f *fakePlugin) Name() string                               { return f.name }
+func (f *fakePlugin) DisplayName() string                        { return f.name }
+func (f *fakePlugin) Description() string                        { return "fake test tool" }
+func (f *fakePlugin) Homepage() string                           { return "" }
+func (f *fakePlugin) Category() string                           { return "language" }
+func (f *fakePlugin) Manifest() *manifest.Tool                   { return nil }
+func (f *fakePlugin) ResolveVersion(spec string) (string, error) { return "1.0.0", nil }
+func (f *fakePlugin) DefaultVersion() string                     { return "1.0.0" }
+func (f *fakePlugin) InstallDir(root, version string) string {
+	return filepath.Join(root, f.name, version)
+}
+func (f *fakePlugin) Shims() []string                              { return f.shims }
+func (f *fakePlugin) EnvVars(installPath string) map[string]string { return nil }
 
 func (f *fakePlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 	a := *f.archive // return a copy so callers can't mutate the fixture

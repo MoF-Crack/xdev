@@ -132,14 +132,14 @@ func TestCleanCacheCategory(t *testing.T) {
 	writeSizedFile(t, filepath.Join(cacheDir, "subdir", "inner.bin"), 5)
 
 	files := []string{
-		"llvm-22.1.8.tar.xz", // archives
-		"java-17.zip",         // archives
-		"java-17.zip.sha256",  // shaFiles
-		"go-1.26.5.zip.part",  // partFiles
+		"llvm-22.1.8.tar.xz",   // archives
+		"java-17.zip",          // archives
+		"java-17.zip.sha256",   // shaFiles
+		"go-1.26.5.zip.part",   // partFiles
 		"tool_scan_cache.json", // scanCache
-		"sniff-cache.json",    // otherFiles
-		"manifest-cache.dat",  // otherFiles
-		"favorites.json",      // otherFiles
+		"sniff-cache.json",     // otherFiles
+		"manifest-cache.dat",   // otherFiles
+		"favorites.json",       // otherFiles
 	}
 	for _, f := range files {
 		writeSizedFile(t, filepath.Join(cacheDir, f), 10)

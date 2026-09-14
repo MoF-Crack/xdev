@@ -128,10 +128,10 @@ func TestLatest_NewestFirstPlugin_InstallsHighest(t *testing.T) {
 // against the plugin's own list.
 func TestLatest_DescendingOrderUnchanged(t *testing.T) {
 	cases := []struct {
-		name  string
-		list  string
-		spec  string
-		want  string
+		name string
+		list string
+		spec string
+		want string
 	}{
 		{"ascending latest", `{"1.0.0", "1.1.0", "2.0.0"}`, "latest", "2.0.0"},
 		{"descending latest", `{"2.0.0", "1.1.0", "1.0.0"}`, "latest", "2.0.0"},

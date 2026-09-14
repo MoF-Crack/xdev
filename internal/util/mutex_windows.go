@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	procCreateMutexW      = kernel32.NewProc("CreateMutexW")
+	procCreateMutexW        = kernel32.NewProc("CreateMutexW")
 	procWaitForSingleObject = kernel32.NewProc("WaitForSingleObject")
-	procReleaseMutex      = kernel32.NewProc("ReleaseMutex")
-	procCloseHandle       = kernel32.NewProc("CloseHandle")
+	procReleaseMutex        = kernel32.NewProc("ReleaseMutex")
+	procCloseHandle         = kernel32.NewProc("CloseHandle")
 )
 
 // acquireWindowsMutex creates or opens a named Windows mutex for the tool.
@@ -30,8 +30,8 @@ func acquireWindowsMutex(toolName string, timeout time.Duration) (*ToolLock, err
 	}
 
 	handle, _, err := procCreateMutexW.Call(
-		0,                            // default security
-		0,                            // not initial owner
+		0, // default security
+		0, // not initial owner
 		uintptr(unsafe.Pointer(name)),
 	)
 	if handle == 0 {
@@ -45,9 +45,9 @@ func acquireWindowsMutex(toolName string, timeout time.Duration) (*ToolLock, err
 	)
 
 	const (
-		WAIT_OBJECT_0   = 0
-		WAIT_TIMEOUT    = 0x00000102
-		WAIT_ABANDONED  = 0x00000080
+		WAIT_OBJECT_0  = 0
+		WAIT_TIMEOUT   = 0x00000102
+		WAIT_ABANDONED = 0x00000080
 	)
 
 	switch waitResult {

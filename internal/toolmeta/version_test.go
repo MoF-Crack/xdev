@@ -8,10 +8,10 @@ import (
 // TC-V1 ExtractVersion env 前缀并集（java / Python / node）
 func TestExtractVersion_EnvPrefixes(t *testing.T) {
 	cases := map[string]string{
-		"java 25.0.3":    "25.0.3",
-		"Python 3.12.7":  "3.12.7",
-		"node 20.18.0":   "20.18.0",
-		"go1.22.0":       "1.22.0",
+		"java 25.0.3":   "25.0.3",
+		"Python 3.12.7": "3.12.7",
+		"node 20.18.0":  "20.18.0",
+		"go1.22.0":      "1.22.0",
 		// gui 锁定行为：多 token 输出保留带 go 前缀的原始 token
 		"go version go1.26.5 windows/amd64": "go1.26.5",
 	}
@@ -25,15 +25,15 @@ func TestExtractVersion_EnvPrefixes(t *testing.T) {
 // TC-V2 ExtractVersion gui 前缀并集
 func TestExtractVersion_GuiPrefixes(t *testing.T) {
 	cases := map[string]string{
-		"yarn 9.1.2":                     "9.1.2",
-		"gradle 9.4.1":                   "9.4.1",
-		"cmake version 3.30.1":           "3.30.1",
-		"git version 2.47.0.windows.1":   "2.47.0",
-		"GNU Make 4.4.1":                 "4.4.1",
-		"Apache Maven 3.9.9":             "3.9.9",
-		"Dart SDK version: 3.5.4":        "3.5.4",
-		"go1.22.0":                       "1.22.0",
-		"v18.0.0":                        "18.0.0",
+		"yarn 9.1.2":                   "9.1.2",
+		"gradle 9.4.1":                 "9.4.1",
+		"cmake version 3.30.1":         "3.30.1",
+		"git version 2.47.0.windows.1": "2.47.0",
+		"GNU Make 4.4.1":               "4.4.1",
+		"Apache Maven 3.9.9":           "3.9.9",
+		"Dart SDK version: 3.5.4":      "3.5.4",
+		"go1.22.0":                     "1.22.0",
+		"v18.0.0":                      "18.0.0",
 	}
 	for in, want := range cases {
 		if got := ExtractVersion(in); got != want {
@@ -54,10 +54,10 @@ func TestExtractVersion_NoVersion(t *testing.T) {
 // TC-V4 ExtractVersionFromOutput 单行
 func TestExtractVersionFromOutput_SingleLine(t *testing.T) {
 	cases := map[string]string{
-		"v20.18.0":       "20.18.0",
+		"v20.18.0":        "20.18.0",
 		"Python 3.12.7\n": "3.12.7",
-		"gradle 9.4.1":   "9.4.1",
-		"":               "",
+		"gradle 9.4.1":    "9.4.1",
+		"":                "",
 	}
 	for in, want := range cases {
 		if got := ExtractVersionFromOutput(in); got != want {

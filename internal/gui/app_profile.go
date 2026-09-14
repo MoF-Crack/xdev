@@ -121,7 +121,7 @@ const profileMaxSize = 10 << 20
 // wailsRuntime.EventsEmit 发进度事件（ctx 缺失时 Wails 直接 log.Fatalf
 // 结束整个测试进程），所以守卫 29-2「未安装的 active 项不产生假错误」无法
 // 在测试里走真实下载/激活。测试注入内存实现后，UseVersion 这一侧的行为
-//（本票的修复点）仍然走真实代码。
+// （本票的修复点）仍然走真实代码。
 var installToolForProfile = func(a *App, tool, version string) error {
 	return a.InstallTool(tool, version)
 }

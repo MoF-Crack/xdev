@@ -107,11 +107,11 @@ func TestAtomicWriteCallSitesConverged(t *testing.T) {
 
 	// 8 个调用点（审计清单；>= 断言以容忍后续新增）
 	atomicCallSites := map[string]int{
-		"internal/config/config.go":         2, // saveLocked + UpdateConfigPaths
-		"internal/discovery/scheduler.go":   4, // sniff cache + .bak + manifest 写回
-		"internal/cli/refresh.go":           1,
-		"internal/manifest/manifest.go":     3,
-		"internal/gui/app_custom_tools.go":  1,
+		"internal/config/config.go":        2, // saveLocked + UpdateConfigPaths
+		"internal/discovery/scheduler.go":  4, // sniff cache + .bak + manifest 写回
+		"internal/cli/refresh.go":          1,
+		"internal/manifest/manifest.go":    3,
+		"internal/gui/app_custom_tools.go": 1,
 	}
 	for rel, want := range atomicCallSites {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))

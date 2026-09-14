@@ -17,15 +17,15 @@ import (
 
 // FavoriteInfo 收藏的工具信息
 type FavoriteInfo struct {
-	Name          string `json:"name"`
-	DisplayName   string `json:"displayName"`
-	Category      string `json:"category"`
-	AddedAt       string `json:"addedAt"`
-	ActiveVersion string `json:"activeVersion"` // 当前活跃版本
-	Installed     bool   `json:"installed"`     // 是否已通过 xdev 安装
-	LocalVersion  string   `json:"localVersion"`  // 系统本地检测到的版本
-	LocalPath     string   `json:"localPath"`     // 系统本地路径
-	Source        string   `json:"source"`        // "xdev" 或 "local"
+	Name          string   `json:"name"`
+	DisplayName   string   `json:"displayName"`
+	Category      string   `json:"category"`
+	AddedAt       string   `json:"addedAt"`
+	ActiveVersion string   `json:"activeVersion"`        // 当前活跃版本
+	Installed     bool     `json:"installed"`            // 是否已通过 xdev 安装
+	LocalVersion  string   `json:"localVersion"`         // 系统本地检测到的版本
+	LocalPath     string   `json:"localPath"`            // 系统本地路径
+	Source        string   `json:"source"`               // "xdev" 或 "local"
 	FormFactor    []string `json:"formFactor,omitempty"` // 形态（manifest EffectiveFormFactor，gui/cli/tui）
 }
 

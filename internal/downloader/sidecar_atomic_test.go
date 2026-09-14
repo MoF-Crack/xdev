@@ -62,7 +62,7 @@ func TestWriteSidecarHash_AllZeroFirstWrite(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "archive.zip")
 	err := Download(context.Background(), Options{
 		URL: srv.URL + "/archive.zip", Dest: dest, Client: srv.Client(),
-		ExpectedSHA: strings.Repeat("0", 64),
+		ExpectedSHA:  strings.Repeat("0", 64),
 		IsThirdParty: true, // TOFU-eligible: no root key embedded in tests
 		MaxRetries:   1,
 	})

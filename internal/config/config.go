@@ -68,12 +68,12 @@ var migrateOnce sync.Once
 // SniffConfig controls the automatic tool-discovery sniffing behaviour
 // (spec 011-tool-discovery-automanage).
 type SniffConfig struct {
-	Strategy        string `yaml:"strategy"`            // interval|startup|service|manual
-	Interval        string `yaml:"interval"`            // default 24h
-	Concurrency     int    `yaml:"concurrency"`         // default 3
-	RateLimitPerHr  int    `yaml:"rate_limit_per_hour"` // default 60
-	AutoArchiveFill bool   `yaml:"auto_archive_fill"`   // default true
-	LastSniffAt     string `yaml:"last_sniff_at"`       // ISO timestamp, maintained by scheduler
+	Strategy        string `yaml:"strategy"`               // interval|startup|service|manual
+	Interval        string `yaml:"interval"`               // default 24h
+	Concurrency     int    `yaml:"concurrency"`            // default 3
+	RateLimitPerHr  int    `yaml:"rate_limit_per_hour"`    // default 60
+	AutoArchiveFill bool   `yaml:"auto_archive_fill"`      // default true
+	LastSniffAt     string `yaml:"last_sniff_at"`          // ISO timestamp, maintained by scheduler
 	GitHubToken     string `yaml:"github_token,omitempty"` // optional GitHub API token (env GITHUB_TOKEN/GH_TOKEN also checked)
 }
 
@@ -130,20 +130,20 @@ type Config struct {
 // (resolved by ResolvePaths). LogLevel defaults to "info", SelfUpdate
 // defaults to true, and ManifestTTL defaults to "24h".
 type CoreConfig struct {
-	XMDevDir         string   `yaml:"xmdevenv_dir"`      // Root xdev home directory
-	DownloadDir      string   `yaml:"download_dir"`      // Where archives are cached
-	InstallDir       string   `yaml:"install_dir"`       // Where tools are extracted to
-	ShimDir          string   `yaml:"shim_dir"`          // Where shim binaries live
-	CacheDir         string   `yaml:"cache_dir"`         // Manifest cache directory
-	EnvDir           string   `yaml:"env_dir"`           // Environment variable fragment directory
-	ManifestDir      string   `yaml:"manifest_dir"`      // Tool manifest YAML directory
-	LogLevel         string   `yaml:"log_level"`         // Logging verbosity: "debug"|"info"|"warn"|"error"
-	SelfUpdate       bool     `yaml:"self_update"`       // Whether to auto-check for xdev updates
+	XMDevDir    string `yaml:"xmdevenv_dir"` // Root xdev home directory
+	DownloadDir string `yaml:"download_dir"` // Where archives are cached
+	InstallDir  string `yaml:"install_dir"`  // Where tools are extracted to
+	ShimDir     string `yaml:"shim_dir"`     // Where shim binaries live
+	CacheDir    string `yaml:"cache_dir"`    // Manifest cache directory
+	EnvDir      string `yaml:"env_dir"`      // Environment variable fragment directory
+	ManifestDir string `yaml:"manifest_dir"` // Tool manifest YAML directory
+	LogLevel    string `yaml:"log_level"`    // Logging verbosity: "debug"|"info"|"warn"|"error"
+	SelfUpdate  bool   `yaml:"self_update"`  // Whether to auto-check for xdev updates
 	// SelfUpdateMode 启动自检发现新版本时的默认行为（Spec 034）：
 	// "prompt"（默认，三选：更新/忽略并继续/退出）| "auto"（自动更新）| "notify"（仅提示）
 	SelfUpdateMode string `yaml:"self_update_mode"`
 	// SelfUpdateStale 启动时是否把 XMDevDir 根下旧版本 xdev CLI 副本替换为当前版本（默认 true）
-	SelfUpdateStale bool `yaml:"self_update_stale"`
+	SelfUpdateStale  bool     `yaml:"self_update_stale"`
 	ManifestTTL      string   `yaml:"manifest_ttl"`      // Cache TTL for remote version lists (Go duration)
 	MirrorPreference []string `yaml:"mirror_preference"` // User-preferred mirror URLs, highest priority
 	// ArchiveRetention 下载归档的保留策略：
@@ -528,18 +528,18 @@ func (c *Config) EnsureDirs() error {
 func defaults(xmdeDir string) *Config {
 	c := &Config{
 		Core: CoreConfig{
-			XMDevDir:    xmdeDir,
-			DownloadDir: filepath.Join(xmdeDir, "downloads"),
-			InstallDir:  filepath.Join(xmdeDir, "install"),
-			ShimDir:     filepath.Join(xmdeDir, "shims"),
-			CacheDir:    filepath.Join(xmdeDir, "cache"),
-			EnvDir:      filepath.Join(xmdeDir, "env"),
-			ManifestDir: filepath.Join(xmdeDir, "manifests"),
-			LogLevel:    "info",
-			SelfUpdate:  true,
+			XMDevDir:        xmdeDir,
+			DownloadDir:     filepath.Join(xmdeDir, "downloads"),
+			InstallDir:      filepath.Join(xmdeDir, "install"),
+			ShimDir:         filepath.Join(xmdeDir, "shims"),
+			CacheDir:        filepath.Join(xmdeDir, "cache"),
+			EnvDir:          filepath.Join(xmdeDir, "env"),
+			ManifestDir:     filepath.Join(xmdeDir, "manifests"),
+			LogLevel:        "info",
+			SelfUpdate:      true,
 			SelfUpdateMode:  "prompt",
 			SelfUpdateStale: true,
-			ManifestTTL: "24h",
+			ManifestTTL:     "24h",
 		},
 		Path: PathConfig{
 			Mode:                "shim",

@@ -51,7 +51,7 @@ type EntryState struct {
 // Progress is the top-level state file structure. It is serialized to
 // progress.json and updated after every state transition.
 type Progress struct {
-	mu      sync.Mutex `json:"-"`
+	mu      sync.Mutex   `json:"-"`
 	Entries []EntryState `json:"entries"`
 	Updated string       `json:"updated"`
 	path    string       `json:"-"`

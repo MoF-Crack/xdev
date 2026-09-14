@@ -180,7 +180,7 @@ func nodeToolchainFromDir(dir string) (nodeToolchain, bool) {
 	tc := nodeToolchain{nodeDir: dir}
 
 	nodeCandidates := []string{
-		filepath.Join(dir, "node.exe"),   // Windows root layout
+		filepath.Join(dir, "node.exe"),    // Windows root layout
 		filepath.Join(dir, "bin", "node"), // Unix layout
 		filepath.Join(dir, "node"),
 	}
@@ -195,7 +195,7 @@ func nodeToolchainFromDir(dir string) (nodeToolchain, bool) {
 	}
 
 	for _, c := range []string{
-		filepath.Join(dir, "node_modules", "npm", "bin", "npm-cli.js"),     // Windows
+		filepath.Join(dir, "node_modules", "npm", "bin", "npm-cli.js"),        // Windows
 		filepath.Join(dir, "lib", "node_modules", "npm", "bin", "npm-cli.js"), // Unix
 	} {
 		if isRegularFile(c) {
@@ -204,8 +204,8 @@ func nodeToolchainFromDir(dir string) (nodeToolchain, bool) {
 		}
 	}
 	for _, c := range []string{
-		filepath.Join(dir, "npm.cmd"),     // Windows
-		filepath.Join(dir, "bin", "npm"),  // Unix
+		filepath.Join(dir, "npm.cmd"),    // Windows
+		filepath.Join(dir, "bin", "npm"), // Unix
 		filepath.Join(dir, "npm"),
 	} {
 		if isRegularFile(c) {

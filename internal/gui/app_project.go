@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xmdemt/xdev/internal/isolator"
-	"github.com/xmdemt/xdev/internal/util"
-	"github.com/xmdemt/xdev/internal/orchestrator"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/xmdemt/xdev/internal/isolator"
+	"github.com/xmdemt/xdev/internal/orchestrator"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 // ========== Isolate 隔离 ==========

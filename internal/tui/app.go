@@ -46,8 +46,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -94,9 +94,9 @@ type Model struct {
 	catIdx     int
 
 	// Tools panel
-	allTools     []plugin.Plugin
+	allTools      []plugin.Plugin
 	filteredTools []plugin.Plugin
-	toolIdx      int
+	toolIdx       int
 
 	// Detail panel
 	installedVersions []string
@@ -246,34 +246,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMainKey(msg)
 
 	case InstallProgressMsg:
-			if m.installState != nil && m.installState.ID == msg.ID {
-				m.installState.Phase = msg.Phase
-				// Spec 035 F5: negative percent means indeterminate — keep the
-				// last known value (defense in depth; progressState.store
-				// already guards the main path).
-				if msg.Percent >= 0 {
-					m.installState.Percent = msg.Percent
-				}
-				m.installState.Speed = msg.Speed
-				m.installState.ETA = msg.ETA
-				// Continue ticking until install completes
-				return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
-					if m.installState == nil {
-						return nil
-					}
-					return InstallProgressMsg{
-						ID:      m.installState.ID,
-						Tool:    msg.Tool,
-						Version: msg.Version,
-						Phase:   m.installState.Phase,
-						Percent: m.installState.Percent,
-						Speed:   m.installState.Speed,
-						ETA:     m.installState.ETA,
-					}
-				})
+		if m.installState != nil && m.installState.ID == msg.ID {
+			m.installState.Phase = msg.Phase
+			// Spec 035 F5: negative percent means indeterminate — keep the
+			// last known value (defense in depth; progressState.store
+			// already guards the main path).
+			if msg.Percent >= 0 {
+				m.installState.Percent = msg.Percent
 			}
-			// Stale progress message (ID mismatch) — discard
-			return m, nil
+			m.installState.Speed = msg.Speed
+			m.installState.ETA = msg.ETA
+			// Continue ticking until install completes
+			return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+				if m.installState == nil {
+					return nil
+				}
+				return InstallProgressMsg{
+					ID:      m.installState.ID,
+					Tool:    msg.Tool,
+					Version: msg.Version,
+					Phase:   m.installState.Phase,
+					Percent: m.installState.Percent,
+					Speed:   m.installState.Speed,
+					ETA:     m.installState.ETA,
+				}
+			})
+		}
+		// Stale progress message (ID mismatch) — discard
+		return m, nil
 
 	case InstallResultMsg:
 		// 票 40（P2-19 / E-15）：陈旧判定上移到最前，且不再以

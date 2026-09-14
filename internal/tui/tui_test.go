@@ -15,9 +15,9 @@ import (
 func TestNewModelCreatesValidState(t *testing.T) {
 	cfg := &config.Config{
 		Core: config.CoreConfig{
-			XMDevDir:    "/tmp/xmde-test",
-			InstallDir:  "/tmp/xmde-test/install",
-			ShimDir:     "/tmp/xmde-test/shims",
+			XMDevDir:   "/tmp/xmde-test",
+			InstallDir: "/tmp/xmde-test/install",
+			ShimDir:    "/tmp/xmde-test/shims",
 		},
 	}
 	cat := &manifest.Catalog{}

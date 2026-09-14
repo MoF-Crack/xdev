@@ -22,11 +22,11 @@ func TestConfigSet_XMDevDir_RejectsRelativeAndUNC(t *testing.T) {
 		"./xdev",
 		"../xdev",
 		"xdev",
-		`C:xdev`,          // Windows 驱动器相对形式
-		`\xdev`,           // 根相对（无驱动器）——Windows 下非绝对
-		`\\server\share`,  // UNC
+		`C:xdev`,         // Windows 驱动器相对形式
+		`\xdev`,          // 根相对（无驱动器）——Windows 下非绝对
+		`\\server\share`, // UNC
 		`\\server\share\xdev`,
-		"//server/share",  // UNC（POSIX 形态）
+		"//server/share", // UNC（POSIX 形态）
 		"",
 	}
 	for _, v := range rejected {

@@ -174,7 +174,7 @@ func promptDriveWith(in io.Reader, out io.Writer, drives []config.DriveInfo) (Dr
 			if letter == "C" {
 				fmt.Fprintf(out, "  ⚠ you picked the system drive C: (%s free)\n", humanBytes(info.Free))
 				fmt.Fprintln(out, "    C: may not have enough space for Android SDK + runtimes.")
-				fmt.Fprint(out,   "    type 'yes' to confirm, anything else to pick again: ")
+				fmt.Fprint(out, "    type 'yes' to confirm, anything else to pick again: ")
 				confirm, err := reader.ReadString('\n')
 				if err != nil && err != io.EOF {
 					return DriveChoice{}, err
@@ -187,7 +187,7 @@ func promptDriveWith(in io.Reader, out io.Writer, drives []config.DriveInfo) (Dr
 			if info.Free < config.MinFreeBytesDefault {
 				fmt.Fprintf(out, "  ⚠ %s: has only %s free (recommend %s+)\n",
 					info.Letter, humanBytes(info.Free), humanBytes(config.MinFreeBytesDefault))
-				fmt.Fprint(out,    "    type 'yes' to confirm, anything else to pick again: ")
+				fmt.Fprint(out, "    type 'yes' to confirm, anything else to pick again: ")
 				confirm, err := reader.ReadString('\n')
 				if err != nil && err != io.EOF {
 					return DriveChoice{}, err

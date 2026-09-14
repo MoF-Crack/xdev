@@ -263,9 +263,9 @@ func showUpdates(cmd *cobra.Command) error {
 
 	installDir := cfg.Core.InstallDir
 	type upgrade struct {
-		Tool       string
-		Installed  string
-		Available  string
+		Tool      string
+		Installed string
+		Available string
 	}
 	var upgrades []upgrade
 

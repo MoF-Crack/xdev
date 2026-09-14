@@ -63,7 +63,7 @@ func tofuApp(t *testing.T, tool string) (*Installer, *config.Config) {
 	tmp := t.TempDir()
 	cfg := &config.Config{
 		Core: config.CoreConfig{
-			XMDevDir: tmp,
+			XMDevDir:   tmp,
 			InstallDir: filepath.Join(tmp, "install"),
 			CacheDir:   filepath.Join(tmp, "cache"),
 			ShimDir:    filepath.Join(tmp, "shims"),

@@ -250,22 +250,22 @@ func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, f
 		}
 	}
 
-		// Step 4: Install self
-		if installDir, isNew, err := installer.InstallSelf(cfg); err != nil {
-			fmt.Printf("⚠ failed to install xdev self: %v\n", err)
-		} else {
-			if isNew {
-				fmt.Printf("✔ installed xdev to %s\n", installDir)
-			}
-			if runtime.GOOS == "windows" && !NoPathFix() {
-				xdevBinDir := filepath.Join(cfg.Core.XMDevDir, "current", "xdev")
-				if err := env.AppendToUserPath(xdevBinDir); err != nil {
-					fmt.Printf("⚠ failed to add xdev dir to Windows user PATH: %v\n", err)
-				} else {
-					fmt.Printf("✔ added xdev dir to Windows user PATH: %s\n", xdevBinDir)
-				}
+	// Step 4: Install self
+	if installDir, isNew, err := installer.InstallSelf(cfg); err != nil {
+		fmt.Printf("⚠ failed to install xdev self: %v\n", err)
+	} else {
+		if isNew {
+			fmt.Printf("✔ installed xdev to %s\n", installDir)
+		}
+		if runtime.GOOS == "windows" && !NoPathFix() {
+			xdevBinDir := filepath.Join(cfg.Core.XMDevDir, "current", "xdev")
+			if err := env.AppendToUserPath(xdevBinDir); err != nil {
+				fmt.Printf("⚠ failed to add xdev dir to Windows user PATH: %v\n", err)
+			} else {
+				fmt.Printf("✔ added xdev dir to Windows user PATH: %s\n", xdevBinDir)
 			}
 		}
+	}
 
 	// Done
 	fmt.Println("\n✔ xdev setup complete!")

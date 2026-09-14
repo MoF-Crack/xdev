@@ -50,10 +50,10 @@ type task struct {
 	version     string
 	osName      string
 	arch        string
-	url         string   // primary URL (mirror if available, else original)
-	fallbackURL string   // original URL to try if primary fails
+	url         string // primary URL (mirror if available, else original)
+	fallbackURL string // original URL to try if primary fails
 	size        int64
-	vi, ai      int      // indices into VersionList / Archives
+	vi, ai      int // indices into VersionList / Archives
 	installArgs []string
 }
 

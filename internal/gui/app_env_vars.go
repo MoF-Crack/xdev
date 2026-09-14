@@ -191,14 +191,14 @@ func pathEntryExists(p string, lookup envLookup) (bool, string) {
 }
 
 type EnvVarInfo struct {
-	Name             string     `json:"name"`
-	Value            string     `json:"value"`
-	Source           string     `json:"source"`
-	Level            string     `json:"level"`
-	ToolName         string     `json:"toolName"`
-	IsValid          bool       `json:"isValid"`
-	InvalidReason    string     `json:"invalidReason"`
-	ValidationStatus string     `json:"validationStatus"`
+	Name             string      `json:"name"`
+	Value            string      `json:"value"`
+	Source           string      `json:"source"`
+	Level            string      `json:"level"`
+	ToolName         string      `json:"toolName"`
+	IsValid          bool        `json:"isValid"`
+	InvalidReason    string      `json:"invalidReason"`
+	ValidationStatus string      `json:"validationStatus"`
 	PathEntries      []PathEntry `json:"pathEntries,omitempty"`
 }
 
@@ -316,7 +316,7 @@ func buildPathEntries(value string) []PathEntry {
 }
 
 // buildPathEntriesWith 是 buildPathEntries 的实现体，接收共享的合并环境查询
-//（B-08：批量场景下复用同一份快照；单次调用传入一次性 lookup）。
+// （B-08：批量场景下复用同一份快照；单次调用传入一次性 lookup）。
 func buildPathEntriesWith(value string, lookup envLookup) []PathEntry {
 	if value == "" {
 		return nil
@@ -353,7 +353,7 @@ func ValidateEnvVar(name, value string) (bool, string) {
 }
 
 // validateEnvVarWith 是 ValidateEnvVar 的实现体，接收共享的合并环境查询
-//（B-08 缓存：批量判定共用一份快照）。
+// （B-08 缓存：批量判定共用一份快照）。
 func validateEnvVarWith(name, value string, lookup envLookup) (bool, string) {
 	if value == "" {
 		return true, ""
@@ -478,7 +478,7 @@ func (a *App) CleanEnvVarPath(name, level string) error {
 }
 
 // cleanEnvVarPath 是 CleanEnvVarPath 的实现体，接收批量共享的 percentExpander
-//（B-08：CleanAllInvalidEnvVars 整批只枚举一次合并环境）。
+// （B-08：CleanAllInvalidEnvVars 整批只枚举一次合并环境）。
 func (a *App) cleanEnvVarPath(name, level string, exp *percentExpander) error {
 	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
 		return fmt.Errorf("cannot modify protected system env var: %s", name)

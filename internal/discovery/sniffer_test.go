@@ -17,7 +17,7 @@ import (
 
 func testTool(name string, remoteType string) *manifest.Tool {
 	t := &manifest.Tool{
-		Name:    name,
+		Name:        name,
 		VersionList: []manifest.Version{},
 	}
 	t.Remote.Type = remoteType
@@ -26,7 +26,7 @@ func testTool(name string, remoteType string) *manifest.Tool {
 
 func testToolWithRemote(name, remoteType, remoteURL, pattern string) *manifest.Tool {
 	t := &manifest.Tool{
-		Name:    name,
+		Name:        name,
 		VersionList: []manifest.Version{},
 	}
 	t.Remote.Type = remoteType
