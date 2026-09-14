@@ -351,14 +351,26 @@ func TestCapture_VolatilePathsIgnoreChurn(t *testing.T) {
 	}
 }
 
-// TestCapture_DetectsUserEnvWrite proves SC-001 on platforms where
-// SetUserEnvVar persists user environment (Windows registry).
+// TestCapture_DetectsUserEnvWrite proves SC-001: Capture+Diff is sensitive to
+// persistent user environment changes (Windows registry on real hosts).
+//
+// 第四轮复核收尾改造：本用例原先写**真实 HKCU 的 GOROOT** —— 守卫的自检竟然是
+// 「测试故意写真实环境变量」的最后一处，而且是最危险的一处（本机 GOROOT 为空，
+// 强杀残留 = GOROOT 指向不存在路径 = 用户的 Go 工具链直接坏掉，P0-17 事故的
+// 原型）。现在读写都走 env 的接缝：Capture 的读路径（GetUserEnvVarsBatch →
+// GetAllUserEnvVars）与写入（SetUserEnvVarTrusted → userEnvWriteFn）全部落在
+// UseInMemoryUserEnvForTesting 安装的内存后端上 —— 守卫的检测语义（环境变量
+// 变更必须被 Capture+Diff 捕获）与原断言逐字不变，宿主零接触。真实注册表读路径
+// 仍由仓库各处 RunWithHostSnapshot 守卫包裹的用例在读，覆盖不受影响。
 func TestCapture_DetectsUserEnvWrite(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("persistent user env write probe is Windows-only")
 	}
-	const key = "GOROOT"
-	orig, _ := env.GetUserEnvVar(key)
+	const key = "XMDEV_HOSTSNAPSHOT_PROBE"
+	const orig = "before-value"
+	restoreEnv := env.UseInMemoryUserEnvForTesting(map[string]string{key: orig})
+	defer restoreEnv()
+
 	opts := Options{EnvKeys: []string{key}}
 
 	before, err := Capture(opts)
@@ -367,16 +379,9 @@ func TestCapture_DetectsUserEnvWrite(t *testing.T) {
 	}
 
 	probe := orig + "__xdev_host_snapshot_probe__"
-	if err := env.SetUserEnvVar(key, probe); err != nil {
-		t.Fatalf("SetUserEnvVar: %v", err)
+	if err := env.SetUserEnvVarTrusted(key, probe); err != nil {
+		t.Fatalf("SetUserEnvVarTrusted: %v", err)
 	}
-	t.Cleanup(func() {
-		if orig == "" {
-			_ = env.DeleteUserEnvVar(key)
-			return
-		}
-		_ = env.SetUserEnvVar(key, orig)
-	})
 
 	after, err := Capture(opts)
 	if err != nil {
@@ -384,7 +389,7 @@ func TestCapture_DetectsUserEnvWrite(t *testing.T) {
 	}
 	changes := Diff(before, after)
 	if len(changes) == 0 {
-		t.Fatal("expected env change after SetUserEnvVar")
+		t.Fatal("expected env change after SetUserEnvVarTrusted")
 	}
 	found := false
 	for _, c := range changes {
@@ -393,6 +398,6 @@ func TestCapture_DetectsUserEnvWrite(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("missing GOROOT probe change: %#v", changes)
+		t.Fatalf("missing %s probe change: %#v", key, changes)
 	}
 }

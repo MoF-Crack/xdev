@@ -55,6 +55,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -84,6 +86,115 @@ const (
 	_ERROR_NO_MORE_ITEMS  = 259
 )
 
+// userPathReadFn / userPathWriteFn 是用户 PATH 的**后端接缝**：生产默认指向真实
+// HKCU\Environment 读写，测试可切换为内存后端。
+//
+// 为什么需要（本批第四轮复核的结论）：PATH 的 RMW 守卫（票 10 的并发丢写、票 11 的
+// home 锚定、CleanupUserPath 各模式）原先直接在**开发者真实的用户 PATH** 上做
+// WriteUserPath 再 defer 恢复。两个后果：
+//  1. 并发跑全量测试时，其它包的宿主机快照窗口会撞上这次写 → 假红；
+//  2. 测试进程被强杀时 defer 不恢复 → 用户 PATH 里留下指向临时目录的死条目
+//     （gui 的 InitConfig 守卫测试注释里就有"清理历史残留 Temp 目录"的痕迹，
+//     说明这类残留确实发生过）。PATH 被破坏的影响面比单个 GOROOT 更大。
+var (
+	userPathReadFn  = readUserPathFromRegistry
+	userPathWriteFn = writeUserPathFromRegistry
+	// userPathLockPathFn 返回跨进程 PATH 锁的文件路径；测试用内存后端时指向临时目录，
+	// 以免在开发者真实 ~/.xdev/.locks 下建文件。锁本身**不跳过**——票 10 的并发丢写
+	// 守卫（TestConcurrentPathRMW_NoLostWrite）依赖真实锁语义，跳过就等于删掉该守卫。
+	userPathLockPathFn = defaultUserPathLockPath
+)
+
+// inMemoryUserPath 非 nil 时表示当前用的是测试用内存后端。
+var inMemoryUserPath *string
+
+var inMemoryUserPathMu sync.Mutex
+
+// realUserRegistryMutationCount / expectedRealRegistryMutationCount 是
+// internal/env 测试防污染闸门的埋点（闸门本体见 userenv_hermetic_test.go 的
+// TestMain，第四轮复核的产物）。
+//
+// 背景（P0-17 事故复盘的教训）：save/restore 式测试在进程被强杀、panic 或断言
+// 提前退出时不会执行恢复，测试值会**永久留在真实 HKCU\Environment** 里。逐个
+// 用例改造（PATH 内存后端、GOROOT 假注册表、本批的 env 变量内存后端）解决的是
+// 已知写点，但挡不住未来新增的用例忘记装后端。因此：
+//
+//   - realUserRegistryMutationCount 在每个真实注册表写/删函数**入口** +1 ——
+//     「尝试」即计数，无论后续是否被 M-2 长度校验拒绝、UTF16 编码失败或权限
+//     不足（这使守卫可以用零落盘的方式自证计数器先于任何注册表访问）；
+//   - expectedRealRegistryMutationCount 供守卫声明「本次运行预期的合法尝试
+//     次数」——唯一允许的形态是先于任何写入即告失败/无变更的尝试（长度拒绝、
+//     编码失败、删除确认不存在的值）。
+//
+// TestMain 断言 delta == declared：任何未声明的真实写/删尝试都让整包失败。
+// 生产路径从不读取这两个计数器。逃生口：设置 XMDEV_ALLOW_REAL_REGISTRY_TESTS=1
+// 运行 `go test ./internal/env` 可临时停用闸门（人工集成测试专用；CI runner 是
+// 一次性环境，若未来加 CI 测试 job 可设置以换取全量真身覆盖 —— 开发机默认勿设）。
+var (
+	realUserRegistryMutationCount     atomic.Int64
+	expectedRealRegistryMutationCount atomic.Int64
+)
+
+func defaultUserPathLockPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".xdev", ".locks", "userpath.lock"), nil
+}
+
+// UseInMemoryUserPathForTesting 把用户 PATH 的读写切到内存后端（初始值为 initial），
+// 返回读取函数与还原函数。**仅供测试**：让"故意改 PATH"的用例不再写开发者真实的
+// HKCU\Environment；跨进程锁保留（锁文件改到临时目录），因此并发守仍然有效。
+//
+// 还原语义是「还原到安装前的接缝值」而非硬编码真实实现：TestMain 会为整包安装
+// 一层种子后端（见 userenv_hermetic_test.go），用例级安装/还原必须正确嵌套，
+// 否则用例的 t.Cleanup 会把整包的防污染后端撕掉。
+func UseInMemoryUserPathForTesting(initial string) (get func() string, restore func()) {
+	store := initial
+	lockDir, err := os.MkdirTemp("", "xdev-userpath-lock-")
+	prevRead, prevWrite := userPathReadFn, userPathWriteFn
+	prevLockFn := userPathLockPathFn
+
+	inMemoryUserPathMu.Lock()
+	inMemoryUserPath = &store
+	userPathReadFn = func() (string, error) {
+		inMemoryUserPathMu.Lock()
+		defer inMemoryUserPathMu.Unlock()
+		return *inMemoryUserPath, nil
+	}
+	userPathWriteFn = func(p string) error {
+		inMemoryUserPathMu.Lock()
+		defer inMemoryUserPathMu.Unlock()
+		*inMemoryUserPath = p
+		return nil
+	}
+	inMemoryUserPathMu.Unlock()
+
+	if err == nil {
+		userPathLockPathFn = func() (string, error) {
+			return filepath.Join(lockDir, "userpath.lock"), nil
+		}
+	}
+
+	return func() string {
+			inMemoryUserPathMu.Lock()
+			defer inMemoryUserPathMu.Unlock()
+			return *inMemoryUserPath
+		},
+		func() {
+			inMemoryUserPathMu.Lock()
+			inMemoryUserPath = nil
+			userPathReadFn = prevRead
+			userPathWriteFn = prevWrite
+			inMemoryUserPathMu.Unlock()
+			userPathLockPathFn = prevLockFn
+			if err == nil {
+				_ = os.RemoveAll(lockDir)
+			}
+		}
+}
+
 // withUserPathLock serializes PATH read-modify-write cycles across
 // processes. Security (L-2 fix): every PATH mutator does
 // read-registry → modify → write-registry; concurrent xdev processes
@@ -91,14 +202,13 @@ const (
 // entries. The lock file lives under ~/.xdev/.locks — a fixed, user-owned
 // location that does not depend on config resolution.
 func withUserPathLock(fn func() error) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	lockPath, pathErr := userPathLockPathFn()
+	if pathErr != nil {
 		// Cannot resolve the lock location — degrade to the unprotected
 		// call rather than failing PATH management entirely.
-		log.Printf("[env] WARN: userpath lock degraded (cannot resolve home dir): %v — proceeding without cross-process PATH serialization", err)
+		log.Printf("[env] WARN: userpath lock degraded (cannot resolve home dir): %v — proceeding without cross-process PATH serialization", pathErr)
 		return fn()
 	}
-	lockPath := filepath.Join(home, ".xdev", ".locks", "userpath.lock")
 	fl, err := util.AcquireFileLock(lockPath, 10*time.Second)
 	if err != nil {
 		// Contention beyond 10s: proceed without the lock (the registry
@@ -379,6 +489,11 @@ func RemoveAllCurrentPaths(currentDir string) error {
 // ReadUserPath reads the "Path" value from HKCU\Environment using the
 // Windows registry API.  Returns "" if the value does not exist.
 func ReadUserPath() (string, error) {
+	return userPathReadFn()
+}
+
+// readUserPathFromRegistry 是真实的注册表实现（HKCU\Environment\Path）。
+func readUserPathFromRegistry() (string, error) {
 	var key uintptr
 	envName, err := syscall.UTF16PtrFromString(`Environment`)
 	if err != nil {
@@ -446,6 +561,14 @@ func ReadUserPath() (string, error) {
 // Security (M-2): Rejects paths that exceed the Windows environment block
 // limit (~32,767 characters) to prevent silent truncation by CreateProcess.
 func WriteUserPath(path string) error {
+	return userPathWriteFn(path)
+}
+
+// writeUserPathFromRegistry 是真实的注册表实现（含 M-2 长度上限校验）。
+func writeUserPathFromRegistry(path string) error {
+	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：在一切校验之前
+	// 计数一次真实写尝试。
+	realUserRegistryMutationCount.Add(1)
 	// Security (M-2): Check PATH length before writing
 	const maxWinRegValueLen = 32767
 	if len(path) > maxWinRegValueLen {
@@ -544,6 +667,17 @@ func SetUserEnvVarTrusted(name, value string) error {
 	if err := validateEnvVarValue(name, value); err != nil {
 		return err
 	}
+	// Host-safety seam（第四轮复核）：写动作经 userEnvWriteFn 落地，测试用内存
+	// 后端（UseInMemoryUserEnvForTesting）替换之 —— 校验全部在前，语义不变。
+	return userEnvWriteFn(name, value)
+}
+
+// writeUserEnvVarToRegistry 是真实 HKCU\Environment 写入实现（X-08 校验已在
+// SetUserEnvVarTrusted 完成；这里只负责落盘，供接缝默认值与人工排查使用）。
+func writeUserEnvVarToRegistry(name, value string) error {
+	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：在任何注册表
+	// 访问之前计数一次真实写尝试。
+	realUserRegistryMutationCount.Add(1)
 	var key uintptr
 	envName, err := syscall.UTF16PtrFromString(`Environment`)
 	if err != nil {
@@ -809,13 +943,18 @@ func GetUserEnvVarTrusted(name string) (string, error) {
 
 // GetUserEnvVarsBatch reads a subset of user environment variables in a
 // single registry open/close cycle (SC-004 optimization for hostsnapshot).
+//
+// 第四轮复核修复：不再做白名单过滤。调用方（hostsnapshot.Capture）显式给出
+// 追踪名单 —— 过滤非白名单名字等于静默丢掉调用方明确要追踪的变量（守卫自检
+// 用命名空间探针名时会完全失明）；读取本身也不需要白名单（GetUserEnvVarTrusted
+// 早已允许读取任意名字）。非 Windows 桩（win_path_other.go）从来不过滤，两平台
+// 由此对齐。唯一生产调用方 hostsnapshot.DefaultOptions 传的全是白名单名，
+// 移除过滤对生产行为零影响。
 func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
 	all := GetAllUserEnvVars()
 	result := make(map[string]string, len(names))
 	for _, n := range names {
-		if util.IsAllowedEnvVarName(n) {
-			result[n] = all[n]
-		}
+		result[n] = all[n]
 	}
 	return result, nil
 }
@@ -834,6 +973,17 @@ func DeleteUserEnvVar(name string) error {
 // DeleteUserEnvVarTrusted deletes a user-level env var without the whitelist check.
 // Used by the installer for env vars declared in tool manifests.
 func DeleteUserEnvVarTrusted(name string) error {
+	// Host-safety seam（第四轮复核）：与 SetUserEnvVarTrusted 对称，删除经
+	// userEnvDeleteFn 落地，测试用内存后端替换之。
+	return userEnvDeleteFn(name)
+}
+
+// deleteUserEnvVarFromRegistry 是真实 HKCU\Environment 删除实现（删除不存在的
+// 值按成功处理 —— ERROR_FILE_NOT_FOUND 不视为错误）。
+func deleteUserEnvVarFromRegistry(name string) error {
+	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：在任何注册表
+	// 访问之前计数一次真实删除尝试。
+	realUserRegistryMutationCount.Add(1)
 	var key uintptr
 	envName, err := syscall.UTF16PtrFromString(`Environment`)
 	if err != nil {
@@ -926,6 +1076,20 @@ func SetEnvVar(name, value, level string) error {
 		return fmt.Errorf("env var %s value length %d exceeds Windows registry limit of %d characters", name, len(value), maxWinRegValueLen)
 	}
 
+	// Host-safety seam（第四轮复核）：user 级与专用写入口走同一接缝 —— 否则
+	// 测试防污染闸门（userenv_hermetic_test.go 的 TestMain）留有一个直写真实
+	// HKCU\Environment 的缺口。落盘语义不变（默认接缝就是真实注册表写入）。
+	if level == "user" {
+		if err := userEnvWriteFn(name, value); err != nil {
+			return err
+		}
+		BroadcastEnvironmentChange()
+		return nil
+	}
+
+	// machine 级（或未来新增级别）仍走通用注册表写路径；计数器先于 getRegKey；
+	// 非法 level 也会在此处被拒绝，但「尝试」已被计数 —— 闸门以尝试为单位。
+	realUserRegistryMutationCount.Add(1)
 	rootKey, subKey, err := getRegKey(level)
 	if err != nil {
 		return err
@@ -1060,6 +1224,17 @@ func DeleteEnvVar(name, level string) error {
 	if level == "machine" && !util.IsAllowedEnvVarName(name) {
 		return fmt.Errorf("cannot delete non-whitelisted machine env var: %s", name)
 	}
+	// Host-safety seam（第四轮复核）：user 级经与专用删入口相同的接缝落地。
+	if level == "user" {
+		if err := userEnvDeleteFn(name); err != nil {
+			return err
+		}
+		BroadcastEnvironmentChange()
+		return nil
+	}
+
+	// machine 级（或非法 level）仍走通用路径；计数器先于 getRegKey。
+	realUserRegistryMutationCount.Add(1)
 	rootKey, subKey, err := getRegKey(level)
 	if err != nil {
 		return err
@@ -1266,6 +1441,8 @@ func ReadSystemPath() (string, error) {
 // WriteSystemPath writes the "Path" value to HKLM\...\Environment as REG_EXPAND_SZ.
 // Requires admin privileges.
 func WriteSystemPath(path string) error {
+	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：真实写尝试计数。
+	realUserRegistryMutationCount.Add(1)
 	var key uintptr
 	envName, err := syscall.UTF16PtrFromString(`SYSTEM\CurrentControlSet\Control\Session Manager\Environment`)
 	if err != nil {
@@ -1656,9 +1833,84 @@ func updateShimDirInUserPathLocked(oldDir, newDir string) {
 	}
 }
 
+// userEnvSeam 组：用户环境变量 HKCU\Environment 的三个落盘操作接缝（第四轮复核）。
+// 之前只有枚举走接缝，写/删直连真实注册表 —— manifest_env_validation_test.go 的
+// save/restore 夹具正是由此写真实 HKCU（P0-17 事故类别）。三个操作共用一个接缝
+// 组，供 UseInMemoryUserEnvForTesting 一次整体替换。
+var (
+	// getAllUserEnvVarsFn 是用户环境变量**枚举**的接缝（GetUserEnvVarTrusted 等
+	// 读取路径都经由它），默认真实注册表实现。
+	getAllUserEnvVarsFn = enumerateUserEnvVarsFromRegistry
+	// userEnvWriteFn 是**写**接缝，默认真实注册表实现。
+	userEnvWriteFn = writeUserEnvVarToRegistry
+	// userEnvDeleteFn 是**删**接缝，默认真实注册表实现。
+	userEnvDeleteFn = deleteUserEnvVarFromRegistry
+)
+
+// inMemoryUserEnvStore 是测试注入的内存用户环境后端（map + 互斥锁）。
+// 三个方法与接缝函数的签名一一对应。
+type inMemoryUserEnvStore struct {
+	mu   sync.Mutex
+	vars map[string]string
+}
+
+func (s *inMemoryUserEnvStore) enumerate() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.vars))
+	for k, v := range s.vars {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *inMemoryUserEnvStore) write(name, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vars[name] = value
+	return nil
+}
+
+func (s *inMemoryUserEnvStore) del(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.vars, name)
+	return nil
+}
+
+// UseInMemoryUserEnvForTesting 用给定映射替换 HKCU\Environment 的枚举、写与删
+// （返回还原函数）。**仅供测试**。
+//
+// 与 PATH 的内存后端同一动机（第四轮复核）：写真实注册表 + defer 恢复的夹具在
+// 进程被强杀时把测试值永久留在用户环境里。枚举/读/写/删全部落在内存映射上之后：
+//   - profile export 白名单守卫（internal/cli）只需注入映射，无需先写真实变量；
+//   - manifest_env_validation_test.go（X-08 值校验契约）在 TestMain 的包级后端上
+//     运行，真实注册表零接触 —— 「校验先于任何注册表访问」的断言语义不变
+//     （值若被写入会出现在内存后端里，assertNoWrite 依然能抓住）。
+//
+// 还原语义是「还原到安装前的接缝值」，支持与 TestMain 包级后端的正确嵌套。
+func UseInMemoryUserEnvForTesting(vars map[string]string) (restore func()) {
+	store := &inMemoryUserEnvStore{vars: make(map[string]string, len(vars))}
+	for k, v := range vars {
+		store.vars[k] = v
+	}
+	prevEnum, prevWrite, prevDelete := getAllUserEnvVarsFn, userEnvWriteFn, userEnvDeleteFn
+	getAllUserEnvVarsFn = store.enumerate
+	userEnvWriteFn = store.write
+	userEnvDeleteFn = store.del
+	return func() {
+		getAllUserEnvVarsFn, userEnvWriteFn, userEnvDeleteFn = prevEnum, prevWrite, prevDelete
+	}
+}
+
 // GetAllUserEnvVars enumerates all user-level environment variables
 // from HKCU\Environment and returns them as a map[string]string.
 func GetAllUserEnvVars() map[string]string {
+	return getAllUserEnvVarsFn()
+}
+
+// enumerateUserEnvVarsFromRegistry 是真实的注册表枚举实现。
+func enumerateUserEnvVarsFromRegistry() map[string]string {
 	result := make(map[string]string)
 
 	var key uintptr

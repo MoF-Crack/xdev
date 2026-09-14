@@ -244,6 +244,71 @@ CI 出口不受限）；③ `mode=branch` 下 PR 创建权限；④ 填充后 `T
 **验证（3 轮连续全量 + 200ms 宿主观测器 2596 次采样）**：`FAIL=0 / 阻塞报警=0 / 瞬时降级=0`（三轮一致）；观测器显示 `config.yaml` 与 `plugins` 指纹**全程零变化**；用户真实 `GOROOT` 保持为空（票 01 的设计状态）。
 **遗留（新增待办，非阻塞）**：把 env PATH / gui InitConfig / cli JAVA_HOME 这几处"故意写真实环境"的测试也改成接缝注入或加崩溃日志（SIGKILL 残留风险）；本轮只修了已被实测触发的 GOROOT 一处，其余如实登记。
 
+## Comments（Batch 5 追加 #8 — 第五轮：#7 遗留清单全量根除 + 包级防污染闸门，2026-09-14）
+
+上一条登记的遗留清单**全部清零**，并把防护从"逐用例自律"升级为"包级不变量"。除登记的 3 处外，复扫又揪出
+**4 处**漏网写点与 **2 个真实缺陷**（其中一处是我第一轮复扫被 `Select-Object -First 15` 截断输出坑掉的——闸门替我抓住了它）。
+
+### 改造清单（7 个写点全部接缝化 / 内存化）
+
+| # | 写点 | 改造 |
+|---|---|---|
+| 1 | `internal/cli/profile_export_whitelist_test.go`（真实写 JAVA_HOME/MY_SECRET） | 注入 `env.UseInMemoryUserEnvForTesting({JAVA_HOME, MY_SECRET})`；断言口径改为"注入映射里非白名单个数"（与宿主状态无关，任何机器确定值）；删除 save/restore 夹具 |
+| 2 | `internal/gui/app_initconfig_test.go`（InitConfig 追加真实 PATH） | 内存 PATH 后端；断言反而变强（直接验证 current/xdev 被追加）+ 新增"真实 PATH 与切换前逐字符一致"宿主断言（第一版断言读错侧被自己的用例抓到后修正） |
+| 3 | `internal/env/win_path_test.go` + `path_rmw_test.go`（真实 PATH RMW） | `saveUserPath` 只读种子 + 内存后端；`UseInMemoryUserPathForTesting` 还原语义改**还原前值**（原硬编码回真实实现——TestMain 包级后端下嵌套安装会互相撕掉） |
+| 4 | `internal/env/manifest_env_validation_test.go`（X-08 值校验契约，整族写真实 HKCU） | env 变量**三操作接缝组** `getAllUserEnvVarsFn`/`userEnvWriteFn`/`userEnvDeleteFn`（此前只有枚举走接缝）；TestMain 包级后端种子=真实快照，save/restore 保留为第二道保险，`assertNoWrite` 语义不变（值若被写入会出现在内存里，一样抓住） |
+| 5 | `internal/env/regenum_test.go`（P0-07/N-10 守卫，写 300 字符名 + 70KB 值） | R1/R2 默认在内存后端上验证接缝层；R3（`EnumEnvVars` 真身 RegEnumValueW 缓冲重建**必须**真实数据驱动）默认显式 skip + 文档化，`XMDEV_ALLOW_REAL_REGISTRY_TESTS=1` 全量真身（已实跑：绿 + 零残留） |
+| 6 | **缺陷**：`SetEnvVar`/`DeleteEnvVar` user 级**直写注册表**（自带校验集，绕过全部接缝=闸门缺口） | user 级路由经 `userEnvWriteFn`/`userEnvDeleteFn`（落盘语义零变化）；machine/非法级保留通用路径 |
+| 7 | `internal/testkit/hostsnapshot/hostsnapshot_test.go` `TestCapture_DetectsUserEnvWrite`（守卫自检写真实 GOROOT——残留=用户 Go 工具链直接坏） | 改命名空间探针 `XMDEV_HOSTSNAPSHOT_PROBE` + 内存接缝读写；Capture+Diff 检测语义逐字不变 |
+
+### 新发现缺陷：`GetUserEnvVarsBatch` 白名单过滤（改造 7 的过程中踩中）
+
+批量读取对**调用方显式给出的名单**做白名单过滤——非白名单名被**静默丢弃**，与"按名单读取"的契约矛盾
+（非 Windows 桩从不过滤，两平台行为不一致即佐证）。hostsnapshot 自检的命名空间探针名会因此完全失明。
+唯一生产调用方 `DefaultOptions` 只传白名单名 → 移除过滤对生产行为零影响。守卫：
+`TestGetUserEnvVarsBatch_ReturnsExplicitlyRequestedNonWhitelistedNames`（红探针：恢复过滤即红，实测）。
+
+### 包级防污染闸门（P0-17 事故类的结构性根治）
+
+`internal/env/userenv_hermetic_test.go`（全包唯一 TestMain）：
+- 为整个测试二进制安装**双内存后端**（PATH + 用户环境变量，种子=启动时真实注册表快照）——任何用例（含未来新增）从结构上写不到真实 HKCU；
+- 每个真实注册表写/删函数入口埋 `realUserRegistryMutationCount`（**尝试即计数**，先于任何注册表访问——M-2 长度拒绝/编码失败/删不存在值都算）；TestMain 跑完断言 `增量 == expectedRealRegistryMutationCount`（守卫用零落盘尝试声明：超长 PATH、NUL 值、删确认不存在的探针）→ 任何未声明的真实写/删尝试**整包失败**，无论发生在哪个用例、是否又"恢复"了；
+- 逃生口 `XMDEV_ALLOW_REAL_REGISTRY_TESTS=1`：停用内存后端与计数断言，供真实机件集成测试（regenum R3 等）——已实跑通过且零残留；CI runner 是一次性环境，未来加 CI 测试 job 可设以换取全量真身覆盖；
+- K2（锁降级守卫）重写为**锁路径接缝注入**（原靠 `t.Setenv("USERPROFILE", <file>)`，包级后端下锁路径已指向临时目录，必须自己控制接缝才能确定性触发）。
+
+### 守卫与红探针（先红后绿，全部实测）
+
+| 守卫 | 钉死的不变量 | 红证据 |
+|---|---|---|
+| `TestUserEnvSeam_WriteAndDeleteNeverTouchRealRegistry` | trusted 写/删经接缝，真实注册表零接触（真实枚举里出现探针=红） | ①写接缝绕过：守卫在可见性断言红 + TestMain 计数违规 + 真实 HKCU 出现探针（已 `reg delete` 清理并枚举验证）；②删接缝绕过：守卫在"删除后探针应从内存后端消失"红 + 计数违规 + **真实注册表零残留**（探针设计的安全性同时得到实证） |
+| `TestUserPathSeam_RealWriterCountsAttemptBeforeRegistry` | PATH 真身入口埋点先于注册表访问（40000 字符被 M-2 拒=零落盘尝试） | 移除埋点：delta=0 红 |
+| `TestUserEnvSeam_RealWritersCountAttemptBeforeRegistry` | env 写/删真身入口埋点（NUL 值编码失败 / 删不存在值=零落盘尝试） | 移除埋点：delta=0 红 |
+| `TestGenericEnvVarAPIs_RouteUserLevelThroughSeam` | SetEnvVar/DeleteEnvVar user 级经接缝 | 撤销路由：红 + 真实 HKCU 出现探针（已清理验证） |
+| `TestGetUserEnvVarsBatch_...` | 批量读取返回显式名单 | 恢复过滤：`ok=false` 红 |
+
+TEMP-RED-PROBE 标记全仓 grep 为零。
+
+### 验证
+
+- gofmt 干净；`go vet ./...` 干净；`GOOS=linux go build ./...` 交叉编译过（env 包大改后确认非 Windows 侧无破坏）；
+- 全仓 `go test ./... -short -count=1`：hostsnapshot 收尾改造前 3 轮全绿（exit 0）；最终态共 5 轮 —— A/C/D/E 四轮 exit 0，**B 一轮 exit=1 但过滤管道未捕获任何 FAIL/--- 行**（当时未落盘全量日志；紧随其后的 C 轮全绿且宿主终态逐字节一致，无法复现）→ D/E 改为完整日志落盘复跑均绿、非 ok 行仅 3 条良性 `[no test files]`。如实记录：B 轮无日志可考，不据此下"无回归"结论，仅以可复现的 D/E 全量日志为准；
+- 宿主终态（多轮后）：真实 PATH **1301 字节、sha16=8FB6AAB0087E7B4B 与批前逐字节一致**；`GOROOT` 空、`JAVA_HOME` 不变、`MY_SECRET` 从未存在；`XMDEV_*`/`XDEVTEST*` 探针零残留；
+- 逃生口模式（`XMDEV_ALLOW_REAL_REGISTRY_TESTS=1`）整包绿，真实探针随 t.Cleanup 全清（枚举验证零残留）。
+
+### 顺带实证的历史残留（本批之前的旧跑遗留，待用户决策是否清理）
+
+真实用户 PATH 里现存**两条死条目**，指向早已不存在的 `TestInitConfig_NoDeadlock2229425286` 临时目录：
+`PATH[0]=C:\Users\xinyan\AppData\Local\Temp\TestInitConfig_NoDeadlock2229425286\001\shims`（**排在最前**，拖慢每个进程启动）与
+`PATH[35]=...\001\current\xdev`。这正是 #7 里"gui 测试注释有清理残留痕迹"的实锤——改造前的强杀/提前退出留下的。
+批前批后 PATH 逐字节一致（1301 字节）证明**不是本批产物**；是否清理由用户定夺（动真实 PATH 属宿主手术，不随本提交）。
+
+### 遗留记录（非阻塞）
+
+- R1/R2（300 字符值名缓冲重建）的真身健壮性在默认防污染模式下不再被驱动——由逃生口模式覆盖；若未来加 CI 测试 job，runner 上设 `XMDEV_ALLOW_REAL_REGISTRY_TESTS=1` 即可常态全量覆盖（一次性环境无宿主安全顾虑）；
+- internal/cli、internal/gui 的测试二进制**不经过** env 包的 TestMain（接缝保持生产默认值）——它们的宿主安全仍由 hostsnapshot 守卫（RunWithPinnedHome/RunWithHostSnapshot）承担；若未来需要同强度闸门，可各自加 TestMain + `UseInMemory*ForTesting`；
+- **既有观察（本批只取证不修）**：`gofmt -l` 扩到 internal/gui、internal/cli 时列出 27 个**本批未触碰**的文件（如 `drive_prompt.go` 的多空格对齐漂移，均为早前批次手工格式遗留）。本批文件全部格式干净；这 27 个建议另起一个纯格式化 hygiene 提交（`gofmt -w` 机械改动），不混入本批 diff。
+
+
 
 ## Comments（Batch 5 追加 #6 — 第二轮回归+安全复核，2026-09-13）
 

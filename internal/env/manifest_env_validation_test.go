@@ -20,10 +20,13 @@
 //	  - 管理树根**未知**时的保守放行（WARN 日志，不拒绝；见
 //	    TestSetUserEnvVarTrusted_ConservativeWhenRootUnknown）。
 //
-// 这些测试写真实 HKCU\Environment，因此全部走 save/restore + t.Cleanup
-// （参考 win_path_test.go 的 saveUserPath/restoreUserPath 与
-// goroot_cleanup_test.go 的模式），绝不污染用户真实环境变量；测试结束主机
-// 状态与开始前完全一致（hostsnapshot 守卫）。
+// 这些用例原先写真实 HKCU\Environment（save/restore + t.Cleanup 夹具）。第四轮
+// 复核（P0-17 事故类别根除）后：userenv_hermetic_test.go 的 TestMain 为整包安装
+// 内存用户环境后端（种子 = 启动时的真实 HKCU 快照），SetUserEnvVarTrusted /
+// DeleteUserEnvVarTrusted 经 userEnvWriteFn / userEnvDeleteFn 接缝全部落在内存
+// 映射上 —— 强杀/panic 也不可能把测试值留在用户环境里。本文件的 save/restore
+// 夹具保留作为用例内的第二道保险（断言语义不变：assertNoWrite 验证「校验先于
+// 任何落盘尝试」—— 值若被写入会出现在内存后端里，一样能抓住）。
 package env
 
 import (

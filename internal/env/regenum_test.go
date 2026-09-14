@@ -9,9 +9,17 @@
 // Windows shim execution. EnumEnvVars passed the wrong byte size
 // (len(buf) instead of len(buf)*2) and silently broke the whole
 // enumeration on values larger than the buffer.
+//
+// 第四轮复核后的双模式说明：userenv_hermetic_test.go 的 TestMain 默认为整包安装
+// 内存用户环境后端，本文件的探针写入落在内存里 —— R1/R2 默认验证的是接缝层与
+// 内存后端的长名字处理；真实 RegEnumValueW 缓冲区增长路径（P0-07 的 panic 修复、
+// N-10 的缓冲重建）只有在 XMDEV_ALLOW_REAL_REGISTRY_TESTS=1（真实后端，探针写入
+// 真实注册表并随 t.Cleanup 清理）时才被完整驱动。CI runner 是一次性环境，若未来
+// 加 CI 测试 job 可设置该变量换取全量真身覆盖；开发机默认保持宿主零接触。
 package env
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -68,7 +76,17 @@ func TestGetAllUserEnvVars_Exactly256_TruncatedNotPanic(t *testing.T) {
 // the EnumEnvVars enumeration — the value is returned whole and the rest
 // of the enumeration survives (a small marker proves the list is not
 // cut short).
+//
+// 只能在真实注册表后端下运行：EnumEnvVars 直连 RegEnumValueW（不走
+// getAllUserEnvVarsFn 接缝），N-10 的缓冲重建逻辑必须由**真实的大值**驱动；
+// 而默认防污染模式下探针写入落在内存后端里，真实注册表读不到 —— 硬跑必然
+// 假红。因此默认模式显式跳过（不是静默通过），以 XMDEV_ALLOW_REAL_REGISTRY_TESTS=1
+// 运行时写入真实注册表（带 t.Cleanup 清理）并全量验证。
 func TestEnumEnvVars_LargeValueData(t *testing.T) {
+	if os.Getenv("XMDEV_ALLOW_REAL_REGISTRY_TESTS") == "" {
+		t.Skip("EnumEnvVars 真身路径（RegEnumValueW 缓冲重建，N-10）需要真实注册表数据；默认宿主零接触模式下跳过。以 XMDEV_ALLOW_REAL_REGISTRY_TESTS=1 运行以执行完整验证")
+	}
+
 	bigValue := strings.Repeat("C", 70000) // 70,000 chars ≈ 140 KB UTF-16
 	setLongTestVar(t, "XDEVTESTREGENUMBIG", bigValue)
 	setLongTestVar(t, "XDEVTESTREGENUMSMALL", "small-marker")

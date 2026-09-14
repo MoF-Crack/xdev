@@ -51,12 +51,31 @@ func RemoveAllCurrentPaths(currentDir string) error {
 
 // ReadUserPath is a no-op on non-Windows platforms.
 func ReadUserPath() (string, error) {
+	if otherInMemoryUserPath != nil {
+		return *otherInMemoryUserPath, nil
+	}
 	return "", nil
 }
 
 // WriteUserPath is a no-op on non-Windows platforms.
 func WriteUserPath(path string) error {
+	if otherInMemoryUserPath != nil {
+		*otherInMemoryUserPath = path
+	}
 	return nil
+}
+
+// otherInMemoryUserPath 与 Windows 侧 UseInMemoryUserPathForTesting 对应：非 Windows
+// 上 PATH 本身是 no-op，但跨平台测试（如 gui 的 InitConfig 守卫）仍需要同名钩子才能编译。
+var otherInMemoryUserPath *string
+
+// UseInMemoryUserPathForTesting 见 Windows 侧实现；非 Windows 上 PATH 读写真身就是
+// no-op，这里只提供一个可断言的内存槽位，保证同一份测试在两个平台都能编译运行。
+func UseInMemoryUserPathForTesting(initial string) (get func() string, restore func()) {
+	store := initial
+	otherInMemoryUserPath = &store
+	return func() string { return *otherInMemoryUserPath },
+		func() { otherInMemoryUserPath = nil }
 }
 
 // BroadcastEnvironmentChange is a no-op on non-Windows platforms.
@@ -138,9 +157,31 @@ func EnrichFromRegistry(envSlice []string) []string {
 	return envSlice
 }
 
+// otherInMemoryUserEnv 与 Windows 侧的 UseInMemoryUserEnvForTesting 对应：让同一份
+// 跨平台测试能在非 Windows 上编译并断言（返回内存映射而非进程环境）。
+var otherInMemoryUserEnv map[string]string
+
+// UseInMemoryUserEnvForTesting 见 Windows 侧实现；非 Windows 下用给定映射替换
+// "用户环境变量枚举"的结果（本平台没有注册表写入，故无需担心污染）。
+func UseInMemoryUserEnvForTesting(vars map[string]string) (restore func()) {
+	snapshot := make(map[string]string, len(vars))
+	for k, v := range vars {
+		snapshot[k] = v
+	}
+	otherInMemoryUserEnv = snapshot
+	return func() { otherInMemoryUserEnv = nil }
+}
+
 // GetAllUserEnvVars returns all user-level environment variables.
 // On non-Windows platforms it reads from the process environment.
 func GetAllUserEnvVars() map[string]string {
+	if otherInMemoryUserEnv != nil {
+		out := make(map[string]string, len(otherInMemoryUserEnv))
+		for k, v := range otherInMemoryUserEnv {
+			out[k] = v
+		}
+		return out
+	}
 	result := make(map[string]string)
 	for _, pair := range os.Environ() {
 		idx := strings.Index(pair, "=")

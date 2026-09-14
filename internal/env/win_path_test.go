@@ -113,23 +113,30 @@ func TestToolBinPaths_Unknown(t *testing.T) {
 }
 
 // ---- CleanupUserPath tests ----
-// These tests save and restore the original user PATH to avoid side effects.
+//
+// 第四轮复核改造：这些用例原先直接在**开发者真实的用户 PATH** 上 WriteUserPath 再
+// defer 恢复。两个后果：并发跑全量时撞上别的包的宿主机快照窗口（假红）；测试进程被
+// 强杀时恢复不执行，临时目录死条目会**永久留在用户 PATH** 里（影响面比单个 GOROOT 更大）。
+// 现在 saveUserPath 把 PATH 读写切到内存后端：用例逻辑与断言一字未改，宿主零接触。
+// 跨进程锁**保留**（锁文件改到临时目录），因此 TestConcurrentPathRMW_NoLostWrite 的
+// 并发丢写守卫依然有效。
 
 func saveUserPath(t *testing.T) string {
 	t.Helper()
-	path, err := ReadUserPath()
-	if err != nil {
-		t.Fatalf("failed to read user PATH: %v", err)
-	}
-	return path
+	// 只读真实 PATH 作为初始种子（不再写回真实注册表）。
+	seed, _ := readUserPathFromRegistry()
+	_, restore := UseInMemoryUserPathForTesting(seed)
+	t.Cleanup(restore)
+	return seed
 }
 
 func restoreUserPath(t *testing.T, original string) {
 	t.Helper()
-	if err := WriteUserPath(original); err != nil {
-		t.Fatalf("failed to restore user PATH: %v", err)
+	// 内存后端由 saveUserPath 注册的 t.Cleanup 还原；这里只做一次泄漏自检，
+	// 确保用例没有把内存后端遗留给后续用例（顺序相关的隐性依赖）。
+	if inMemoryUserPath == nil {
+		t.Fatal("saveUserPath 的内存后端已被提前还原（用例之间有顺序依赖）")
 	}
-	BroadcastEnvironmentChange()
 }
 
 func TestCleanupUserPath_ShimMode(t *testing.T) {

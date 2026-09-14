@@ -73,13 +73,21 @@ func TestConcurrentPathRMW_NoLostWrite(t *testing.T) {
 // K2: when the lock location cannot be created, withUserPathLock must
 // degrade to the unprotected call AND leave a diagnosable WARN log.
 func TestWithUserPathLock_DegradesWithLog(t *testing.T) {
-	// Point HOME at an existing FILE — MkdirAll(<file>\.xdev\.locks)
-	// fails deterministically.
+	// 直接注入一个「不可创建」的锁路径：父目录链穿过一个**已存在的文件**
+	// （<file>\.xdev\.locks），AcquireFileLock 的 MkdirAll 必然失败。
+	// 第四轮复核改造：原先靠 t.Setenv("USERPROFILE", <file>) 让
+	// defaultUserPathLockPath 间接撞上该文件 —— 但 TestMain 现在为整包安装
+	// 内存 PATH 后端（锁路径已指向临时目录，USERPROFILE 不再参与），用例必须
+	// 自己控制锁路径接缝才能确定性地触发降级。
 	notADir := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(notADir, []byte("file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("USERPROFILE", notADir)
+	prevLockFn := userPathLockPathFn
+	userPathLockPathFn = func() (string, error) {
+		return filepath.Join(notADir, ".xdev", ".locks", "userpath.lock"), nil
+	}
+	t.Cleanup(func() { userPathLockPathFn = prevLockFn })
 
 	var logBuf bytes.Buffer
 	log.SetOutput(&logBuf)
