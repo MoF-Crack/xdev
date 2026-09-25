@@ -339,6 +339,39 @@ TEMP-RED-PROBE 标记全仓 grep 为零。
 
 
 
+## Comments（Batch 6 追加 #7 — 第六轮专项审计：数据线 5 缺陷修复 + 端态要求登记，2026-09-25）
+
+对 fill→sign→verify 全链做第六轮对抗审计（四路并行 + 人工复核），发现数据线在
+**运行时序**上有一个 P0 级正确性缺陷（此前五轮全部漏检——它只在「真实执行
+build→fill→sign 工序」时发作，单测因测试二进制不嵌清单而构造不出）：
+
+| # | 缺陷 | 等级 | 修复（commit f08ff07） |
+|---|---|---|---|
+| F1 | **sign-manifests 签的是构建前的嵌入快照**：`LoadCatalog` 在已构建二进制里走 embed-first 合并（`*merged = *embeddedTool`），同版本磁盘归档字段被丢弃；工序 build→fill→sign 下，fill 写好的 163 个哈希**永远进不了签名图**——sig 与同 artifact 的填充后 manifest 互不一致，合并后 keyed 构建把本线要修的每个条目拒装（"possible hash tampering"） | **P0** | sign/fill 改用 `LoadToolManifests` 磁盘专用加载（与 `xdev manifest index`、check-urls 同源），签名=磁盘实际内容 |
+| F2 | `TestManifestSignatureCoverage` 永久死代码：按全集收集 unsigned 后立即 Skipf，而 dsh（npm 型）**按设计永远无 .sig**→豁免集永远非空→skip 永远先触发——覆盖断言在数据线完成前后都从未执行，恰好掩盖 F1 | P1 | 无哈希豁免集先于 skip 计算；unsigned 只从「可签」集合收集；重签后守卫真实生效 |
+| F3 | fill/check-urls **初始 URL 零校验**（CheckRedirect 只管第 2..N 跳）：http 明文起点 + 私网/169.254.169.254 全裸奔，失败信息的响应前缀还进公开报告——定时跑在公网 runner 上的巡检=SSRF 探针 | P1 | 两处初始 URL 过 `util.IsSafeExternalURL`（产品统一基线：https 强制、拒私网/保留地址、localhost 例外交给测试夹具） |
+| F6 | 缓存键缺 URL 维度：同 (tool,ver,os,arch,format) 换 URL 时静默哈希旧字节进签名图；工作流 `restore-keys:` 前缀回退构成跨运行投毒链 | P2 | `<dest>.url` sidecar 证明字节来源（不匹配即重下）+ 删 `restore-keys` |
+| F7 | manifest 供给的 name/version/os/arch/format 未做路径安全校验——`os: "../../.."` 可把下载字节写到缓存外、.sig 写到 manifests 外 | P2 | `fillCacheFilename`/`validateManifestPathName` 逐分量校验 + Join 后包含性断言（三处消费点全覆盖） |
+
+另修：F8（`inputs.ref` ${{ }} 内插进 run: 脚本）、F10（fill 报告把未落盘哈希记为
+filled）、F11（WriteSignatureFile 原子化）、isAllZeroHex 收敛到 util.IsAllZeroHash。
+**工作流信任边界（F4/P1）重构**：ref 只进 `ref/` 子目录作数据，代码一律取
+github.sha 构建——任意 ref（含 fork `refs/pull/N/head`）的代码不再携带私钥运行。
+
+**端态要求（F5 登记，数据线完成后必须回来翻转）**：两个生产调用方把
+`AllowPlaceholderTOFU` 派生为「哈希为空/占位」——L-10 拒绝门在 keyed 构建下对空哈希
+条目恒跳过（TOFU 兜底）。这是数据线未完成的**有意过渡策略**（否则 keyed 发布直接
+拒装 17/52 工具）；已用 `TestPlaceholderTOFU_TransitionalPolicy` 钉死两端语义（过渡
+放行 + 端态可达）。**本线 fill+sign 落地后，installer.go/app_install.go 两个调用方
+应改为 false，让 L-10 门真正生效；届时该测试的「transitional」子测试必须同步翻转。**
+
+新守卫：`internal/cli/fill_round6_guard_test.go`（F3×3/F6/F7×2/F10）+ 既有 4 处
+PreviewCustomToolVersions 无关；`internal/downloader/placeholder_tofu_policy_test.go`。
+全门：gofmt/build/vet/linux build + `go test ./... -short` 30 包 + vitest 236 +
+vite build + e2e 21/21 全绿。
+
+
+
 ## 内容
 
 1. `xdev manifest fill-sha256` 补全 **163** 个空 SHA256（复核实测精确数；go/node 的 linux/darwin 条目需真实下载计算哈希）。
