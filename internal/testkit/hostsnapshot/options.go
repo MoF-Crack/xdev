@@ -43,6 +43,11 @@ func DefaultOptions() Options {
 	for k := range util.AllowedEnvVarNames {
 		keys = append(keys, k)
 	}
+	// 第六轮审计 P2-5：AllowedEnvVarNames 刻意不含 "Path"（它在受保护清单里），
+	// 但快照必须指纹 HKCU\Environment\Path——历史上真实 PATH 污染事故
+	// （TestInitConfig_NoDeadlock 死条目）正是落在这条变量上；不追踪的话
+	// cli/gui/installer 等包的测试写真实 PATH 时两个守卫都看不见。
+	keys = append(keys, "Path")
 	sort.Strings(keys)
 
 	temp := os.TempDir()

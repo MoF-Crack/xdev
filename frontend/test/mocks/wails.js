@@ -3,7 +3,7 @@ const defaultApp = {
   GetLastSelection: async () => ({}),
   IsInitialized: async () => false,
   ListCustomTools: async () => [],
-  PreviewCustomToolVersions: async () => ['v1.0.0'],
+  PreviewCustomToolVersions: async () => ({ success: true, message: '', versions: ['v1.0.0'] }),
   AddCustomTool: async () => ({ success: true, message: 'added', versions: ['v1.0.0'] }),
   RemoveCustomTool: async () => {},
 };
@@ -193,7 +193,8 @@ export function createInitializedWailsBrowserMocks() {
     DestroyRemoteInstance: async (...args) => { window.__wailsCalls.DestroyRemoteInstance.push(args); },
     GetAboutInfo: async () => ({ appName: 'XDev', version: '1.0.0', buildDate: 'today', goVersion: '1.24', wailsVersion: '2.9', platform: 'windows', arch: 'amd64', repoURL: 'https://example.test/repo', license: 'MIT' }),
     ListCustomTools: async () => [],
-    PreviewCustomToolVersions: async (...args) => { window.__wailsCalls.PreviewCustomToolVersions.push(args); return ['v1.0.0', 'v2.0.0']; },
+    // F-2：Go 契约已改为 {success, message, versions}（失败可携带原因直达 UI）。
+    PreviewCustomToolVersions: async (...args) => { window.__wailsCalls.PreviewCustomToolVersions.push(args); return { success: true, message: '', versions: ['v1.0.0', 'v2.0.0'] }; },
     AddCustomTool: async (...args) => { window.__wailsCalls.AddCustomTool.push(args); return { success: true, message: 'added', versions: ['v1.0.0'] }; },
     RemoveCustomTool: async (...args) => { window.__wailsCalls.RemoveCustomTool.push(args); },
     CheckToolDependencies: async (name) => (name === 'node' ? [{ tool: 'npm', requiredVersion: '>=9.0.0', currentVersion: '10.9.0', satisfied: true, reason: '', installPath: '' }] : []),

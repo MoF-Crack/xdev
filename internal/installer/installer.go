@@ -1491,7 +1491,11 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 		log.Printf("[install] Rolling back %d env var writes due to failure", len(written))
 		for _, name := range written {
 			if orig, ok := originals[name]; ok {
-				if err := env.SetUserEnvVarTrusted(name, orig); err != nil {
+				// P2-4（第六轮审计）：回滚必须用 Restore 变体——原值先于 xdev 存在
+				//（用户自己的 GOROOT=C:\Go / 含 %VAR% 的原值），对回滚值复跑 X-08
+				// 写时校验会拒绝恢复，导致「安装失败 + manifest 值留驻 + 用户原值
+				// 永久丢失」的更坏终态。
+				if err := env.SetUserEnvVarRestore(name, orig); err != nil {
 					log.Printf("[install] WARNING: failed to rollback env var %s: %v", name, err)
 				}
 			} else {
@@ -1690,8 +1694,16 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 			// Security (M-1): Clean up user-level environment variables (JAVA_HOME, GOROOT, etc.)
 			// that were set during Activate. These point to the now-deleted installation
 			// and would cause errors if left in the registry.
+			//
+			// P2-3（第六轮审计）：removeUserEnvVars 的删除不广播 WM_SETTINGCHANGE——
+			// RemoveCurrentBinPaths 自带广播，但注册表环境变量的删除没有；Explorer
+			// 派生的新终端会继续持有已删除的 JAVA_HOME/GOROOT（正是 goroot_cleanup
+			// 注释里描述的陈旧值效应）。本分支是 Uninstall 中唯一的环境变量删除点，
+			// 在分支末尾广播一次覆盖 env 删除与（可能的）direct 模式 PATH 清理。
+			envTouched := false
 			if !i.noEnvWrite {
 				i.removeUserEnvVars(p)
+				envTouched = true
 			}
 			// direct 模式：从 PATH 中移除 current/<tool> 的 bin 子目录
 			if i.cfg.GetPathMode() == "direct" {
@@ -1702,6 +1714,10 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 						log.Printf("[install] WARNING: failed to remove current bin paths from PATH: %v", err)
 					}
 				}
+			}
+			if envTouched {
+				env.BroadcastEnvironmentChange()
+				log.Printf("[install] Broadcast environment change after %s env cleanup", p.Name())
 			}
 		}
 	}

@@ -106,6 +106,12 @@ func SetUserEnvVarTrusted(name, value string) error {
 	return SetUserEnvVar(name, value)
 }
 
+// SetUserEnvVarRestore is not supported on non-Windows platforms（回滚与写入
+// 同一语义：非 Windows 上持久环境变量一律不支持，错误信息一致）。
+func SetUserEnvVarRestore(name, value string) error {
+	return SetUserEnvVar(name, value)
+}
+
 // GetUserEnvVar reads from the process environment on non-Windows platforms.
 func GetUserEnvVar(name string) (string, error) {
 	return os.Getenv(name), nil

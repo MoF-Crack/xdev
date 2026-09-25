@@ -672,6 +672,24 @@ func SetUserEnvVarTrusted(name, value string) error {
 	return userEnvWriteFn(name, value)
 }
 
+// SetUserEnvVarRestore（第六轮审计 P2-4）仅供安装失败的回滚路径使用：把此前
+// 读到的**原值**放回注册表。原值先于 xdev 存在（用户自己的配置），而 X-08 的
+// 值校验（%VAR% 引用白名单、路径型变量必须落在受管树内）约束的是**本次安装
+// 试图写入的新值**——对回滚值复跑会把用户原有的 GOROOT=C:\Go、含 %VAR% 引用
+// 或目录外的原值判为非法：回滚被拒 → 安装报失败但 manifest 值留在注册表 →
+// 用户原值永久丢失（比安装失败更坏的状态）。名字校验保留（回滚的名字来自
+// 读取成功的真实键）；值只保留 null 防御。写入经 userEnvWriteFn（防污染闸门
+// 的计数与内存后端对回滚同样生效）。
+func SetUserEnvVarRestore(name, value string) error {
+	if err := util.ValidateEnvVarName(name); err != nil {
+		return fmt.Errorf("refusing to restore env var: %w", err)
+	}
+	if strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("env var %q restore value contains null bytes", name)
+	}
+	return userEnvWriteFn(name, value)
+}
+
 // writeUserEnvVarToRegistry 是真实 HKCU\Environment 写入实现（X-08 校验已在
 // SetUserEnvVarTrusted 完成；这里只负责落盘，供接缝默认值与人工排查使用）。
 func writeUserEnvVarToRegistry(name, value string) error {
@@ -1050,11 +1068,24 @@ func SetEnvVar(name, value, level string) error {
 		// PATH is routed through the dedicated writers, which apply the
 		// 32,767-char registry limit and the cross-process RMW lock —
 		// never the generic value writer.
+		//
+		// P2-3（第六轮审计）：此处此前写后不广播——GUI PATH 编辑器与
+		// CleanEnvVarPath 都经此分支落盘，Explorer 新开的终端会继续继承
+		// 旧 PATH（GOROOT 清理的注释里描述的正是同一效应）。写成功即广播，
+		// 与本函数其余两个写分支对齐。
 		switch level {
 		case "user":
-			return withUserPathLock(func() error { return WriteUserPath(value) })
+			if err := withUserPathLock(func() error { return WriteUserPath(value) }); err != nil {
+				return err
+			}
+			BroadcastEnvironmentChange()
+			return nil
 		case "machine":
-			return WriteSystemPath(value)
+			if err := WriteSystemPath(value); err != nil {
+				return err
+			}
+			BroadcastEnvironmentChange()
+			return nil
 		default:
 			return fmt.Errorf("unsupported environment variable level %q", level)
 		}

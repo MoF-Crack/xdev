@@ -82,10 +82,16 @@ const stepOneHeading = ref(null), stepTwoHeading = ref(null), stepThreeHeading =
 const loadErrorElement = ref(null), emptyDrivesElement = ref(null), lastSelection = ref({});
 const progressSteps = computed(() => [t('setup.step_location'), t('setup.step_review'), t('setup.step_complete')]);
 const installBase = computed(() => customPath.value || (selectedDrive.value ? `${selectedDrive.value}\\XDev` : ''));
+// F-3（前端复审，显示层）：分隔符必须与所选路径风格一致——自定义路径（如
+// /home/u/xdev）在 step-2 预览里被拼成 \downloads 属于 Windows 假设泄漏；
+// Go 侧 InitConfig 用原生 filepath.Join，这里对齐（与已修复的 exportProfile
+// 同型问题，仅影响预览不破坏数据）。
+const pathSep = computed(() => (installBase.value.includes('\\') ? '\\' : '/'));
+const joinBase = (sub) => `${installBase.value}${pathSep.value}${sub}`;
 const directories = computed(() => [
-  [t('setup.base_dir'), installBase.value], [t('setup.downloads'), `${installBase.value}\\downloads`],
-  [t('setup.installations'), `${installBase.value}\\install`], [t('setup.shims'), `${installBase.value}\\shims`],
-  [t('setup.cache'), `${installBase.value}\\cache`],
+  [t('setup.base_dir'), installBase.value], [t('setup.downloads'), joinBase('downloads')],
+  [t('setup.installations'), joinBase('install')], [t('setup.shims'), joinBase('shims')],
+  [t('setup.cache'), joinBase('cache')],
 ].map(([label, path]) => ({ label, path })));
 
 function isRecommended(drive) { return drive.letter !== 'C:' && drive.free > 50 * 1024 ** 3; }

@@ -156,6 +156,10 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
 
   async function migratePackageManager(toolName) {
     const displayName = selectedTool.value?.displayName || toolName;
+    // F-1（前端复审）：G-06 同款入口守卫——迁移是复制型重操作且 Go 侧
+    // MigratePackageManager 无锁无幂等门，连点两次会并行拷贝同一棵树到同一
+    // 目标目录 + 双写环境变量；updatePackageManager 已有同型守卫（见上）。
+    if (pmOperating.value) return;
     pmOperating.value = toolName;
     try {
       await window.go.gui.App.MigratePackageManager(toolName);

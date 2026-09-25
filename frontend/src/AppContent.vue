@@ -1424,9 +1424,17 @@ async function previewCustomToolVersions(formData) {
   customToolSubmitting.value = true;
   customToolPreview.value = [];
   try {
-    customToolPreview.value = await window.go.gui.App.PreviewCustomToolVersions(
+    // F-2（前端复审）：Go 侧契约已改为 {success, message, versions}——
+    // 失败不再被 `|| []` 吞成静默空列表，原因直达 toast。
+    const result = await window.go.gui.App.PreviewCustomToolVersions(
       formData.sourceURL, formData.sourceType, formData.pattern || '',
-    ) || [];
+    );
+    if (result && result.success) {
+      customToolPreview.value = result.versions || [];
+    } else {
+      customToolPreview.value = [];
+      message.error(t('custom_tools.preview_failed') + ': ' + ((result && result.message) || ''));
+    }
   } catch (e) {
     console.error('Preview failed:', e);
     message.error(t('custom_tools.preview_failed') + ': ' + e);

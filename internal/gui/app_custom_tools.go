@@ -91,22 +91,34 @@ func npmPackageFromSource(sourceURL, sourceType string) string {
 }
 
 // PreviewCustomToolVersions discovers available versions from a remote
-// source without writing any manifest.  Returns the version list or nil
-// on error.
-func (a *App) PreviewCustomToolVersions(sourceURL, sourceType, pattern string) []string {
+// source without writing any manifest.  Returns a CustomToolResult whose
+// Success flag distinguishes "source reachable, zero versions" from
+// failure; Message carries the reason on error.
+//
+// F-2（前端复审）：旧签名返回 []string 且所有失败路径都返回 nil——Wails
+// promise 恒 resolve，前端的 catch（preview_failed toast）是死代码：非法
+// URL/格式错误/发现失败一律表现为「Preview 静默无结果」。与同文件
+// AddCustomTool 的 CustomToolResult 契约对齐后，失败可携带原因直达 UI。
+func (a *App) PreviewCustomToolVersions(sourceURL, sourceType, pattern string) *CustomToolResult {
 	if sourceURL == "" {
-		return nil
+		return &CustomToolResult{Success: false, Message: "source URL is required"}
 	}
 	switch sourceType {
 	case "html", "json", "npm":
 		if err := util.IsSafeExternalURL(sourceURL); err != nil {
 			logWarn("[PreviewCustomToolVersions] unsafe URL %q: %v", sourceURL, err)
-			return nil
+			return &CustomToolResult{
+				Success: false,
+				Message: fmt.Sprintf("%s source URL is not safe: %v", sourceType, err),
+			}
 		}
 	case "github":
 		if strings.Contains(sourceURL, "://") || !strings.Contains(sourceURL, "/") {
 			logWarn("[PreviewCustomToolVersions] github source must use owner/repo format, got %q", sourceURL)
-			return nil
+			return &CustomToolResult{
+				Success: false,
+				Message: "GitHub source must use owner/repo format (e.g. golang/go)",
+			}
 		}
 	}
 	if pattern == "" && sourceType == "github" {
@@ -117,9 +129,13 @@ func (a *App) PreviewCustomToolVersions(sourceURL, sourceType, pattern string) [
 	versions, err := remote.DiscoverVersions(context.Background(), rs)
 	if err != nil {
 		logWarn("[PreviewCustomToolVersions] discover failed: %v", err)
-		return nil
+		return &CustomToolResult{
+			Success:  false,
+			Message:  fmt.Sprintf("version discovery failed: %v", err),
+			Versions: nil,
+		}
 	}
-	return versions
+	return &CustomToolResult{Success: true, Versions: versions}
 }
 
 // AddCustomTool discovers versions for a custom tool, generates its

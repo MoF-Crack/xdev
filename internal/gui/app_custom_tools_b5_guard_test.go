@@ -238,7 +238,10 @@ func TestAddCustomTool_NPMPackage_ThreeConstructionPoints(t *testing.T) {
 	// 构造点①：Preview 的发现链路。旧代码 Package 恒空 →
 	// "npm remote: package is required" → 预览永远返回空列表。
 	preview := app.PreviewCustomToolVersions(sourceURL, "npm", "")
-	if len(preview) == 0 {
+	if !preview.Success {
+		t.Fatalf("PreviewCustomToolVersions(npm) 失败（B-07 构造点①）: %s", preview.Message)
+	}
+	if len(preview.Versions) == 0 {
 		t.Fatal("PreviewCustomToolVersions(npm) 未发现任何版本（B-07 构造点①）")
 	}
 

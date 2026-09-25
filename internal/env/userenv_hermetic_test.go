@@ -32,9 +32,16 @@ import (
 
 // TestMain 是 internal/env 测试二进制的宿主安全闸门（全包唯一 TestMain）。
 func TestMain(m *testing.M) {
-	if os.Getenv("XMDEV_ALLOW_REAL_REGISTRY_TESTS") != "" {
-		fmt.Fprintln(os.Stderr, "[env-test] XMDEV_ALLOW_REAL_REGISTRY_TESTS 已设置 — 以真实注册表后端运行（人工集成模式，防污染闸门停用）")
+	// P3-6（第六轮审计）：逃生口必须精确匹配 "=1"（文档语义）。此前用 `!= ""`
+	// 判定——`=0`、`=false` 这类明显想「关闭」的取值会**静默拆除全部防护**
+	//（内存后端 + 计数断言一起停）；fail-safe 方向应是：除显式 "1" 外一律保持
+	// 受保护模式。regenum_test.go 的 skip 判定同语义（== "" 时跳过真实用例）。
+	if os.Getenv("XMDEV_ALLOW_REAL_REGISTRY_TESTS") == "1" {
+		fmt.Fprintln(os.Stderr, "[env-test] XMDEV_ALLOW_REAL_REGISTRY_TESTS=1 — 以真实注册表后端运行（人工集成模式，防污染闸门停用）")
 		os.Exit(m.Run())
+	}
+	if v := os.Getenv("XMDEV_ALLOW_REAL_REGISTRY_TESTS"); v != "" {
+		fmt.Fprintf(os.Stderr, "[env-test] XMDEV_ALLOW_REAL_REGISTRY_TESTS=%q 非法取值（须为 1）—— 防污染闸门保持启用；想跑真实注册表集成测试请显式设为 1\n", v)
 	}
 
 	// 种子：只读真实注册表。内存后端必须先于 m.Run() 安装 —— 计数基线也要在

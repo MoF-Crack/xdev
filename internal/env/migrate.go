@@ -2,6 +2,7 @@ package env
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -91,6 +92,13 @@ func MigrateLegacyDir(legacyDir, newDir string) error {
 	// 需要迁移的子目录（合并模式）
 	mergeDirs := []string{"install", "cache", "downloads", "env"}
 
+	// 第六轮审计（M1）：CopyDir 对不可解析/断链条目的「跳过」必须先于源删除被
+	// 汇总可见（票 09/N-01 同型——app_migration.go 的本地工具迁移已消费
+	// CopyDirReport，此调用点此前仍在用丢弃计数的 CopyDir）。清理/跳过计数在
+	// RemoveAll(legacyDir) 之前落日志：一旦旧目录被删，跳过的内容即不可恢复。
+	totalSkipped := 0
+	totalFiles := 0
+
 	for _, sub := range mergeDirs {
 		srcDir := filepath.Join(legacyDir, sub)
 		dstDir := filepath.Join(newDir, sub)
@@ -116,25 +124,40 @@ func MigrateLegacyDir(legacyDir, newDir string) error {
 			srcPath := filepath.Join(srcDir, entry.Name())
 			dstPath := filepath.Join(dstDir, entry.Name())
 
-			// 检查目标是否已存在同名条目，避免覆盖
+			// 检查目标路径是否已存在同名条目，避免覆盖
 			if _, err := os.Stat(dstPath); err == nil {
 				// 目标已存在，跳过（不覆盖）
 				continue
 			}
 
 			if entry.IsDir() {
-				if err := util.CopyDir(srcPath, dstPath); err != nil {
+				files, skipped, err := util.CopyDirReport(srcPath, dstPath, nil)
+				if err != nil {
 					return fmt.Errorf("failed to copy directory %s to %s: %w", srcPath, dstPath, err)
+				}
+				totalFiles += files
+				if skipped > 0 {
+					totalSkipped += skipped
+					log.Printf("[migrate] WARNING: %s → %s 复制时跳过 %d 个无法解析/断链的条目（详见 [copydir] 日志）——旧目录删除后这些内容不可恢复", srcPath, dstPath, skipped)
 				}
 			} else {
 				if err := util.CopyFile(srcPath, dstPath); err != nil {
 					return fmt.Errorf("failed to copy file %s to %s: %w", srcPath, dstPath, err)
 				}
+				totalFiles++
 			}
 		}
 	}
 
 	// 删除旧目录
+	//
+	// M1：若存在被跳过的条目，此处不再无条件删除旧目录——断链条目本身虽是死
+	// 指针，但自引用/循环型 junction 的内容可能仍可达；把决定权交给迁移调用方
+	//（GUI 弹窗确认）或至少要求人工清理。返回带哨兵前缀的错误，调用方可以按
+	// 前缀识别并在确认后重跑。
+	if totalSkipped > 0 {
+		return fmt.Errorf("MIGRATE_SKIPPED_ENTRIES: 旧目录 %s 暂不删除——复制阶段跳过了 %d 个无法解析/断链的条目（共迁移 %d 个文件）；请检查 [copydir] 日志确认这些条目无需保留，处理完后重跑迁移", legacyDir, totalSkipped, totalFiles)
+	}
 	if err := os.RemoveAll(legacyDir); err != nil {
 		// 删除失败不影响迁移结果，仅记录
 		// 可能有文件被锁定

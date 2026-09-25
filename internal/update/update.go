@@ -22,7 +22,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/remote"
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -154,8 +156,33 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
+	// P2-A（第六轮审计 shim 链）：publish 后立即刷新 shims/ 下现存的分发器副本。
+	// replaceBinaryWindows 走 rename 舞步发布新 inode——工具 Activate 时刻硬链接
+	// 的旧分发器仍持有旧 inode（缺 PATH 透传/别名修复，遮蔽系统真实工具）。
+	// 此前刷新只挂在 GUI domReady 的 EnsureSelfInstalled 上：`xdev self update`、
+	// TUI 自检更新、GUI 手动更新全部不刷新，CLI-only 主机永久滞后；GUI 主机
+	// 也要等下一次启动才收敛。exe 此刻指向新二进制（rename 已完成），作为刷新
+	// 源是完整镜像。刷新失败只告警——更新本体已成功，刷新由下次启动兜底。
+	refreshShimDispatchers(exe)
+
 	log.Printf("[update] Successfully updated to %s", result.LatestVersion)
 	return nil
+}
+
+// refreshShimDispatchers 把 home 下 shims/ 的现存分发器副本重指到 selfPath。
+// update 包不持有 Config——用 config.ResolveHomeDir()（只读发现）推导默认
+// shims 目录；home 不可解析时静默跳过（GUI 启动时的 EnsureSelfInstalled 会再
+// 兜底一次，见 app.go 的 refreshShimDispatchers）。
+func refreshShimDispatchers(selfPath string) {
+	home := config.ResolveHomeDir()
+	if home == "" {
+		return
+	}
+	shimDir := filepath.Join(home, "shims")
+	refreshed, failed := shim.RefreshDispatchers(shimDir, selfPath)
+	if refreshed > 0 || failed > 0 {
+		log.Printf("[update] shim dispatchers refreshed=%d failed=%d (dir=%s)", refreshed, failed, shimDir)
+	}
 }
 
 // fetchLatestRelease calls the GitHub API to get the latest release.
@@ -223,18 +250,37 @@ func binaryNameInArchive() string {
 // Only a root-level xdev / xdev.exe is accepted (zip-slip: no "..", no dirs).
 func extractUpdateBinary(archivePath, archiveName, destDir string) (string, error) {
 	want := binaryNameInArchive()
-	out := filepath.Join(destDir, ".xdev-update-bin")
+	// 第六轮审计 P2-B（shim 链）：唯名暂存文件（票 31 / P1-24 的既定教训：
+	// 固定 <name> 会被并发写者互相截断）。GUI 自动更新（每次启动 ~2s 触发）与
+	// CLI `xdev self update` 可能同时跑到这里——固定名 .xdev-update-bin 下，
+	// 后写者的 O_TRUNC 截断前者的在途提取，两个 io.Copy 写同一文件后谁先
+	// rename 谁把混合损坏字节发布成 home 主二进制；而损坏的 home 副本无法
+	// 自愈（stale.go probe 失败 → 永久跳过，只有「完全缺失」分支才重建）。
+	// 唯名后各进程写各自的暂存文件，publish 点（rename）保持原子。
+	tmp, err := os.CreateTemp(destDir, ".xdev-update-bin-*")
+	if err != nil {
+		return "", fmt.Errorf("create update staging file: %w", err)
+	}
+	out := tmp.Name()
+	// 提取器以 O_CREATE|O_TRUNC 打开同一路径，这里关闭即可（留空文件无碍）。
+	if err := tmp.Close(); err != nil {
+		os.Remove(out)
+		return "", fmt.Errorf("create update staging file: %w", err)
+	}
 	lower := strings.ToLower(archiveName)
 	switch {
 	case strings.HasSuffix(lower, ".zip"):
 		if err := extractNamedZipMember(archivePath, want, out); err != nil {
+			os.Remove(out)
 			return "", err
 		}
 	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
 		if err := extractNamedTarGzMember(archivePath, want, out); err != nil {
+			os.Remove(out)
 			return "", err
 		}
 	default:
+		os.Remove(out)
 		return "", fmt.Errorf("unsupported update archive %q", archiveName)
 	}
 	return out, nil

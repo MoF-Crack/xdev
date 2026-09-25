@@ -50,7 +50,18 @@ For each <tool>.yaml, this command:
 				return fmt.Errorf("load private key: %w", err)
 			}
 
-			cat, err := manifest.LoadCatalog(manifestsDir)
+			// 第六轮审计 F1（P0）：签名的必须是**磁盘上的当前状态**。
+			//
+			// 旧代码走 manifest.LoadCatalog——在已构建的二进制里它把嵌入清单
+			// （构建时刻的快照，163 个空哈希）作为合并基座，磁盘上同版本的归档
+			// 字段被整体丢弃（manifest.go loadMergedCatalog 的 embed-first 语义）。
+			// 签名数据线的工序是「build → fill（写盘）→ sign（同一二进制）」，
+			// 于是 sign 读到的永远是 fill 之前的嵌入状态：填好的哈希永远签不进去，
+			// 产出的 .sig 与同一 artifact 里的填充后 manifest 互不一致——合并后
+			// keyed 构建会把本数据线要修的每一个条目全部拒装（"possible hash
+			// tampering"）。xdev manifest index 与 check-urls 已用磁盘专用加载器，
+			// 签名端与之对齐：签磁盘上实际存在的内容。
+			tools, err := manifest.LoadToolManifests(manifestsDir)
 			if err != nil {
 				return fmt.Errorf("load manifests: %w", err)
 			}
@@ -65,7 +76,13 @@ For each <tool>.yaml, this command:
 
 			signed := 0
 			skipped := 0
-			for _, tool := range cat.Tools() {
+			for _, tool := range tools {
+				// F7：工具名来自磁盘 manifest（不可信数据），进入 .sig 输出路径前
+				// 必须通过路径安全校验（拒绝分隔符/盘符冒号/".."）。
+				if err := validateManifestPathName(tool.Name); err != nil {
+					fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+					continue
+				}
 				sha256Map, hasHash := manifest.BuildSignatureHashMap(tool)
 
 				if !hasHash {
@@ -162,7 +179,12 @@ modifying any files.`,
 				cacheDir = filepath.Join(os.TempDir(), "xdev-fill-sha256")
 			}
 
-			cat, err := manifest.LoadCatalog(manifestsDir)
+			// 第六轮审计 F1：与 sign-manifests 同因——fill 必须针对**磁盘状态**
+			// 决策（LoadCatalog 的 embed-first 合并会把构建时刻的空哈希快照当成
+			// 基座），否则 CI 工序「build → fill → sign」里 fill 看到的也是
+			// 构建前状态，重跑时会整批重新下载已填好的哈希（依赖缓存兜底），
+			// 且与磁盘加载的签名/巡检命令语义不一致。
+			tools, err := manifest.LoadToolManifests(manifestsDir)
 			if err != nil {
 				return fmt.Errorf("load manifests: %w", err)
 			}
@@ -183,17 +205,22 @@ modifying any files.`,
 			}
 			filteredOut := 0
 
-			for _, tool := range cat.Tools() {
+			for _, tool := range tools {
 				if len(filter) > 0 && !filter[tool.Name] {
 					filteredOut++
 					continue
 				}
 				toolFilled := 0 // per-tool counter to avoid needless YAML rewrites
 				var pending []manifest.ArchiveSHAUpdate
+				// 第六轮审计 F10：记录本工具在 entries 里的起始位置——写回失败时
+				// 须把本轮已登记为 "filled" 的逐条目降级为 "failed"，否则 JSON 报告
+				// 会把「哈希算出来了但没落盘」也记为成功，流水线与 PR 机器消费面
+				// 会把不存在的哈希当成已填充（--allow-partial 下尤甚）。
+				entryStart := len(entries)
 				for vi, v := range tool.VersionList {
 					for ai, a := range v.Archives {
 						// Skip if already has a valid hash
-						if a.SHA256 != "" && !isAllZeroHex(a.SHA256) {
+						if a.SHA256 != "" && !util.IsAllZeroHash(a.SHA256) {
 							totalSkipped++
 							entries = append(entries, fillEntry{
 								Tool: tool.Name, Version: v.Version, OSArch: a.OS + "/" + a.Arch,
@@ -232,8 +259,33 @@ modifying any files.`,
 						}
 
 						// Download and compute hash
-						dest := filepath.Join(cacheDir, fmt.Sprintf("%s-%s-%s-%s.%s",
-							tool.Name, v.Version, a.OS, a.Arch, a.Format))
+						//
+						// 第六轮审计 F7：manifest 的 name/version/os/arch/format 是
+						// **不可信数据**（第三方/手工放置的 manifest 可随意声明），
+						// 直接拼进路径可把下载字节写到缓存目录之外（os: "../../.."）。
+						// 先逐分量做路径安全校验，Join 后再断言仍在缓存目录内。
+						fname, ferr := fillCacheFilename(tool.Name, v.Version, a.OS, a.Arch, a.Format)
+						if ferr != nil {
+							fmt.Fprintf(os.Stderr, "❌ %s@%s %s/%s: %v\n",
+								tool.Name, v.Version, a.OS, a.Arch, ferr)
+							totalFailed++
+							entries = append(entries, fillEntry{
+								Tool: tool.Name, Version: v.Version, OSArch: a.OS + "/" + a.Arch,
+								URL: url, Status: "failed", Error: ferr.Error(),
+							})
+							continue
+						}
+						dest := filepath.Join(cacheDir, fname)
+						if uerr := ensureUnderDir(dest, cacheDir); uerr != nil {
+							fmt.Fprintf(os.Stderr, "❌ %s@%s %s/%s: %v\n",
+								tool.Name, v.Version, a.OS, a.Arch, uerr)
+							totalFailed++
+							entries = append(entries, fillEntry{
+								Tool: tool.Name, Version: v.Version, OSArch: a.OS + "/" + a.Arch,
+								URL: url, Status: "failed", Error: uerr.Error(),
+							})
+							continue
+						}
 
 						hash, err := downloadAndHash(url, dest, a.InstallArgs, a.Format, noCache, retries)
 						if err != nil {
@@ -270,11 +322,22 @@ modifying any files.`,
 				// 最坏文件仅 5% 行保留。那会让"重填 163 个哈希"的 PR 完全不可评审，并把
 				// manifest 里的说明性注释（上游改名依据/A-03 依赖评估/安装策略）一并抹掉。
 				if toolFilled > 0 && !dryRun {
+					// F7：工具名进入 yamlPath 拼接前做路径安全校验（manifest 不可信）。
+					if nerr := validateManifestPathName(tool.Name); nerr != nil {
+						fmt.Fprintf(os.Stderr, "❌ %s: %v\n", tool.Name, nerr)
+						totalFailed++
+						downgradeFilledEntries(entries[entryStart:], nerr.Error())
+						entries = append(entries, fillEntry{Tool: tool.Name, Status: "failed", Error: nerr.Error()})
+						continue
+					}
 					yamlPath := filepath.Join(manifestsDir, tool.Name+".yaml")
 					changed, missed, err := manifest.UpdateArchiveSHA256InFile(yamlPath, pending)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "❌ %s: write failed: %v\n", tool.Name, err)
 						totalFailed++
+						// F10：写回失败 → 本工具已登记的 "filled" 逐条目降级为 "failed"，
+						// 报告不得把未落盘的哈希记为成功。
+						downgradeFilledEntries(entries[entryStart:], "write manifest: "+err.Error())
 						entries = append(entries, fillEntry{
 							Tool: tool.Name, Status: "failed", Error: "write manifest: " + err.Error(),
 						})
@@ -286,6 +349,7 @@ modifying any files.`,
 							changed, strings.Join(missed, "; "))
 						fmt.Fprintf(os.Stderr, "❌ %s: %s\n", tool.Name, detail)
 						totalFailed++
+						downgradeFilledEntries(entries[entryStart:], "write manifest: "+detail)
 						entries = append(entries, fillEntry{Tool: tool.Name, Status: "failed", Error: detail})
 					}
 				}
@@ -349,11 +413,22 @@ func downloadAndHash(url, dest string, installArgs []string, format string, noCa
 	// Check cache（校验通过才复用）
 	if !noCache {
 		if _, err := os.Stat(dest); err == nil {
-			if verr := validateArchiveFile(dest, format); verr == nil {
+			// 第六轮审计 F6：缓存命中必须同时证明「这字节就是从这个 URL 下载的」。
+			// 缓存键只含 tool/version/os/arch/format——同一元组换 URL（上游 yank 重传、
+			// 拼写修正 PR）或跨运行投毒时，旧字节会被静默哈希进**要被签名**的 manifest。
+			// sidecar <dest>.url 记录来源 URL；缺失或不匹配一律视为 miss 重新下载。
+			urlSidecar := dest + ".url"
+			sidecarData, serr := os.ReadFile(urlSidecar)
+			if serr != nil || strings.TrimSpace(string(sidecarData)) != url {
+				log.Printf("[fill] cached %s is from a different URL — re-downloading (cache key lacks URL; F6)", dest)
+				_ = os.Remove(dest)
+				_ = os.Remove(urlSidecar)
+			} else if verr := validateArchiveFile(dest, format); verr == nil {
 				return fileSHA256(dest)
 			} else {
 				log.Printf("[fill] cached %s failed validation (%v) — re-downloading", dest, verr)
 				_ = os.Remove(dest)
+				_ = os.Remove(urlSidecar)
 			}
 		}
 	}
@@ -400,6 +475,16 @@ func downloadAndHashOnce(url, dest string, installArgs []string, format string) 
 	// 下载路径（downloader / update）同一条安全基线：限制重定向次数、拒绝 HTTPS→HTTP 降级、
 	// 每一跳都过 IsSafeExternalURL（开放重定向 SSRF）。此前是裸 http.Client，默认会跟随
 	// 最多 10 跳到任意协议/主机——与既有审计项 H-8/N-6/N-9 的要求不一致。
+	//
+	// 第六轮审计 F3：CheckRedirect 只作用于**重定向目标**（第 2..N 跳），初始 URL 从不经过
+	// 任何校验——http:// 明文起点绕过 H-1 的降级防御，http://169.254.169.254/内网主机把
+	// CI 变成 SSRF 探针（失败信息里的响应前缀还会进 fill-report/step summary）。
+	// 采用产品统一基线 util.IsSafeExternalURL（与 AddCustomTool/TestMirrorConnectivity
+	// 一致）：https 强制（仅 localhost 例外的本地服务语义）、拒绝私网/保留地址、
+	// DNS 失败即 fail-closed。
+	if err := util.IsSafeExternalURL(url); err != nil {
+		return "", fmt.Errorf("fill-sha256 URL is not safe: %v", err)
+	}
 	client := fillHTTPClient()
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -449,6 +534,9 @@ func downloadAndHashOnce(url, dest string, installArgs []string, format string) 
 		os.Remove(dest)
 		return "", err
 	}
+
+	// F6：记录来源 URL sidecar，供缓存复用判定「字节与 URL 对应」。
+	_ = os.WriteFile(dest+".url", []byte(url), 0o644)
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
@@ -574,21 +662,77 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// isAllZeroHex reports whether s is a hex string made up entirely of '0'.
-// It validates that the string is exactly 64 characters (SHA-256 hex length)
-// so that malformed short strings like "0000" are not mistaken for placeholders.
-func isAllZeroHex(s string) bool {
-	s = strings.TrimPrefix(s, "0x")
-	s = strings.TrimPrefix(s, "0X")
-	if len(s) != 64 {
-		return false
-	}
-	for _, c := range s {
-		if c != '0' {
-			return false
+// downgradeFilledEntries（第六轮审计 F10）：写回失败时把本工具已登记为
+// "filled" 的逐条目降级为 "failed"。entries 直接以 slice 引用传入（调用方随后
+// append 的工具级失败条目不受影响——那是新元素）。
+func downgradeFilledEntries(entries []fillEntry, reason string) {
+	for i := range entries {
+		if entries[i].Status == "filled" {
+			entries[i].Status = "failed"
+			entries[i].Error = reason
+			// Hash 保留：报告消费面仍可知道"算出来了但没落盘"的值。
 		}
 	}
-	return true
+}
+
+// fillCacheFilename（第六轮审计 F7）：把 manifest 供给的五个分量拼成缓存文件名，
+// 任何分量含路径分隔符、盘符冒号、".." 或为空都拒绝——manifest 是不可信数据，
+// 未校验的拼接可把下载字节写到缓存目录之外。
+func fillCacheFilename(tool, version, osName, arch, format string) (string, error) {
+	components := []struct{ kind, value string }{
+		{"tool name", tool},
+		{"version", version},
+		{"os", osName},
+		{"arch", arch},
+		{"format", format},
+	}
+	for _, c := range components {
+		if strings.TrimSpace(c.value) == "" {
+			return "", fmt.Errorf("manifest %s is empty", c.kind)
+		}
+		if strings.ContainsAny(c.value, `/\:`) {
+			return "", fmt.Errorf("manifest %s %q contains a path separator or drive colon", c.kind, c.value)
+		}
+		if c.value == "." || c.value == ".." || strings.Contains(c.value, "..") {
+			return "", fmt.Errorf("manifest %s %q is not path-safe", c.kind, c.value)
+		}
+	}
+	return fmt.Sprintf("%s-%s-%s-%s.%s", tool, version, osName, arch, format), nil
+}
+
+// ensureUnderDir asserts that path (already Joined) still sits directly under dir —
+// the belt-and-braces containment check behind fillCacheFilename.
+func ensureUnderDir(path, dir string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", path, err)
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", dir, err)
+	}
+	wantPrefix := absDir + string(filepath.Separator)
+	if absPath != absDir && !strings.HasPrefix(absPath, wantPrefix) {
+		return fmt.Errorf("resolved cache path %s escapes cache dir %s", absPath, absDir)
+	}
+	return nil
+}
+
+// validateManifestPathName（第六轮审计 F7）：manifest 供给的工具名进入输出/写回
+// 路径（<name>.yaml.sig、<name>.yaml）前必须通过路径安全校验——LoadToolManifests
+// 对磁盘上手工放置的 yaml 不做任何名字约束，"../x" 一类名字可把 .sig 写到
+// manifests 目录之外。
+func validateManifestPathName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("manifest tool name is empty")
+	}
+	if strings.ContainsAny(name, `/\:`) {
+		return fmt.Errorf("manifest tool name %q contains a path separator or drive colon", name)
+	}
+	if name == "." || name == ".." || strings.Contains(name, "..") {
+		return fmt.Errorf("manifest tool name %q is not path-safe", name)
+	}
+	return nil
 }
 
 // writeManifestYAML 已不再用于 fill 的回写路径（见 UpdateArchiveSHA256InFile 的说明：

@@ -18,6 +18,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 // ManifestSignature represents a signed manifest.
@@ -116,12 +118,17 @@ func VerifySignature(pubKey ed25519.PublicKey, ms *ManifestSignature) bool {
 }
 
 // WriteSignatureFile writes a ManifestSignature to a JSON file.
+//
+// 第六轮审计 F11：.sig 走原子写（util.AtomicWriteFile：temp + rename），与 H-3
+// 的 manifest 原子写同一基线——崩溃/取消中途留下的截断 .sig 会被本地流程当作
+// 可提交产物，截断在签名数据上是不可检测的坏状态（TestEmbeddedSignatures 只在
+// CI 嵌入侧兜底）。
 func WriteSignatureFile(path string, ms *ManifestSignature) error {
 	data, err := json.MarshalIndent(ms, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal signature: %w", err)
 	}
-	return os.WriteFile(path, data, 0o644)
+	return util.AtomicWriteFile(path, data, 0o644)
 }
 
 // ReadSignatureFile reads a ManifestSignature from a JSON file.

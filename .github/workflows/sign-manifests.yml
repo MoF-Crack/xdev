@@ -61,14 +61,27 @@ jobs:
     outputs:
       sha: ${{ steps.base.outputs.sha }}
     steps:
-      - name: Checkout
+      # 第六轮审计 F4（信任边界）：本作业持有 Ed25519 私钥，**绝不能执行
+      # inputs.ref 里的代码**——任意 ref（含 fork 的 refs/pull/N/head）的 Go 源码
+      # 若被构建并在密钥所在进程里运行，等于把根签名密钥交给 ref 作者。
+      # 布局：ref 只进 `ref/` 子目录作为**数据**（manifests/、keys/pub.key）；
+      # 代码一律取 github.sha（workflow_dispatch 时=默认分支 HEAD，即维护者可信面）。
+      - name: Checkout signing ref (data only)
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
+          path: ref
+
+      - name: Checkout trusted code (workflow SHA)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Record base SHA
         id: base
+        working-directory: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
@@ -76,12 +89,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # 第六轮审计 F6b：删除 restore-keys 前缀回退——恶意 ref 运行可以用
+      # 攻击者字节占据 fill-sha256-<hash> 缓存，之后的 main 运行经前缀回退
+      # 命中并把这些字节哈希进 main 的 manifest（再用真密钥签名）。
+      # 只允许精确键命中：键由 manifest 内容哈希派生，ref 数据不同即 miss。
       - name: Cache archives for fill-sha256
         uses: actions/cache@v4
         with:
           path: ~/.cache/xdev-fill-sha256
-          key: fill-sha256-${{ hashFiles('manifests/*.yaml') }}
-          restore-keys: fill-sha256-
+          key: fill-sha256-${{ hashFiles('ref/manifests/*.yaml') }}
 
       - name: Verify signing secrets (hard gate)
         env:
@@ -95,20 +111,21 @@ jobs:
       - name: Report / align trust root
         env:
           XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+          ALIGN_PUBKEY: ${{ inputs.align_pubkey }}
         run: |
-          repo_key=$(tr -d '\r\n' < keys/pub.key)
+          repo_key=$(tr -d '\r\n' < ref/keys/pub.key)
           echo "repo keys/pub.key  = $repo_key"
           echo "CI public key      = $XDEV_SIGNING_PUBLIC_KEY"
           if [ "$repo_key" = "$XDEV_SIGNING_PUBLIC_KEY" ]; then
             echo "::notice::信任根已一致（本地构建与发布产物共用同一把根密钥）"
-          elif [ "${{ inputs.align_pubkey }}" = "true" ]; then
-            printf '%s\n' "$XDEV_SIGNING_PUBLIC_KEY" > keys/pub.key
+          elif [ "$ALIGN_PUBKEY" = "true" ]; then
+            printf '%s\n' "$XDEV_SIGNING_PUBLIC_KEY" > ref/keys/pub.key
             echo "::warning::已把 keys/pub.key 对齐为 CI 公钥（本次变更请一并复核）"
           else
             echo "::warning::仓库 keys/pub.key 与 CI 公钥不一致；本地 keyed 构建将无法验证本作业产出的 .sig（如需对齐请重新触发并勾选 align_pubkey）"
           fi
 
-      - name: Build xdev
+      - name: Build xdev (trusted code only)
         run: go build -o xdev .
 
       - name: fill-sha256 (validated downloads + JSON report)
@@ -116,7 +133,7 @@ jobs:
           ALLOW_PARTIAL: ${{ inputs.allow_partial }}
           TOOLS: ${{ inputs.tools }}
         run: |
-          args=(--manifests-dir manifests --cache-dir "$HOME/.cache/xdev-fill-sha256" --report fill-report.json --retries 2)
+          args=(--manifests-dir ref/manifests --cache-dir "$HOME/.cache/xdev-fill-sha256" --report fill-report.json --retries 2)
           [ -n "$TOOLS" ] && args+=(--tool "$TOOLS")
           [ "$ALLOW_PARTIAL" = "true" ] && args+=(--allow-partial)
           ./xdev fill-sha256 "${args[@]}"
@@ -140,14 +157,14 @@ jobs:
             echo '```'
             echo "### 仍为空的 sha256（每工具计数；npm 型条目属设计如此）"
             echo '```'
-            for f in manifests/*.yaml; do
+            for f in ref/manifests/*.yaml; do
               n=$(grep -cE 'sha256:[[:space:]]*""' "$f" || true)
               if [ "$n" -gt 0 ]; then echo "$(basename "$f"): $n"; fi
             done
             echo '```'
             echo "### 哈希发生变化的既有 URL（必须人工确认后合并）"
             echo '```diff'
-            git diff -U0 -- 'manifests/*.yaml' | grep -E '^[+-][[:space:]]+(url|sha256):' || true
+            git -C ref diff -U0 -- 'manifests/*.yaml' | grep -E '^[+-][[:space:]]+(url|sha256):' || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -159,39 +176,55 @@ jobs:
           trap 'rm -f keys/priv.key' EXIT
           printf '%s\n' "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
           chmod 600 keys/priv.key
-          ./xdev sign-manifests --manifests-dir manifests --priv-key keys/priv.key
+          ./xdev sign-manifests --manifests-dir ref/manifests --priv-key keys/priv.key
 
       - name: Regenerate index.yaml
-        run: ./xdev manifest index --manifests-dir manifests
+        run: ./xdev manifest index --manifests-dir ref/manifests
 
       # 产出物自检：用**发布公钥**验证刚产出的签名（R2/R5 的机器判据）。
+      # 守卫测试针对仓库根 manifests/ 目录——把 ref 的产出复制回根目录供其校验
+      # （守卫读取的是磁盘状态；复制只是为守卫准备输入，不改变信任边界）。
+      - name: Sync signed outputs for guard verification
+        run: |
+          mkdir -p manifests
+          cp -f ref/manifests/*.yaml manifests/
+          cp -f ref/manifests/*.yaml.sig manifests/
+          mkdir -p keys
+          cp -f ref/keys/pub.key keys/pub.key
+
       - name: Verify produced signatures
         env:
           XDEV_MANIFEST_VERIFY_PUBKEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
         run: |
           go test . -short -count=1 -run 'TestManifestSignatureCoverage|TestEmbeddedSignatures|TestManifests_EveryTool|TestIndexYaml|TestManifestsTree'
 
+      # F8：ref 经 env 注入，绝不 ${{ }} 内插进 run: 脚本（分支名可含双引号/$()）。
       - name: Check branch did not move (R8)
+        env:
+          REF_INPUT: ${{ inputs.ref }}
         run: |
-          now=$(git rev-parse HEAD)
-          [ "$now" = "${{ steps.base.outputs.sha }}" ] || { echo "::error::${{ inputs.ref }} moved during the run (${{ steps.base.outputs.sha }} → $now); please re-run"; exit 1; }
+          now=$(git -C ref rev-parse HEAD)
+          [ "$now" = "${{ steps.base.outputs.sha }}" ] || { echo "::error::$REF_INPUT moved during the run (${{ steps.base.outputs.sha }} → $now); please re-run"; exit 1; }
 
       - name: Upload signed manifests
         uses: actions/upload-artifact@v7
         with:
           name: signed-manifests-${{ steps.base.outputs.sha }}
           path: |
-            manifests/*.yaml
-            manifests/*.yaml.sig
+            ref/manifests/*.yaml
+            ref/manifests/*.yaml.sig
             fill-report.json
-            keys/pub.key
+            ref/keys/pub.key
           retention-days: 14
 
       - name: Note artifact location
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+          MODE: ${{ inputs.mode }}
         run: |
           {
-            echo "产物：signed-manifests-${{ steps.base.outputs.sha }}（${{ inputs.ref }} @ ${{ steps.base.outputs.sha }}）"
-            if [ "${{ inputs.mode }}" = "artifact" ]; then
+            echo "产物：signed-manifests-${{ steps.base.outputs.sha }}（$REF_INPUT @ ${{ steps.base.outputs.sha }}）"
+            if [ "$MODE" = "artifact" ]; then
               echo "模式=artifact：未对仓库做任何写入。下载该 artifact 后由人工提交（或改用 mode=branch 自动开 PR）。"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -223,9 +256,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          cp -f signed/manifests/*.yaml     manifests/ || true
-          cp -f signed/manifests/*.yaml.sig manifests/ || true
-          [ -f signed/keys/pub.key ] && cp -f signed/keys/pub.key keys/pub.key || true
+          cp -f signed/ref/manifests/*.yaml     manifests/ || true
+          cp -f signed/ref/manifests/*.yaml.sig manifests/ || true
+          [ -f signed/ref/keys/pub.key ] && cp -f signed/ref/keys/pub.key keys/pub.key || true
 
           git config user.name  "xdev signing bot"
           git config user.email "signing@users.noreply.github.com"

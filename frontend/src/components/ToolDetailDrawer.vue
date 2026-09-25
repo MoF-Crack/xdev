@@ -41,7 +41,7 @@
               <CopyableValue :value="inst.path" :copy-label="t('btn.copy')" :success-label="t('detail.copied')" :failure-label="t('detail.copy_failed')" />
               <n-space size="small">
                 <n-button v-if="canSwitchInstance(inst)" data-action="switch-instance" size="tiny" :disabled="pmBusy" @click="emitSwitchInstance(inst)">{{ switchLabel(inst) }}</n-button>
-                <n-button v-if="!inst.managed" data-action="migrate-pm" size="tiny" @click="$emit('migrate-pm', tool.name)">{{ t('pm.migrate') }}</n-button>
+                <n-button v-if="!inst.managed" data-action="migrate-pm" size="tiny" :disabled="pmBusy" @click="$emit('migrate-pm', tool.name)">{{ t('pm.migrate') }}</n-button>
               </n-space>
             </div>
           </section>

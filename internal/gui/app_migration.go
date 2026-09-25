@@ -763,15 +763,28 @@ func (a *App) postMigrateSetup(tool env.LocalTool, cfg *config.Config) {
 	}
 
 	// 设置环境变量
+	//
+	// P1-1（第六轮审计）：这里此前直调 env.SetEnvVar——manifest env_vars 是
+	// **不可信数据**（第三方/手工放置的 yaml 可声明任意键值），而 SetEnvVar 的
+	// PATH 分支在所有校验之前路由到整串覆写（WriteUserPath）——"env_vars:
+	// {Path: C:\evil}" 经 GUI 迁移就能整体替换用户 PATH；其它键（如
+	// GOROOT=%TEMP%\evil、目录外 JAVA_HOME）也全无 X-08 校验。与安装器
+	// setUserEnvVars 同语义对齐：
+	//   - PATH 一律跳过（大小写不敏感）——由 xdev 的 shim/目录注入机制管理；
+	//   - 其余键走 SetUserEnvVarTrusted（受保护键拒绝 + 路径型值 X-08 校验）。
 	vars := p.EnvVars(installPath)
 	if len(vars) > 0 {
 		// Windows registry writes must be serialized to prevent lost updates
 		regMu.Lock()
 		for k, v := range vars {
-			if err := env.SetEnvVar(k, v, "user"); err != nil {
+			if strings.EqualFold(k, "PATH") {
+				logWarn("[postMigrateSetup] 跳过 manifest 声明的 %s（PATH 由 xdev 目录注入机制管理，迁移不覆写用户 PATH）", k)
+				continue
+			}
+			if err := env.SetUserEnvVarTrusted(k, v); err != nil {
 				logWarn("[postMigrateSetup] 设置环境变量 %s 失败: %v", k, err)
 			} else {
-				logInfo("[postMigrateSetup] 设置环境变量: %s=%s", k, v)
+				logInfo("[postMigrateSetup] 设置环境变量: %s", k)
 			}
 		}
 		regMu.Unlock()

@@ -583,19 +583,29 @@ func downloadOnce(ctx context.Context, opts Options) error {
 
 	// SHA-256 verification.
 	//
-	// Security (C-4 + L-10): The sidecar .sha256 file uses a TOFU (Trust On
-	// First Use) model — the first download's hash is recorded and used to
+	// Security (C-4 + L-10 + 第六轮审计 F5): The sidecar .sha256 file uses a TOFU
+	// (Trust On First Use) model — the first download's hash is recorded and used to
 	// verify subsequent downloads. This is inherently weaker than a manifest-
 	// provided hash because an attacker who can replace the archive can also
 	// replace the sidecar. The following hardening measures are applied:
 	//
-	//   1. When a root public key is embedded (signer.HasRootKey()), downloads
-	//      without a real SHA-256 hash are REJECTED — the sidecar TOFU path is
-	//      disabled entirely, forcing manifest-signed hashes.
+	//   1. When a root public key is embedded (signer.HasRootKey()) AND the caller
+	//      has NOT opted into placeholder-TOFU (AllowPlaceholderTOFU=false) AND the
+	//      version is not a legitimately unsigned discovery (UnsignedVersion),
+	//      downloads without a real SHA-256 hash are REJECTED.
+	//      ⚠ 现状（过渡期）：两个生产调用方（installer.go / app_install.go）在
+	//      哈希为空/占位时把 AllowPlaceholderTOFU 派生为 true——这正是 L-10 设计要
+	//      拒绝的场景，即当前 keyed 构建对空哈希内置条目仍走 TOFU 兜底。这是
+	//      票 17 数据线（163 空哈希待填充）完成前的**有意过渡策略**（否则 keyed
+	//      发布版本直接拒装 17/52 工具）；数据线完成后调用方应改为 false，
+	//      让下方门控真正生效（已在票 17 卡片登记为端态要求）。
 	//   2. Sidecar files are written read-only (0o444) to raise the bar for
 	//      casual tampering.
 	//   3. First-use downloads print a prominent stderr WARNING.
 	//   4. The audit log records Verified=false for all TOFU-based checks.
+	//
+	// 守卫测试 TestPlaceholderTOFU_TransitionalPolicy 以生产调用方的派生方式构造
+	// Options，把上述过渡语义钉死：策略翻转时该测试必须同步更新。
 	gotHash := hex.EncodeToString(hasher.Sum(nil))
 
 	// Determine which SHA to use for verification:

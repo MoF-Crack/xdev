@@ -261,30 +261,26 @@ func TestIndexYaml_CoversAllToolManifests(t *testing.T) {
 	}
 }
 
-// TestManifestSignatureCoverage（P0-02 阶段 2，自激活）：重签完成后，每个工具
-// manifest 都必须有自己的 .sig，且签名图覆盖该 manifest 的全部非空 sha256 与
+// TestManifestSignatureCoverage（P0-02 阶段 2，自激活）：重签完成后，每个**可签**
+// 工具 manifest 都必须有自己的 .sig，且签名图覆盖该 manifest 的全部非空 sha256 与
 // mirror_sha256。
 //
 // 数据线未完成时本守卫跳过（并打印缺失清单）。这是「不定义边界就会第一天红」的
 // 处理方式：既不阻塞当前树，也不会在重签之后静默放过。
+//
+// 第六轮审计 F2：无哈希工具豁免（边界③，如 npm 型 dsh——按设计**永远**没有
+// .sig）必须先于 skip 判定计算。旧实现按全集收集 unsigned 后立即 Skipf，dsh
+// 恒在 unsigned 里 → 整个测试（含覆盖断言）永久死代码，守卫零保证且恰好掩盖
+// 「sign-manifests 读到的是嵌入快照而非填充后磁盘状态」这类缺陷。
 func TestManifestSignatureCoverage(t *testing.T) {
 	files := toolManifestFiles(t)
 
-	var unsigned []string
-	for _, f := range files {
-		if _, err := os.Stat(filepath.Join(manifestsDir, f+".sig")); err != nil {
-			unsigned = append(unsigned, f)
-		}
+	// Pass 1：解析每个 manifest，先分出「可签」与「无哈希豁免」两个集合。
+	type signableTool struct {
+		file string
+		tool *manifest.Tool
 	}
-	if len(unsigned) > 0 {
-		t.Skipf("票 17 数据线未完成：%d/%d 个工具 manifest 尚无 .sig（待重签）—— 缺失示例 %v；重签后本守卫自动生效",
-			len(unsigned), len(files), firstN(unsigned, 5))
-	}
-
-	pub, keySource := verifyPublicKey(t)
-
-	// 无哈希工具豁免（边界③）：没有任何可用哈希的 manifest（如 npm 型 dsh）没有
-	// 可签内容，sign-manifests 会跳过它，因此也不要求有 .sig。
+	var signable []signableTool
 	var hashless []string
 	for _, f := range files {
 		raw, err := os.ReadFile(filepath.Join(manifestsDir, f))
@@ -297,12 +293,27 @@ func TestManifestSignatureCoverage(t *testing.T) {
 		}
 		if _, has := manifest.BuildSignatureHashMap(&tool); !has {
 			hashless = append(hashless, f)
-			if _, err := os.Stat(filepath.Join(manifestsDir, f+".sig")); err == nil {
-				t.Errorf("%s 无任何可用哈希却存在 .sig —— 签名端会跳过它，请明确豁免口径 (边界③)", f)
-			}
 			continue
 		}
+		signable = append(signable, signableTool{f, &tool})
+	}
 
+	// Pass 2：unsigned 只从**可签**集合里收集（无哈希工具不要求 .sig）。
+	var unsigned []string
+	for _, s := range signable {
+		if _, err := os.Stat(filepath.Join(manifestsDir, s.file+".sig")); err != nil {
+			unsigned = append(unsigned, s.file)
+		}
+	}
+	if len(unsigned) > 0 {
+		t.Skipf("票 17 数据线未完成：%d/%d 个可签工具 manifest 尚无 .sig（待重签）—— 缺失示例 %v；无哈希豁免 %d 个；重签后本守卫自动生效",
+			len(unsigned), len(signable), firstN(unsigned, 5), len(hashless))
+	}
+
+	pub, keySource := verifyPublicKey(t)
+
+	for _, s := range signable {
+		f, tool := s.file, s.tool
 		sigPath := filepath.Join(manifestsDir, f+".sig")
 		ms, err := signer.ReadSignatureFile(sigPath)
 		if err != nil {
@@ -340,6 +351,14 @@ func TestManifestSignatureCoverage(t *testing.T) {
 						f, v.Version, a.OS, a.Arch)
 				}
 			}
+		}
+	}
+
+	// 无哈希工具的边界③自检：签名端会跳过它们，因此**不应**存在 .sig（有则说明
+	// 豁免口径漂移，需人工确认）。放在 skip 之后：数据线未完成时同样不误报。
+	for _, f := range hashless {
+		if _, err := os.Stat(filepath.Join(manifestsDir, f+".sig")); err == nil {
+			t.Errorf("%s 无任何可用哈希却存在 .sig —— 签名端会跳过它，请明确豁免口径 (边界③)", f)
 		}
 	}
 	if len(hashless) > 0 {

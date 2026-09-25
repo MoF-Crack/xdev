@@ -100,11 +100,18 @@ const commands = reactive({});
 const testing = ref(false);
 const testResult = ref(null);
 
-const create = () => emit('create', {
-  adapter: adapter.value, image: image.value,
-  sshHost: host.value, sshPort: port.value, sshUser: user.value,
-  sshKeyPath: keyPath.value, sshPassword: password.value,
-});
+const create = () => {
+  const payload = {
+    adapter: adapter.value, image: image.value,
+    sshHost: host.value, sshPort: port.value, sshUser: user.value,
+    sshKeyPath: keyPath.value, sshPassword: password.value,
+  };
+  // F-5（前端复审，卫生）：密码发出后立即从组件状态清除——Go 侧不落盘
+  //（C-08 白名单 + SSHPASS 环境变量传递），但桌面应用的响应式状态会活到
+  // 页面卸载；用后即清是零成本的纵深防御。
+  password.value = '';
+  emit('create', payload);
+};
 
 async function browseKey() {
   const fn = props.browseFile || ((title) => window.go?.gui?.App?.BrowseFile?.(title, '*.pem;*.key;*.id_rsa;*.id_ed25519;*.id_ecdsa;*.id_dsa'));
@@ -115,9 +122,11 @@ async function browseKey() {
 async function test() {
   testing.value = true;
   testResult.value = null;
+  const pw = password.value;
+  password.value = ''; // F-5：测试连接同样用后即清
   try {
-    const fn = props.testSSH || ((h, p, u, k, pw) => window.go?.gui?.App?.TestSSHConnection?.(h, p, u, k, pw));
-    testResult.value = await fn(host.value, port.value || 22, user.value, keyPath.value, password.value);
+    const fn = props.testSSH || ((h, p, u, k, s) => window.go?.gui?.App?.TestSSHConnection?.(h, p, u, k, s));
+    testResult.value = await fn(host.value, port.value || 22, user.value, keyPath.value, pw);
   } catch (e) {
     testResult.value = { success: false, message: String(e) };
   } finally {

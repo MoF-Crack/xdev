@@ -154,6 +154,16 @@ comments).`,
 						res.Error = "unsupported URL scheme (only http/https are probed)"
 						return
 					}
+					// 第六轮审计 F3：初始 URL 同样必须过 SSRF/私网校验。CheckRedirect
+					// 只作用于重定向目标，不覆盖第一次请求——不校验的话这个**定时跑在
+					// 公网 runner 上的巡检**就是一台内网端口/状态扫描器，探测结果还写进
+					// 公开报告。产品统一基线 IsSafeExternalURL：http 仅限 localhost、
+					// https 公网、拒绝私网/保留地址、DNS 失败 fail-closed。
+					if serr := util.IsSafeExternalURL(res.URL); serr != nil {
+						res.Status = "error"
+						res.Error = "unsafe URL: " + serr.Error()
+						return
+					}
 					code, netErr := probeURL(client, res.URL)
 					res.HTTPStatus = code
 					switch {
