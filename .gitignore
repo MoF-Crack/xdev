@@ -78,6 +78,12 @@ test-results/
 # DSH internal session metadata (not part of the repo)
 .omo/
 
+# BugX audit runtime state + dsh host adaptation (machine-local; .bugx/ is never
+# committed per .bugx/README.md; .dsh/ host entry is hash-verified in .bugx/hosts.json
+# and re-created by `bugx install` on demand)
+.bugx/
+.dsh/
+
 
 # Local validation logs (transient)
 build/*validate*

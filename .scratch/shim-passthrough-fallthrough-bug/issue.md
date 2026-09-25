@@ -51,3 +51,29 @@ xdev 管理时，透传到 PATH 上的真实可执行文件」的降级路径。
 - gh CLI 同样受影响（内部 git 检测 base repo 失败）。
 - 临时绕过：将真实 Git 目录前置到 PATH（或删除孤儿 shim）。
 
+## Comments
+
+- 2026-09-18（BugX 宿主接入会话）状态更新：代码修复（bf69b85，Spec 038
+  `shim_fallthrough.go` + 测试）已在仓库（build\bin 为 0.4.0），但**三重未闭环**：
+  ① 本机部署面 `E:\XDev` 仍是 0.3.3-rc.2（2026-08-29 构建），运行中的 shims 无透传
+  （实测：shim 调用失败仍直接终态报错，无 PATH 兜底）；
+  ② GitHub v0.4.0 tag（e72a9e1）早于本修复，无任何发布版本携带；
+  ③ 新发现的别名剥离大小写缺陷（`.scratch/shim-alias-case-bug/issue.md`）会**绕过透传**：
+  alias 带大写 `.EXE` 进入 `LookupOnPath`，`shim_fallthrough.go` L181 以
+  `alias+ToLower(ext)` 构建候选，`npm.EXE.exe` 等永远不命中真实文件。
+  两缺陷需同时落地（组合矩阵见该票）；本票在部署面与发布面闭合前保持 open。
+- 2026-09-18（实施会话）**部署面已闭环**：
+  - 新二进制（0.4.0+bf69b85+大小写修复，hash 30AB3AE9F50E1ABB）已替换
+    `E:\XDev\xdev.exe` 并刷新全部 100 个 shims 分发器条目（同一 inode）；
+  - 机器冒烟矩阵全绿：
+    - `E:\XDev\shims\git.exe --version` → **git version 2.55.0.windows.3 exit 0**
+      （本票核心行为——孤儿 shim 不再遮蔽真实 Git，透传正路径命中）
+    - `E:\XDev\shims\npm.EXE --version` → **11.19.0 exit 0**（shim-alias-case-bug 核心用例）
+    - `E:\XDev\shims\node.EXE -v` → **v26.8.1 exit 0**
+    - Python `shutil.which('npm')` → spawn → **11.19.0 exit 0**（bugx 生产事故链端到端）
+    - bugx doctor Node 探针 **✗ → ✓**（"UI/TUI 环境就绪"）
+  - 发布面（②）：待 v0.4.1 发布时自然闭环。
+
+  Status: partially-resolved（代码+部署面已闭环；发布面待 v0.4.1 tag）
+
+

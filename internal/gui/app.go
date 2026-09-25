@@ -65,6 +65,7 @@ import (
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/remote"
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/update"
 	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
@@ -935,6 +936,7 @@ func (a *App) EnsureSelfInstalled() {
 		}
 		a.removeObsoleteGUICopy(homeDir)
 		a.ensureCurrentSelfInstall(cfg)
+		a.refreshShimDispatchers(cfg)
 		return
 	}
 
@@ -958,6 +960,7 @@ func (a *App) EnsureSelfInstalled() {
 			logWarn("[EnsureSelfInstalled] failed to install to install/ directory: %v", err)
 		}
 	}
+	a.refreshShimDispatchers(cfg)
 }
 
 // ensureCurrentSelfInstall 确保当前版本始终经 install/xdev/<version>/ +
@@ -996,6 +999,23 @@ func (a *App) removeObsoleteGUICopy(homeDir string) {
 		logWarn("[EnsureSelfInstalled] failed to remove obsolete %s: %v", guiName, err)
 	} else {
 		logInfo("[EnsureSelfInstalled] removed obsolete dual-binary leftover %s", guiPath)
+	}
+}
+
+// refreshShimDispatchers 把 shims/ 下现存分发器副本重新指向当前二进制
+// （缺陷④ / shim-alias-case-bug plan §3：shims 在工具 Activate 时硬链接
+// 到当时的 xdev，自更新/stale 镜像替换走 rename 落新 inode，旧硬链接持有
+// 旧 inode → 分发器版本永远滞后，旧分发器无 PATH 透传/别名修复，继续遮蔽
+// 系统真实工具）。幂等自愈：一致时 SameFile no-op，每轮 EnsureSelfInstalled
+// 安全调用。
+func (a *App) refreshShimDispatchers(cfg *config.Config) {
+	src, ok := selfBinarySource()
+	if !ok {
+		return
+	}
+	refreshed, failed := shim.RefreshDispatchers(cfg.Core.ShimDir, src)
+	if refreshed > 0 || failed > 0 {
+		logInfo("[EnsureSelfInstalled] shim dispatchers refreshed=%d failed=%d", refreshed, failed)
 	}
 }
 

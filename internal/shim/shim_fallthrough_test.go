@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/xmdemt/xdev/internal/config"
 )
 
 // makeFakeBin 在 dir 下创建一个可执行的假二进制。
@@ -112,6 +114,7 @@ func TestLookupOnPath_RejectsPathSeparators(t *testing.T) {
 func TestDefaultExcludedDirs_CoversShims(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XMDEV_HOME", home)
+	config.ResetHomeDirForTest() // 测试隔离：shim_alias_case_test.go 等按字母序先跑、消费 sync.Once 后不重置
 	excluded := defaultExcludedDirs()
 	for _, d := range []string{
 		home,

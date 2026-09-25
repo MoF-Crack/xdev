@@ -60,22 +60,31 @@ func MaybeExec(selfName string) (bool, error) {
 	// The main binary may be named "xdev", "xdev.exe", or carry a
 	// version suffix like "xdev-1.0.0" / "xdev-1.0.0.exe".  All of
 	// these should run the CLI rather than being treated as a shim
-	// alias.
-	base := strings.TrimSuffix(selfName, exeSuffix())
+	// alias.  Windows command resolution (NTFS / PATHEXT /
+	// CreateProcess) is case-insensitive, and callers such as
+	// Python's shutil.which hand back argv[0] with UPPERCASE PATHEXT
+	// extensions ("npm.EXE") — the alias must be normalized into the
+	// same case domain as the shim index before it is used (缺陷票
+	// shim-alias-case-bug：大小写敏感的 TrimSuffix 剥不掉 ".EXE"，
+	// "shim alias \"npm.EXE\" not installed" 遮蔽系统真实工具).
+	base := normalizeShimAlias(trimExeSuffix(selfName))
 	if base == "xdev" || strings.HasPrefix(base, "xdev-") || base == "xdev-gui" || strings.HasPrefix(base, "xdev-gui-") {
 		return false, nil
 	}
 	// Wails internal commands should not be intercepted by the shim
 	// dispatcher.  When Wails builds the project, it invokes the
 	// binary with os.Args[0] set to "wailsbindings" to generate
-	// frontend bindings.
-	if selfName == "wailsbindings" || selfName == "wailsbindings.exe" {
+	// frontend bindings.  trimExeSuffix + fold covers any casing
+	// ("wailsbindings", "wailsbindings.exe", "WailsBindings.Exe").
+	if base == "wailsbindings" {
 		return false, nil
 	}
 	// Windows shims are copied twice: once as "node" and once as
 	// "node.exe".  When invoked as "node.exe" the runtime sees the
 	// full name; we strip the suffix so Lookup finds the alias.
-	alias := strings.TrimSuffix(selfName, exeSuffix())
+	// trimExeSuffix handles any casing of the suffix and
+	// normalizeShimAlias folds the alias into the index's case domain.
+	alias := base
 	target, _, args, err := Lookup(alias, os.Args[1:])
 	if err != nil {
 		// PATH 透传（Spec 038）：shim 存在但工具未由 xdev 管理时，不能
@@ -114,6 +123,9 @@ func MaybeExec(selfName string) (bool, error) {
 // The returned toolName identifies which tool directory the target
 // belongs to (e.g. "node" for both "node" and "npm" aliases).
 func Lookup(alias string, args []string) (string, string, []string, error) {
+	// 大小写域归一（缺陷票 shim-alias-case-bug）：索引键与查找输入必须
+	// 同域比较。Windows 命令解析本就大小写不敏感；Unix 保留精确大小写。
+	alias = normalizeShimAlias(alias)
 	xmdeHome := config.ResolveHomeDir()
 
 	cur := filepath.Join(xmdeHome, "current", alias)
@@ -301,7 +313,10 @@ func loadDiskShimIndex(xmdeHome string) map[string]shimEntry {
 		if len(parts) != 3 {
 			continue
 		}
-		idx[parts[0]] = shimEntry{toolName: parts[1], path: parts[2]}
+		// 读取侧同域折叠（缺陷票 shim-alias-case-bug）：旧版索引可能保留
+		// 磁盘文件名大小写（构建端折叠前的落盘产物），与折叠后的查找输入
+		// 无法命中；normalizeShimAlias 对 Unix 是恒等，不影响精确大小写语义。
+		idx[normalizeShimAlias(parts[0])] = shimEntry{toolName: parts[1], path: parts[2]}
 	}
 	return idx
 }
@@ -389,6 +404,11 @@ func addExecutables(idx map[string]shimEntry, dir, toolName string) {
 		if alias == "" {
 			continue
 		}
+		// 同域折叠（缺陷票 shim-alias-case-bug）：与 Lookup 输入用同一条
+		// normalizeShimAlias 归一化，消除"构建端保留磁盘文件名大小写、
+		// 查找端折叠"的键域不一致（大写 NPM.CMD 注册为 "NPM" 而
+		// Lookup("npm") 查不到）。
+		alias = normalizeShimAlias(alias)
 		fullPath := filepath.Join(dir, name)
 		// Only record the first match for each alias.
 		if _, exists := idx[alias]; !exists {
@@ -464,6 +484,38 @@ func exeSuffix() string {
 		return ".exe"
 	}
 	return ""
+}
+
+// trimExeSuffix strips the platform executable suffix case-insensitively.
+//
+// 缺陷票 shim-alias-case-bug：Python 的 shutil.which 在 Windows 按 PATHEXT
+// （默认全大写 .EXE）构造候选文件名，NTFS 大小写不敏感地命中磁盘上的小写
+// 文件并把大写路径作为 argv[0] 传给子进程；大小写敏感的
+// strings.TrimSuffix(selfName, ".exe") 剥不掉 ".EXE"，别名带着扩展名进入
+// Lookup → "shim alias \"npm.EXE\" not installed"（exit 1，遮蔽系统真实
+// 工具）。扩展名剥离必须与 addExecutables 索引构建端的 ToLower 判定同域。
+func trimExeSuffix(name string) string {
+	ext := exeSuffix()
+	if ext == "" {
+		return name
+	}
+	if len(name) >= len(ext) && strings.EqualFold(name[len(name)-len(ext):], ext) {
+		return name[:len(name)-len(ext)]
+	}
+	return name
+}
+
+// normalizeShimAlias folds a shim alias into the case domain shared by
+// the index builder (addExecutables) and the lookup path (Lookup /
+// scanFor / loadDiskShimIndex).  Windows command resolution
+// (NTFS / CreateProcess / PATHEXT) is case-insensitive, so every alias
+// must compare in one folded domain; Unix tool names are case-sensitive
+// and keep their exact spelling.
+func normalizeShimAlias(alias string) string {
+	if os.PathSeparator == '\\' {
+		return strings.ToLower(alias)
+	}
+	return alias
 }
 
 // InstallShim creates a shim entry in shimDir pointing at selfPath.
