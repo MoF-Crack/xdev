@@ -92,7 +92,15 @@ func TestShutdown_InFlightSniffStillMarkedPartial(t *testing.T) {
 
 	// 嗅探仍被按住 → 这里的中断属于「真的没跑完」。
 	s.Shutdown()
+
+	// 放行后台嗅探，并等它真正收尾——否则 goroutine 会在测试返回后继续写
+	// 缓存文件，导致 t.TempDir() 的 RemoveAll 清理失败（目录非空）。
 	close(release)
+	select {
+	case <-s.startupDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("background sniff did not finish after release")
+	}
 
 	cache, err := s.LoadCache()
 	if err != nil {

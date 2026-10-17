@@ -666,8 +666,20 @@ func (m Model) fetchRemoteVersions() tea.Cmd {
 	}
 	p := m.filteredTools[m.toolIdx]
 	return func() tea.Msg {
-		versions := p.Manifest().Versions()
-		return RemoteVersionsMsg{Tool: p.Name(), Versions: versions}
+		// 第七轮审计 F-28（TUI 侧同型缺陷）：Lua/vfox 插件的 Manifest() 恒返回
+		// nil（internal/plugin/lua_plugin.go），旧代码直接 p.Manifest().Versions()
+		// 会对 nil 解引用 panic —— 任何装了 Lua 插件的机器选中该工具按 r 刷新
+		// 远程版本即崩溃。与 CLI 侧 listTool 的修复同语义：manifest 为 nil 时
+		// 不崩溃，改为回落到 ResolveVersion("latest") 给出的单个可安装版本。
+		mf := p.Manifest()
+		if mf == nil {
+			versions := []string{}
+			if v, err := p.ResolveVersion("latest"); err == nil && v != "" {
+				versions = append(versions, v)
+			}
+			return RemoteVersionsMsg{Tool: p.Name(), Versions: versions}
+		}
+		return RemoteVersionsMsg{Tool: p.Name(), Versions: mf.Versions()}
 	}
 }
 

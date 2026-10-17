@@ -25,10 +25,12 @@ describe('ToolDetailDrawer', () => {
   });
 
   it('renders dependency rows with satisfied/missing states and install path hint', () => {
-    const t = (key, params) => key === 'detail.deps_install_path' ? `Required for ${params.path} install` : key === 'detail.deps_satisfied' ? 'Satisfied' : key === 'detail.deps_missing' ? 'Missing' : key;
+    const t = (key, params) => key === 'detail.deps_install_path' ? `Required for ${params.path} install` : key === 'detail.deps_satisfied' ? 'Satisfied' : key === 'detail.deps_missing' ? 'Missing' : key === 'detail.deps_reason_not_found' ? 'Not found in PATH' : key;
+    // 第七轮审计 F-42：原因行的判据是 reasonCode（Go 侧只填 ReasonCode/ReasonParams，
+    // Reason 恒空），因此 fixture 必须按真实契约提供 reasonCode。
     const wrapper = mount(ToolDetailDrawer, { global: { stubs: { teleport: true } }, props: { show: true, tool: { name: 'vscode' }, deps: [
-      { tool: 'node', requiredVersion: '>=18', currentVersion: '20.0.0', satisfied: true, reason: '', installPath: '' },
-      { tool: 'git', requiredVersion: '>=2.0', currentVersion: '', satisfied: false, reason: 'PATH 中未找到 git', installPath: 'E:\\XDev' },
+      { tool: 'node', requiredVersion: '>=18', currentVersion: '20.0.0', satisfied: true, reasonCode: '', reasonParams: {}, installPath: '' },
+      { tool: 'git', requiredVersion: '>=2.0', currentVersion: '', satisfied: false, reasonCode: 'not_found', reasonParams: {}, installPath: 'E:\\XDev' },
     ], t } });
     const rows = wrapper.findAll('.dep-row');
     expect(rows).toHaveLength(2);
@@ -36,6 +38,11 @@ describe('ToolDetailDrawer', () => {
     expect(rows[0].text()).toContain('Satisfied');
     expect(rows[1].text()).toContain('Missing');
     expect(rows[1].text()).toContain('Required for E:\\XDev install');
+    // F-42 守卫：原因行必须真的渲染出来（旧判据 dep.reason 恒假 → 永不渲染）。
+    expect(rows[1].find('.dep-reason').exists()).toBe(true);
+    expect(rows[1].text()).toContain('Not found in PATH');
+    // 未提供 reasonCode 的行不得渲染原因行（防空标签）。
+    expect(rows[0].find('.dep-reason').exists()).toBe(false);
   });
 
   it('shows launch and copy-command actions only for installed tools with matching form factor', async () => {

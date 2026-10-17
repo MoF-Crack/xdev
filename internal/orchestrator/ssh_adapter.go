@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -213,8 +215,13 @@ func (s *SSHAdapter) ConnectInteractive(ctx context.Context, id string, shell []
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			os.Exit(exitErr.ExitCode())
+		// 第七轮审计 F-52：与 DockerAdapter.ConnectInteractive 同源修复 ——
+		// 库函数内不得 os.Exit（会跳过 deferred 清理，并使 cli/remote.go 的
+		// %w 包装与 main.go 的 exitCodeForError 收口失效）。返回
+		// *shim.ExitCodeError，让真实退出码沿错误链传播。
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &shim.ExitCodeError{Code: exitErr.ExitCode()}
 		}
 		return err
 	}

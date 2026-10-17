@@ -345,6 +345,14 @@ func (s *Scheduler) sniffNowTool(ctx context.Context, t *manifest.Tool, force bo
 				LastSniff: time.Now(),
 				Error:     sniffErr.Error(),
 			})
+			// 第七轮审计 F-53：把限流**窗口**写进缓存。旧实现只写 Remaining，
+			// RateLimitState.ResetAt 全仓从未被赋值（只有读取点），于是
+			// specs/011 FR-007 承诺的「记录 reset_at、到 reset 前不再重试」从未生效：
+			// 下一个进程读到 resetAt.IsZero() → 走「无活跃窗口」救援分支保留满桶，
+			// 令牌桶限额无法跨进程累计（重启即重置），仅靠服务端 60/h 兜底。
+			// 这里按 GitHub 的 X-RateLimit-Reset 语义保守地写一个窗口：
+			// 无法拿到精确 reset 时用 1 小时（未认证配额的重置周期）。
+			_ = s.markRateLimitedLocked()
 			s.mu.Unlock()
 			return sniffErr
 		}
@@ -607,23 +615,96 @@ func buildArchiveTemplateFromTool(t *manifest.Tool) ([]manifest.Archive, bool) {
 	return nil, false
 }
 
+// rateLimitWindow 是拿不到服务端 X-RateLimit-Reset 时的保守限流窗口
+// （GitHub 未认证配额按小时重置）。第七轮审计 F-53。
+const rateLimitWindow = time.Hour
+
 // updateCacheEntryLocked upserts a tool entry in the cache.
 // Caller must hold s.mu.
+//
+// 第七轮审计 F-56：读-改-写必须整体落在**同一把独占锁**内。旧实现是
+// `LoadCache`（只取**共享**锁，50ms 非阻塞）→ 改内存 → `SaveCache`（此时才取
+// 独占锁），两把锁之间没有覆盖整个 RMW 周期。于是两个 xdev 进程在同一 home 上
+// 并发嗅探（常见：GUI 启动自检嗅探与手动 `xdev sniff --all` 重叠）会各自基于同一
+// 份快照写回，**后写者覆盖前者的工具条目**（文件本身由 AtomicWriteFile 保证不撕裂，
+// 丢的是更新）。这里改为在独占锁内完成「读→合并→写」。
 func (s *Scheduler) updateCacheEntryLocked(tool string, result ToolSniffResult) error {
-	cache, err := s.LoadCache()
-	if err != nil {
-		cache = &SniffCache{
-			Tools:     make(map[string]ToolSniffResult),
-			RateLimit: RateLimitState{Remaining: s.limiter.available()},
+	return s.withCacheLock(func(cache *SniffCache) error {
+		if cache.Tools == nil {
+			cache.Tools = make(map[string]ToolSniffResult)
 		}
+		cache.Tools[tool] = result
+		return nil
+	})
+}
+
+// withCacheLock 在**同一把独占文件锁**内执行一次完整的「读 → 改 → 写」缓存事务
+// （第七轮审计 F-56）。mutate 收到的 cache 保证非 nil；锁不可得时降级为「读现有
+// 缓存 + 改 + 写」的无锁路径（与既有 SaveCache 的降级语义一致：拿不到锁不应让
+// 嗅探整体失败）。
+func (s *Scheduler) withCacheLock(mutate func(*SniffCache) error) error {
+	if err := os.MkdirAll(filepath.Dir(s.cachePath), 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	lockPath := s.cachePath + ".lock"
+	lock, lockErr := util.AcquireFileLock(lockPath, 5*time.Second)
+	if lockErr == nil {
+		defer lock.Release()
+	}
+
+	// 锁内读取（绕过 LoadCache 的共享锁，避免同进程内两把锁互斥）。
+	cache := s.readCacheUnlocked()
+	if cache == nil {
+		cache = &SniffCache{Tools: make(map[string]ToolSniffResult)}
 	}
 	if cache.Tools == nil {
 		cache.Tools = make(map[string]ToolSniffResult)
 	}
+	if err := mutate(cache); err != nil {
+		return err
+	}
+	// 注意：mutate 可能已显式设定 Remaining（限流时置 0）。只有当 mutate 没有把
+	// Remaining 归零时才用本地令牌桶刷新它，否则会把「已限流」状态覆盖回满桶
+	//（F-53 回归：窗口写进去了但剩余数被重置，跨进程限流仍失效）。
+	if cache.RateLimit.Remaining != 0 {
+		cache.RateLimit.Remaining = s.limiter.available()
+	}
+	return s.writeCacheUnlocked(cache)
+}
 
-	cache.Tools[tool] = result
-	cache.RateLimit.Remaining = s.limiter.available()
-	return s.SaveCache(cache)
+// readCacheUnlocked 读缓存但不取任何文件锁（调用方须已持有独占锁）。
+func (s *Scheduler) readCacheUnlocked() *SniffCache {
+	data, err := os.ReadFile(s.cachePath)
+	if err != nil {
+		return nil
+	}
+	var c SniffCache
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil
+	}
+	return &c
+}
+
+// writeCacheUnlocked 原子写缓存但不取任何文件锁（调用方须已持有独占锁）。
+func (s *Scheduler) writeCacheUnlocked(c *SniffCache) error {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal cache: %w", err)
+	}
+	if err := util.AtomicWriteFile(s.cachePath, data, 0o644); err != nil {
+		return fmt.Errorf("write cache: %w", err)
+	}
+	return nil
+}
+
+// markRateLimitedLocked 记录一次限流：把 Remaining 归零并写入 ResetAt，
+// 使限流窗口能**跨进程**生效（第七轮审计 F-53）。Caller must hold s.mu.
+func (s *Scheduler) markRateLimitedLocked() error {
+	return s.withCacheLock(func(cache *SniffCache) error {
+		cache.RateLimit.Remaining = 0
+		cache.RateLimit.ResetAt = time.Now().Add(rateLimitWindow)
+		return nil
+	})
 }
 
 // LoadCache reads and parses the sniff cache from disk (FR-008).

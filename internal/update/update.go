@@ -170,19 +170,47 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 }
 
 // refreshShimDispatchers 把 home 下 shims/ 的现存分发器副本重指到 selfPath。
-// update 包不持有 Config——用 config.ResolveHomeDir()（只读发现）推导默认
-// shims 目录；home 不可解析时静默跳过（GUI 启动时的 EnsureSelfInstalled 会再
-// 兜底一次，见 app.go 的 refreshShimDispatchers）。
+//
+// 第七轮审计 F-47：不能硬拼 `<home>/shims` —— `core.shim_dir` 是**受支持的可配置项**
+// （internal/cli/config.go 的 `config set core.shim_dir` 可写），GUI 侧的同一动作走
+// cfg.Core.ShimDir。旧实现硬拼默认路径，于是改过 shim_dir 的机器上：刷新落在不存在
+// 的目录 → shim.RefreshDispatchers 返回 (0,0) **静默成功** → 真实 shim 目录里的旧
+// inode 分发器永不更新，正是第六轮 P2-A 要修的「分发器版本永久滞后、遮蔽真实工具」。
+//
+// 现在优先读配置里的 shim_dir，读不到再回落 `<home>/shims`；两者都拿不到才跳过。
+// 刷新失败/目录不存在时给出可诊断的告警，而不是静默。
 func refreshShimDispatchers(selfPath string) {
-	home := config.ResolveHomeDir()
-	if home == "" {
+	shimDir := resolveShimDir()
+	if shimDir == "" {
+		log.Printf("[update] WARNING: cannot resolve shim dir (no config and no home) — shim dispatchers not refreshed; run `xdev doctor` to repair")
 		return
 	}
-	shimDir := filepath.Join(home, "shims")
+	if fi, err := os.Stat(shimDir); err != nil || !fi.IsDir() {
+		log.Printf("[update] WARNING: shim dir %s does not exist or is not a directory — shim dispatchers not refreshed", shimDir)
+		return
+	}
 	refreshed, failed := shim.RefreshDispatchers(shimDir, selfPath)
 	if refreshed > 0 || failed > 0 {
 		log.Printf("[update] shim dispatchers refreshed=%d failed=%d (dir=%s)", refreshed, failed, shimDir)
 	}
+	if failed > 0 {
+		log.Printf("[update] WARNING: %d shim dispatcher(s) could not be refreshed in %s", failed, shimDir)
+	}
+}
+
+// resolveShimDir 返回本次更新应当刷新的 shim 目录：优先配置里的 core.shim_dir，
+// 回落 `<home>/shims`（F-47）。
+func resolveShimDir() string {
+	if cfg, err := config.Load(""); err == nil && cfg != nil {
+		if d := cfg.Core.ShimDir; d != "" {
+			return d
+		}
+	}
+	home := config.ResolveHomeDir()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, "shims")
 }
 
 // fetchLatestRelease calls the GitHub API to get the latest release.

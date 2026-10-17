@@ -51,7 +51,13 @@
               <div v-for="dep in deps" :key="dep.tool + (dep.platform || '') + (dep.installPath || '')" class="dep-row" :data-dep="dep.tool">
                 <n-tag :type="dep.satisfied ? 'success' : 'warning'" size="small">{{ dep.satisfied ? t('detail.deps_satisfied') : t('detail.deps_missing') }}</n-tag>
                 <span class="dep-name">{{ dep.tool }}<template v-if="dep.requiredVersion">{{ t('detail.deps_required', { version: dep.requiredVersion }) }}</template><template v-if="dep.currentVersion">{{ t('detail.deps_current', { version: dep.currentVersion }) }}</template></span>
-                <span v-if="dep.reason" class="dep-reason">{{ t('detail.deps_reason_' + dep.reasonCode, dep.reasonParams || {}) }}</span>
+                <!-- 第七轮审计 F-42：判据必须是 reasonCode，不能是 reason。
+                     Go 侧 checkDependency（internal/gui/app_dependencies.go）从不给
+                     st.Reason 赋值（该字段是「保留空串」的兼容字段），只填
+                     ReasonCode / ReasonParams，因此 v-if="dep.reason" 恒为假 →
+                     整条原因行**永不渲染**，用户看不到「PATH 中未找到 node」这类
+                     可操作信息。 -->
+                <span v-if="dep.reasonCode" class="dep-reason">{{ t('detail.deps_reason_' + dep.reasonCode, dep.reasonParams || {}) }}</span>
                 <span v-if="dep.installPath" class="dep-install">{{ t('detail.deps_install_path', { path: dep.installPath }) }}</span>
               </div>
             </div>

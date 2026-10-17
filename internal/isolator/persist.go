@@ -38,26 +38,82 @@ func statePath(xmdeDir, mode string) string {
 	return filepath.Join(xmdeDir, "isolate", mode+".json")
 }
 
+// saveState 原子写入隔离会话状态（第七轮审计 F-51）。
+//
+// 该文件是 setup/teardown **跨进程唯一的**所有权凭证与容器句柄，旧实现用裸
+// os.WriteFile：写盘瞬间崩溃/断电/磁盘满会留下截断的 JSON，而 loadState 又
+// 静默吞掉解析错误并返回零值 —— 后果是
+//   - 容器模式：containerID 为空 → Teardown 直接 return → **容器永久泄漏**；
+//   - nix 模式：WrittenFiles 丢失 → 走 legacy 分支只打日志不删 → flake.nix 残留，
+//     用户重跑 setup 又被 ensureOverwritable 拒绝。
+//
+// 现在写临时文件 + fsync + rename（同目录内 rename 在 Windows/POSIX 都是原子的）。
 func saveState(xmdeDir, mode string, s persistedState) {
 	if xmdeDir == "" || mode == "" {
 		return
 	}
 	p := statePath(xmdeDir, mode)
-	_ = os.MkdirAll(filepath.Dir(p), 0o755)
-	data, _ := json.Marshal(s)
-	_ = os.WriteFile(p, data, 0o644)
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("isolate: could not create state dir %s: %v", dir, err)
+		return
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		log.Printf("isolate: could not marshal state for %s: %v", p, err)
+		return
+	}
+	// 唯名临时文件：固定名会被并发 setup/teardown 互相截断
+	//（internal/config 的 P1-24 守卫禁止生产代码出现固定 ".tmp" 中间文件）。
+	tmp, err := os.CreateTemp(dir, ".isolate-state-*.tmp")
+	if err != nil {
+		log.Printf("isolate: could not create temp state file in %s: %v", dir, err)
+		return
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // rename 成功后为 no-op
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		log.Printf("isolate: could not write temp state %s: %v", tmpName, err)
+		return
+	}
+	if err := tmp.Sync(); err != nil {
+		// fsync 失败不致命（部分文件系统不支持），记录后继续。
+		log.Printf("isolate: fsync of %s failed (continuing): %v", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		log.Printf("isolate: could not close temp state %s: %v", tmpName, err)
+		return
+	}
+	if err := os.Rename(tmpName, p); err != nil {
+		log.Printf("isolate: could not publish state %s: %v", p, err)
+	}
 }
 
+// loadState 读取隔离会话状态（第七轮审计 F-51）。
+//
+// 旧实现 `_ = json.Unmarshal(data, &s)` 静默吞掉解析错误并返回零值——调用方
+// 无法区分「从未 setup 过」与「状态文件损坏」。现在区分两者：文件不存在是正常
+// 情况（静默返回零值），解析失败则明确告警，让用户/排障者知道所有权凭证丢了
+// （容器可能泄漏，需要手工 docker rm）。
 func loadState(xmdeDir, mode string) persistedState {
 	var s persistedState
 	if xmdeDir == "" || mode == "" {
 		return s
 	}
-	data, err := os.ReadFile(statePath(xmdeDir, mode))
+	p := statePath(xmdeDir, mode)
+	data, err := os.ReadFile(p)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("isolate: could not read state %s: %v", p, err)
+		}
 		return s
 	}
-	_ = json.Unmarshal(data, &s)
+	if err := json.Unmarshal(data, &s); err != nil {
+		log.Printf("isolate: WARNING: state file %s is corrupt (%v) — ownership/container handle lost; "+
+			"if a container is still running, remove it manually with `docker rm -f`", p, err)
+		return persistedState{}
+	}
 	return s
 }
 

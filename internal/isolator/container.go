@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,8 +85,23 @@ func (c *containerIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) er
 		"-v", c.projectDir + ":/workspace",
 		"-w", "/workspace",
 	}
-	// Add env vars
+	// Add env vars.
+	//
+	// 第七轮审计 F-50：**不要**把宿主的 PATH 透传进容器。spec.Env["PATH"] 由
+	// cli/isolate.go 组装为「宿主 shim 目录 + 宿主 PATH」，那条语义只对 `none`
+	// 模式成立（noneIsolator 就地 os.Setenv）。容器里该值指向**宿主**路径，而
+	// 挂载只有 `-v <projectDir>:/workspace` —— 于是：
+	//   ① Windows 主机的分号分隔 PATH 在 Linux 容器里是**单个无效条目**，
+	//      镜像自带的 `sleep` 无法经 PATH 解析 → docker run 失败
+	//      （runc: executable file not found in $PATH），setup 直接不可用；
+	//   ② 即使 setup 侥幸通过，容器内的命令解析用宿主 PATH，xdev 管理的工具
+	//      （shim 目录）在容器里根本不存在 → 「隔离环境可用 xdev 工具」从未实现。
+	// 容器应使用**镜像自身的** PATH；其它环境变量（HOME、工具专用变量等）照常透传。
 	for k, v := range spec.Env {
+		if strings.EqualFold(k, "PATH") {
+			log.Printf("isolate: not injecting host PATH into the container (F-50); the image's own PATH is used")
+			continue
+		}
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
 	// Add port forwards for tools
