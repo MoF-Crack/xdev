@@ -133,7 +133,9 @@ func (e *LuaEngine) vmFor(path string, vfox bool) (*lua.LState, *cachedVM, error
 				}
 				return nil, nil, fmt.Errorf("load %s plugin %s: %w", label, path, err)
 			}
-			promotePluginMethods(L, L.GetGlobal("PLUGIN"))
+			// 第八轮审计 A-01：PLUGIN 表本身的读取也要受保护（插件可给它挂抛错的
+			// __index；裸 GetGlobal 会以 Go panic 打崩宿主）。
+			promotePluginMethods(L, getGlobalProtected(L, "PLUGIN"))
 			cv = &cachedVM{L: L}
 			e.vms[path] = cv
 		}
@@ -371,4 +373,40 @@ func extractField(L *lua.LState, helper, key string, fn func()) {
 	if err := L.PCall(0, 0, nil); err != nil {
 		log.Printf("[plugin] WARNING: %s(%q) raised a Lua error while reading a plugin result — treating the field as absent: %v", helper, key, err)
 	}
+}
+
+// luaNil 是 Lua 的 nil 值（用于 protectedValue 的失败回落）。
+var luaNil = lua.LNil
+
+// protectedValue 在受保护调用内求值 read，返回它读到的 Lua 值；read 触发 Lua
+// 错误（例如插件表带抛错的 `__index`）时返回 lua.LNil 并记一条警告。
+//
+// 第八轮审计 A-01（P0，F-10 修复不完整）：F-10 只把**结果字段读取**包进了
+// extractField，但**插件表本身**的读取仍是裸 `L.GetField`/`L.GetGlobal` ——
+// 而 gopher-lua 的 `L.GetField` 会执行 `__index` 元方法，`ls.Panic` 是 Go panic
+// （`panicWithTraceback`），会直接穿透 `LoadPlugin` 打崩宿主进程。实测：
+//
+//	PLUGIN = setmetatable({name="x"}, {__index = function(_,k) error("boom") end})
+//
+// 之后 `xdev available` 即 `panic: …boom` → exit 2。由于 `registerUserPlugins`
+// 在 `RegisterAll` 里加载每个用户插件，**任意** `$XMDEV_HOME/plugins/*.lua`
+// 都能让 CLI/TUI/GUI 每次启动都崩溃（DoS）。本函数把入口读取一并纳入保护。
+func protectedValue(L *lua.LState, helper, key string, read func() lua.LValue) lua.LValue {
+	out := luaNil
+	extractField(L, helper, key, func() {
+		if v := read(); v != nil {
+			out = v
+		}
+	})
+	return out
+}
+
+// getGlobalProtected 是受保护的 `L.GetGlobal`（A-01）。
+func getGlobalProtected(L *lua.LState, name string) lua.LValue {
+	return protectedValue(L, "getGlobal", name, func() lua.LValue { return L.GetGlobal(name) })
+}
+
+// getFieldProtected 是受保护的 `L.GetField`（A-01）。
+func getFieldProtected(L *lua.LState, table lua.LValue, key string) lua.LValue {
+	return protectedValue(L, "getField", key, func() lua.LValue { return L.GetField(table, key) })
 }

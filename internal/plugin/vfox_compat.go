@@ -68,14 +68,17 @@ func (e *LuaEngine) loadLuaBase(path string, specs luaCallSpecs, vfox bool) (*lu
 		return nil, fmt.Errorf("load %s plugin %s: %w", label, path, err)
 	}
 
-	pluginTable := L.GetGlobal("PLUGIN")
+	// 第八轮审计 A-01（P0）：PLUGIN 表本身的读取必须走受保护调用 —— 插件可以给
+	// PLUGIN 挂抛错的 __index 元方法，裸 L.GetGlobal/L.GetField 会以 Go panic
+	// 打崩宿主（`xdev available` 即 exit 2）。
+	pluginTable := getGlobalProtected(L, "PLUGIN")
 	if pluginTable.Type() != lua.LTTable {
 		return nil, fmt.Errorf("%s plugin %s: PLUGIN table not found", pluginLabel(vfox), path)
 	}
 
 	var name, displayName string
 	if vfox {
-		infoTable := L.GetField(pluginTable, "info")
+		infoTable := getFieldProtected(L, pluginTable, "info")
 		if infoTable.Type() == lua.LTTable {
 			name = getFieldString(L, infoTable, "name")
 			displayName = getFieldString(L, infoTable, "display_name")
@@ -113,14 +116,14 @@ func (e *LuaEngine) loadLuaBase(path string, specs luaCallSpecs, vfox bool) (*lu
 	}
 
 	promotePluginMethods(L, pluginTable)
-	if fn := L.GetGlobal("available"); fn.Type() != lua.LTFunction {
+	if fn := getGlobalProtected(L, "available"); fn.Type() != lua.LTFunction {
 		return nil, fmt.Errorf("%s plugin %s: available() function not found", pluginLabel(vfox), path)
 	}
-	if fn := L.GetGlobal(specs.archiveFn); fn.Type() != lua.LTFunction {
+	if fn := getGlobalProtected(L, specs.archiveFn); fn.Type() != lua.LTFunction {
 		return nil, fmt.Errorf("%s plugin %s: %s() function not found", pluginLabel(vfox), path, specs.archiveFn)
 	}
 
-	hasEnv := L.GetGlobal(specs.envVarsFn).Type() == lua.LTFunction
+	hasEnv := getGlobalProtected(L, specs.envVarsFn).Type() == lua.LTFunction
 
 	return &luaBasePlugin{
 		path:        path,
@@ -149,10 +152,10 @@ func promotePluginMethods(L *lua.LState, pluginTable lua.LValue) {
 		return
 	}
 	for _, name := range []string{"available", "archive", "install", "env_vars", "env_keys"} {
-		if L.GetGlobal(name).Type() == lua.LTFunction {
+		if getGlobalProtected(L, name).Type() == lua.LTFunction {
 			continue
 		}
-		if field := L.GetField(pluginTable, name); field.Type() == lua.LTFunction {
+		if field := getFieldProtected(L, pluginTable, name); field.Type() == lua.LTFunction {
 			L.SetGlobal(name, field)
 		}
 	}
@@ -182,7 +185,7 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 	doneCh := make(chan error, 1)
 	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
-			Fn:      L.GetGlobal("available"),
+			Fn:      getGlobalProtected(L, "available"),
 			NRet:    1,
 			Protect: true,
 		}); err != nil {
@@ -244,7 +247,7 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 	doneCh := make(chan error, 1)
 	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
-			Fn:      L.GetGlobal(fnName),
+			Fn:      getGlobalProtected(L, fnName),
 			NRet:    1,
 			Protect: true,
 		}, lua.LString(version), lua.LString(goos), lua.LString(arch)); err != nil {
@@ -303,7 +306,7 @@ func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[strin
 	doneCh := make(chan error, 1)
 	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
-			Fn:      L.GetGlobal(fnName),
+			Fn:      getGlobalProtected(L, fnName),
 			NRet:    1,
 			Protect: true,
 		}, lua.LString(installPath)); err != nil {

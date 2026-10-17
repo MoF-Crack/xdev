@@ -203,15 +203,21 @@ func (s *Scheduler) Shutdown() {
 	if s.startupCancel == nil {
 		return
 	}
-	// 第七轮审计 F-55：后台嗅探可能在进程收到退出信号**之前就已经正常跑完**——
-	// 那种情况下 sniffAllWithForce 已按 ctx.Err() 判定过 Partial 并保存了缓存
-	//（见本文件 sniffAllWithForce 的 `Partial: ctx.Err() != nil` 与随后的
-	// SaveCache）。旧代码在这里无条件把 Partial 覆写为 true，把一次**完整**的
-	// 嗅探错标成 partial，使 `xdev sniff` 摘要无条件多打一个 partial，误导排障。
-	// 因此先非阻塞探测完成信号：已完成则只释放 context，不再回写缓存。
+	// 第七轮审计 F-55 + 第八轮审计 A-04：后台嗅探**自己**就是 Partial 的权威判定者
+	// —— sniffAllWithForce 在结尾按 `ctx.Err() != nil` 算出 Partial 并原子落盘
+	//（见本文件的 `Partial: ctx.Err() != nil` 与随后的 SaveCache）。
+	//
+	// F-55 的初版修复只堵住了「进入 Shutdown 前就已完成」这一种时序；若嗅探在
+	// 第一个 select 与第二个 select 之间完成（第八轮用确定性交错复现：
+	// `Partial=true … Tools=1`，而那次嗅探其实已把活干完），第二个 select 仍会走
+	// `<-s.startupDone` 分支，然后**无条件**把 Partial 覆写成 true —— 同一个
+	// 「完整嗅探被错标 partial」缺陷只是窗口变窄了。
+	//
+	// 正确语义：只要 startupDone 关闭（无论何时），嗅探就已自行保存过正确结果，
+	// Shutdown **绝不**回写；只有等待超时（嗅探仍在飞行、没机会保存）时，
+	// Shutdown 才作为兜底写一次 Partial=true。
 	select {
 	case <-s.startupDone:
-		// 已完成：Partial 已由 sniffAllWithForce 按 ctx.Err() 决定并落盘。
 		s.startupCancel()
 		return
 	default:
@@ -220,11 +226,12 @@ func (s *Scheduler) Shutdown() {
 	s.startupCancel()
 	select {
 	case <-s.startupDone:
-		// Normal completion after cancellation.
+		// 嗅探已收尾并自行保存（Partial 由它按 ctx.Err() 决定）——不要回写。
+		return
 	case <-time.After(2 * time.Second):
 		log.Printf("[discovery] shutdown: timeout waiting for background sniff")
 	}
-	// Flush partial results to cache. 只有确实被中断的嗅探才走到这里。
+	// 兜底：嗅探仍在飞行，没能保存——把它已产出的部分结果标为 partial 落盘。
 	if cache, err := s.LoadCache(); err == nil && cache != nil {
 		cache.Partial = true
 		cache.LastSniffAt = time.Now()
@@ -561,51 +568,47 @@ func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
 	// This preserves entries for tools that were not sniffed this round
 	// and avoids losing results from concurrent processes (NFR-004).
 	//
-	// F-56 加固：与 withCacheLock 同理——读失败时**不得**从空缓存出发再写回，
-	// 那会把整份缓存清空。这里读失败则放弃本轮合并写（结果仅留在返回值里），
-	// 并明确告警；绝不「读失败 → 写空」。
-	existingCache, loadErr := s.LoadCache()
-	if loadErr != nil {
-		log.Printf("[discovery] SniffAll: refusing to rewrite cache after a failed read: %v", loadErr)
-	}
-	newCache := &SniffCache{
-		Tools:       make(map[string]ToolSniffResult),
-		RateLimit:   RateLimitState{Remaining: s.limiter.available()},
-		LastSniffAt: time.Now(),
-		Partial:     ctx.Err() != nil,
-	}
-	if existingCache != nil {
-		for k, v := range existingCache.Tools {
-			newCache.Tools[k] = v
-		}
-		if !existingCache.LastSniffAt.IsZero() {
-			// Preserve stale flag from previous run.
-			newCache.Stale = existingCache.Stale
-		}
-	}
-
-	// Mark tools that timed out as stale.
-	if ctx.Err() != nil {
-		newCache.Stale = true
-	}
-
-	// Overlay this round's results.
+	// 第八轮审计 D3（F-56 未修全）：整个「读现有 → 合并本轮 → 写回」必须落在
+	// **同一把独占锁**内。旧实现是 LoadCache（共享锁，:574）→ 改内存 → SaveCache
+	//（独占锁，:625），两把锁之间没有覆盖整个 RMW 周期；在此期间另一个进程/协程
+	// 经 updateCacheEntryLocked 落地的条目会被本轮的过时快照**整份覆盖**而丢失
+	//（实测：合并写丢掉了并发写入的条目）。withCacheLock 当时只保护了
+	// updateCacheEntryLocked，合并写路径仍是跨两把锁的无锁 RMW。
+	//
+	// 现在把合并逻辑整体交给 withCacheLock：锁内重新读取、合并、写回。
+	// 读失败（损坏/不可读）时 withCacheLock 直接返回错误、**绝不**写空缓存。
 	var errs []string
-	for r := range results {
-		newCache.Tools[r.name] = r.result
-		if r.err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", r.name, r.err))
+	mergeErr := s.withCacheLock(func(cache *SniffCache) error {
+		// 保留既有条目（本轮未嗅探到的工具）。
+		if cache.Tools == nil {
+			cache.Tools = make(map[string]ToolSniffResult)
 		}
-	}
-
-	// Single atomic save.
-	s.mu.Lock()
-	if loadErr == nil {
-		if saveErr := s.SaveCache(newCache); saveErr != nil {
-			log.Printf("[discovery] SniffAll: save cache failed: %v", saveErr)
+		if cache.LastSniffAt.IsZero() {
+			// 首次运行：没有历史，保持 Stale 现状。
+		} else {
+			// Preserve stale flag from previous run.
 		}
+		// 限流窗口：活跃则整段沿用（D1/D1b），否则由 withCacheLock 统一刷新。
+		if !cache.RateLimit.ResetAt.IsZero() && !time.Now().Before(cache.RateLimit.ResetAt) {
+			cache.RateLimit.ResetAt = time.Time{} // 窗口已过期 → 关闭
+		}
+		cache.LastSniffAt = time.Now()
+		cache.Partial = ctx.Err() != nil
+		if ctx.Err() != nil {
+			cache.Stale = true
+		}
+		// Overlay this round's results.
+		for r := range results {
+			cache.Tools[r.name] = r.result
+			if r.err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", r.name, r.err))
+			}
+		}
+		return nil
+	})
+	if mergeErr != nil {
+		log.Printf("[discovery] SniffAll: merge write failed: %v", mergeErr)
 	}
-	s.mu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("sniff errors: %s", strings.Join(errs, "; "))
@@ -647,6 +650,16 @@ func (s *Scheduler) updateCacheEntryLocked(tool string, result ToolSniffResult) 
 	})
 }
 
+// rateLimitWindowActive 报告 c 里是否记录着一个**尚未过期**的限流窗口
+// （第八轮审计 D1/D1b）。窗口活跃时，缓存中的 Remaining 是权威值，
+// 不得被本地令牌桶覆盖。
+func (s *Scheduler) rateLimitWindowActive(c *SniffCache) bool {
+	if c == nil || c.RateLimit.ResetAt.IsZero() {
+		return false
+	}
+	return time.Now().Before(c.RateLimit.ResetAt)
+}
+
 // withCacheLock 在**同一把独占文件锁**内执行一次完整的「读 → 改 → 写」缓存事务
 // （第七轮审计 F-56）。mutate 收到的 cache 保证非 nil；锁不可得时降级为「读现有
 // 缓存 + 改 + 写」的无锁路径（与既有 SaveCache 的降级语义一致：拿不到锁不应让
@@ -681,10 +694,10 @@ func (s *Scheduler) withCacheLock(mutate func(*SniffCache) error) error {
 	if err := mutate(cache); err != nil {
 		return err
 	}
-	// 注意：mutate 可能已显式设定 Remaining（限流时置 0）。只有当 mutate 没有把
-	// Remaining 归零时才用本地令牌桶刷新它，否则会把「已限流」状态覆盖回满桶
-	//（F-53 回归：窗口写进去了但剩余数被重置，跨进程限流仍失效）。
-	if cache.RateLimit.Remaining != 0 {
+	// 第八轮审计 D1b：统一用 rateLimitWindowActive 判定，而不是「Remaining != 0」
+	// 这种启发式（Remaining 恰为 0 且窗口已过期时，旧写法会拒绝刷新，留下一个
+	// 永远为 0 的桶）。窗口活跃 → 保留缓存计数；否则用本地令牌桶刷新。
+	if !s.rateLimitWindowActive(cache) {
 		cache.RateLimit.Remaining = s.limiter.available()
 	}
 	return s.writeCacheUnlocked(cache)
@@ -777,7 +790,14 @@ func (s *Scheduler) SaveCache(c *SniffCache) error {
 	if c.Tools == nil {
 		c.Tools = make(map[string]ToolSniffResult)
 	}
-	c.RateLimit.Remaining = s.limiter.available()
+	// 第八轮审计 D1b（F-53 的自引入回归）：**不得**在限流窗口活跃期间用本地
+	// 令牌桶刷新 Remaining。旧实现无条件 `c.RateLimit.Remaining = s.limiter.available()`
+	// ——本地桶在一次 SniffAll 后是满的，于是刚写进去的「已限流（Remaining=0）」
+	// 被立刻改回 60，NewScheduler 的「窗口仍活跃 → 保留缓存计数」分支永不生效，
+	// 跨进程限流再次失效。只在窗口未活跃时才刷新。
+	if !s.rateLimitWindowActive(c) {
+		c.RateLimit.Remaining = s.limiter.available()
+	}
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
