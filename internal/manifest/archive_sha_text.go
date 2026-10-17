@@ -221,3 +221,73 @@ func UpdateArchiveSHA256InFile(path string, updates []ArchiveSHAUpdate) (int, []
 	}
 	return changed, missed, nil
 }
+
+// SetLatestInLines 在 YAML 文本里把顶层 `latest:` 的值改成 newLatest，返回新内容
+// 与是否发生改动（第七轮审计 F-29 的注释保全部分）。
+//
+// 为什么需要它：`xdev refresh` 原先用 manifest.MarshalTool **整文件重写**来更新
+// latest，会把用户手写 manifest 里的**全部注释**抹掉。这里只做文本级外科替换——
+// 命中顶层 `latest:` 行（缩进为 0，避免误改某个 version 条目下的同名字段）时
+// 就地替换值并保留行尾注释；未命中则**追加**一行。
+//
+// 与 SetArchiveSHA256InLines 同源的思路：能用文本级改写就不整文件重排。
+func SetLatestInLines(src []byte, newLatest string) ([]byte, bool) {
+	if newLatest == "" {
+		return src, false
+	}
+	text := string(src)
+	lines := strings.Split(text, "\n")
+
+	for i, line := range lines {
+		// 顶层 latest：行首无缩进，且不是注释行。
+		if len(line) == 0 || line[0] == ' ' || line[0] == '\t' || line[0] == '#' {
+			continue
+		}
+		if !strings.HasPrefix(line, "latest:") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "latest:")
+		// 分离「值」与「行尾注释」：找到 '#'，把其**前面的整段空白**一并归入
+		// 注释部分，从而逐字节保留 "value  # note" 的双空格写法。
+		value, comment := rest, ""
+		if hash := strings.Index(rest, "#"); hash >= 0 {
+			cut := hash
+			for cut > 0 && (rest[cut-1] == ' ' || rest[cut-1] == '\t') {
+				cut--
+			}
+			value, comment = rest[:cut], rest[cut:]
+		}
+		if strings.TrimSpace(value) == newLatest {
+			return src, false // 已经是目标值
+		}
+		lines[i] = "latest: " + newLatest + comment
+		return []byte(strings.Join(lines, "\n")), true
+	}
+
+	// 没有顶层 latest：追加一行（放在开头，与 YAML 顶层字段惯例一致）。
+	out := append([]byte("latest: "+newLatest+"\n"), src...)
+	return out, true
+}
+
+// UpdateLatestInFile 在文件上做一次「加锁 → 文本级改 latest → 原子写」。
+// 返回是否发生改动。用于 `xdev refresh` 在保住注释的前提下更新 latest（F-29）。
+func UpdateLatestInFile(path, newLatest string) (bool, error) {
+	lock, lockErr := util.AcquireFileLock(path+".lock", 30*time.Second)
+	if lockErr != nil {
+		return false, fmt.Errorf("manifest lock %s.lock: %w", path, lockErr)
+	}
+	defer lock.Release()
+
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	out, changed := SetLatestInLines(src, newLatest)
+	if !changed {
+		return false, nil
+	}
+	if err := util.AtomicWriteFile(path, out, 0o644); err != nil {
+		return false, fmt.Errorf("write %s: %w", path, err)
+	}
+	return true, nil
+}

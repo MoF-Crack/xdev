@@ -106,10 +106,16 @@ func TestAtomicWriteCallSitesConverged(t *testing.T) {
 	root := repoRoot(t)
 
 	// 8 个调用点（审计清单；>= 断言以容忍后续新增）
+	//
+	// 第七轮审计 F-29 更新：internal/cli/refresh.go 的调用点**已按设计消失** ——
+	// refresh 原先自己 MarshalTool + AtomicWriteFile 整文件重写，会抹掉用户手写
+	// manifest 的全部注释；现改为委托 internal/manifest.UpdateLatestInFile（加锁 →
+	// 文本级外科写 → util.AtomicWriteFile），因此原子写仍走收敛路径，只是发生地
+	// 从 cli 移到了 manifest 包（该包的清单条目本就覆盖）。这不是放宽断言，而是
+	// 把清单同步到一次有意的架构收敛。
 	atomicCallSites := map[string]int{
 		"internal/config/config.go":        2, // saveLocked + UpdateConfigPaths
 		"internal/discovery/scheduler.go":  4, // sniff cache + .bak + manifest 写回
-		"internal/cli/refresh.go":          1,
 		"internal/manifest/manifest.go":    3,
 		"internal/gui/app_custom_tools.go": 1,
 	}
