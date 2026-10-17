@@ -124,13 +124,24 @@ func TestSetLatestInLines_QuotedValueIsIdempotent(t *testing.T) {
 			t.Errorf("quoted value %q should be recognised as already current", src)
 		}
 	}
-	// 但引号值不等于目标时仍要改写。
+	// 但引号值不等于目标时仍要改写，且**沿用原有引号风格**（第八轮审计 V4：
+	// 丢掉引号是格式回归，且 `"1.0"` 与 `1.0` 在 YAML 里类型不同）。
 	out, changed := SetLatestInLines([]byte("name: demo\nlatest: \"1.0.0\"\n"), "2.0.0")
 	if !changed {
 		t.Fatal("expected a change for a different quoted value")
 	}
-	if !strings.Contains(string(out), "latest: 2.0.0") {
-		t.Errorf("got %q", string(out))
+	if !strings.Contains(string(out), `latest: "2.0.0"`) {
+		t.Errorf("双引号风格未被沿用：got %q", string(out))
+	}
+	// 单引号同理。
+	out2, _ := SetLatestInLines([]byte("name: demo\nlatest: '1.0.0'\n"), "2.0.0")
+	if !strings.Contains(string(out2), "latest: '2.0.0'") {
+		t.Errorf("单引号风格未被沿用：got %q", string(out2))
+	}
+	// 无引号的原值 + 不需要引号的新值 → 保持无引号（不做无谓的格式改动）。
+	out3, _ := SetLatestInLines([]byte("name: demo\nlatest: 1.0.0\n"), "2.0.0")
+	if !strings.Contains(string(out3), "latest: 2.0.0\n") {
+		t.Errorf("裸值被无谓地加了引号：got %q", string(out3))
 	}
 }
 

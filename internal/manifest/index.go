@@ -157,6 +157,12 @@ func BuildIndexYAML(tools []*Tool, generated time.Time) ([]byte, error) {
 }
 
 // indexDisplayName 返回分类展示名（未知分类回退为可读的标题式名称）。
+//
+// 第八轮审计 V5：首字母大写必须按 **rune** 切分。旧实现用 `w[:1]`（字节切片）
+// 取首字符，对多字节 UTF-8 会切出半个码位：实测 `indexDisplayName("工具")`
+// → `"\ufffd\xb7\xa5具"`（乱码），`"über-build"` → `"\ufffd\xbcber-build"`，
+// `"Ωmega"`/`"日本語ツール"` 同样被破坏。分类名可能来自用户手写 manifest，
+// 非 ASCII 完全合法。
 func indexDisplayName(cat string) string {
 	if d, ok := indexCategoryDisplay[cat]; ok {
 		return d
@@ -166,7 +172,8 @@ func indexDisplayName(cat string) string {
 		if w == "" {
 			continue
 		}
-		words[i] = strings.ToUpper(w[:1]) + w[1:]
+		r := []rune(w)
+		words[i] = strings.ToUpper(string(r[0])) + string(r[1:])
 	}
 	if len(words) == 0 {
 		return cat

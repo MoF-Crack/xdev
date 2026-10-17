@@ -753,6 +753,18 @@ func versionReleaseNewer(a, b Version) bool {
 	return a.Version > b.Version
 }
 
+// VersionReleaseNewer 报告 a 是否应当排在 b 之前，使用与 SortVersionsByRelease
+// **完全相同**的全序（semver → 发布日期 → 原串）。
+//
+// 第八轮审计 R8-2：`xdev refresh` 原先用 `newestVersion`（本全序）挑出候选，
+// 却用 `util.CompareSemver` 做写回门 —— 两套排序不一致。数字段相同、发布日期
+// 不同时（真实语料：clion/goland/webstorm 的 `2026.2` vs `2026.2.0.1`），全序判
+// 「更新」而 CompareSemver 判「相等」，于是 latest **永远推不上去**，且没有任何
+// 提示。导出本函数让写回门复用同一判据，从根上消除两套排序的分裂。
+func VersionReleaseNewer(a, b Version) bool {
+	return versionReleaseNewer(a, b)
+}
+
 func parseReleaseDate(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {

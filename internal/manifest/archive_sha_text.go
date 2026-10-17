@@ -255,10 +255,16 @@ func SetLatestInLines(src []byte, newLatest string) ([]byte, bool) {
 		if len(line) == 0 || line[0] == ' ' || line[0] == '\t' || line[0] == '#' {
 			continue
 		}
-		if !strings.HasPrefix(line, "latest:") {
+		// 第八轮审计 V2：YAML 允许 `latest :`（冒号前有空格）与 `"latest":` /
+		// `'latest':`（键加引号）等等价写法。旧实现只认字面前缀 "latest:"，于是
+		// 这些写法会被当成「没有顶层 latest」→ 走到插入分支 → 产出**重复键**：
+		//   "name: demo\nlatest : 1.0.0\n" → "latest: 2.0.0\nname: demo\nlatest : 1.0.0\n"
+		// yaml.Unmarshal 报 `mapping key "latest" already defined`，文件损坏。
+		// 现在按「解析出键名」的方式匹配，所有等价写法都就地改写。
+		key, rest, ok := splitTopLevelKey(line)
+		if !ok || key != "latest" {
 			continue
 		}
-		rest := strings.TrimPrefix(line, "latest:")
 		// 分离「值」与「行尾注释」：找到 '#'，把其**前面的整段空白**一并归入
 		// 注释部分，从而逐字节保留 "value  # note" 的双空格写法。
 		value, comment := rest, ""
@@ -273,7 +279,19 @@ func SetLatestInLines(src []byte, newLatest string) ([]byte, bool) {
 		if unquoteYAML(strings.TrimSpace(value)) == newLatest {
 			return src, false
 		}
-		lines[i] = "latest: " + newLatest + comment
+		// 保留行首的 UTF-8 BOM（它属于文件级标记，改写键值时不能丢）。
+		prefix := ""
+		if strings.HasPrefix(line, "\ufeff") {
+			prefix = "\ufeff"
+		}
+		// 第八轮审计 V3/V4：写回的值必须做 YAML 标量处理 ——
+		//  V3：原样拼接特殊字符会产出**非法 YAML**（实测 `a: b` → mapping values
+		//      not allowed；`*glob` → unknown anchor；`- dash` → block sequence
+		//      entries not allowed；`[bracket`、`"quote` 同理）。
+		//  V4：原值带引号时丢掉引号是格式回归（且可能改变解析结果，如 `"1.0"` 与
+		//      `1.0` 在 yaml 里类型不同）。
+		// 规则：原值有引号 → 沿用同一引号风格；原值无引号但新值需要引号 → 加双引号。
+		lines[i] = prefix + "latest: " + yamlScalarFor(newLatest, strings.TrimSpace(value)) + comment
 		return joinLinesKeepEnds(lines, ends), true
 	}
 
@@ -306,15 +324,136 @@ func SetLatestInLines(src []byte, newLatest string) ([]byte, bool) {
 		nl = "\n"
 	}
 
-	outLines := make([]string, 0, len(lines)+1)
-	outEnds := make([]string, 0, len(ends)+1)
+	// 第八轮审计 R8-1（P1，本修复自身引入的回归）：前导块的**最后一行没有换行符**
+	// 时（例如文件整体就是一行注释 `# c1`，或最后一行是注释且无末尾换行），
+	// `ends[insertAt-1] == ""`。旧写法把 `nl` 只当作**新行自己的**行尾，从不作为
+	// 前导分隔符插入 → 新行被直接粘在注释尾部：
+	//   "# c1" → "# c1latest: 2.0\n"（YAML 里 latest 键根本不存在！）
+	// 而 refresh 仍按 changed=true 打印 "latest: 旧 -> 新"，即**谎报成功且写坏文件**。
+	// 现在：前导块末尾缺换行时，先补一个分隔符再写新行。
+	outLines := make([]string, 0, len(lines)+2)
+	outEnds := make([]string, 0, len(ends)+2)
 	outLines = append(outLines, lines[:insertAt]...)
 	outEnds = append(outEnds, ends[:insertAt]...)
+	if insertAt > 0 && (insertAt-1 >= len(ends) || ends[insertAt-1] == "") {
+		// 前导块末行没有行尾：补一个空行作为分隔，保证 latest 独立成行。
+		outLines = append(outLines, "")
+		outEnds = append(outEnds, nl)
+	}
 	outLines = append(outLines, "latest: "+newLatest)
 	outEnds = append(outEnds, nl)
 	outLines = append(outLines, lines[insertAt:]...)
 	outEnds = append(outEnds, ends[insertAt:]...)
 	return joinLinesKeepEnds(outLines, outEnds), true
+}
+
+// splitTopLevelKey 从一行 YAML 顶层映射条目里解析出「键名」与「冒号之后的原文」。
+//
+// 支持 YAML 的等价写法（第八轮审计 V2）：
+//
+//	latest: 1.0.0      → ("latest", " 1.0.0")
+//	latest : 1.0.0     → ("latest", " 1.0.0")
+//	"latest": 1.0.0    → ("latest", " 1.0.0")
+//	'latest': 1.0.0    → ("latest", " 1.0.0")
+//
+// 非映射条目（无冒号、是列表项 `- x`、或键为空）返回 ok=false。
+func splitTopLevelKey(line string) (key, rest string, ok bool) {
+	s := line
+	// 首行的 UTF-8 BOM 属于文件级标记，不是键名的一部分。
+	if strings.HasPrefix(s, "\ufeff") {
+		s = strings.TrimPrefix(s, "\ufeff")
+	}
+	// 列表项不是映射键。
+	if strings.HasPrefix(strings.TrimLeft(s, " \t"), "- ") || strings.TrimSpace(s) == "-" {
+		return "", "", false
+	}
+	// 找到不在引号内的冒号。
+	inSingle, inDouble := false, false
+	colon := -1
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case ':':
+			if !inSingle && !inDouble {
+				colon = i
+			}
+		}
+		if colon >= 0 {
+			break
+		}
+	}
+	if colon < 0 {
+		return "", "", false
+	}
+	rawKey := strings.TrimSpace(s[:colon])
+	if rawKey == "" {
+		return "", "", false
+	}
+	return unquoteYAML(rawKey), s[colon+1:], true
+}
+
+// yamlScalarFor 为写回 `latest:` 的值生成安全的 YAML 标量文本（第八轮审计 V3/V4）。
+//
+// oldRaw 是该键**原有**的值原文（未去引号），用于沿用原有引号风格：
+//   - 原值被单引号包裹 → 新值也用单引号（内部单引号按 YAML 规则双写转义）；
+//   - 原值被双引号包裹 → 新值也用双引号（内部反斜杠/双引号转义）；
+//   - 原值无引号 → 新值本身不需要引号就裸写，否则加双引号。
+//
+// needsYAMLQuoting 判定裸写是否会产出非法 YAML 或改变语义。
+func yamlScalarFor(newValue, oldRaw string) string {
+	switch {
+	case len(oldRaw) >= 2 && oldRaw[0] == '\'' && oldRaw[len(oldRaw)-1] == '\'':
+		return "'" + strings.ReplaceAll(newValue, "'", "''") + "'"
+	case len(oldRaw) >= 2 && oldRaw[0] == '"' && oldRaw[len(oldRaw)-1] == '"':
+		esc := strings.ReplaceAll(newValue, `\`, `\\`)
+		esc = strings.ReplaceAll(esc, `"`, `\"`)
+		return `"` + esc + `"`
+	}
+	if !needsYAMLQuoting(newValue) {
+		return newValue
+	}
+	esc := strings.ReplaceAll(newValue, `\`, `\\`)
+	esc = strings.ReplaceAll(esc, `"`, `\"`)
+	return `"` + esc + `"`
+}
+
+// needsYAMLQuoting 报告裸写该标量是否会产出非法/歧义 YAML。
+//
+// 覆盖：空串、首尾空白、YAML 指示符（`- ? : , [ ] { } # & * ! | > ' " % @ \“）、
+// 含 `: `（映射歧义）或 ` #`（注释歧义）、以及看起来像数字/布尔/null 的串
+// （裸写会被解析成非字符串类型）。
+func needsYAMLQuoting(v string) bool {
+	if v == "" {
+		return true
+	}
+	if strings.TrimSpace(v) != v {
+		return true
+	}
+	if strings.ContainsAny(v, "\n\r\t") {
+		return true
+	}
+	switch v[0] {
+	case '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`':
+		return true
+	}
+	if strings.Contains(v, ": ") || strings.HasSuffix(v, ":") {
+		return true
+	}
+	if strings.Contains(v, " #") {
+		return true
+	}
+	switch strings.ToLower(v) {
+	case "true", "false", "yes", "no", "on", "off", "null", "~":
+		return true
+	}
+	return false
 }
 
 // unquoteYAML 去掉值两侧成对的单/双引号，用于幂等比较。

@@ -344,6 +344,10 @@ func TestNewestVersion_DoesNotMutateInput(t *testing.T) {
 }
 
 // TestShouldUpdateLatest_NeverDowngrades：只在候选严格高于现值时才写回。
+//
+// 第八轮审计 R8-2 更新了签名：比较改用 manifest.VersionReleaseNewer（与
+// newestVersion 同一个全序），因此需要候选/现值所在的 VersionList 来取 Release
+// 日期。本用例的版本串都不带日期，语义与旧断言完全一致。
 func TestShouldUpdateLatest_NeverDowngrades(t *testing.T) {
 	cases := []struct {
 		candidate, current string
@@ -358,8 +362,42 @@ func TestShouldUpdateLatest_NeverDowngrades(t *testing.T) {
 		{"1.0.0-rc.1", "1.0.0", false},
 	}
 	for _, tc := range cases {
-		if got := shouldUpdateLatest(tc.candidate, tc.current); got != tc.want {
+		// 构造只含这两个版本串的列表（无 Release 日期）。
+		versions := []manifest.Version{{Version: tc.current}, {Version: tc.candidate}}
+		if got := shouldUpdateLatest(versions, tc.candidate, tc.current); got != tc.want {
 			t.Errorf("shouldUpdateLatest(%q, %q) = %v, want %v", tc.candidate, tc.current, got, tc.want)
 		}
+	}
+}
+
+// 第八轮审计 R8-2 守卫：写回门必须与 newestVersion 用**同一个全序**。
+//
+// 缺陷现场：newestVersion 走 manifest.SortVersionsByRelease 的全序
+// （semver → 发布日期 → 原串），而写回门用 util.CompareSemver（只比三段数字，
+// 忽略日期次键）。数字段相同、发布日期不同时，全序判「更新」而 CompareSemver 判
+// 「相等」→ latest 永远推不上去且无提示。真实语料：clion/goland/webstorm 的
+// `2026.2` vs `2026.2.0.1`。
+func TestShouldUpdateLatest_UsesSameTotalOrderAsNewestVersion(t *testing.T) {
+	// 数字段相同、日期不同的两个版本（真实语料形态）。
+	versions := []manifest.Version{
+		{Version: "2026.2", Release: "2026-07-16"},
+		{Version: "2026.2.0.1", Release: "2026-07-23"},
+	}
+
+	// newestVersion 挑出的是带更晚日期的那个。
+	candidate := newestVersion(versions)
+	if candidate != "2026.2.0.1" {
+		t.Fatalf("test setup: newestVersion = %q, want 2026.2.0.1", candidate)
+	}
+
+	// 写回门必须同意 —— 旧实现（CompareSemver=0）会在这里返回 false。
+	if !shouldUpdateLatest(versions, candidate, "2026.2") {
+		t.Error("R8-2 复现：newestVersion 选中了 2026.2.0.1，但写回门拒绝推进 latest " +
+			"——两套排序分裂（全序 vs CompareSemver）")
+	}
+
+	// 反向：不得把较旧日期的版本推成 latest。
+	if shouldUpdateLatest(versions, "2026.2", "2026.2.0.1") {
+		t.Error("写回门把较旧日期的版本推成了 latest")
 	}
 }
