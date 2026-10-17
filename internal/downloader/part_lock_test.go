@@ -118,6 +118,9 @@ func TestDownload_CrashResume_TakesOver(t *testing.T) {
 			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
+		// RFC 9110：206 必须携带 Content-Range，否则客户端无法验证写入偏移
+		// （F-12b 的 fail-closed 校验会拒绝一个无法证明起点的续传）。
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", startByte, len(payload)-1, len(payload)))
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)-startByte))
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write(payload[startByte:])
@@ -127,7 +130,10 @@ func TestDownload_CrashResume_TakesOver(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "archive.zip")
 	// Crash residue: half the payload plus a stale lock file.
-	if err := os.WriteFile(dest+".part", payload[:1024], 0o644); err != nil {
+	//
+	// F-12：残留必须放在**本 URL 的分代路径**上，才是「同一 URL 的崩溃残留」
+	// 语义（修复后跨 URL 的残留会被隔离，正是 F-12 要的）。
+	if err := os.WriteFile(partPathFor(dest, srv.URL+"/archive.zip"), payload[:1024], 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(dest+".part.lock", nil, 0o644); err != nil {
@@ -263,8 +269,10 @@ func TestPause_DoesNotDeletePart(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond) // extra settling window
 
-	if _, err := os.Stat(dest + ".part"); err != nil {
-		t.Errorf("paused download lost its .part file: %v", err)
+	// F-12：.part 按候选 URL 分代（<dest>.<sha256(url)[:16]>.part），断言
+	// 「盘上仍有该 dest 的 .part 残留」而不是拼死旧命名。
+	if !HasPartialFile(dest) {
+		t.Errorf("paused download lost its .part file (dest=%s)", dest)
 	}
 	if st := mustStatus(t, m, id); st != StatusPaused {
 		t.Errorf("status = %s, want paused (a paused download must not be reported as cancelled)", st)

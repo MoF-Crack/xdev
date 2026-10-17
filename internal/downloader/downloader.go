@@ -44,12 +44,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,6 +147,19 @@ type Options struct {
 	// (hash becomes real) and re-installing the same version would be
 	// misreported as hash tampering.
 	UnsignedVersion bool
+}
+
+// Fallbacks 返回该下载的全部候选 URL（主 URL + 回退 URL）。
+//
+// F-12：.part 按 URL 分代，因此「清理这次下载可能留下的临时文件」必须覆盖
+// 每一个候选 URL 的代，否则回退 URL 写入的 .part 会变成孤儿。
+func (o Options) Fallbacks() []string {
+	out := make([]string, 0, len(o.FallbackURLs)+1)
+	if o.URL != "" {
+		out = append(out, o.URL)
+	}
+	out = append(out, o.FallbackURLs...)
+	return out
 }
 
 // Download fetches opts.URL to opts.Dest.
@@ -270,8 +286,10 @@ func Download(ctx context.Context, opts Options) error {
 			// actually observed (dead/misconfigured proxy), not when the
 			// proxy worked and the target simply 404'd.
 			if opts.ProxyURL != "" && proxyFailed {
+				// F-17：代理 URL 的 userinfo 是合法配置（认证代理），
+				// 绝不能出现在用户可见的错误里。
 				return fmt.Errorf("download failed: proxy %s unreachable (%s); direct also failed (%s); start the proxy service or disable proxy.enabled",
-					opts.ProxyURL, strings.Join(failures, "; "), strings.Join(directFailures, "; "))
+					redactProxyCredentials(opts.ProxyURL), strings.Join(failures, "; "), strings.Join(directFailures, "; "))
 			}
 			failures = append(failures, directFailures...)
 		}
@@ -354,6 +372,43 @@ func sanitizedURL(raw string) string {
 	return parsed.String()
 }
 
+// proxyUserinfoPattern 匹配 URL 的 userinfo 段（`//user:pass@`），用于脱敏。
+var proxyUserinfoPattern = regexp.MustCompile(`//[^/@\s]*@`)
+
+// redactProxyCredentials 把文案里的 `user:pass@` 替换为 `<redacted>@`。
+//
+// F-17：与 internal/remote 的 redactProxyCredentials 同款实现（票 40 / P2-16
+// 后半只修了 remote 包，downloader 包遗漏）。刻意不复用 util.SanitizeURL：它在
+// url.Parse 失败时原样返回输入，而「URL 畸形到解析失败」恰恰是最需要脱敏的
+// 场景（url.Parse 的错误文本会带上含凭据的原始 URL）。也不为共享而改
+// internal/util——该文件属其他 agent 的所有权。
+func redactProxyCredentials(msg string) string {
+	return proxyUserinfoPattern.ReplaceAllString(msg, "//<redacted>@")
+}
+
+// urlInTextPattern 匹配任意 URL（含被引号/括号包裹的情形）。
+//
+// F-18：net/http 的错误文本把 URL 包在双引号里
+// （`Get "https://host/path?token=X": dial tcp …`），修复前按 strings.Fields
+// 切词再判 HasPrefix(field, "https://") 判假 → 整段 URL（含查询串凭据）原样
+// 保留。这里对整段文本做正则替换，不再依赖字段边界。
+var urlInTextPattern = regexp.MustCompile(`https?://[^\s"'<>()\[\],;]+`)
+
+// sanitizedReason 去除错误消息中的 URL 凭据/查询参数并清理控制字符，
+// 用于把底层错误安全地回显给用户。
+func sanitizedReason(err error) string {
+	reason := urlInTextPattern.ReplaceAllStringFunc(err.Error(), sanitizedURL)
+	if len(reason) > 200 {
+		reason = reason[:200]
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 {
+			return ' '
+		}
+		return r
+	}, reason)
+}
+
 // notifyStatus invokes opts.OnStatus (if set) with a formatted message.
 func notifyStatus(opts Options, format string, args ...any) {
 	if opts.OnStatus == nil {
@@ -372,22 +427,130 @@ func shortHost(raw string) string {
 	return parsed.Host
 }
 
-func sanitizedReason(err error) string {
-	reason := err.Error()
-	for _, field := range strings.Fields(reason) {
-		if strings.HasPrefix(field, "https://") {
-			reason = strings.ReplaceAll(reason, field, sanitizedURL(strings.TrimRight(field, ",;:)")))
+// ---------------------------------------------------------------------------
+// .part path generation (F-12)
+// ---------------------------------------------------------------------------
+
+// partGeneration 是「按 URL 分代」的 .part 命名所用的短哈希长度
+// （sha256(url) 的十六进制前 16 字符 = 64 bit，碰撞风险可忽略）。
+const partGenerationLen = 16
+
+// partPathFor 返回某个候选 URL 的 .part 路径：<dest>.<sha256(url)[:16]>.part。
+//
+// F-12（P0）：修复前 .part 只由 opts.Dest 决定，而 fromBytes 取该文件大小后
+// **无条件**作为 Range 起点发给当前候选 URL。tryURLList 在主 URL 失败后继续用
+// 同一 dest 尝试回退 URL → 主 URL 写了一半的字节被当成回退 URL 的前缀，落盘
+// AAAA…BBBB 混合归档；无哈希(TOFU)通路上该文件被 rename 并写入 sidecar pin
+// 永久固化。
+//
+// 按 URL 分代后，跨 URL 的残留落在不同文件里，天然不可能被当成前缀；同一 URL
+// 的崩溃残留仍按原名续传（断点续传能力保留）。
+//
+// 注意：凡是要拼接 .part 的地方都必须走本函数或 partPathsFor，否则会留下
+// 孤儿 .part 或删错文件（见 manager.go 的 Pause/Cancel 清理与辅助函数）。
+func partPathFor(dest, rawURL string) string {
+	sum := sha256.Sum256([]byte(rawURL))
+	return dest + "." + hex.EncodeToString(sum[:])[:partGenerationLen] + ".part"
+}
+
+// partPathsFor 返回一个下载（主 URL + 回退 URL + 历史命名）可能涉及的
+// 全部 .part 路径，供清理逻辑（Pause/Cancel/退出清理）一次性删除。
+//
+// 末位刻意包含未分代的 <dest>.part：修复前的版本或更早的 xdev 留下的残留
+// 必须仍能被清理，否则会在缓存目录里永久占位。
+func partPathsFor(dest string, urls ...string) []string {
+	paths := make([]string, 0, len(urls)+1)
+	seen := make(map[string]bool, len(urls)+1)
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		add(partPathFor(dest, u))
+	}
+	add(dest + ".part")
+	return paths
+}
+
+// removePartialFiles 删除给定 dest/URL 组合的全部 .part 残留（best-effort，
+// 不存在的路径不算错误）。返回首个非「不存在」的错误，供调用方记日志。
+func removePartialFiles(dest string, urls ...string) error {
+	var firstErr error
+	for _, p := range partPathsFor(dest, urls...) {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
 		}
 	}
-	if len(reason) > 200 {
-		reason = reason[:200]
+	return firstErr
+}
+
+// ---------------------------------------------------------------------------
+// Range / Content-Range helpers (F-12b, F-13)
+// ---------------------------------------------------------------------------
+
+// contentRangePattern 匹配 RFC 9110 的 Content-Range：
+// `bytes <start>-<end>/<total>`，也接受 unsatisfied 形式的 `bytes */<total>`。
+var contentRangePattern = regexp.MustCompile(`^bytes\s+(?:(\d+)-(\d+)|\*)/(\d+|\*)$`)
+
+// parseContentRange 解析 Content-Range，返回 (start, total, ok)。
+// start 为 -1 表示 unsatisfied 形式（`bytes */total`）；total 为 -1 表示 `*`。
+// 任何不符合 RFC 形状的值都返回 ok=false（调用方 fail closed）。
+func parseContentRange(value string) (start, total int64, ok bool) {
+	m := contentRangePattern.FindStringSubmatch(strings.TrimSpace(value))
+	if m == nil {
+		return 0, 0, false
 	}
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 {
-			return ' '
+	total = -1
+	if m[3] != "*" {
+		n, err := strconv.ParseInt(m[3], 10, 64)
+		if err != nil {
+			return 0, 0, false
 		}
-		return r
-	}, reason)
+		total = n
+	}
+	if m[1] == "" {
+		return -1, total, true // `bytes */total`：请求区间不满足
+	}
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return n, total, true
+}
+
+// completePartResidue 报告「这个 416 是否意味着本地 .part 已等于完整文件」。
+//
+// 判定刻意保守（fail closed）：
+//   - 服务端未给 Content-Range：无从证明，返回 false（删 .part 让下次重来）；
+//   - Content-Range 是 `bytes */<total>`：total 必须与本地长度一致；
+//   - Content-Range 是普通 `bytes <start>-<end>/<total>`：必须满足
+//     start == 本地长度且 end+1 == total（即请求的起点正好是文件末尾）。
+//
+// 不满足时返回 false，调用方删除 .part —— 宁可从零重下，也不接受一个来历
+// 不明的「完整」文件（它可能只是本地截断的残缺品）。
+func completePartResidue(resp *http.Response, fromBytes int64) bool {
+	start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+	if !ok {
+		// 退路：少数服务器只回 Content-Length: 0 表示「没有更多字节」。
+		if resp.ContentLength == 0 {
+			return true
+		}
+		return false
+	}
+	if total < 0 {
+		return false // `bytes */ *` 或 `bytes 0-99/*`：无法证明完整性
+	}
+	if total != fromBytes {
+		return false
+	}
+	// unsatisfied 形式（start == -1）只要 total 对上即可。
+	return start <= 0 || start == fromBytes
 }
 
 // isNotFoundError reports whether the error indicates the resource was
@@ -439,7 +602,10 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 }
 
 func downloadOnce(ctx context.Context, opts Options) error {
-	partPath := opts.Dest + ".part"
+	// F-12：.part 按候选 URL 分代（<dest>.<sha256(url)[:16]>.part）。同一 URL
+	// 的崩溃残留仍被续传；**另一个 URL** 的残留落在别的文件里，永远不会被
+	// 当成前缀拼成本 URL 的续传目标。
+	partPath := partPathFor(opts.Dest, opts.URL)
 
 	// Ticket 21 (audit-fixes / P1-01): exclusive lock on the partial file.
 	// Two xdev processes sharing one cache destination (GUI + CLI, or a
@@ -515,6 +681,33 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	defer resp.Body.Close()
 
 	log.Printf("[download] Response: status=%d content-length=%d", resp.StatusCode, resp.ContentLength)
+
+	// F-13：416 Range Not Satisfiable 单独处理。它恰恰是「本地 .part 已等于
+	// 完整文件」时服务器唯一合法的回答。修复前该分支按普通非 2xx 直接返回，
+	// 且**不删 .part** → 下次安装读到同样大小、发同样越界的 Range、再吃 416，
+	// 该 dest 永久不可恢复。
+	//
+	// 正确动作：把手上的 .part 当作完整文件走后续的校验 + rename 路径。
+	// 但这只在「服务器确实说请求的区间越界（区间从 fromBytes 起）」时才成立，
+	// 所以先确认本地确有内容、且（若服务端给了 Content-Range）声明的是
+	// `bytes */total` 且 total 与本地长度一致。
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		if fromBytes > 0 && completePartResidue(resp, fromBytes) {
+			log.Printf("[download] HTTP 416 with a complete local .part (%d bytes) — verifying and promoting it instead of failing", fromBytes)
+			notifyStatus(opts, "Server reported the partial file is already complete — verifying it")
+			resp.Body.Close()
+			// written=0：本次响应没有写入任何字节（完整内容已在 .part 里），
+			// finalizeDownload 会把既有内容补喂给 hasher。
+			return finalizeDownload(opts, partPath, f, sha256.New(), fromBytes, 0)
+		}
+		// 无法证明本地就是完整文件（无残留 / 服务端未确认 total）：删掉 .part
+		// 让下次能从头重来，而不是把一个永不满足的 Range 留给下一次。
+		log.Printf("[download] ERROR: HTTP 416 for %s (local .part=%d bytes) — discarding the partial file", sanitizedURL(opts.URL), fromBytes)
+		f.Close()
+		_ = os.Remove(partPath)
+		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
+	}
+
 	if resp.StatusCode/100 != 2 {
 		log.Printf("[download] ERROR: non-2xx status code %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
@@ -524,6 +717,21 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] Server did not honor Range header, restarting from scratch")
 		notifyStatus(opts, "Server ignored Range header — restarting from scratch")
 		fromBytes = 0
+	}
+
+	// F-12b：resume 时必须校验响应的 Content-Range 起始偏移 == fromBytes。
+	// 修复前从不校验：服务端回 206 但起点是 0（或任何别的偏移）时，body 被
+	// 写在偏移 fromBytes 处 → 错位文件；无哈希(TOFU)通路上还会被接受并写 pin。
+	if fromBytes > 0 && resp.StatusCode == http.StatusPartialContent {
+		start, _, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || start != fromBytes {
+			log.Printf("[download] ERROR: Content-Range mismatch: server=%q requested-start=%d — discarding the partial file",
+				resp.Header.Get("Content-Range"), fromBytes)
+			f.Close()
+			_ = os.Remove(partPath)
+			return fmt.Errorf("server returned Content-Range %q which does not start at the requested offset %d for %s — discarding the partial file and retrying from scratch",
+				resp.Header.Get("Content-Range"), fromBytes, sanitizedURL(opts.URL))
+		}
 	}
 
 	// If resuming, seek to the end; if fresh, truncate any existing .part file.
@@ -574,12 +782,56 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	}
 	log.Printf("[download] Writing to %s (total expected: %d bytes)", partPath, writer.total)
 	written, err := io.Copy(writer, resp.Body)
-	f.Close()
 	if err != nil {
+		f.Close()
 		log.Printf("[download] ERROR: write failed after %d bytes: %v", written, err)
 		return err
 	}
+
+	// F-13b：close-delimited（无 Content-Length、非 chunked）短 body 被当完整
+	// 下载接受。服务端声明 total 却提前收尾时，io.Copy 以 nil 错误结束——
+	// 必须自己比对字节数，否则残缺归档会被 rename 并写入 TOFU pin。
+	if resp.ContentLength >= 0 && resp.ContentLength+fromBytes != written+fromBytes {
+		f.Close()
+		log.Printf("[download] ERROR: short body: wrote %d bytes, server declared %d", written+fromBytes, resp.ContentLength+fromBytes)
+		_ = os.Remove(partPath)
+		return fmt.Errorf("incomplete download for %s: wrote %d bytes but the server declared %d — discarding the partial file",
+			sanitizedURL(opts.URL), written+fromBytes, resp.ContentLength+fromBytes)
+	}
 	log.Printf("[download] Write complete: %d bytes written", written+fromBytes)
+
+	return finalizeDownload(opts, partPath, f, hasher, fromBytes, written)
+}
+
+// finalizeDownload 完成「关闭句柄 → SHA-256/TOFU 校验 → 原子 rename → 审计」
+// 这条收尾链。它被两条路径复用：
+//
+//   - 正常路径：刚写完响应 body（written 为本次写入字节数）；
+//   - F-13 的 416 恢复路径：本地 .part 已等于完整文件，没有可写内容
+//     （written == 0），但 .part 的既有内容必须先喂进 hasher 才能校验。
+//
+// f 是打开的 .part 句柄（本函数负责关闭）；fromBytes 是续传起点（也是要
+// 预先喂给 hasher 的既有字节数）。
+func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Hash, fromBytes, written int64) error {
+	// 416 恢复路径下 fromBytes > 0 而没有任何写入：既有内容尚未进入 hasher
+	// （正常路径在写之前已喂过），这里补上，保证 gotHash 覆盖整个文件。
+	if written == 0 && fromBytes > 0 {
+		if pf, err := os.Open(partPath); err == nil {
+			if _, copyErr := io.Copy(hasher, pf); copyErr != nil {
+				pf.Close()
+				f.Close()
+				log.Printf("[download] ERROR: failed to hash the complete partial file: %v", copyErr)
+				return copyErr
+			}
+			pf.Close()
+			log.Printf("[download] Hashed %d bytes of the complete partial file for SHA-256 continuity", fromBytes)
+		} else {
+			f.Close()
+			log.Printf("[download] ERROR: failed to open the complete partial file for hashing: %v", err)
+			return err
+		}
+	}
+	f.Close()
 
 	// SHA-256 verification.
 	//
@@ -948,7 +1200,8 @@ func proxyFromOptions(opts Options) func(*http.Request) (*url.URL, error) {
 	}
 	proxyURL, err := url.Parse(opts.ProxyURL)
 	if err != nil {
-		log.Printf("[download] WARNING: invalid proxy URL %q: %v", opts.ProxyURL, err)
+		// F-17：url.Parse 的错误文本会原样带上含凭据的 URL，先脱敏再进日志。
+		log.Printf("[download] WARNING: invalid proxy URL %q: %v", redactProxyCredentials(opts.ProxyURL), redactProxyCredentials(err.Error()))
 		return http.ProxyFromEnvironment
 	}
 	log.Printf("[download] Using proxy: %s", proxyURL.Host)

@@ -71,6 +71,13 @@ const maxTotalExtractSize int64 = 10 << 30 // 10 GiB total across all files
 // strip is the number of leading path components to discard (used to
 // skip the top-level directory inside most upstream tarballs).
 func Extract(src, dst, format string, strip int) error {
+	// F-20: strip comes straight from the manifest and was previously
+	// unvalidated end to end. A negative value reached parts[strip:] and
+	// panicked with "slice bounds out of range [-1:]", crashing the whole
+	// install. Reject it here (defence in depth — stripPath also clamps).
+	if strip < 0 {
+		return fmt.Errorf("invalid strip value %d: must be >= 0", strip)
+	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -771,6 +778,11 @@ func getNlink(info os.FileInfo) uint64 {
 // stripping, otherwise ("", false) meaning the entry should be
 // skipped.
 func stripPath(p string, strip int) (string, bool) {
+	// F-20: clamp a negative strip. The value is manifest-controlled; the
+	// pre-fix code only guarded the upper bound, so parts[-1:] panicked.
+	if strip < 0 {
+		strip = 0
+	}
 	p = filepath.Clean(p)
 	if p == "." || p == "/" {
 		return "", false

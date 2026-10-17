@@ -69,6 +69,25 @@ func WriteUserPath(path string) error {
 // 上 PATH 本身是 no-op，但跨平台测试（如 gui 的 InitConfig 守卫）仍需要同名钩子才能编译。
 var otherInMemoryUserPath *string
 
+// TransformUserPath（票 44）：非 Windows 上 PATH 读写是 no-op，但 transform
+// 仍被调用并对内存槽位生效（跨平台测试可断言变换语义）；changed 透传。
+func TransformUserPath(transform func(current string) (next string, changed bool, err error)) (bool, error) {
+	current, _ := ReadUserPath()
+	next, changed, err := transform(current)
+	if err != nil {
+		return changed, err
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, WriteUserPath(next)
+}
+
+// TransformSystemPath（票 44）：非 Windows 无系统级 PATH 注册表语义——恒 no-op。
+func TransformSystemPath(transform func(current string) (next string, changed bool, err error)) (bool, error) {
+	return false, nil
+}
+
 // UseInMemoryUserPathForTesting 见 Windows 侧实现；非 Windows 上 PATH 读写真身就是
 // no-op，这里只提供一个可断言的内存槽位，保证同一份测试在两个平台都能编译运行。
 func UseInMemoryUserPathForTesting(initial string) (get func() string, restore func()) {

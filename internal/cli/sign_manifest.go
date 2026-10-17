@@ -25,6 +25,7 @@ func newSignManifestsCmd() *cobra.Command {
 		manifestsDir string
 		privKeyPath  string
 		outputDir    string
+		allowPartial bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,7 +36,12 @@ func newSignManifestsCmd() *cobra.Command {
 For each <tool>.yaml, this command:
 1. Extracts all SHA-256 hashes from the archives
 2. Signs the hash map with the Ed25519 private key
-3. Writes <tool>.yaml.sig next to the manifest file`,
+3. Writes <tool>.yaml.sig next to the manifest file
+
+Any per-file failure (path-safety rejection, signing error, .sig write error)
+makes the command exit non-zero so CI cannot mistake a partial signing run for
+success — the same rule fill-sha256 follows. Use --allow-partial to opt out
+explicitly when the gaps are understood and accepted.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if privKeyPath == "" {
@@ -76,11 +82,16 @@ For each <tool>.yaml, this command:
 
 			signed := 0
 			skipped := 0
+			// 第六轮审计 F-30（P1）：修复前逐文件失败只 `continue`，函数恒
+			// `return nil`——「全部签名写失败」在 CI 里也是 exit 0，整批未签出的
+			// manifest 会被当成发布成功（与 fill-sha256 已修的 R5 同型）。
+			failed := 0
 			for _, tool := range tools {
 				// F7：工具名来自磁盘 manifest（不可信数据），进入 .sig 输出路径前
 				// 必须通过路径安全校验（拒绝分隔符/盘符冒号/".."）。
 				if err := validateManifestPathName(tool.Name); err != nil {
 					fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+					failed++
 					continue
 				}
 				sha256Map, hasHash := manifest.BuildSignatureHashMap(tool)
@@ -95,19 +106,27 @@ For each <tool>.yaml, this command:
 				sig, err := signer.SignManifest(privKey, tool.Name, sha256MapJSON)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "❌ %s: sign failed: %v\n", tool.Name, err)
+					failed++
 					continue
 				}
 
 				sigPath := filepath.Join(outDir, tool.Name+".yaml.sig")
 				if err := signer.WriteSignatureFile(sigPath, sig); err != nil {
 					fmt.Fprintf(os.Stderr, "❌ %s: write failed: %v\n", tool.Name, err)
+					failed++
 					continue
 				}
 				fmt.Fprintf(os.Stdout, "✅ %s: signed (%d versions)\n", tool.Name, len(sha256Map))
 				signed++
 			}
 
-			fmt.Fprintf(os.Stdout, "\n📊 Signed: %d, Skipped: %d\n", signed, skipped)
+			fmt.Fprintf(os.Stdout, "\n📊 Signed: %d, Skipped: %d, Failed: %d\n", signed, skipped, failed)
+
+			// F-30（P1）：失败必须可见且默认失败即非零退出，避免 CI 把
+			// 「部分/全部签名失败」当成功（与 fill-sha256 的 R5 同一口径）。
+			if failed > 0 && !allowPartial {
+				return fmt.Errorf("sign-manifests failed for %d manifest(s); re-run with --allow-partial only if the gaps are explicitly accepted", failed)
+			}
 			return nil
 		},
 	}
@@ -115,6 +134,7 @@ For each <tool>.yaml, this command:
 	cmd.Flags().StringVar(&manifestsDir, "manifests-dir", "manifests", "path to manifests directory")
 	cmd.Flags().StringVar(&privKeyPath, "priv-key", "", "path to Ed25519 private key")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "output directory for .sig files (default: same as manifests-dir)")
+	cmd.Flags().BoolVar(&allowPartial, "allow-partial", false, "exit 0 even when some manifests could not be signed (default: fail)")
 	_ = cmd.MarkFlagRequired("priv-key")
 
 	return cmd

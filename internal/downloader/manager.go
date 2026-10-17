@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,18 @@ type Task struct {
 	opts     Options
 	mu       sync.Mutex
 	pausedAt int64 // 暂停时已下载的字节数
+
+	// pauseRequested 是「暂停 vs 取消」的**权威判据**（F-14）。
+	//
+	// 修复前判据是 `pausedAt > 0`，而 pausedAt 取自 task.Downloaded —— 后者
+	// 只由 progressWriter 的进度回调写入，回调又被 `p.total > 0` 门控。服务器
+	// 不返回 Content-Length（chunked，ContentLength == -1）时 total == -1，
+	// 回调永不触发 → pausedAt 恒 0 → 收尾时判成 Cancelled：覆盖刚写入的
+	// StatusPaused，并 os.Remove 掉用户只想暂停的那个 .part。
+	//
+	// 标志由 Pause 在锁内同步置位，不依赖任何进度回调，因此 chunked 响应、
+	// 以及「首个 200ms 节流窗口内就暂停」都能正确判为暂停。Cancel 会清掉它。
+	pauseRequested bool
 }
 
 // Manager 管理所有下载任务
@@ -184,21 +197,27 @@ func (m *Manager) runDownload(task *Task) {
 	}
 	if err != nil {
 		if dlCtx.Err() == context.Canceled {
-			// 检查是否是暂停（pausedAt > 0）还是取消
-			if task.pausedAt > 0 {
+			// F-14：暂停 vs 取消由 pauseRequested 判定（不再依赖进度回调
+			// 写入的 pausedAt —— chunked 响应下它恒为 0）。pausedAt 只用于
+			// 报告「暂停时已下载多少字节」，取盘上 .part 的真实大小兜底。
+			if task.pauseRequested {
 				task.Status = StatusPaused
+				if onDisk := partialBytesForTask(task); onDisk > task.pausedAt {
+					task.pausedAt = onDisk
+				}
 				task.Downloaded = task.pausedAt
 			} else {
 				task.Status = StatusCancelled
-				// 取消时清理临时文件
-				partPath := task.opts.Dest + ".part"
+				// 取消时清理临时文件（F-12：按 URL 分代，全部代 + 历史命名）。
 				// Ticket 21 (N-06): log instead of silently ignoring — on
 				// Windows the writer may still hold the handle. The
 				// .part.lock takeover semantics make the residue harmless.
-				if rmErr := os.Remove(partPath); rmErr != nil && !os.IsNotExist(rmErr) {
-					log.Printf("[download] WARNING: 取消后删除临时文件失败 %s: %v", partPath, rmErr)
+				for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
+					if rmErr := os.Remove(partPath); rmErr != nil && !os.IsNotExist(rmErr) {
+						log.Printf("[download] WARNING: 取消后删除临时文件失败 %s: %v", partPath, rmErr)
+					}
 				}
-				log.Printf("[download] 已取消下载并清理临时文件: %s", partPath)
+				log.Printf("[download] 已取消下载并清理临时文件: %s", task.opts.Dest)
 			}
 		} else {
 			task.Status = StatusFailed
@@ -239,8 +258,16 @@ func (m *Manager) Pause(id string) error {
 		return fmt.Errorf("cannot pause task in status %s", task.Status)
 	}
 
-	// 记录暂停时已下载的字节数（必须先于 cancel —— 见上）
+	// 记录暂停时已下载的字节数（必须先于 cancel —— 见上）。
+	//
+	// F-14：进度回调在 chunked（无 Content-Length）响应下永不触发，所以
+	// task.Downloaded 会是 0。这里直接取盘上 .part 的真实大小作为兜底，
+	// 让「已下载 N 字节」的报告对用户仍然有意义。
+	task.pauseRequested = true
 	task.pausedAt = task.Downloaded
+	if onDisk := partialBytesForTask(task); onDisk > task.pausedAt {
+		task.pausedAt = onDisk
+	}
 	task.Status = StatusPaused
 	task.cancel()
 	log.Printf("[download] 暂停下载: %s, 已下载 %d 字节", id, task.pausedAt)
@@ -269,6 +296,7 @@ func (m *Manager) Resume(id string) error {
 	task.cancel = cancel
 	task.Status = StatusDownloading
 	task.pausedAt = 0
+	task.pauseRequested = false
 	task.mu.Unlock()
 
 	// Resume starts a NEW download goroutine generation while the paused one
@@ -309,12 +337,16 @@ func (m *Manager) Cancel(id string) error {
 	task.cancel()
 	task.Status = StatusCancelled
 	task.pausedAt = 0 // 确保 pausedAt 为 0，这样 runDownload 不会将其标记为 paused
+	// F-14：取消必须清掉暂停标志，否则收尾会走 Paused 分支。
+	task.pauseRequested = false
 	task.mu.Unlock()
 
-	// 清理临时文件
-	partPath := task.opts.Dest + ".part"
-	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("[download] WARNING: 删除临时文件失败 %s: %v（下次下载将接管该残留）", partPath, err)
+	// 清理临时文件（F-12：按 URL 分代 —— 本 URL 的代 + 回退 URL 的代 +
+	// 历史未分代命名，全部删掉，否则会留下孤儿 .part 占着缓存目录）。
+	for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
+		if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[download] WARNING: 删除临时文件失败 %s: %v（下次下载将接管该残留）", partPath, err)
+		}
 	}
 
 	log.Printf("[download] 取消下载并清理临时文件: %s", id)
@@ -382,40 +414,125 @@ func (m *Manager) CleanupOnExit() {
 		task.mu.Unlock()
 
 		if active {
-			// 清理临时文件
-			partPath := task.opts.Dest + ".part"
-			if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
-				log.Printf("[download] WARNING: 退出清理删除临时文件失败 %s: %v", partPath, err)
+			// 清理临时文件（F-12：按 URL 分代，全部代 + 历史命名）
+			for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
+				if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+					log.Printf("[download] WARNING: 退出清理删除临时文件失败 %s: %v", partPath, err)
+				}
 			}
-			log.Printf("[download] 退出清理: 取消下载 %s 并删除临时文件 %s", id, partPath)
+			log.Printf("[download] 退出清理: 取消下载 %s 并删除临时文件 %s", id, task.opts.Dest)
 		}
 	}
 }
 
-// GetPartialFileSize 获取 .part 文件的大小（用于断点续传信息）
+// GetPartialFileSize 获取 .part 文件的大小（用于断点续传信息）。
+//
+// F-12：.part 按候选 URL 分代（<dest>.<sha256(url)[:16]>.part），单看 dest
+// 无法定位文件。本函数（及 HasPartialFile/CleanupPartialFile）保留原签名以
+// 兼容既有调用方与测试，语义为「该 dest 下**任意**分代的 .part 中最大的那
+// 一个」——GUI/CLI 只关心「有没有残留、有多少字节」。精确到某个 URL 的
+// 查询请用 GetPartialFileSizeForURL。
 func GetPartialFileSize(dest string) int64 {
-	partPath := dest + ".part"
-	fi, err := os.Stat(partPath)
+	return maxPartialFileSize(partialPathsInDir(dest))
+}
+
+// GetPartialFileSizeForURL 返回某个具体候选 URL 的 .part 大小。
+func GetPartialFileSizeForURL(dest, rawURL string) int64 {
+	fi, err := os.Stat(partPathFor(dest, rawURL))
 	if err != nil {
 		return 0
 	}
 	return fi.Size()
 }
 
-// HasPartialFile 检查是否有部分下载的文件
+// HasPartialFile 检查是否有部分下载的文件（任意分代）。
 func HasPartialFile(dest string) bool {
-	partPath := dest + ".part"
-	_, err := os.Stat(partPath)
-	return err == nil
+	return len(partialPathsInDir(dest)) > 0
 }
 
-// CleanupPartialFile 清理部分下载的临时文件
+// CleanupPartialFile 清理该 dest 下所有分代的 .part 残留（含历史未分代命名）。
+// 不存在时返回 nil，方便调用方幂等重试。
 func CleanupPartialFile(dest string) error {
-	partPath := dest + ".part"
-	return os.Remove(partPath)
+	var firstErr error
+	for _, p := range partialPathsInDir(dest) {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
-// CleanupAllPartialsInDir 清理指定目录下所有 .part 文件
+// partialPathsInDir 返回该 dest 下存在的全部 .part 路径：
+// 分代命名 <dest>.<16hex>.part，以及历史未分代命名 <dest>.part。
+//
+// 调用方（Pause/Cancel/辅助函数）手里只有 dest，不知道当初是哪个候选 URL
+// 生成的，所以按目录扫描 + 前缀匹配来找。刻意不用 filepath.Glob：glob 会把
+// dest 里的 `[`、`*`、`?` 当元字符，而 dest 是拼出来的文件名（缓存目录 +
+// 归档名），含这类字符时匹配会静默失配 → 留下孤儿 .part。
+//
+// 只接受 16 位十六进制分代，避免误伤 <dest>.something.part 这类无关文件；
+// 也刻意不匹配 <dest>.<gen>.part.lock（锁文件不该在这里被删）。
+func partialPathsInDir(dest string) []string {
+	paths := make([]string, 0, 2)
+	if _, err := os.Stat(dest + ".part"); err == nil {
+		paths = append(paths, dest+".part")
+	}
+	dir := filepath.Dir(dest)
+	prefix := filepath.Base(dest) + "."
+	const suffix = ".part"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return paths
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		if isPartGeneration(strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)) {
+			paths = append(paths, filepath.Join(dir, name))
+		}
+	}
+	return paths
+}
+
+// isPartGeneration 报告 gen 是否是合法的分代后缀（16 位小写十六进制）。
+func isPartGeneration(gen string) bool {
+	if len(gen) != partGenerationLen {
+		return false
+	}
+	for _, r := range gen {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// maxPartialFileSize 返回给定路径中最大的文件大小（都不存在则为 0）。
+func maxPartialFileSize(paths []string) int64 {
+	var max int64
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil && fi.Size() > max {
+			max = fi.Size()
+		}
+	}
+	return max
+}
+
+// partialBytesForTask 返回该任务在盘上真实的 .part 字节数（F-14 的兜底来源：
+// 进度回调在 chunked 响应下永不触发，只有盘上大小是可信的）。
+func partialBytesForTask(task *Task) int64 {
+	return maxPartialFileSize(partialPathsInDir(task.opts.Dest))
+}
+
+// CleanupAllPartialsInDir 清理指定目录下所有 .part 文件。
+//
+// F-12：分代命名形如 <archive>.zip.<16hex>.part，仍以 .part 结尾，因此原来
+// 的 "*.part" glob 依然同时覆盖分代命名与历史未分代命名，无需改动。
 func CleanupAllPartialsInDir(dir string) error {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.part"))
 	if err != nil {

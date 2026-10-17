@@ -33,6 +33,24 @@ var githubBodyLimit = 16 << 20 // 16 MiB
 // unbounded body, which the decoder would buffer in memory (OOM / hang).
 const jsonBodyLimit = 16 << 20 // 16 MiB
 
+// htmlBodyLimit 是 HTML 版本索引页的读取上限。
+//
+// F-19：修复前 discoverHTML 用裸 io.ReadAll(io.LimitReader(...))——LimitReader
+// 到限即返回 io.EOF，ReadAll 视为**成功**，于是页面在 2 MiB 处被静默截断，
+// 落在截断点之后的版本无声丢失（用户看到「没有新版本」且无任何线索）。改用
+// 同包 readLimitedBody（GitHub 路径已在用）做显式截断检测。
+// Var（非 const）以便测试调小上限构造超限页面。
+var htmlBodyLimit = 2 << 20 // 2 MiB
+
+// maxGitHubPages 是 GitHub 分页的硬迭代上限。
+//
+// F-15：修复前循环既无 visited 集合也无迭代计数，上游（或被劫持的响应）给出
+// 同主机自环的 Link 头时无限翻页——烧光未认证的 60 req/h 限额，allReleases
+// 无界增长直至 OOM。visited 集合抓不住「每页 URL 都不同」的无限序列，故再
+// 加一道硬上限兜底。100 页 × 100 条/页 = 10000 个 release，远超任何真实仓库
+// 的版本数量（也是 perPageValues 上限 100 时的自然界）。
+const maxGitHubPages = 100
+
 // perPageValues defines the per_page values to try when the response body is
 // truncated. Starting with 100 (GitHub API maximum), falling back to 50, then 30.
 var perPageValues = []int{100, 50, 30}
@@ -343,14 +361,18 @@ func isProxyError(errMsg string) bool {
 	return util.IsProxyError(errors.New(errMsg))
 }
 
+// urlInTextPattern 匹配任意 URL（含被引号/括号包裹的情形）。
+//
+// F-18：net/http 的错误文本把 URL 包在双引号里
+// （`Get "https://host/path?token=X": dial tcp …`），按 strings.Fields 切词再
+// 判 HasPrefix(field, "https://") 判假 → 整段 URL（含查询串凭据）原样保留。
+// 这里对整段文本做正则替换，不再依赖字段边界。
+var urlInTextPattern = regexp.MustCompile(`https?://[^\s"'<>()\[\],;]+`)
+
 // sanitizedReason 去除错误消息中的 URL 凭据/查询参数并清理控制字符（F-15），
 // 用于把底层错误安全地回显给用户。
 func sanitizedReason(reason string) string {
-	for _, field := range strings.Fields(reason) {
-		if strings.HasPrefix(field, "https://") {
-			reason = strings.ReplaceAll(reason, field, util.SanitizeURL(strings.TrimRight(field, ",;:)")))
-		}
-	}
+	reason = urlInTextPattern.ReplaceAllStringFunc(reason, util.SanitizeURL)
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 {
 			return ' '
@@ -783,8 +805,22 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 	}
 
 	// Follow paginated responses.
+	//
+	// F-15：两道守卫同时存在——
+	//   - visited：抓同主机自环 / A→B→A 环（Link 头指回已取过的页）；
+	//   - maxGitHubPages：兜底抓「每页 URL 都不同」的无限序列（visited 抓不住）。
+	// 任一命中都 break（保留已取到的版本）而不是报错：已取页面的数据是好的，
+	// 环只是上游的异常。
 	currentURL := apiURL
+	visited := map[string]bool{currentURL: true}
+	pages := 0
 	for {
+		pages++
+		if pages > maxGitHubPages {
+			log.Printf("[remote] WARNING: GitHub pagination exceeded the hard cap of %d pages — stopping (F-15)", maxGitHubPages)
+			break
+		}
+
 		// --- ETag / cache lookup ---
 		var ifNoneMatch string
 		if cached, ok := cacheGet(currentURL); ok {
@@ -819,8 +855,11 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			resp.Body.Close()
 			cached, ok := cacheGet(currentURL)
 			if !ok {
-				// Cache evaporated between the lookup and now; retry without ETag.
-				continue
+				// F-16：缓存蒸发是异常状态。修复前这里 `continue` 重入循环，
+				// 而 ifNoneMatch 仍从同一个（缺失的）缓存取 → 发出的请求与
+				// 上一次逐字节相同；服务端若无条件回 304，循环永不退出。
+				// 明确报错，不再静默重试。
+				return nil, fmt.Errorf("github remote: server returned 304 Not Modified for %s but no cached response is available (cache expired or was cleared) — cannot revalidate", currentURL)
 			}
 			var pageReleases []struct {
 				TagName string `json:"tag_name"`
@@ -838,6 +877,12 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			if nextURL == "" {
 				break // 该页本就没有下一页
 			}
+			// F-15：环检测——游标指回已取过的页就停，别无限翻页。
+			if visited[nextURL] {
+				log.Printf("[remote] WARNING: GitHub pagination loop detected at %s (page already fetched) — stopping (F-15)", util.SanitizeURL(nextURL))
+				break
+			}
+			visited[nextURL] = true
 			currentURL = nextURL
 			continue
 		}
@@ -894,6 +939,13 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 		if !hasNext {
 			break
 		}
+		// F-15：环检测——同一主机内 Link 头指回已取过的页（自环或 A→B→A）
+		// 时停止翻页，避免无界请求与 allReleases 无界增长。
+		if visited[nextURL] {
+			log.Printf("[remote] WARNING: GitHub pagination loop detected at %s (page already fetched) — stopping (F-15)", util.SanitizeURL(nextURL))
+			break
+		}
+		visited[nextURL] = true
 		currentURL = nextURL
 	}
 
@@ -1094,9 +1146,20 @@ func discoverHTML(ctx context.Context, r manifest.RemoteSource) ([]string, error
 		return nil, fmt.Errorf("html remote: returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB limit
+	// F-19：修复前是裸 io.ReadAll(io.LimitReader(resp.Body, 2<<20))——LimitReader
+	// 到限即返回 io.EOF，ReadAll 视为成功，页面被静默截断、落在截断点之后的
+	// 版本无声丢失。改用同包 readLimitedBody（GitHub 路径已在用）做显式检测：
+	// 读满上限即判定截断并报错，让用户看到可诊断的失败而不是「没有新版本」。
+	//
+	// 注意 readLimitedBody 对**空 body** 也报错：HTML 索引页为空同样是异常
+	// （没有可解析的版本来源），报错比静默返回空列表更有用。
+	body, err := readLimitedBody(resp.Body, htmlBodyLimit)
 	if err != nil {
-		return nil, fmt.Errorf("html remote: read body: %w", err)
+		if strings.Contains(err.Error(), "truncated") {
+			return nil, fmt.Errorf("html remote: %s exceeded the %d-byte limit for %s — the version list may be incomplete; raise the limit or use a more specific index page: %w",
+				sanitizedReason(err.Error()), htmlBodyLimit, util.SanitizeURL(r.URL), err)
+		}
+		return nil, fmt.Errorf("html remote: read body from %s: %w", util.SanitizeURL(r.URL), err)
 	}
 
 	re, err := regexp.Compile(r.Pattern)

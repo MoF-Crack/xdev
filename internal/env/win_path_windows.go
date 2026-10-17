@@ -564,6 +564,64 @@ func WriteUserPath(path string) error {
 	return userPathWriteFn(path)
 }
 
+// TransformUserPath（票 44 / P2-2）在跨进程 PATH 锁内执行一次完整的
+// 读-改-写。GUI 的 PATH 清理此前「锁外读 → 计算新值 → SetEnvVar 锁内盲写」，
+// 读与写之间并发 xdev 进程（doctor/install/Activate，其 RMW 全程持锁）写入的
+// 条目会被静默覆盖。transform 收到当前值，返回 (next, changed, err)；
+// changed=false 或 next==current 时跳过写。读走 userPathReadFn、写走
+// userPathWriteFn（防污染 TestMain 的内存后端对 transform 同样生效）。
+// 写成功后广播 WM_SETTINGCHANGE（与 SetEnvVar 的 PATH 分支对齐）。
+func TransformUserPath(transform func(current string) (next string, changed bool, err error)) (bool, error) {
+	var changed bool
+	err := withUserPathLock(func() error {
+		current, rerr := ReadUserPath()
+		if rerr != nil {
+			return fmt.Errorf("read user PATH: %w", rerr)
+		}
+		next, c, terr := transform(current)
+		if terr != nil {
+			return terr
+		}
+		changed = c
+		if !c || next == current {
+			changed = false
+			return nil
+		}
+		return WriteUserPath(next)
+	})
+	if err == nil && changed {
+		BroadcastEnvironmentChange()
+	}
+	return changed, err
+}
+
+// TransformSystemPath（票 44 / P2-2）是机器级 PATH 的锁内 RMW。此前 GUI 的
+// 机器级 PATH 清理完全无锁（WriteSystemPath 直写）；复用 withUserPathLock
+// ——与 CleanupSystemPath 同一先例：注册表键不同，只加串行化、无死锁风险。
+func TransformSystemPath(transform func(current string) (next string, changed bool, err error)) (bool, error) {
+	var changed bool
+	err := withUserPathLock(func() error {
+		current, rerr := ReadSystemPath()
+		if rerr != nil {
+			return fmt.Errorf("read system PATH: %w", rerr)
+		}
+		next, c, terr := transform(current)
+		if terr != nil {
+			return terr
+		}
+		changed = c
+		if !c || next == current {
+			changed = false
+			return nil
+		}
+		return WriteSystemPath(next)
+	})
+	if err == nil && changed {
+		BroadcastEnvironmentChange()
+	}
+	return changed, err
+}
+
 // writeUserPathFromRegistry 是真实的注册表实现（含 M-2 长度上限校验）。
 func writeUserPathFromRegistry(path string) error {
 	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：在一切校验之前

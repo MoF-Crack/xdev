@@ -77,6 +77,11 @@ func newDepTestInstaller(t *testing.T, plugins ...*depPlugin) *Installer {
 }
 
 // makeInstalledDir creates a fake installation directory so dependency checks pass.
+//
+// F-27 note: the dependency gate now uses VerifyInstallIntegrity (not a bare
+// os.Stat + IsDir), so a merely EXISTING directory is no longer "installed".
+// The helper therefore lays down the tool's declared shim binary, which is
+// what a real, complete install tree contains.
 func makeInstalledDir(t *testing.T, ins *Installer, toolName, version string) {
 	t.Helper()
 	p, ok := ins.reg.Get(toolName)
@@ -84,8 +89,25 @@ func makeInstalledDir(t *testing.T, ins *Installer, toolName, version string) {
 		t.Fatalf("tool %q not in registry", toolName)
 	}
 	path := p.InstallDir(ins.cfg.Core.InstallDir, version)
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", path, err)
+	binDir := filepath.Join(path, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", binDir, err)
+	}
+	// Install every declared shim so VerifyInstallIntegrity succeeds.
+	for _, shimName := range p.Shims() {
+		binName := shimName
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+		if err := os.WriteFile(filepath.Join(binDir, binName), []byte("stub-binary"), 0o755); err != nil {
+			t.Fatalf("write stub binary %s: %v", binName, err)
+		}
+	}
+	// Guarantee a non-empty tree even for a plugin that declares no shims.
+	if len(p.Shims()) == 0 {
+		if err := os.WriteFile(filepath.Join(path, "placeholder.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write placeholder: %v", err)
+		}
 	}
 }
 

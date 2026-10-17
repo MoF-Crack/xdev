@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xmdemt/xdev/internal/config"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -131,6 +132,15 @@ func configSet(cfg *config.Config, key, value string) error {
 	case "path":
 		return setPathField(&cfg.Path, field, value)
 	case "mirror":
+		// F-35（P2）：mirror 是**下载源**，此前是裸赋值 cfg.Mirror[field] = value，
+		// 任何字符串（含 http 明文、内网/保留地址、非 URL）都能写进 config.yaml
+		// 并在下载时生效——与 `config proxy`（cfg.SetProxy → util.ValidateProxyURL）、
+		// `profile import`（util.IsSafeHTTPSExternalURL）、GUI
+		// App.SetMirrorConfig（同一函数）三处的既有校验不一致。
+		// 这里复用同一函数（只调用，不改 util），使四个入口同一语义。
+		if err := util.IsSafeHTTPSExternalURL(value); err != nil {
+			return fmt.Errorf("mirror.%s: %w", field, err)
+		}
 		if cfg.Mirror == nil {
 			cfg.Mirror = map[string]string{}
 		}
@@ -181,16 +191,37 @@ func setCoreField(c *config.CoreConfig, field, value string) error {
 		}
 		c.XMDevDir = value
 	case "download_dir":
+		// 票 33（P1-27 / E-08）的 validateLocalAbsPath 铺开到全部派生目录：
+		// 它们与 home 一样会被拼进文件系统路径，相对路径会随进程 CWD 漂移，
+		// UNC 无法承载 shim/注册表/缓存语义。修复前只有 xmdevenv_dir 受校验。
+		if err := validateLocalAbsPath(value); err != nil {
+			return err
+		}
 		c.DownloadDir = value
 	case "install_dir":
+		if err := validateLocalAbsPath(value); err != nil {
+			return err
+		}
 		c.InstallDir = value
 	case "shim_dir":
+		if err := validateLocalAbsPath(value); err != nil {
+			return err
+		}
 		c.ShimDir = value
 	case "cache_dir":
+		if err := validateLocalAbsPath(value); err != nil {
+			return err
+		}
 		c.CacheDir = value
 	case "env_dir":
+		if err := validateLocalAbsPath(value); err != nil {
+			return err
+		}
 		c.EnvDir = value
 	case "manifest_dir":
+		if err := validateLocalAbsPath(value); err != nil {
+			return err
+		}
 		c.ManifestDir = value
 	case "log_level":
 		c.LogLevel = value

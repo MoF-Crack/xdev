@@ -118,6 +118,11 @@ func newUninstallCmd() *cobra.Command {
 				return unsupportedToolErr(name)
 			}
 			ins := installer.New(Cfg(), reg)
+			// F-32（P2）：与 install/use/init/profile/upgrade 五处同源的门。
+			// 缺这一处时 noEnvWrite 保持零值 false，Uninstall 在「删掉最后一个
+			// 版本」分支会执行真实的 removeUserEnvVars——删除宿主的
+			// JAVA_HOME/GOPATH（internal/installer/installer.go:1704）。
+			ins.SetNoEnvWrite(NoPathFix())
 			if err := ins.Uninstall(p, ver); err != nil {
 				return err
 			}
@@ -263,7 +268,24 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 		return unsupportedToolErr(tool)
 	}
 	if remote {
-		versions := p.Manifest().Versions()
+		// F-28（P0）：Lua 插件的 Manifest() 恒返回 nil（internal/plugin/lua_plugin.go:49
+		// ——Lua 插件没有静态 manifest，版本只能经 available() 动态求值）。
+		// 旧代码直接 p.Manifest().Versions() 会对 nil *manifest.Tool 解引用 panic。
+		//
+		// 降级语义：没有静态版本列表时不要伪造一个版本，也不要静默打空表——
+		// 明确告知用户该插件不提供静态列表（版本由插件运行时解析），并顺带
+		// 尝试 ResolveVersion("latest") 给出一个可安装的提示值。
+		m := p.Manifest()
+		if m == nil {
+			fmt.Printf("• %s: plugin does not provide a static version list\n", tool)
+			if latest, err := p.ResolveVersion("latest"); err == nil && latest != "" {
+				fmt.Printf("  latest resolvable version: %s\n", latest)
+			} else {
+				fmt.Printf("  (versions are resolved dynamically by the plugin at install time)\n")
+			}
+			return nil
+		}
+		versions := m.Versions()
 		active := ""
 		if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
 			active = filepath.Base(target)

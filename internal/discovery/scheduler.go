@@ -560,7 +560,14 @@ func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
 	// Build merged cache: load existing, overlay this round's results.
 	// This preserves entries for tools that were not sniffed this round
 	// and avoids losing results from concurrent processes (NFR-004).
-	existingCache, _ := s.LoadCache()
+	//
+	// F-56 加固：与 withCacheLock 同理——读失败时**不得**从空缓存出发再写回，
+	// 那会把整份缓存清空。这里读失败则放弃本轮合并写（结果仅留在返回值里），
+	// 并明确告警；绝不「读失败 → 写空」。
+	existingCache, loadErr := s.LoadCache()
+	if loadErr != nil {
+		log.Printf("[discovery] SniffAll: refusing to rewrite cache after a failed read: %v", loadErr)
+	}
 	newCache := &SniffCache{
 		Tools:       make(map[string]ToolSniffResult),
 		RateLimit:   RateLimitState{Remaining: s.limiter.available()},
@@ -593,8 +600,10 @@ func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
 
 	// Single atomic save.
 	s.mu.Lock()
-	if saveErr := s.SaveCache(newCache); saveErr != nil {
-		log.Printf("[discovery] SniffAll: save cache failed: %v", saveErr)
+	if loadErr == nil {
+		if saveErr := s.SaveCache(newCache); saveErr != nil {
+			log.Printf("[discovery] SniffAll: save cache failed: %v", saveErr)
+		}
 	}
 	s.mu.Unlock()
 
@@ -653,7 +662,16 @@ func (s *Scheduler) withCacheLock(mutate func(*SniffCache) error) error {
 	}
 
 	// 锁内读取（绕过 LoadCache 的共享锁，避免同进程内两把锁互斥）。
-	cache := s.readCacheUnlocked()
+	//
+	// F-56 加固：必须区分「文件不存在」（首次运行，从空缓存开始是正确的）与
+	// 「读取/解析失败」（并发写者占用、瞬时共享冲突、JSON 损坏）。旧写法把两者
+	// 都当成 nil 并从空缓存开始，然后**照样写回** —— 一次瞬时读失败就会把
+	// 整份缓存清空。这类「读失败 → 写空」的覆盖正是 F-56 要消灭的丢更新形态，
+	// 因此失败时直接返回错误，绝不写盘。
+	cache, err := s.readCacheUnlocked()
+	if err != nil {
+		return fmt.Errorf("read sniff cache (refusing to overwrite): %w", err)
+	}
 	if cache == nil {
 		cache = &SniffCache{Tools: make(map[string]ToolSniffResult)}
 	}
@@ -673,16 +691,22 @@ func (s *Scheduler) withCacheLock(mutate func(*SniffCache) error) error {
 }
 
 // readCacheUnlocked 读缓存但不取任何文件锁（调用方须已持有独占锁）。
-func (s *Scheduler) readCacheUnlocked() *SniffCache {
+//
+// 返回 (nil, nil) 表示「文件确实不存在」（首次运行）；返回 (nil, err) 表示
+// 读到了内容却无法解析/无法读取 —— 调用方**不得**据此写空缓存（F-56 加固）。
+func (s *Scheduler) readCacheUnlocked() (*SniffCache, error) {
 	data, err := os.ReadFile(s.cachePath)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var c SniffCache
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil
+		return nil, fmt.Errorf("corrupt sniff cache: %w", err)
 	}
-	return &c
+	return &c, nil
 }
 
 // writeCacheUnlocked 原子写缓存但不取任何文件锁（调用方须已持有独占锁）。

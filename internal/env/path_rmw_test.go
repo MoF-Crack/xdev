@@ -10,6 +10,7 @@ package env
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -152,5 +153,120 @@ func TestRemoveFromWindowsUserPath_CaseInsensitive(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(result), "xdev\\shims") {
 		t.Errorf("case-variant shim entry not removed: %q", result)
+	}
+}
+
+// K5（票 44 / P2-2）：TransformUserPath 是 GUI PATH 清理的锁内 RMW 入口——
+// 与其它持锁 mutator 并发时不得丢写。一半 worker 走 Transform（新路径），
+// 一半走 SetWindowsUserPath（既有持锁 mutator）：每条并发写入都必须出现在
+// 终态。旧实现（锁外读 + 锁内盲写）在交错下会以「读快照覆盖新值」丢条目。
+func TestTransformUserPath_ConcurrentLockedMutators_NoLostWrite(t *testing.T) {
+	original := saveUserPath(t)
+	defer restoreUserPath(t, original)
+
+	if err := WriteUserPath(`C:\Windows\System32`); err != nil {
+		t.Fatalf("WriteUserPath: %v", err)
+	}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers*2)
+	for i := 0; i < workers; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			entry := fmt.Sprintf(`C:\t%d`, i)
+			_, err := TransformUserPath(func(cur string) (string, bool, error) {
+				for _, p := range strings.Split(cur, ";") {
+					if strings.EqualFold(strings.TrimSpace(p), entry) {
+						return "", false, nil
+					}
+				}
+				if cur == "" {
+					return entry, true, nil
+				}
+				return cur + ";" + entry, true, nil
+			})
+			if err != nil {
+				errCh <- fmt.Errorf("worker t%d: %w", i, err)
+			}
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			if err := SetWindowsUserPath(fmt.Sprintf(`C:\s%d`, i)); err != nil {
+				errCh <- fmt.Errorf("worker s%d: %w", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+
+	final, err := ReadUserPath()
+	if err != nil {
+		t.Fatalf("ReadUserPath: %v", err)
+	}
+	lower := strings.ToLower(final)
+	for i := 0; i < workers; i++ {
+		for _, entry := range []string{fmt.Sprintf(`c:\t%d`, i), fmt.Sprintf(`c:\s%d`, i)} {
+			if !strings.Contains(lower, entry) {
+				t.Errorf("lost write: concurrent entry %s missing from final PATH: %q", entry, final)
+			}
+		}
+	}
+}
+
+// K6（票 44）：TransformUserPath 的 changed/no-op 语义——transform 返回
+// changed=false 或 next==current 时不落盘（后端值不变）。
+func TestTransformUserPath_NoOpSemantics(t *testing.T) {
+	original := saveUserPath(t)
+	defer restoreUserPath(t, original)
+
+	const initial = `C:\Windows\System32;E:\some\bin`
+	if err := WriteUserPath(initial); err != nil {
+		t.Fatalf("WriteUserPath: %v", err)
+	}
+
+	// changed=false → 不写
+	changed, err := TransformUserPath(func(cur string) (string, bool, error) {
+		return "", false, nil
+	})
+	if err != nil || changed {
+		t.Fatalf("changed=false: changed=%v err=%v, want false/nil", changed, err)
+	}
+	if got, _ := ReadUserPath(); got != initial {
+		t.Errorf("changed=false must not write; PATH = %q, want %q", got, initial)
+	}
+
+	// next == current → 不写（幂等）
+	changed, err = TransformUserPath(func(cur string) (string, bool, error) {
+		return cur, true, nil
+	})
+	if err != nil || changed {
+		t.Fatalf("next==current: changed=%v err=%v, want false/nil（幂等不写）", changed, err)
+	}
+
+	// 真变更 → 写入并报 changed=true
+	changed, err = TransformUserPath(func(cur string) (string, bool, error) {
+		return cur + `;E:\new`, true, nil
+	})
+	if err != nil || !changed {
+		t.Fatalf("real change: changed=%v err=%v, want true/nil", changed, err)
+	}
+	if got, _ := ReadUserPath(); got != initial+`;E:\new` {
+		t.Errorf("transform write = %q, want %q", got, initial+`;E:\new`)
+	}
+
+	// transform 报错 → 原值不动、错误透传
+	_, err = TransformUserPath(func(cur string) (string, bool, error) {
+		return "", false, fmt.Errorf("boom")
+	})
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("transform error must propagate, got %v", err)
+	}
+	if got, _ := ReadUserPath(); got != initial+`;E:\new` {
+		t.Errorf("failed transform must not write; PATH = %q", got)
 	}
 }

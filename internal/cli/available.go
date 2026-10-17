@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -107,23 +108,36 @@ func printRow(row []string, widths []int) {
 		if i < len(row) {
 			v = row[i]
 		}
-		if len(v) > widths[i] {
-			v = v[:widths[i]-1] + "…"
+		if utf8.RuneCountInString(v) > widths[i] {
+			v = truncate(v, widths[i])
 		}
 		parts[i] = v
 	}
 	fmt.Println(strings.Join(parts, "  "))
 }
 
+// truncate shortens s to at most n display units (runes), appending an
+// ellipsis when it had to cut.
+//
+// F-36（P3）：原实现用 len(s)/s[:n-1] 按**字节**切——一个汉字 3 字节，
+// `truncate("中文描述文本", 4)` 会在第 4 字节处劈开第二个汉字，产出非法
+// UTF-8（终端显示为 U+FFFD 或乱码，GUI 侧 JSON 编码还可能失败）。改为按
+// rune 计数与切片，任何输入都产出合法 UTF-8。
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	if n <= 1 {
-		return s[:n]
+	if n == 1 {
+		// 只放得下 1 个显示单元：省略号恰好占 1 个 rune，且保留
+		// 「内容被截断」这一信息（旧实现在此处 s[:1] 会劈开多字节字符）。
+		return "…"
 	}
-	return s[:n-1] + "…"
+	return string(runes[:n-1]) + "…"
 }
 
 func loadCatalog() *manifest.Catalog {

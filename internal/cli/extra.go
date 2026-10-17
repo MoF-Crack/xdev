@@ -66,7 +66,7 @@ func newSelfCmd() *cobra.Command {
 				// 2. Remove shell RC injection
 				fmt.Println("Cleaning up shell configuration...")
 				shellInfo := env.DetectShell()
-				if err := env.RemoveShellRC(shellInfo); err != nil {
+				if err := stripAllXdevRCBlocks(shellInfo); err != nil {
 					fmt.Printf("Warning: failed to clean shell RC: %v\n", err)
 				}
 

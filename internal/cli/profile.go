@@ -271,6 +271,10 @@ func newImportCmd() *cobra.Command {
 			// Install tools
 			ctx := context.Background()
 			ins = installer.New(cfg, reg)
+			// F-32（P2）结构性守卫命中点：这里**重新构造**了 installer，
+			// 上面 :236 的门随旧实例一起被丢弃——不补这一行，profile import
+			// 的安装/激活阶段会重新写注册表（noEnvWrite 回落零值 false）。
+			ins.SetNoEnvWrite(NoPathFix())
 			var items []installer.BatchInstallItem
 			for _, t := range profile.Tools {
 				items = append(items, installer.BatchInstallItem{

@@ -35,9 +35,51 @@ import (
 	"github.com/xmdemt/xdev/internal/util"
 )
 
+// doctorFixPlan 集中决定 doctor 允许执行哪些**宿主写**操作。
+//
+// F-31（P2）：修复前 `--fix` 分支无条件执行 env.CleanupUserPath +
+// installer.InstallSelf + env.AppendToUserPath + env.CleanupSystemPath
+// （doctor.go 全文 0 处引用 NoPathFix()），`xdev doctor --fix --no-path-fix`
+// 实测照样写宿主注册表；CleanupSystemPath 更是直接写 HKLM。
+//
+// 逐项语义（注意区分「写注册表」与「写 xdev 自己的目录」）：
+//   - CleanGOROOT     —— 写 HKCU\Environment（自愈陈旧 GOROOT）；
+//   - CleanUserPath   —— 写 HKCU\Environment 的 Path；
+//   - AppendUserPath  —— 写 HKCU\Environment 的 Path；
+//   - CleanSystemPath —— 写 **HKLM**（机器级，需要管理员），因此除了
+//     --no-path-fix 之外还要 `--fix-system-path` 显式 opt-in；
+//   - InstallSelf     —— 只写 <xmdevenv_dir>/install/xdev/ 与 current/xdev
+//     的 junction，**不碰注册表**，因此不受 --no-path-fix 门控：把它一并
+//     关掉会让 `--fix` 失去作用（xdev 自身不再进入 PATH）。
+//
+// 与 init.go:173 / install.go:85,152 / profile.go:236 / upgrade_cmd.go:32
+// 五处 SetNoEnvWrite(NoPathFix()) 同源：同一个 NoPathFix() 决定所有注册表写。
+type doctorFixPlan struct {
+	CleanGOROOT     bool
+	CleanUserPath   bool
+	AppendUserPath  bool
+	CleanSystemPath bool
+	InstallSelf     bool
+}
+
+// planDoctorFix 由 --no-path-fix 与 --fix-system-path 推导出允许的写操作集合。
+func planDoctorFix(noPathFix, fixSystemPath bool) doctorFixPlan {
+	return doctorFixPlan{
+		// 用户级注册表写（HKCU\Environment）：统一受 --no-path-fix 门控。
+		CleanGOROOT:    !noPathFix,
+		CleanUserPath:  !noPathFix,
+		AppendUserPath: !noPathFix,
+		// 机器级注册表写（HKLM）：门控之外再加显式 opt-in。
+		CleanSystemPath: !noPathFix && fixSystemPath,
+		// 只写 xdev 自己的目录 —— 始终执行。
+		InstallSelf: true,
+	}
+}
+
 // newDoctorCmd runs a battery of health checks on the local install.
 func newDoctorCmd() *cobra.Command {
 	var flagFix bool
+	var flagFixSystemPath bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run sanity checks on your xdev installation",
@@ -45,15 +87,27 @@ func newDoctorCmd() *cobra.Command {
 			cfg := Cfg()
 			allOK := true
 
+			// F-31：宿主写操作的单一决策点。planDoctorFix 同时覆盖
+			// 下面第 0 步的 GOROOT 自愈与 --fix 分支的全部注册表写。
+			fixPlan := planDoctorFix(NoPathFix(), flagFixSystemPath)
+
 			// 0. Self-heal stale GOROOT residue (ticket 01 / audit X-07): the
 			//    pre-v2 go.yaml wrote a GOROOT one level above the real
 			//    toolchain (strip:0 nested layout), which breaks every
 			//    `go build` with "package fmt is not in std". Idempotent and
 			//    conservative — only deletes values that provably point at
 			//    the parent of a real GOROOT.
-			if err := env.CleanupStaleGOROOT(); err != nil {
-				fmt.Printf("✘ GOROOT registry cleanup failed: %v\n", err)
-				allOK = false
+			//
+			//    F-31：这一步写 HKCU\Environment，因此同样受 --no-path-fix
+			//    门控（修复前它在 --fix 分支之外**无条件**执行，连
+			//    `xdev doctor --no-path-fix` 都会写宿主注册表）。
+			if fixPlan.CleanGOROOT {
+				if err := env.CleanupStaleGOROOT(); err != nil {
+					fmt.Printf("✘ GOROOT registry cleanup failed: %v\n", err)
+					allOK = false
+				}
+			} else {
+				fmt.Println("• GOROOT registry cleanup: skipped (--no-path-fix)")
 			}
 
 			check := func(name string, ok bool, msg string) {
@@ -84,11 +138,17 @@ func newDoctorCmd() *cobra.Command {
 					cfg.Core.ShimDir, firstPathEntries(os.Getenv("PATH"), 3)))
 
 			// 4. shell RC has the xdev block
+			//
+			// F-33（P2）：修复前只匹配 env.Marker()（`# >>> xdev init >>>`），
+			// 而 `xdev activate` 注入的是 hookMarker（`# >>> xdev hook >>>`）。
+			// 两个 marker 三处不一致的后果之一就是这里：activate 成功后
+			// doctor 报 `✘ shell rc injected`（假阴性），并因此让 doctor
+			// 退出码变非零。
 			sh := env.DetectShell()
 			if sh.RCFile != "" {
 				hasBlock := false
 				if data, err := os.ReadFile(sh.RCFile); err == nil {
-					hasBlock = strings.Contains(string(data), env.Marker())
+					hasBlock = hasXdevRCBlock(data)
 				}
 				check("shell rc injected", hasBlock, sh.RCFile)
 			} else {
@@ -177,12 +237,16 @@ func newDoctorCmd() *cobra.Command {
 			}
 
 			// Fix mode
+			//
+			// F-31（P2）：分支内每一个**写注册表**的动作都由 fixPlan 门控
+			// （见 planDoctorFix 的逐项说明）。修复前这里是无条件执行，
+			// `--no-path-fix` 被完全忽略，实测会写宿主 PATH。
 			if flagFix {
 				fmt.Println("\n--- Fixing PATH issues ---")
 
-				// Fix user PATH
-				changed, err := env.CleanupUserPath(cfg.Core.XMDevDir, cfg.Core.ShimDir, cfg.GetPathMode())
-				if err != nil {
+				if !fixPlan.CleanUserPath {
+					fmt.Println("• User PATH cleanup: skipped (--no-path-fix)")
+				} else if changed, err := env.CleanupUserPath(cfg.Core.XMDevDir, cfg.Core.ShimDir, cfg.GetPathMode()); err != nil {
 					fmt.Printf("✘ Failed to fix user PATH: %v\n", err)
 				} else if changed {
 					fmt.Println("✔ User PATH cleaned up")
@@ -191,20 +255,31 @@ func newDoctorCmd() *cobra.Command {
 				}
 
 				// 将 xdev 自身安装到 install/xdev/<version>/ 并创建 junction
-				// 这样 xdev 命令通过 current/xdev 目录在 PATH 中全局可用
-				if _, _, err := installer.InstallSelf(cfg); err != nil {
-					fmt.Printf("✘ Failed to install xdev self: %v\n", err)
+				// 这样 xdev 命令通过 current/xdev 目录在 PATH 中全局可用。
+				//
+				// F-31：InstallSelf 只写 xdev 自己的目录（install/xdev/ 与
+				// current/xdev junction），不写任何注册表键，因此**不受**
+				// --no-path-fix 门控——把它一并关掉会让 `--fix` 失去作用。
+				if fixPlan.InstallSelf {
+					if _, _, err := installer.InstallSelf(cfg); err != nil {
+						fmt.Printf("✘ Failed to install xdev self: %v\n", err)
+					}
 				}
-				xdevBinDir := filepath.Join(cfg.Core.XMDevDir, "current", "xdev")
-				if err := env.AppendToUserPath(xdevBinDir); err != nil {
-					fmt.Printf("✘ Failed to add xdev dir to user PATH: %v\n", err)
+				if !fixPlan.AppendUserPath {
+					fmt.Println("• Add xdev dir to user PATH: skipped (--no-path-fix)")
 				} else {
-					fmt.Printf("✔ Added xdev dir to user PATH: %s\n", xdevBinDir)
+					xdevBinDir := filepath.Join(cfg.Core.XMDevDir, "current", "xdev")
+					if err := env.AppendToUserPath(xdevBinDir); err != nil {
+						fmt.Printf("✘ Failed to add xdev dir to user PATH: %v\n", err)
+					} else {
+						fmt.Printf("✔ Added xdev dir to user PATH: %s\n", xdevBinDir)
+					}
 				}
 
-				// Fix system PATH (requires admin)
-				changed, err = env.CleanupSystemPath()
-				if err != nil {
+				// Fix system PATH (writes HKLM, requires admin).
+				if !fixPlan.CleanSystemPath {
+					fmt.Println("• System PATH cleanup: skipped (requires --fix-system-path)")
+				} else if changed, err := env.CleanupSystemPath(); err != nil {
 					fmt.Printf("✘ Failed to fix system PATH: %v (may need admin privileges)\n", err)
 				} else if changed {
 					fmt.Println("✔ System PATH cleaned up")
@@ -229,7 +304,39 @@ func newDoctorCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&flagFix, "fix", false, "Attempt to fix detected issues")
+	cmd.Flags().BoolVar(&flagFixSystemPath, "fix-system-path", false,
+		"with --fix, also clean the machine-level (HKLM) system PATH — requires admin and an explicit opt-in")
 	return cmd
+}
+
+// xdevRCMarkers 是 RC 文件中「xdev 已经注入过」的全部可能标记。
+//
+// F-33（P2）：仓库里存在两套 marker——
+//   - env.Marker()（`# >>> xdev init >>>`）：`xdev init` /
+//     env.InjectShellRC 写的那一块；
+//   - hookMarker（`# >>> xdev hook >>>`）：`xdev activate` 写的那一块；
+//   - 以及 env 的历史 marker（`# >>> xmdevenvmt init >>>`）。
+//
+// 消费侧（doctor 的校验、self uninstall 的清理）此前只认其中一套，
+// 于是 activate 之后 doctor 报假阴性、self uninstall 之后 RC 里仍留 hook 块。
+// 集中在这里，让两处消费点共用同一份清单。
+func xdevRCMarkers() []string {
+	markers := []string{hookMarker, env.Marker()}
+	// 历史 marker：升级用户 RC 里的旧块也必须算「已注入」，否则同样假阴性。
+	// env 包未导出它们，这里按文档化的历史字符串列一份（仅用于识别）。
+	markers = append(markers, "# >>> xmdevenvmt init >>>")
+	return markers
+}
+
+// hasXdevRCBlock 报告 RC 内容里是否存在**任一**已知的 xdev 注入块。
+func hasXdevRCBlock(data []byte) bool {
+	text := string(data)
+	for _, m := range xdevRCMarkers() {
+		if m != "" && strings.Contains(text, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // notInstallableTools 返回本平台不可安装的工具名（排序）——票 18 / P2-29。
