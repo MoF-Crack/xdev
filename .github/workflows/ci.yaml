@@ -77,6 +77,13 @@ jobs:
           npm ci
           npm run build
 
+      # 第七轮审计 F-44：CI 此前只做 `vite build`，**从不运行前端测试**——
+      # 236 个 vitest 用例（含 i18n 键奇偶、订阅泄漏、重入、竞态守卫）全红也能合入，
+      # 整套前端守卫退化为「本机自律」。此处补上单元测试门禁。
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: npx vitest run
+
       - name: Download dependencies
         run: go mod download
 
@@ -98,6 +105,13 @@ jobs:
       - name: Test
         # -v removed: verbose output inflates log storage with no gate value
         run: go test ./... -count=1
+
+      # 第七轮审计 F-44：仓库多轮工作（票 10/19/44/46）核心即锁与 PATH RMW 竞态，
+      # 但 `-race` 在任何工作流中都不存在（本机因 MinGW 8.1.0 与 Go 1.26 race
+      # 运行时不兼容而无法执行）。Linux runner 无该限制，是唯一能补上竞态门禁的地方。
+      - name: Test with race detector (linux only)
+        if: matrix.goos == 'linux'
+        run: go test -race ./internal/... -count=1
 
       - name: Upload artifact
         continue-on-error: true
@@ -158,10 +172,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # secrets cannot be referenced in step-level `if:`; expose them as job env
-    # and gate optional signing on the env values instead.
+    # 第七轮审计 F-38（密钥作用域）：**不得**把 XDEV_SIGNING_PRIVATE_KEY 放在
+    # 作业级 env —— 作业级 env 对该作业的**所有步骤**可见，于是本作业的
+    # `npm ci`（执行 lockfile 中全部依赖的 preinstall/install/postinstall 脚本）
+    # 与 `gem install fpm`（执行 rubygems 拉取的 Ruby 代码）都能读到根签名私钥。
+    # 攻击者只需投毒**一个**依赖即可为任意 manifest 签发合法签名，而所有已发布
+    # 客户端都内嵌对应公钥 → 整条更新链的信任根失守。
+    # 私钥只在真正需要它的步骤上做**步骤级** env 注入（见下方 Verify / Sign 两步）；
+    # 公钥非机密，可保留作业级（下游 Build 步骤要用它注入 -ldflags）。
     env:
-      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
       XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
 
     steps:
@@ -219,6 +238,8 @@ jobs:
           npm run build
 
       - name: Verify signing secrets (hard gate)
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
           # Spec 003 FR-001/FR-002: Release must fail if signing keys are missing
           if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
@@ -232,9 +253,15 @@ jobs:
           echo "Signing secrets verified"
 
       - name: Sign manifests
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
+          # F-38 纵深：umask + trap 保证私钥落地文件不被同作业后续步骤读取，
+          # 且无论成功失败都被清除（与 sign-manifests.yml 同源做法）。
+          umask 077
+          trap 'rm -f keys/priv.key' EXIT
           mkdir -p keys
-          echo "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
+          printf '%s' "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
           chmod 600 keys/priv.key
           go build -o xdev .
           ./xdev sign-manifests --manifests-dir manifests --priv-key keys/priv.key
@@ -477,8 +504,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     timeout-minutes: 30
+    # 第七轮审计 F-38：私钥不进作业级 env（本作业只做非空校验，从不用它签名）。
     env:
-      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
       XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
 
     steps:
@@ -528,6 +555,10 @@ jobs:
           npm run build
 
       - name: Verify signing secrets (hard gate)
+        env:
+          # F-38：本作业不使用私钥签名，仅做存在性硬门禁——因此私钥只在此步骤可见，
+          # 不会泄漏给同作业的 `npm ci` / `gem install` 等依赖安装步骤。
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
           # Spec 003 FR-001/FR-002: Release must fail if signing keys are missing
           if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
@@ -603,8 +634,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    # 第七轮审计 F-38：私钥不进作业级 env（本作业只做非空校验，从不用它签名）。
     env:
-      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
       XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
 
     steps:
@@ -653,6 +684,9 @@ jobs:
           npm run build
 
       - name: Verify signing secrets (hard gate)
+        env:
+          # F-38：本作业不使用私钥签名，仅做存在性硬门禁——私钥只在此步骤可见。
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
           if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
             echo "::error::Missing required secret: XDEV_SIGNING_PRIVATE_KEY"

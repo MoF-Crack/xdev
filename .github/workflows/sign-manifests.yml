@@ -66,18 +66,30 @@ jobs:
       # 若被构建并在密钥所在进程里运行，等于把根签名密钥交给 ref 作者。
       # 布局：ref 只进 `ref/` 子目录作为**数据**（manifests/、keys/pub.key）；
       # 代码一律取 github.sha（workflow_dispatch 时=默认分支 HEAD，即维护者可信面）。
+      #
+      # 第七轮审计 F-37（顺序至关重要）：`actions/checkout` 的
+      # prepareExistingDirectory() 在「repositoryPath/.git 不存在」时会
+      # `remove = true`，随后删除该目录下的**每一个条目**
+      # （git-directory-helper.ts:117-124）。不带 `path` 的那次 checkout 其
+      # repositoryPath = $GITHUB_WORKSPACE，而根目录在第一次只建了 ref/.git
+      # 时并没有 .git —— 于是「先 ref、后可信代码」的顺序会把 ref/ 整个删掉，
+      # 导致 Record base SHA 步骤失败（签名作业必然中止），并让
+      # hashFiles('ref/manifests/*.yaml') 恒空、缓存键退化为常量
+      # `fill-sha256-`（F6b 的「精确键命中、禁止跨运行投毒」保护随之失效）。
+      # 因此：**先**做可信代码 checkout（此时工作区为空，即使触发 remove 也无害），
+      # **再**把 ref 数据检出到 ref/ 子目录。
+      - name: Checkout trusted code (workflow SHA)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Checkout signing ref (data only)
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           path: ref
-
-      - name: Checkout trusted code (workflow SHA)
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          persist-credentials: false
 
       - name: Record base SHA
         id: base
