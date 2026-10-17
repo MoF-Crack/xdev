@@ -86,4 +86,31 @@ describe('EnvironmentVariablesPage', () => {
     expect(wrapper.emitted('migration-all')).toHaveLength(1);
     expect(wrapper.text()).toContain('migration.status_success');
   });
+
+  // 第七轮审计 F-40：迁移进行中时三个按钮必须禁用，且点击不再发出事件。
+  //
+  // 缺陷现场：AppContent 的 migratingAll/migratingSingle 只被写、从不被读
+  // （模板零引用），按钮唯一约束是 `:disabled="!migrationTools.length"`，
+  // 不随进行中状态禁用。迁移是长耗时复制/移动，快速双击会让同一工具被两个
+  // 并发迁移流程处理（Go 侧也无工具锁）。
+  it('disables every migration action while a migration is in flight (F-40)', async () => {
+    const wrapper = mount(EnvironmentVariablesPage, { props });
+    // 空闲：按钮可用。
+    expect(wrapper.get('[data-action="migration-scan"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[data-action="migration-single"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[data-action="migration-all"]').attributes('disabled')).toBeUndefined();
+
+    await wrapper.setProps({ migrationBusy: true });
+    expect(wrapper.get('[data-action="migration-scan"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-action="migration-single"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-action="migration-all"]').attributes('disabled')).toBeDefined();
+
+    // 禁用状态下点击不得再发出任何迁移事件（Vue 的 disabled 阻止原生 click）。
+    await wrapper.get('[data-action="migration-single"]').trigger('click');
+    await wrapper.get('[data-action="migration-all"]').trigger('click');
+    await wrapper.get('[data-action="migration-scan"]').trigger('click');
+    expect(wrapper.emitted('migration-single')).toBeUndefined();
+    expect(wrapper.emitted('migration-all')).toBeUndefined();
+    expect(wrapper.emitted('migration-scan')).toBeUndefined();
+  });
 });
