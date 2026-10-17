@@ -53,6 +53,21 @@ func Parse(raw string) (Spec, error) {
 	case "lts":
 		return Spec{Raw: raw, Original: original, Kind: KindLTS}, nil
 	}
+	// 第八轮审计 A-05（P1）：**先判 partial，再判 exact**。
+	//
+	// parseSemver 接受 2 段（`3.12`），因此 isExactSemver("3.12") 为真，旧顺序会把
+	// `python@3.12` 归为 KindExact → 精确匹配 "3.12" 失败并报
+	// "version 3.12 not found"。于是 isPartial / resolveRange 的 "x.y" 分支是
+	// **完全死代码**，而 README.md 与 installation-guide.md 都把
+	// `xdev install python@3.12` 当首要示例，resolver.go 的注释也承诺
+	// `"3.12" -> any 3.12.x`。实测：`xdev install python@3.12` 报
+	// "resolve version failed … version 3.12 not found"，而 `^3.12`/`~3.12`/`3.12.7`
+	// 均能进入下载阶段。
+	//
+	// `3.12` 是「部分版本」（= 3.12.x 中最高者），必须走范围解析。
+	if isPartial(raw) {
+		return Spec{Raw: raw, Original: original, Kind: KindRange, Constraint: raw}, nil
+	}
 	if isExactSemver(raw) {
 		return Spec{Raw: raw, Original: original, Kind: KindExact}, nil
 	}
