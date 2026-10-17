@@ -12,7 +12,7 @@ import (
 // （panicWithTraceback），直接穿透 LoadPlugin 打崩宿主进程。
 //
 // 影响：任意 `$XMDEV_HOME/plugins/*.lua` 都能让 CLI/TUI/GUI 每次启动都崩溃
-//（registerUserPlugins 在 RegisterAll 里加载每个用户插件）—— 已用真实二进制
+// （registerUserPlugins 在 RegisterAll 里加载每个用户插件）—— 已用真实二进制
 // 复现：`xdev available` → `panic: …p16-boom:install` → exit 2。
 //
 // 本用例不带 recover：若修复失效，测试进程会直接 panic（这就是红）。
