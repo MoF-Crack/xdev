@@ -228,15 +228,27 @@ func UpdateArchiveSHA256InFile(path string, updates []ArchiveSHAUpdate) (int, []
 // 为什么需要它：`xdev refresh` 原先用 manifest.MarshalTool **整文件重写**来更新
 // latest，会把用户手写 manifest 里的**全部注释**抹掉。这里只做文本级外科替换——
 // 命中顶层 `latest:` 行（缩进为 0，避免误改某个 version 条目下的同名字段）时
-// 就地替换值并保留行尾注释；未命中则**追加**一行。
+// 就地替换值并保留行尾注释；未命中则插入一行。
 //
 // 与 SetArchiveSHA256InLines 同源的思路：能用文本级改写就不整文件重排。
+//
+// 第八轮审计自纠（本函数是第七轮的产物，被第八轮探针抓出三个真实缺陷）：
+//  1. **CRLF 文件被改成混合行尾**：旧实现 `strings.Split(text, "\n")` + `Join`
+//     会把命中行的 `\r` 丢掉，产出 `…\r\n latest: 2.0.0 \n …` 的混合行尾
+//     （实测 `"# comment\r\nname: demo\r\nlatest: 2.0.0\nversions: []\r\n"`）。
+//     现改为**逐行保留原始行尾**。
+//  2. **追加到第 0 行会破坏 YAML 文档结构**：当文件以 `---`（文档起始标记）或
+//     `%YAML` 指令开头时，把 `latest:` 前置会产生 `latest: 2.0.0\n---\nname: …`
+//     —— 新键落进一个**独立文档**。现改为插入到「前导块之后」（BOM / 指令 /
+//     `---` / 注释 / 空行之后）。
+//  3. **BOM 被挤到文件中间**：`\ufeffname: demo` 会被改成
+//     `latest: 2.0.0\n\ufeffname: demo`，使 UTF-8 BOM 出现在字节 0 之外。
+//     现在含 BOM 的首行永不被越过。
 func SetLatestInLines(src []byte, newLatest string) ([]byte, bool) {
 	if newLatest == "" {
 		return src, false
 	}
-	text := string(src)
-	lines := strings.Split(text, "\n")
+	lines, ends := splitLinesKeepEnds(src)
 
 	for i, line := range lines {
 		// 顶层 latest：行首无缩进，且不是注释行。
@@ -257,16 +269,97 @@ func SetLatestInLines(src []byte, newLatest string) ([]byte, bool) {
 			}
 			value, comment = rest[:cut], rest[cut:]
 		}
-		if strings.TrimSpace(value) == newLatest {
-			return src, false // 已经是目标值
+		// 幂等：现值（含被引号包裹的写法）已等于目标则不改动。
+		if unquoteYAML(strings.TrimSpace(value)) == newLatest {
+			return src, false
 		}
 		lines[i] = "latest: " + newLatest + comment
-		return []byte(strings.Join(lines, "\n")), true
+		return joinLinesKeepEnds(lines, ends), true
 	}
 
-	// 没有顶层 latest：追加一行（放在开头，与 YAML 顶层字段惯例一致）。
-	out := append([]byte("latest: "+newLatest+"\n"), src...)
-	return out, true
+	// 没有顶层 latest：插入到「前导块之后」，避免破坏文档结构或挤走 BOM。
+	insertAt := 0
+	for insertAt < len(lines) {
+		raw := lines[insertAt]
+		// BOM 属文件级标记，必须留在字节 0 —— 不能把新键插到它前面。
+		if insertAt == 0 && strings.HasPrefix(raw, "\ufeff") {
+			insertAt++
+			continue
+		}
+		t := strings.TrimSpace(raw)
+		if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "%") || t == "---" {
+			insertAt++
+			continue
+		}
+		break
+	}
+
+	// 新增行沿用邻近行的行尾风格（CRLF 文件保持 CRLF）。
+	nl := "\n"
+	switch {
+	case insertAt > 0:
+		nl = ends[insertAt-1]
+	case len(ends) > 0:
+		nl = ends[0]
+	}
+	if nl == "" {
+		nl = "\n"
+	}
+
+	outLines := make([]string, 0, len(lines)+1)
+	outEnds := make([]string, 0, len(ends)+1)
+	outLines = append(outLines, lines[:insertAt]...)
+	outEnds = append(outEnds, ends[:insertAt]...)
+	outLines = append(outLines, "latest: "+newLatest)
+	outEnds = append(outEnds, nl)
+	outLines = append(outLines, lines[insertAt:]...)
+	outEnds = append(outEnds, ends[insertAt:]...)
+	return joinLinesKeepEnds(outLines, outEnds), true
+}
+
+// unquoteYAML 去掉值两侧成对的单/双引号，用于幂等比较。
+func unquoteYAML(v string) string {
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			return v[1 : len(v)-1]
+		}
+	}
+	return v
+}
+
+// splitLinesKeepEnds 按 '\n' 切分并**逐行保留原始行尾**（"\n" 或 "\r\n"），
+// 使改写后的文件不会出现混合行尾。
+func splitLinesKeepEnds(src []byte) (lines, ends []string) {
+	s := string(src)
+	for {
+		i := strings.IndexByte(s, '\n')
+		if i < 0 {
+			if s != "" {
+				lines = append(lines, s)
+				ends = append(ends, "")
+			}
+			return
+		}
+		line, end := s[:i], "\n"
+		if strings.HasSuffix(line, "\r") {
+			line, end = line[:len(line)-1], "\r\n"
+		}
+		lines = append(lines, line)
+		ends = append(ends, end)
+		s = s[i+1:]
+	}
+}
+
+// joinLinesKeepEnds 是 splitLinesKeepEnds 的逆操作。
+func joinLinesKeepEnds(lines, ends []string) []byte {
+	var b strings.Builder
+	for i := range lines {
+		b.WriteString(lines[i])
+		if i < len(ends) {
+			b.WriteString(ends[i])
+		}
+	}
+	return []byte(b.String())
 }
 
 // UpdateLatestInFile 在文件上做一次「加锁 → 文本级改 latest → 原子写」。
