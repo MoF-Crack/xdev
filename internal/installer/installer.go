@@ -40,6 +40,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1603,13 +1604,62 @@ func defaultLinkCurrent(target, link string) error {
 // leftover) WITHOUT following it into the install tree: os.Remove unlinks the
 // reparse point itself and never recurses into its target. This is why the
 // code must never use os.RemoveAll here.
+//
+// 第八轮审计 P1-3（F-22 的自引入回归）：旧版本 xdev 的 CopyDir 兜底会在
+// `current/<tool>` 留下一个**真实目录**（非 reparse point）。os.Remove 对**非空**
+// 目录必定失败（Windows: "The directory is not empty"），随后
+// `os.Rename(tmpLink, currentLink)` 也无法覆盖已存在的目录
+// （"Access is denied"），`rollbackActivation` 走同一个函数同样失败 —— 于是
+// `xdev install`/`xdev use` **每次重试都是同一条错误链，永远修不好**，
+// 正是 F-22 注释里声称已消除的症状（实测 H10）。
+//
+// 修复：显式识别这个已知的遗留形态（真实目录、非 symlink、非 junction），把它
+// **重命名**到一个不再被 `ActiveVersion` 解析的旁路名字（`.stale-<随机>`）后
+// 再 RemoveAll。先 rename 是关键：`current/` 下立刻不再有该条目，安装流程可以
+// 继续；即便随后的删除失败，残留也只是一个不影响解析的旁路目录，且删除是
+// 有界的（只删这个我们已确认是遗留产物的目录）。
+//
+// 绝不在此对**链接**调用 RemoveAll —— 那会顺着 reparse point 删掉安装树。
 func removeLinkEntry(path string) {
-	if _, err := os.Lstat(path); err != nil {
+	fi, err := os.Lstat(path)
+	if err != nil {
 		return // nothing there
 	}
-	if err := os.Remove(path); err != nil {
+	if err := os.Remove(path); err == nil {
+		return
+	} else if !isLegacyRealDir(fi) {
+		// 链接/junction/文件：os.Remove 已尽力，失败只告警（绝不 RemoveAll）。
 		log.Printf("[install] WARNING: failed to remove link entry %s: %v", path, err)
+		return
 	}
+
+	// 遗留的真实目录（旧 CopyDir 产物）：rename 到旁路名后再删。
+	stale := path + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if rerr := os.Rename(path, stale); rerr != nil {
+		log.Printf("[install] WARNING: failed to remove legacy directory %s: %v", path, rerr)
+		return
+	}
+	log.Printf("[install] removed legacy CopyDir directory at %s (moved to %s)", path, stale)
+	if rerr := os.RemoveAll(stale); rerr != nil {
+		log.Printf("[install] WARNING: could not fully delete legacy directory %s: %v", stale, rerr)
+	}
+}
+
+// isLegacyRealDir 报告该 FileInfo 是否为「旧版 CopyDir 兜底留下的真实目录」——
+// 即：是目录，且不是 symlink、不是 Windows junction（Lstat 报 ModeIrregular）。
+// 只有这一种形态才允许走 rename+RemoveAll 的清理路径。
+func isLegacyRealDir(fi os.FileInfo) bool {
+	if fi == nil || !fi.IsDir() {
+		return false
+	}
+	m := fi.Mode()
+	if m&os.ModeSymlink != 0 {
+		return false
+	}
+	if m&os.ModeIrregular != 0 { // Windows junction
+		return false
+	}
+	return true
 }
 
 // rollbackActivation restores the previous junction/symlink after a failed

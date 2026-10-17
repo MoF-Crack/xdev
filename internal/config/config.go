@@ -1147,9 +1147,25 @@ func ResolveHomeDir() string {
 // Call this from `xdev init` and `xdev self uninstall` so the next
 // invocation re-discovers the correct home.  It removes both the
 // primary cache and any legacy LOCALAPPDATA cache.
+//
+// 第八轮审计 A-09（P1）：还必须重置**进程内**的 sync.Once 缓存。
+//
+// 旧实现只删两个缓存文件，而 `homeOnce` 已经 fire 过、`homeVal` 仍是旧值 ——
+// 于是长驻进程（GUI）里"改 home 后失效缓存、下次重新发现"的期望**不成立**：
+// 实测 `ResolveHomeDir()`=home1 → 改 `XMDEV_HOME`=home2 → `InvalidateHomeCache()`
+// → 仍返回 home1（只有测试专用的 `ResetHomeDirForTest` 能刷新）。
+//
+// 生产可达点：`gui/app_migration.go:88` 与 `:374`（迁移后改
+// `cfg.Core.XMDevDir` + `Save()` + `InvalidateHomeCache()`）、`cli/extra.go:58`、
+// `cli/init.go:91`。此后同进程的 `shim.go`（shim 索引读写）与 `update.go`
+// （自更新）继续用**旧 home** → shim 分发失效或写回已迁移走的目录，直到重启进程。
+// 这与历史上 sync.Once 粘滞引发的大事故同源。
 func InvalidateHomeCache() {
 	os.Remove(homeCachePath())
 	os.Remove(fallbackCachePath())
+	// 进程内缓存必须一并失效，否则长驻进程仍会拿到旧 home。
+	homeOnce = sync.Once{}
+	homeVal = ""
 }
 
 // homeCachePath returns the path to the cross-process home cache file.
