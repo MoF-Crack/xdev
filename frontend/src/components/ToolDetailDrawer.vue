@@ -29,7 +29,7 @@
             <n-tag v-if="tool.localVersion" type="warning">{{ tool.localVersion }}</n-tag>
             <CopyableValue v-if="tool.localPath" :value="tool.localPath" :copy-label="t('btn.copy')" :success-label="t('detail.copied')" :failure-label="t('detail.copy_failed')" />
             <n-space>
-              <n-button v-if="tool.localPath && !tool.installed" data-action="migrate" size="tiny" @click="$emit('migrate', tool.name, tool.localPath)">{{ t('detail.migrate_to_xdev') }}</n-button>
+              <n-button v-if="tool.localPath && !tool.installed" data-action="migrate" size="tiny" :disabled="migrationBusy" @click="$emit('migrate', tool.name, tool.localPath)">{{ t('detail.migrate_to_xdev') }}</n-button>
               <n-button v-if="tool.localPath && tool.installed" data-action="switch-local" size="tiny" @click="$emit('switch-local', tool.name)">{{ t('detail.switch_to_local') }}</n-button>
             </n-space>
           </section>
@@ -99,6 +99,9 @@ const props = defineProps({
   operatingTool: { type: String, default: '' },
   returnFocusTo: Object,
   deps: { type: Array, default: () => [] },
+  // R8-02（第八轮审计，P1）：迁移进行中标志，透传自 AppContent 的
+  // migratingSingle/migratingAll —— 抽屉里的「迁移到 xdev」按钮此前不受任何约束。
+  migrationBusy: Boolean,
   t: { type: Function, required: true },
 });
 const emit = defineEmits(['update:show', 'toggle-favorite', 'migrate', 'switch-local', 'switch-xdev', 'use-version', 'uninstall-version', 'install', 'repair', 'show-more', 'launch', 'copy-command', 'migrate-pm', 'install-package-manager', 'update-package-manager']);

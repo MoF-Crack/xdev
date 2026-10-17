@@ -49,6 +49,11 @@ export function installWailsMocks(appOverrides = {}, runtimeOverrides = {}) {
       }
     },
     __subscriptions: () => ({ active: activeSubscriptions, total: totalSubscriptions }),
+    // R8-01: per-event-name live listener counts, so specs can assert *which*
+    // events are registered without guessing from the aggregate counter.
+    __subscriptionNames: () => Object.fromEntries(
+      Object.entries(unitListeners).map(([name, set]) => [name, set.size]),
+    ),
     ...runtimeOverrides,
   };
   // Emit helper for specs: deliver an event to every live listener of the

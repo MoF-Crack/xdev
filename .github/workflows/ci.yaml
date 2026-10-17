@@ -80,9 +80,18 @@ jobs:
       # 第七轮审计 F-44：CI 此前只做 `vite build`，**从不运行前端测试**——
       # 236 个 vitest 用例（含 i18n 键奇偶、订阅泄漏、重入、竞态守卫）全红也能合入，
       # 整套前端守卫退化为「本机自律」。此处补上单元测试门禁。
+      #
+      # 第八轮审计 R8-04：F-44 只补了 `npx vitest run`，但 `frontend/package.json` 的
+      # `"test": "node test/smoke.mjs"` 是**第二套**源码级契约守卫（AppContent 必须渲染
+      # CommandPalette/AppShell、抽取后的页面顺序、`v-if="false"` 死分支、导航分组、
+      # locale 键奇偶…）。`vite.config.js` 的 `test.include = ['test/**/*.{test,spec}.js']`
+      # **不匹配** `smoke.mjs`，且全仓此前没有任何地方调用 `npm test` —— 这套守卫
+      # 在 CI 里从不执行。两条命令在同一 working-directory 下依次运行。
       - name: Frontend unit tests
         working-directory: frontend
-        run: npx vitest run
+        run: |
+          npx vitest run
+          npm test
 
       - name: Download dependencies
         run: go mod download

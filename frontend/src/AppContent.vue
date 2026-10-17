@@ -26,10 +26,10 @@
       </PageToolbar>
     </template>
         <!-- Dashboard -->
-        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :batch-installing="batchInstalling" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @install-all-updates="installAllUpdates" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
+        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :batch-installing="batchInstalling" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" :migration-busy="!!migratingAll || !!migratingSingle" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @install-all-updates="installAllUpdates" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
 
         <!-- Favorites Page -->
-        <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
+        <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
         <!-- Settings -->
         <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
         <!-- Environment Variables Page -->
@@ -45,7 +45,7 @@
         <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
   </AppShell>
 
-  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
+  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
@@ -122,28 +122,23 @@ onUnmounted(() => {
   window.runtime?.EventsOff?.('xdev:activation-warning');
 });
 
-onMounted(async () => {
-  // Spec 032: one bootstrap round-trip replaces the categories +
-  // dashboard + favorites waterfall.
-  try {
-    const boot = await window.go.gui.App.GetBootstrapState();
-    if (boot?.categories) categories.value = boot.categories;
-    if (boot?.stats) stats.value = boot.stats;
-    if (boot?.favorites) favorites.value = boot.favorites;
-  } catch (e) {
-    console.error('Bootstrap failed, falling back to individual loads:', e);
-    await loadCategories();
-    await loadDashboard();
-    await loadFavorites();
-  }
-  await loadUpdates();
-  await loadIgnoredTools();
-  await loadSniffConfig();
-  await loadSniffServiceStatus();
-  await loadMigrationMode();
-  // 扫描旧版目录，发现后弹出迁移确认对话框
-  scanAndPromptLegacyMigration();
-
+// R8-01（第八轮审计，P1）：事件注册必须全部落在**同步前缀**，即任何 await 之前。
+//
+// 缺陷现场：这 4 个 EventsOn 原本写在 `onMounted(async () => {...})` 的**多个 await
+// 之后**（GetBootstrapState → loadUpdates → … → loadMigrationMode），而 onUnmounted
+// 的 EventsOff 是同步的。真实时序窗口：App.vue 的 `checkInit()` 在 bootstrap 未决时
+// 返回 false → <AppContent> 被 <SetupWizard> 替换 → 卸载执行 EventsOff（此时还没有
+// 任何监听者）→ 挂起的 await 恢复 → **卸载之后**才 EventsOn 注册。
+// Wails 的 EventsOn 按事件名把回调追加进一个 Set，EventsOff(name) 只在注册之后调用
+// 才有效，因此这些监听者**永不注销**：每次卸载/重挂载泄漏 4 个，且它们会在组件已经
+// 不在时继续跑 message.warning(...) / loadDashboard() —— 用户看到「幽灵」激活失败
+// toast，并触发无意义的仪表盘重算。
+//
+// 修复：把注册提到 onMounted 的同步前缀。回调只引用函数声明（提升）与在同步前缀处
+// 已初始化的 ref（showSelfUpdate/selfUpdateInfo 在 <script setup> 顶层、早于
+// onMounted 回调执行时求值，故安全）；回调体内对其它 ref 的访问发生在事件到达时，
+// 与注册位置无关。
+function registerRuntimeListeners() {
   // Listen for TOFU warning events from the backend
   window.runtime?.EventsOn?.('xdev:tofu-warning', (data) => {
     if (!data || !data.tool) return;
@@ -192,6 +187,33 @@ onMounted(async () => {
       message.error(t('update_check_failed'));
     }
   });
+}
+
+onMounted(async () => {
+  // R8-01：先同步注册（第一个 await 之前），保证「注册先于任何挂起点」；
+  // 即使本组件在 bootstrap 未决期间被卸载，onUnmounted 的 EventsOff 也能清干净。
+  registerRuntimeListeners();
+
+  // Spec 032: one bootstrap round-trip replaces the categories +
+  // dashboard + favorites waterfall.
+  try {
+    const boot = await window.go.gui.App.GetBootstrapState();
+    if (boot?.categories) categories.value = boot.categories;
+    if (boot?.stats) stats.value = boot.stats;
+    if (boot?.favorites) favorites.value = boot.favorites;
+  } catch (e) {
+    console.error('Bootstrap failed, falling back to individual loads:', e);
+    await loadCategories();
+    await loadDashboard();
+    await loadFavorites();
+  }
+  await loadUpdates();
+  await loadIgnoredTools();
+  await loadSniffConfig();
+  await loadSniffServiceStatus();
+  await loadMigrationMode();
+  // 扫描旧版目录，发现后弹出迁移确认对话框
+  scanAndPromptLegacyMigration();
 });
 
 const selectedView = ref('dashboard');
@@ -1515,6 +1537,17 @@ async function saveArchiveRetention(policy) {
 }
 
 async function migrateTool(toolName, localPath) {
+  // R8-02（第八轮审计，P1）：F-40 的重入守卫**只覆盖了 migrateSingle/migrateAll**，
+  // 而同一时刻可用的另外两条迁移入口都走本函数：
+  //   - DashboardPage 扫描结果行「迁移」→ @scan-migrate → migrateScanTool → migrateTool；
+  //   - FavoritesPage / ToolDetailDrawer 的「迁移到 xdev」→ @migrate → migrateTool。
+  // 本函数既不读也不写 migratingAll/migratingSingle，Go 侧
+  // MigrateLocalTool / migrateLocalToolByJunction / migrateLocalToolByMove 也都不取
+  // 工具锁，因此双击 = 两次并发 MigrateLocalTool，对同一目录并发
+  // CopyDir/os.Rename/CreateJunction；move 模式下第二个流程还会对已被移走的源路径做
+  // os.RemoveAll。这里复用同一对标志（并在 finally 复位）。
+  if (migratingAll.value || migratingSingle.value) return;
+  migratingSingle.value = toolName;
   try {
     await window.go.gui.App.MigrateLocalTool(toolName, localPath);
     message.success(t('migration.migrated_to_xdev', { name: toolName }));
@@ -1522,6 +1555,8 @@ async function migrateTool(toolName, localPath) {
     await refreshTools();
   } catch (e) {
     message.error(t('migration.migrate_failed') + ': ' + e);
+  } finally {
+    migratingSingle.value = '';
   }
 }
 

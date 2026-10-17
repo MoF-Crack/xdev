@@ -387,9 +387,9 @@ manifest.LoadCatalogCached()
 ./build.sh
 
 # Windows PowerShell
-.\build.ps1              # 完整构建
-.\build.ps1 -SkipGUI    # 仅 CLI
-.\build.ps1 -SkipFrontend  # 跳过前端编译
+.\build.ps1                 # 完整构建
+.\build.ps1 -SkipBuild      # 跳过编译（仅做审计）
+.\build.ps1 -SkipAudit      # 跳过下载源审计
 ```
 
 ### 11.2 Ldflags

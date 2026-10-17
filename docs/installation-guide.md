@@ -118,9 +118,7 @@ GUI 构建步骤会自动编译 `frontend/` 目录下的 Vue.js 项目，产出 
 ```
 
 可选参数：
-- `-SkipFrontend`：跳过前端构建
-- `-SkipCLI`：跳过 CLI 构建
-- `-SkipGUI`：跳过 GUI 构建
+- `-SkipBuild`：跳过编译（`build.ps1`）
 - `-SkipAudit`：跳过下载源审计
 
 ## 6. 验证安装
