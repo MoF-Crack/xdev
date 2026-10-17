@@ -220,7 +220,15 @@ func TestF15_HardPageCap(t *testing.T) {
 
 // TestF16_304WithEvaporatedCache_NoInfiniteLoop：服务端对任何请求都无条件回
 // 304。修复前 `if !ok { continue }` 重入循环时请求逐字节相同 → 无限循环
-// （PoC：30 次限流后仍未停止）。缓存蒸发是异常状态，应明确报错。
+// （PoC：30 次限流后仍未停止）。缓存蒸发是异常状态，最终必须明确报错。
+//
+// P2-8 后本用例的**请求计数断言**已更新：F-16 修复时把这条路径换成了硬错误，
+// 依据是「continue 重入循环时 ifNoneMatch 仍从同一个缺失的缓存取 → 发出的请求
+// 与上一次逐字节相同」。该断言不成立 —— ifNoneMatch 是循环体内的局部变量，
+// continue 会重新执行 cacheGet，缓存已被删除 → ifNoneMatch = ""，第二次是
+// **不带 If-None-Match 的普通 GET**（服务端若正常应答 200 即自愈完成）。
+// 现在恢复重试并封顶 **1 次**：F-16 的红线（必须终止 + 必须报错 + 不得无界重发）
+// 全部保留，只是允许一次自愈尝试。请求数上限因此从 1 放宽到 2。
 func TestF16_304WithEvaporatedCache_NoInfiniteLoop(t *testing.T) {
 	resetGitHubCache(t)
 
@@ -268,8 +276,9 @@ func TestF16_304WithEvaporatedCache_NoInfiniteLoop(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if requests > 1 {
-		t.Errorf("unconditional 304 issued %d identical requests, want exactly 1 (no silent retry)", requests)
+	// P2-8：1 次自愈重试 + 1 次最终判定 = 最多 2 次；修复前是无界重发。
+	if requests > 2 {
+		t.Errorf("unconditional 304 issued %d identical requests, want ≤ 2 (one self-healing retry, then give up)", requests)
 	}
 }
 

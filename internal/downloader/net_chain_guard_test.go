@@ -265,15 +265,24 @@ func TestF12b_ContentRangeOffsetMismatch_Discarded(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestF13_CompletePartResidue_416VerifiesAndRenames：本地 .part 已等于完整文件
-// 时服务器只能回 416（PoC 里服务端就是裸 416）。修复前该分支直接返回错误且
-// 不删 .part → 该 dest 永久不可恢复。修复后应把手上的 .part 当完整文件走
-// 「校验 + rename」。
+// 时服务器回 416。修复前该分支直接返回错误且不删 .part → 该 dest 永久不可恢复。
+// 修复后应把手上的 .part 当完整文件走「校验 + rename」。
+//
+// P1-2 后本用例的**响应形状**已更新：修复前 416 分支有一条
+// `ContentLength == 0 即视为完整` 的退路，于是裸 416 也能触发提升 —— 而这正是
+// P1-2 确认的缺陷（RFC 9110 允许 416 不带 Content-Range，Go 写
+// WriteHeader(416) 且无 body 时 ContentLength 就是 0，于是**任意**截断残片都会
+// 被提升为正式归档）。现在只有服务端明确给出 `bytes */total`（或
+// `bytes A-B/total`）且 total 与本地长度一致才算证据，所以这里按 RFC 补上
+// Content-Range；「裸 416 必须 fail closed」由
+// TestP1_2_Bare416MustNotPromoteTruncatedPart 覆盖。
 func TestF13_CompletePartResidue_416VerifiesAndRenames(t *testing.T) {
 	payload := bytes.Repeat([]byte("P"), 8192)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Range") != "" {
 			// 起点越界（本地已完整）——服务器的唯一合法回答。
-			// 与 PoC 一致：裸 416，不带 Content-Range。
+			// P1-2：必须带上 `bytes */total` 才是完整性的证据（裸 416 不再算）。
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(payload)))
 			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 			return
 		}

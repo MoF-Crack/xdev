@@ -450,12 +450,25 @@ func HasPartialFile(dest string) bool {
 	return len(partialPathsInDir(dest)) > 0
 }
 
-// CleanupPartialFile 清理该 dest 下所有分代的 .part 残留（含历史未分代命名）。
-// 不存在时返回 nil，方便调用方幂等重试。
+// CleanupPartialFile 清理该 dest 下所有分代的 .part 残留（含历史未分代命名）
+// 以及它们的 .part.lock。不存在时返回 nil，方便调用方幂等重试。
+//
+// P2-5：锁文件也必须清 —— util.AcquireFileLock 创建的 <part>.lock 修复前没有
+// 任何代码删除（H15：清理后仍剩 2 个 .part.lock）。被活跃下载持有的锁不会被删
+// （见 removePartLockIfUnheld）。
 func CleanupPartialFile(dest string) error {
 	var firstErr error
 	for _, p := range partialPathsInDir(dest) {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+		if err := removePartLockIfUnheld(p + ".lock"); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	// 「.part 已删但锁还在」的孤儿锁：按目录扫描分代锁名。
+	for _, l := range partialLockPathsInDir(dest) {
+		if err := removePartLockIfUnheld(l); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -512,6 +525,40 @@ func isPartGeneration(gen string) bool {
 	return true
 }
 
+// partialLockPathsInDir 返回该 dest 下存在的全部分代 .part.lock 路径
+// （含历史未分代命名 <dest>.part.lock）。
+//
+// P2-5：与 partialPathsInDir 同款「按目录扫描 + 前缀匹配」策略（刻意不用
+// filepath.Glob —— dest 里的 `[`、`*`、`?` 会被当元字符而静默失配）。
+// 单独存在是因为「.part 已被删、只剩锁」是最常见的孤儿形态：只扫 .part 的
+// partialPathsInDir 在那种情况下返回空列表，锁就永远清不掉。
+func partialLockPathsInDir(dest string) []string {
+	paths := make([]string, 0, 2)
+	if _, err := os.Stat(dest + ".part.lock"); err == nil {
+		paths = append(paths, dest+".part.lock")
+	}
+	dir := filepath.Dir(dest)
+	prefix := filepath.Base(dest) + "."
+	const suffix = ".part.lock"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return paths
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		if isPartGeneration(strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)) {
+			paths = append(paths, filepath.Join(dir, name))
+		}
+	}
+	return paths
+}
+
 // maxPartialFileSize 返回给定路径中最大的文件大小（都不存在则为 0）。
 func maxPartialFileSize(paths []string) int64 {
 	var max int64
@@ -525,14 +572,29 @@ func maxPartialFileSize(paths []string) int64 {
 
 // partialBytesForTask 返回该任务在盘上真实的 .part 字节数（F-14 的兜底来源：
 // 进度回调在 chunked 响应下永不触发，只有盘上大小是可信的）。
+//
+// P2-7：必须**逐代查询本任务自己的候选 URL**（主 URL + FallbackURLs），
+// 不能用「所有代中最大的那个」——修复前 A 代残留 10 000 000 字节、当前
+// URL(B) 只剩 1024 字节时会把 A 的字节数当成 B 的进度上报给用户（H4）。
+// 回退 URL 的代仍要计入：回退 URL 正在下载时 Pause 要能报出真实进度。
 func partialBytesForTask(task *Task) int64 {
-	return maxPartialFileSize(partialPathsInDir(task.opts.Dest))
+	var max int64
+	for _, u := range task.opts.Fallbacks() {
+		if size := GetPartialFileSizeForURL(task.opts.Dest, u); size > max {
+			max = size
+		}
+	}
+	return max
 }
 
-// CleanupAllPartialsInDir 清理指定目录下所有 .part 文件。
+// CleanupAllPartialsInDir 清理指定目录下所有 .part 文件及其 .part.lock。
 //
 // F-12：分代命名形如 <archive>.zip.<16hex>.part，仍以 .part 结尾，因此原来
 // 的 "*.part" glob 依然同时覆盖分代命名与历史未分代命名，无需改动。
+//
+// P2-5：锁文件（<part>.lock）也要清 —— 修复前它们没有任何代码删除，
+// 目录级清理后仍会剩下孤儿锁。被活跃下载持有的锁不会被删
+// （见 removePartLockIfUnheld）。
 func CleanupAllPartialsInDir(dir string) error {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.part"))
 	if err != nil {
@@ -541,6 +603,20 @@ func CleanupAllPartialsInDir(dir string) error {
 	for _, m := range matches {
 		os.Remove(m)
 		log.Printf("[download] 清理临时文件: %s", m)
+		if lockErr := removePartLockIfUnheld(m + ".lock"); lockErr != nil {
+			log.Printf("[download] WARNING: 清理锁文件失败 %s.lock: %v", m, lockErr)
+		}
+	}
+	// 「.part 已删但锁还在」的孤儿锁：glob "*.part.lock" 不匹配 "*.part"，
+	// 必须单独扫一遍。
+	locks, err := filepath.Glob(filepath.Join(dir, "*.part.lock"))
+	if err != nil {
+		return err
+	}
+	for _, l := range locks {
+		if err := removePartLockIfUnheld(l); err != nil {
+			log.Printf("[download] WARNING: 清理锁文件失败 %s: %v", l, err)
+		}
 	}
 	return nil
 }

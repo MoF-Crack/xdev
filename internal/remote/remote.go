@@ -350,6 +350,69 @@ func parseNextURL(linkHeader string) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Pagination loop detection (P3-9)
+// ---------------------------------------------------------------------------
+
+// paginationKey 把分页 URL 规范化成环检测用的键：
+// scheme + host + path + **排序后**的查询参数（含重复键按值排序）。
+//
+// P3-9：修复前 visited 直接以原始 URL 字符串为键，上游只要把查询串参数顺序
+// 换一换（`?per_page=100&page=2` vs `?page=2&per_page=100`）再附一个无关参数，
+// 每次 hop 都是「新 URL」→ 环检测 0 次命中，只能靠 maxGitHubPages 硬上限终止，
+// 一次嗅探就烧掉 100 次请求（未认证限额 60/h）。规范化后这些变体折叠成同一个键。
+//
+// 无法解析的 URL 原样返回：宁可漏判（还有硬上限兜底）也不要让键碰撞把两个
+// 真正不同的页合并。
+func paginationKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(u.Scheme)
+	b.WriteString("://")
+	b.WriteString(u.Host)
+	b.WriteString(u.Path)
+	for i, k := range keys {
+		vals := append([]string(nil), q[k]...)
+		sort.Strings(vals)
+		for _, v := range vals {
+			if i == 0 && b.Len() > 0 {
+				b.WriteByte('?')
+			} else {
+				b.WriteByte('&')
+			}
+			b.WriteString(k)
+			b.WriteByte('=')
+			b.WriteString(v)
+		}
+	}
+	return b.String()
+}
+
+// paginationPageNumber 返回 URL 的 page 查询参数（缺省为 0 = 未指定）。
+//
+// P3-9 的第二道守卫：即便某个上游用完全不同的查询串拼出同一页，
+// page 参数也必须**单调递增** —— 环检测之外再兜一层。
+func paginationPageNumber(raw string) int {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(u.Query().Get("page"))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// ---------------------------------------------------------------------------
 // Proxy error helpers
 // ---------------------------------------------------------------------------
 
@@ -811,9 +874,18 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 	//   - maxGitHubPages：兜底抓「每页 URL 都不同」的无限序列（visited 抓不住）。
 	// 任一命中都 break（保留已取到的版本）而不是报错：已取页面的数据是好的，
 	// 环只是上游的异常。
+	//
+	// P3-9：visited 的键改用**规范化**形式（scheme+host+path + 排序后的查询
+	// 参数），并单独对 page 参数做单调性检查。修复前按原始字符串判等 ——
+	// 每次 hop 只把查询串参数顺序换一换（`?per_page=100&page=2&mark=N`，
+	// 逻辑上永远是同一页）就能完全绕过环检测，只能靠 maxGitHubPages 硬上限
+	// 终止：100 次请求，未认证 GitHub 限额 60/h → 一次嗅探就耗尽配额（H9）。
 	currentURL := apiURL
-	visited := map[string]bool{currentURL: true}
+	visited := map[string]bool{paginationKey(currentURL): true}
+	lastPage := paginationPageNumber(currentURL)
 	pages := 0
+	// revalidations 限制「304 且缓存蒸发」的自愈重试次数（P2-8：最多 1 次）。
+	revalidations := 0
 	for {
 		pages++
 		if pages > maxGitHubPages {
@@ -841,7 +913,10 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 
 		resp, err := doWithProxyFallback(ctx, req)
 		if err != nil {
-			return nil, fmt.Errorf("github remote: fetch %s: %w", currentURL, err)
+			// P1-4：ownerRepo 是 manifest 可控的，它被拼进 apiURL 后可能带上
+			// 凭据/查询串；网络错误文本里还会内嵌整段 URL。两处都要脱敏。
+			return nil, fmt.Errorf("github remote: fetch %s: %w",
+				util.SanitizeURL(currentURL), errors.New(sanitizedReason(err.Error())))
 		}
 
 		// Rate-limit check (before consuming the body).
@@ -855,17 +930,32 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			resp.Body.Close()
 			cached, ok := cacheGet(currentURL)
 			if !ok {
-				// F-16：缓存蒸发是异常状态。修复前这里 `continue` 重入循环，
-				// 而 ifNoneMatch 仍从同一个（缺失的）缓存取 → 发出的请求与
-				// 上一次逐字节相同；服务端若无条件回 304，循环永不退出。
-				// 明确报错，不再静默重试。
-				return nil, fmt.Errorf("github remote: server returned 304 Not Modified for %s but no cached response is available (cache expired or was cleared) — cannot revalidate", currentURL)
+				// P2-8（F-16 回归）：缓存蒸发时**重试一次**而不是硬报错。
+				//
+				// F-16 的修复注释断言「continue 重入循环时 ifNoneMatch 仍从同一个
+				// 缺失的缓存取 → 发出的请求与上一次逐字节相同」——这个断言不成立：
+				// ifNoneMatch 是循环体**内**的局部变量，continue 会重新执行
+				// cacheGet，缓存已被删除 → ifNoneMatch = ""，第二次是**不带
+				// If-None-Match 的普通 GET**，服务端回 200，发现流程正常完成。
+				// 修复把这条自愈路径换成了硬错误（H5），用户看到的是无法恢复的
+				// 失败而不是透明重试。
+				//
+				// 现在恢复重试并加**一次**计数器：既保留自愈，又满足 F-16 的
+				// 初衷（防止服务端无条件回 304 时无限重发同一个请求）。
+				if revalidations < 1 {
+					revalidations++
+					log.Printf("[remote] WARNING: 304 Not Modified for %s but the cached response is gone (expired or cleared) — retrying once without If-None-Match",
+						util.SanitizeURL(currentURL))
+					continue
+				}
+				return nil, fmt.Errorf("github remote: server returned 304 Not Modified for %s but no cached response is available (cache expired or was cleared) — cannot revalidate",
+					util.SanitizeURL(currentURL))
 			}
 			var pageReleases []struct {
 				TagName string `json:"tag_name"`
 			}
 			if err := json.Unmarshal(cached.body, &pageReleases); err != nil {
-				return nil, fmt.Errorf("github remote: decode cached JSON from %s: %w", currentURL, err)
+				return nil, fmt.Errorf("github remote: decode cached JSON from %s: %w", util.SanitizeURL(currentURL), err)
 			}
 			allReleases = append(allReleases, pageReleases...)
 			// P2-08 / C-11：304 响应**没有** Link 头（RFC 9110：304 只回
@@ -878,11 +968,12 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 				break // 该页本就没有下一页
 			}
 			// F-15：环检测——游标指回已取过的页就停，别无限翻页。
-			if visited[nextURL] {
+			// P3-9：按规范化键判等（参数顺序/无关参数不再能绕过）。
+			if visited[paginationKey(nextURL)] {
 				log.Printf("[remote] WARNING: GitHub pagination loop detected at %s (page already fetched) — stopping (F-15)", util.SanitizeURL(nextURL))
 				break
 			}
-			visited[nextURL] = true
+			visited[paginationKey(nextURL)] = true
 			currentURL = nextURL
 			continue
 		}
@@ -896,7 +987,7 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 		bodyBytes, err := readLimitedBody(resp.Body, githubBodyLimit)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("github remote: read body from %s: %w", currentURL, err)
+			return nil, fmt.Errorf("github remote: read body from %s: %w", util.SanitizeURL(currentURL), err)
 		}
 
 		// Store in cache with ETag, together with this page's next-page cursor
@@ -926,7 +1017,7 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			if len(preview) > 200 {
 				preview = preview[:200]
 			}
-			return nil, fmt.Errorf("github remote: decode JSON from %s (body preview: %q): %w", currentURL, preview, err)
+			return nil, fmt.Errorf("github remote: decode JSON from %s (body preview: %q): %w", util.SanitizeURL(currentURL), preview, err)
 		}
 		allReleases = append(allReleases, pageReleases...)
 
@@ -941,11 +1032,21 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 		}
 		// F-15：环检测——同一主机内 Link 头指回已取过的页（自环或 A→B→A）
 		// 时停止翻页，避免无界请求与 allReleases 无界增长。
-		if visited[nextURL] {
+		// P3-9：按规范化键判等 + page 参数单调性检查（双重守卫）。
+		nextKey := paginationKey(nextURL)
+		nextPage := paginationPageNumber(nextURL)
+		if visited[nextKey] {
 			log.Printf("[remote] WARNING: GitHub pagination loop detected at %s (page already fetched) — stopping (F-15)", util.SanitizeURL(nextURL))
 			break
 		}
-		visited[nextURL] = true
+		if lastPage > 0 && nextPage > 0 && nextPage <= lastPage {
+			log.Printf("[remote] WARNING: GitHub pagination page number did not advance (%d → %d) at %s — stopping (P3-9)", lastPage, nextPage, util.SanitizeURL(nextURL))
+			break
+		}
+		visited[nextKey] = true
+		if nextPage > 0 {
+			lastPage = nextPage
+		}
 		currentURL = nextURL
 	}
 
@@ -1030,8 +1131,15 @@ func discoverJSON(ctx context.Context, r manifest.RemoteSource) ([]string, error
 	}
 	// Security (N-6): enforce HTTPS and block private/reserved IPs to
 	// prevent SSRF via malicious third-party manifest RemoteSource URLs.
+	//
+	// P1-4：修复前这里用 %q 把 r.URL **原样**拼进用户可见错误 —— userinfo 与
+	// ?token=SECRET 全部泄漏（会进 GUI 错误弹窗、CLI stderr，并可能被复制进
+	// issue/日志）。F-18 的 sanitizedReason 只作用于 doWithProxyFallback 返回的
+	// 网络错误，这两条主路径完全没有脱敏。现在统一走 util.SanitizeURL +
+	// sanitizedReason 二次脱敏（后者同时覆盖 url.Parse 错误文本里内嵌的原始 URL）。
 	if err := util.IsSafeExternalURL(r.URL); err != nil {
-		return nil, fmt.Errorf("json remote: unsafe URL %q: %w", r.URL, err)
+		return nil, fmt.Errorf("json remote: unsafe URL %q: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
@@ -1041,7 +1149,8 @@ func discoverJSON(ctx context.Context, r manifest.RemoteSource) ([]string, error
 
 	resp, err := doWithProxyFallback(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("json remote: fetch %s: %w", r.URL, err)
+		return nil, fmt.Errorf("json remote: fetch %s: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 	defer resp.Body.Close()
 
@@ -1126,8 +1235,12 @@ func discoverHTML(ctx context.Context, r manifest.RemoteSource) ([]string, error
 	}
 	// Security (N-6): enforce HTTPS and block private/reserved IPs to
 	// prevent SSRF via malicious third-party manifest RemoteSource URLs.
+	//
+	// P1-4：同 discoverJSON —— `unsafe URL %q` 与 `fetch %s` 都不得原样回显
+	// 带凭据的 r.URL（userinfo / 查询串）。
 	if err := util.IsSafeExternalURL(r.URL); err != nil {
-		return nil, fmt.Errorf("html remote: unsafe URL %q: %w", r.URL, err)
+		return nil, fmt.Errorf("html remote: unsafe URL %q: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
@@ -1137,7 +1250,8 @@ func discoverHTML(ctx context.Context, r manifest.RemoteSource) ([]string, error
 
 	resp, err := doWithProxyFallback(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("html remote: fetch %s: %w", r.URL, err)
+		return nil, fmt.Errorf("html remote: fetch %s: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 	defer resp.Body.Close()
 

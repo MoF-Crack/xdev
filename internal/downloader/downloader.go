@@ -264,6 +264,17 @@ func Download(ctx context.Context, opts Options) error {
 
 	ok, failures, proxyFailed := tryURLList(ctx, opts, urls, true)
 	if ok {
+		// P2-5：成功收尾时清掉**其它候选 URL** 的代（主 URL 中途断流留下的
+		// <dest>.<other-url-gen>.part 及其 .part.lock）。F-12 让每个候选 URL
+		// 各有一份 .part，但修复前成功路径从不清理失败候选的代 —— dest 已经
+		// 生成，目录里却永久残留孤儿 .part 与 .part.lock（H1/H15）。
+		//
+		// 复用 removePartialFiles（修复前它是死代码，全仓无调用方），传入
+		// Fallbacks() 覆盖全部候选 URL + 历史未分代命名。注意成功的那一代
+		// .part 已在 finalizeDownload 里被 rename 掉，删除是幂等的。
+		if rmErr := removePartialFiles(opts.Dest, opts.Fallbacks()...); rmErr != nil {
+			log.Printf("[download] WARNING: 成功下载后清理残留临时文件失败: %v", rmErr)
+		}
 		return nil
 	}
 
@@ -478,12 +489,67 @@ func partPathsFor(dest string, urls ...string) []string {
 	return paths
 }
 
-// removePartialFiles 删除给定 dest/URL 组合的全部 .part 残留（best-effort，
-// 不存在的路径不算错误）。返回首个非「不存在」的错误，供调用方记日志。
+// removePartLockIfUnheld 尽力删除一个 .part.lock，但**只在能证明它没被别的
+// 下载进程持有时**才删。
+//
+// 为什么不能无条件删：LockFileEx/flock 的排他锁是「按文件」的。如果另一个
+// xdev 进程正持有 L，我们却把 L 从目录里删掉，它锁住的就变成一个已解除链接的
+// inode；下一个进程会新建同名 L 并成功加锁 → 两个进程同时写同一个 .part
+// （正是 P1-01 的互斥语义要防的事）。因此先用 0 超时试探性获取：拿得到说明
+// 无人持有，释放后即可安全删除；拿不到说明有活跃下载，保持原样。
+func removePartLockIfUnheld(lockPath string) error {
+	if _, err := os.Stat(lockPath); err != nil {
+		return nil // 不存在（或不可读）：无可清理
+	}
+	fl, err := util.AcquireFileLock(lockPath, 0)
+	if err != nil {
+		return nil // 被活跃下载持有 —— 绝不删除
+	}
+	_ = fl.Release()
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// removePartResidueIfUnheld 删除一份 .part 残留及其 .part.lock，但同样**只在
+// 能证明该 .part 没有被活跃下载持有时**才动手。
+//
+// 这一点对「成功收尾时清理失败候选的代」尤其重要：同一 dest 下，主 URL 与
+// 回退 URL 各有独立的分代与锁，两个下载可以同时在跑（互斥锁是按分代的）。
+// 无条件删会把**别人在途的 .part** 从目录里抽走（Windows 上删除会失败、
+// Unix 上写进已解除链接的 inode），所以先试探锁：拿不到就原样保留。
+func removePartResidueIfUnheld(partPath string) error {
+	if _, err := os.Stat(partPath); err != nil {
+		// 没有 .part：仍清掉可能残留的孤儿锁。
+		return removePartLockIfUnheld(partPath + ".lock")
+	}
+	fl, err := util.AcquireFileLock(partPath+".lock", 0)
+	if err != nil {
+		return nil // 有活跃下载持有 —— 不动它的 .part
+	}
+	_ = fl.Release()
+
+	var firstErr error
+	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+		firstErr = err
+	}
+	if err := os.Remove(partPath + ".lock"); err != nil && !os.IsNotExist(err) && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// removePartialFiles 删除给定 dest/URL 组合的全部 .part 残留与 .part.lock
+// （best-effort，不存在的路径不算错误；被活跃下载持有的分代保持原样）。
+// 返回首个错误，供调用方记日志。
+//
+// P2-5：调用方是「本次下载成功收尾」——必须把**失败候选 URL** 留下的代与
+// 锁一起清掉，否则 dest 已生成但目录里永久残留 <other-url>.part / .part.lock。
 func removePartialFiles(dest string, urls ...string) error {
 	var firstErr error
 	for _, p := range partPathsFor(dest, urls...) {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
+		if err := removePartResidueIfUnheld(p); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -534,13 +600,17 @@ func parseContentRange(value string) (start, total int64, ok bool) {
 //
 // 不满足时返回 false，调用方删除 .part —— 宁可从零重下，也不接受一个来历
 // 不明的「完整」文件（它可能只是本地截断的残缺品）。
+//
+// P1-2：**裸 416 不再是完整性的证据**。修复前这里有一条
+// `if resp.ContentLength == 0 { return true }` 的退路，而 RFC 9110 允许 416
+// 不带 Content-Range，Go 服务端写 WriteHeader(416) 且无 body 时 ContentLength
+// 恰好就是 0 → 任意本地 .part（包括只有真实文件一半的截断残片）都被当作
+// 「已完整」提升为正式归档，并在无哈希(TOFU)通路上被 pin 永久固化。
+// 现在只有服务端明确给出 `bytes */total`（或 `bytes A-B/total`）且 total 与
+// 本地长度一致时才走提升路径；否则删 .part，宁可让用户从零重下。
 func completePartResidue(resp *http.Response, fromBytes int64) bool {
 	start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 	if !ok {
-		// 退路：少数服务器只回 Content-Length: 0 表示「没有更多字节」。
-		if resp.ContentLength == 0 {
-			return true
-		}
 		return false
 	}
 	if total < 0 {
@@ -719,11 +789,34 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		fromBytes = 0
 	}
 
+	// P1-1 (a)：新鲜下载（未发 Range）绝不允许收到 206。
+	//
+	// F-12b 的 Content-Range 偏移校验被门控在 `fromBytes > 0 && 206`，于是
+	// 「未发 Range 的请求收到 206 + bytes 0-499/1000」这条路径完全没有校验：
+	// F-13b 只比 ContentLength（500 == 500）→ 500 字节残缺归档被 rename，并在
+	// 无哈希(TOFU)通路上写入 sidecar pin 永久固化（后续安装比对的是同一个坏 pin，
+	// 永远通过，只能手动删缓存才能恢复）。对 206 的合法前提是「我们确实请求了
+	// 某个区间」，因此这里直接删 .part 并 fail closed。
+	if fromBytes == 0 && resp.StatusCode == http.StatusPartialContent {
+		log.Printf("[download] ERROR: server returned 206 Partial Content for a fresh request without Range (Content-Range=%q) — discarding",
+			resp.Header.Get("Content-Range"))
+		f.Close()
+		_ = os.Remove(partPath)
+		return fmt.Errorf("server returned 206 Partial Content with Content-Range %q for a request that asked for the whole file — the response is only part of the archive; discarding the partial file and retrying from scratch",
+			resp.Header.Get("Content-Range"))
+	}
+
 	// F-12b：resume 时必须校验响应的 Content-Range 起始偏移 == fromBytes。
 	// 修复前从不校验：服务端回 206 但起点是 0（或任何别的偏移）时，body 被
 	// 写在偏移 fromBytes 处 → 错位文件；无哈希(TOFU)通路上还会被接受并写 pin。
+	//
+	// P1-1 (b)：除起点外还必须校验**组装后的总长度 == Content-Range 声明的
+	// total**。只比起点抓不住「服务端只回部分区间但如实声明该区间的
+	// Content-Length」（例：本地 500 字节 + `bytes 500-599/1000` + 如实
+	// Content-Length: 100 → 组装出 600 字节就被接受并写 pin）。total 为 `*`
+	// （parseContentRange 返回 -1）时无从证明完整性 —— 也 fail closed。
 	if fromBytes > 0 && resp.StatusCode == http.StatusPartialContent {
-		start, _, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		if !ok || start != fromBytes {
 			log.Printf("[download] ERROR: Content-Range mismatch: server=%q requested-start=%d — discarding the partial file",
 				resp.Header.Get("Content-Range"), fromBytes)
@@ -731,6 +824,34 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			_ = os.Remove(partPath)
 			return fmt.Errorf("server returned Content-Range %q which does not start at the requested offset %d for %s — discarding the partial file and retrying from scratch",
 				resp.Header.Get("Content-Range"), fromBytes, sanitizedURL(opts.URL))
+		}
+		if total < 0 {
+			log.Printf("[download] ERROR: Content-Range %q declares an unknown total — cannot prove the assembled archive is complete",
+				resp.Header.Get("Content-Range"))
+			f.Close()
+			_ = os.Remove(partPath)
+			return fmt.Errorf("server returned Content-Range %q with an unknown total for %s — cannot verify that the assembled archive is complete; discarding the partial file",
+				resp.Header.Get("Content-Range"), sanitizedURL(opts.URL))
+		}
+		// 期望总长度 = 续传起点 + 本次响应应写入的字节数。响应自带
+		// Content-Length 时用它；chunked（-1）时只能用 Content-Range 推出的
+		// 区间长度（end-start+1），并在写完后再与实写字节数交叉校验。
+		if total < fromBytes {
+			log.Printf("[download] ERROR: Content-Range %q declares total=%d which is smaller than the local partial file (%d bytes) — discarding",
+				resp.Header.Get("Content-Range"), total, fromBytes)
+			f.Close()
+			_ = os.Remove(partPath)
+			return fmt.Errorf("server declared Content-Range total %d for %s but the local partial file already holds %d bytes — discarding the partial file and retrying from scratch",
+				total, sanitizedURL(opts.URL), fromBytes)
+		}
+		// 响应区间长度必须正好补齐 total（否则组装出来的文件长度就对不上）。
+		if resp.ContentLength >= 0 && fromBytes+resp.ContentLength != total {
+			log.Printf("[download] ERROR: Content-Range total=%d but local=%d + Content-Length=%d = %d — discarding the partial file",
+				total, fromBytes, resp.ContentLength, fromBytes+resp.ContentLength)
+			f.Close()
+			_ = os.Remove(partPath)
+			return fmt.Errorf("server returned Content-Range %q for %s but the declared total %d does not match the assembled length %d (local %d + response %d) — discarding the partial file and retrying from scratch",
+				resp.Header.Get("Content-Range"), sanitizedURL(opts.URL), total, fromBytes+resp.ContentLength, fromBytes, resp.ContentLength)
 		}
 	}
 
@@ -797,6 +918,38 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		_ = os.Remove(partPath)
 		return fmt.Errorf("incomplete download for %s: wrote %d bytes but the server declared %d — discarding the partial file",
 			sanitizedURL(opts.URL), written+fromBytes, resp.ContentLength+fromBytes)
+	}
+
+	// P1-1 (b) 收尾交叉校验：206 已声明的 total 必须等于实际组装出的总长度。
+	// 上面只校验了「本地 + Content-Length」这一对，chunked（ContentLength == -1）
+	// 的 206 响应绕过了它——这里用实写字节数再核一次，任何少于 total 的组装结果
+	// 都删 .part 并 fail closed（残缺归档绝不能进 TOFU pin）。
+	if resp.StatusCode == http.StatusPartialContent {
+		if _, total, ok := parseContentRange(resp.Header.Get("Content-Range")); ok && total >= 0 {
+			if assembled := fromBytes + written; assembled != total {
+				f.Close()
+				log.Printf("[download] ERROR: assembled length %d != Content-Range total %d (local=%d written=%d) — discarding",
+					assembled, total, fromBytes, written)
+				_ = os.Remove(partPath)
+				return fmt.Errorf("incomplete download for %s: the assembled archive is %d bytes but the server declared a total of %d — discarding the partial file",
+					sanitizedURL(opts.URL), assembled, total)
+			}
+		}
+	}
+
+	// P1-1 (c)：显式拒绝空下载。
+	//
+	// `200 + Content-Length: 0` 在修复前会通过 F-13b 的 `0 == 0` 判据 →
+	// 0 字节文件被 rename 成正式归档，并写入空文件哈希
+	// (e3b0c442…b855) 的 TOFU pin。真实归档不可能是 0 字节：这里删 .part
+	// 并 fail closed。注意 chunked 响应（ContentLength == -1）不在此列——
+	// 它由上面的实写字节数校验负责。
+	if written == 0 && fromBytes == 0 {
+		f.Close()
+		log.Printf("[download] ERROR: empty download (0 bytes written) for %s — discarding", sanitizedURL(opts.URL))
+		_ = os.Remove(partPath)
+		return fmt.Errorf("empty download for %s: the server returned 0 bytes — refusing to promote an empty file to a complete archive",
+			sanitizedURL(opts.URL))
 	}
 	log.Printf("[download] Write complete: %d bytes written", written+fromBytes)
 
