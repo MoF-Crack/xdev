@@ -488,43 +488,19 @@ func (a *App) GetCacheBreakdown() CacheBreakdown {
 
 // CleanCache 按分类删除缓存文件
 // category: "archives" | "shaFiles" | "partFiles" | "all"
+//
+// 第七轮审计 F-06（P1）：本函数曾与 CleanCacheCategory 语义分叉——它的
+// `case "all"` 直接 `shouldDelete = true`，把 CacheDir 下的**每一个**文件都
+// 删掉，而 CacheDir 里同时住着**非缓存的用户状态文件**：favorites.json（收藏）、
+// ignored_tools.json（更新忽略列表）、custom_tools.json（自定义工具注册）、
+// keystore.dat（TOFU 密钥库）、shim-index.v1、sniff-cache.json、
+// tool_scan_cache.json。用户点一次「清理所有缓存」即静默清空这些数据，
+// 且确认文案只说「需要重新下载」。
+//
+// 现在收敛为**单一实现**：直接委托给 CleanCacheCategory（分类规则来自
+// cache_classify.go 的 cacheEntryCategory 单一来源），"all" 只删真正的缓存
+// （归档 / .sha256 / .part），元数据归入 "otherFiles" 而**不被 "all" 删除**。
+// 保留本入口是为了不破坏既有 Wails 绑定（前端历史调用点仍可达）。
 func (a *App) CleanCache(category string) error {
-	cfg := a.getCfg()
-
-	entries, err := os.ReadDir(cfg.Core.CacheDir)
-	if err != nil {
-		return fmt.Errorf("读取缓存目录失败: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		shouldDelete := false
-
-		switch category {
-		case "archives":
-			shouldDelete = isArchiveName(name)
-		case "shaFiles":
-			shouldDelete = strings.HasSuffix(name, ".sha256")
-		case "partFiles":
-			shouldDelete = strings.HasSuffix(name, ".part")
-		case "all":
-			shouldDelete = true
-		default:
-			return fmt.Errorf("未知的缓存分类: %s", category)
-		}
-
-		if shouldDelete {
-			if err := os.Remove(filepath.Join(cfg.Core.CacheDir, name)); err != nil {
-				logWarn("[CleanCache] 删除缓存文件失败 %s: %v", name, err)
-			}
-		}
-	}
-
-	// 缓存文件已删除，缓存占用明细必须立即失效。
-	a.InvalidateSizeBreakdown()
-
-	return nil
+	return a.CleanCacheCategory(category)
 }

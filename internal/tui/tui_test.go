@@ -748,3 +748,77 @@ func TestInstallResultMsg_StaleForNewerOp(t *testing.T) {
 		t.Errorf("updateQueue 被陈旧消息改动: %v", m2.updateQueue)
 	}
 }
+
+// --- F-57: RemoteVersionsMsg must be tool-scoped ---
+
+// newTUITestModelWithTools builds a Model whose filteredTools holds the
+// given tool names (stable registry order = alphabetical).
+func newTUITestModelWithTools(t *testing.T, names ...string) Model {
+	t.Helper()
+	cfg := &config.Config{
+		Core: config.CoreConfig{
+			XMDevDir:   t.TempDir(),
+			InstallDir: t.TempDir(),
+			ShimDir:    t.TempDir(),
+		},
+	}
+	cat := &manifest.Catalog{}
+	reg := plugin.NewRegistry()
+	for _, n := range names {
+		reg.Register(plugin.NewGeneric(&manifest.Tool{
+			Name: n, Category: "language", Shims: []string{n},
+			VersionList: []manifest.Version{{Version: "1.0.0"}},
+		}))
+	}
+	m := NewModel(cfg, cat, reg)
+	m.applyCategoryFilter()
+	return m
+}
+
+// TestRemoteVersionsMsg_DropsMessageForOtherTool (F-57): a late reply for
+// tool A arriving after the cursor moved to tool B must be discarded, not
+// written into the version list that now belongs to B.
+func TestRemoteVersionsMsg_DropsMessageForOtherTool(t *testing.T) {
+	m := newTUITestModelWithTools(t, "aaa", "bbb")
+	m.toolIdx = 1 // "bbb" selected
+	m.remoteVersions = []string{"1.0.0"}
+
+	if got := m.currentToolName(); got != "bbb" {
+		t.Fatalf("test setup: current tool = %q, want bbb", got)
+	}
+
+	updated, _ := m.Update(RemoteVersionsMsg{Tool: "aaa", Versions: []string{"9.9.9", "8.8.8"}})
+	m2 := updated.(Model)
+
+	if len(m2.remoteVersions) != 1 || m2.remoteVersions[0] != "1.0.0" {
+		t.Errorf("remoteVersions = %v, want [1.0.0] (stale reply for aaa must be dropped)", m2.remoteVersions)
+	}
+}
+
+// TestRemoteVersionsMsg_AcceptsMessageForCurrentTool is the matching
+// positive case: a reply for the selected tool still updates the list.
+func TestRemoteVersionsMsg_AcceptsMessageForCurrentTool(t *testing.T) {
+	m := newTUITestModelWithTools(t, "aaa", "bbb")
+	m.toolIdx = 1 // "bbb"
+
+	updated, _ := m.Update(RemoteVersionsMsg{Tool: "bbb", Versions: []string{"2.0.0"}})
+	m2 := updated.(Model)
+
+	if len(m2.remoteVersions) != 1 || m2.remoteVersions[0] != "2.0.0" {
+		t.Errorf("remoteVersions = %v, want [2.0.0] (reply for the selected tool must be accepted)", m2.remoteVersions)
+	}
+}
+
+// TestRemoteVersionsMsg_IgnoresErrForOtherTool: the Err field must not be
+// surfaced for a tool that is no longer selected either.
+func TestRemoteVersionsMsg_IgnoresErrForOtherTool(t *testing.T) {
+	m := newTUITestModelWithTools(t, "aaa", "bbb")
+	m.toolIdx = 1 // "bbb"
+
+	updated, _ := m.Update(RemoteVersionsMsg{Tool: "aaa", Err: fmt.Errorf("boom")})
+	m2 := updated.(Model)
+
+	if len(m2.remoteVersions) != 0 {
+		t.Errorf("remoteVersions = %v, want empty", m2.remoteVersions)
+	}
+}

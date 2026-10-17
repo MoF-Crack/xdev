@@ -30,7 +30,12 @@ export function useI18n() {
     let text = messages[key] || locales.en[key] || key;
     if (params) {
       Object.keys(params).forEach((k) => {
-        text = text.replace(`{${k}}`, params[k]);
+        // F-39: 必须用函数式替换。字符串形式的第二参数会被 JS 当作替换模式
+        // 解释（`$&` / `` $` `` / `$'` / `$$` / `$1`），而参数来自用户数据
+        // （环境变量名、工具名、Windows 路径），会把 `$&` 字面量上屏、
+        // 用 `$'` 复制匹配点之后的整段文案、或用 `$$` 吃掉字符。
+        // 函数返回值永远按字面量插入；null/undefined 退化为空串。
+        text = text.replace(`{${k}}`, () => String(params[k] ?? ''));
       });
     }
     return text;

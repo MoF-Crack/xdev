@@ -47,12 +47,13 @@ func (s *b5EnvStore) enumerateCount() int {
 	return s.enumerate
 }
 
-// b5InstallEnvSeams 用内存实现替换票 30 的 5 个包级 seam，并在测试结束时
-// 恢复（seam 默认值 = 生产实现）。
+// b5InstallEnvSeams 用内存实现替换票 30 的包级 seam + 票 44 的 PATH 锁内
+// RMW seam，并在测试结束时恢复（seam 默认值 = 生产实现）。
 func b5InstallEnvSeams(t *testing.T, store *b5EnvStore, merged map[string]string, pairs []env.EnvPair) {
 	t.Helper()
 	oldSnapshot, oldEnum := mergedEnvSnapshotFn, enumerateEnvVarsFn
 	oldGet, oldSet, oldDelete := envGetEnvVarFn, envSetEnvVarFn, envDeleteEnvVarFn
+	oldTransform := envTransformPathFn
 
 	mergedEnvSnapshotFn = func() map[string]string {
 		store.mu.Lock()
@@ -74,10 +75,26 @@ func b5InstallEnvSeams(t *testing.T, store *b5EnvStore, merged map[string]string
 		delete(store.vars, b5EnvKey(level, name))
 		return nil
 	}
+	// 票 44：PATH 清理经锁内 RMW seam——默认实现直达真实注册表，测试注入
+	// 等价的内存读-算-写（transform 语义与生产一致：changed 才落盘）。
+	envTransformPathFn = func(level string, transform func(current string) (next string, changed bool, err error)) (bool, error) {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		key := b5EnvKey(level, "Path")
+		next, changed, terr := transform(store.vars[key])
+		if terr != nil {
+			return false, terr
+		}
+		if changed {
+			store.vars[key] = next
+		}
+		return changed, nil
+	}
 
 	t.Cleanup(func() {
 		mergedEnvSnapshotFn, enumerateEnvVarsFn = oldSnapshot, oldEnum
 		envGetEnvVarFn, envSetEnvVarFn, envDeleteEnvVarFn = oldGet, oldSet, oldDelete
+		envTransformPathFn = oldTransform
 	})
 }
 
@@ -154,8 +171,12 @@ func TestValidateEnvVar_PercentVarEntryValid(t *testing.T) {
 }
 
 // TestCleanEnvVarPath_UndefinedPercentVarStillRemoved：未定义引用与真缺失
-// 路径都必须被清理（防「所有 %-引用落到保守跳过」的 no-op 退化）；全部条目
-// 失效时整个变量被删除（单条目分支同样生效）。
+// 路径都必须被清理（防「所有 %-引用落到保守跳过」的 no-op 退化）。
+//
+// 票 44 语义更新：PATH 走锁内 RMW 后，**全部条目失效**的 PATH 保留原值并告警
+// （受保护变量不可删/不可写空——旧测试经 fake-delete 断言删除，但生产路径
+// 的 DeleteEnvVar 本就拒绝 PATH，fake 行为不代表生产）。单条目/通用变量的
+// 全失效删除语义不变（MYONLYPATH 分支）。
 func TestCleanEnvVarPath_UndefinedPercentVarStillRemoved(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone")
 	store := &b5EnvStore{vars: map[string]string{}}
@@ -166,8 +187,8 @@ func TestCleanEnvVarPath_UndefinedPercentVarStillRemoved(t *testing.T) {
 	if err := app.CleanEnvVarPath("Path", "user"); err != nil {
 		t.Fatalf("CleanEnvVarPath: %v", err)
 	}
-	if store.has("user", "Path") {
-		t.Errorf("全部条目失效时变量必须被删除，实际残留: %q", store.get("user", "Path"))
+	if !store.has("user", "Path") {
+		t.Error("全部条目失效的 PATH 必须保留原值（受保护变量不可删）——票 44 语义")
 	}
 
 	// 单条目分支：未定义引用 → 视为失效 → 删除变量（不退化为静默保留）。

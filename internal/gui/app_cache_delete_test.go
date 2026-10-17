@@ -186,14 +186,22 @@ func TestCleanCacheCategory(t *testing.T) {
 	}
 	assertCacheFiles(t, cacheDir)
 
-	// all: recreate and remove everything (files only).
+	// all: recreate and remove only the REAL cache (archives / .sha256 / .part).
+	//
+	// 第七轮审计 F-06 更新了本断言：原断言是「all 删光每一个文件」，而那条语义
+	// 正是缺陷本身——CacheDir 里同时住着用户状态文件（favorites.json 收藏、
+	// ignored_tools.json 忽略列表、custom_tools.json 自定义工具、keystore.dat
+	// 密钥库）与派生索引（sniff-cache.json / shim-index.v1 / tool_scan_cache.json）。
+	// 用户点一次「清理所有缓存」不该静默清空这些数据，因此 `all` 现在只删真缓存；
+	// 元数据必须显式点名分类（scanCache / otherFiles）才会被删除。
 	for _, f := range files {
 		writeSizedFile(t, filepath.Join(cacheDir, f), 10)
 	}
 	if err := app.CleanCacheCategory("all"); err != nil {
 		t.Fatal(err)
 	}
-	assertCacheFiles(t, cacheDir)
+	assertCacheFiles(t, cacheDir,
+		"favorites.json", "manifest-cache.dat", "sniff-cache.json", "tool_scan_cache.json")
 
 	// The subdir (and its content) must have survived everything.
 	if fi, err := os.Stat(filepath.Join(cacheDir, "subdir")); err != nil || !fi.IsDir() {

@@ -52,6 +52,21 @@ var (
 	envGetEnvVarFn    = env.GetEnvVar
 	envSetEnvVarFn    = env.SetEnvVar
 	envDeleteEnvVarFn = env.DeleteEnvVar
+	// envTransformPathFn 是 PATH 锁内 RMW 的接缝（票 44 / P2-2）：
+	// CleanEnvVarPath 对 name=PATH 的清理经此入口——生产按 level 分派到
+	// env.TransformUserPath / env.TransformSystemPath（读-算-写全程持
+	// withUserPathLock，杜绝「锁外读+锁内盲写」丢并发写入条目）；测试注入
+	// 内存实现（app_env_vars_percent_test.go 的 b5InstallEnvSeams）。
+	envTransformPathFn = func(level string, transform func(current string) (next string, changed bool, err error)) (bool, error) {
+		switch level {
+		case "user":
+			return env.TransformUserPath(transform)
+		case "machine":
+			return env.TransformSystemPath(transform)
+		default:
+			return false, fmt.Errorf("unsupported level: %q, only user or machine", level)
+		}
+	}
 )
 
 // defaultMergedEnvSnapshot 枚举「合并环境」并归一为大写键。
@@ -474,16 +489,56 @@ func (a *App) DeleteEnvVarEntry(name, level string) error {
 }
 
 func (a *App) CleanEnvVarPath(name, level string) error {
-	return a.cleanEnvVarPath(name, level, newPercentExpander())
+	_, err := a.cleanEnvVarPath(name, level, newPercentExpander())
+	return err
 }
 
 // cleanEnvVarPath 是 CleanEnvVarPath 的实现体，接收批量共享的 percentExpander
 // （B-08：CleanAllInvalidEnvVars 整批只枚举一次合并环境）。
-func (a *App) cleanEnvVarPath(name, level string, exp *percentExpander) error {
+func (a *App) cleanEnvVarPath(name, level string, exp *percentExpander) (bool, error) {
 	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
-		return fmt.Errorf("cannot modify protected system env var: %s", name)
+		return false, fmt.Errorf("cannot modify protected system env var: %s", name)
 	}
 	logInfo("[CleanEnvVarPath] cleaning env var: %s", name)
+
+	// 票 44（P2-2）：PATH 的清理是跨进程高竞态的读-改-写——必须全程持锁。
+	// 旧流程「锁外读 → 计算 → SetEnvVar 锁内盲写」会把读与写之间其它 xdev
+	// 进程（doctor/install/Activate，全程持锁的 RMW）写入的条目静默覆盖。
+	// 经 envTransformPathFn 走 env.TransformUserPath/TransformSystemPath。
+	//
+	// 第七轮审计 F-04：本函数现在回传 `changed` —— 批量入口必须据此如实上报动作，
+	// 不能再靠「回读值是否为空」反推。PATH 在全条目失效时是**保留原值**（不写不删），
+	// 回读必然非空，旧逻辑因此把「一个条目都没动」谎报成 Action="cleaned"。
+	if strings.EqualFold(name, "path") {
+		// 锁序纪律（F-01，Round 7）：expander 的惰性加载会在 transform 闭包内首次
+		// 调用 mergedEnvSnapshotFn。生产侧的 envTransformPathFn 持的是文件锁
+		// （withUserPathLock，无重入问题），但任何以非可重入互斥体保护 transform
+		// 的调用方/测试接缝，都会与该惰性加载构成「同 goroutine 二次加锁」→ 自
+		// 死锁（实测 internal/gui 整包 606s 超时）。进入 transform 之前先把合并
+		// 环境快照解析掉，使闭包内不再发生首次加载。
+		exp.lookup("")
+		changed, terr := envTransformPathFn(level, func(current string) (string, bool, error) {
+			if current == "" {
+				return "", false, nil
+			}
+			next, removed := filterValidPathEntries(current, exp)
+			if removed == 0 {
+				return "", false, nil
+			}
+			if next == "" {
+				// 全部条目失效：受保护变量不可删、不可写空——保留原值并告警
+				//（旧行为是 DeleteEnvVar 的受保护名拒绝错误，对用户仅是困惑）。
+				logWarn("[CleanEnvVarPath] PATH 的全部条目均无效——保留原值（受保护变量不可清空），请人工检查")
+				return "", false, nil
+			}
+			logInfo("[CleanEnvVarPath] locked RMW: cleaned %d invalid paths from PATH", removed)
+			return next, true, nil
+		})
+		if terr != nil {
+			return false, fmt.Errorf("failed to clean PATH: %v", terr)
+		}
+		return changed, nil
+	}
 
 	var value string
 	var err error
@@ -491,14 +546,14 @@ func (a *App) cleanEnvVarPath(name, level string, exp *percentExpander) error {
 	case "user", "machine":
 		value, err = envGetEnvVarFn(name, level)
 		if err != nil {
-			return fmt.Errorf("failed to read env var: %v", err)
+			return false, fmt.Errorf("failed to read env var: %v", err)
 		}
 	default:
-		return fmt.Errorf("unsupported level: %q", level)
+		return false, fmt.Errorf("unsupported level: %q", level)
 	}
 
 	if value == "" {
-		return nil
+		return false, nil
 	}
 
 	// B-08：先 %VAR%（合并环境），再 $VAR（os.ExpandEnv）。旧代码只做
@@ -507,44 +562,55 @@ func (a *App) cleanEnvVarPath(name, level string, exp *percentExpander) error {
 	expanded := expandPathRefs(value, exp.lookup)
 
 	if strings.Contains(expanded, ";") {
-		parts := strings.Split(value, ";")
-		var validParts []string
-		removed := 0
-		for _, p := range parts {
-			pTrimmed := strings.TrimSpace(p)
-			if pTrimmed == "" {
-				continue
-			}
-			exists, expandedP := pathEntryExists(pTrimmed, exp.lookup)
-			if !exists {
-				removed++
-				logInfo("[CleanEnvVarPath] removing invalid path: %s (expanded: %s)", pTrimmed, expandedP)
-				continue
-			}
-			validParts = append(validParts, p)
-		}
-
+		next, removed := filterValidPathEntries(value, exp)
 		if removed == 0 {
-			return nil
+			return false, nil
 		}
-
-		newValue := strings.Join(validParts, ";")
-		if newValue == "" {
-			return envDeleteEnvVarFn(name, level)
+		if next == "" {
+			if err := envDeleteEnvVarFn(name, level); err != nil {
+				return false, err
+			}
+			return true, nil
 		}
-
-		if err := envSetEnvVarFn(name, newValue, level); err != nil {
-			return fmt.Errorf("failed to update env var: %v", err)
+		if err := envSetEnvVarFn(name, next, level); err != nil {
+			return false, fmt.Errorf("failed to update env var: %v", err)
 		}
 		logInfo("[CleanEnvVarPath] cleaned %d invalid paths from %s", removed, name)
-		return nil
+		return true, nil
 	}
 
 	if exists, _ := pathEntryExists(value, exp.lookup); !exists {
-		return envDeleteEnvVarFn(name, level)
+		if err := envDeleteEnvVarFn(name, level); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 
-	return nil
+	return false, nil
+}
+
+// filterValidPathEntries 从分号分隔的值中剔除失效条目（含空条目——清理即
+// 重写时不保留空洞），返回新值与剔除数。PATH 的锁内 RMW 与非 PATH 变量的
+// 清理共用同一判定（票 44 抽取；语义与旧内联实现逐条对齐：%VAR% 经合并
+// 环境展开后判定存在性，真缺失/未定义引用剔除，合法条目原样保留）。
+func filterValidPathEntries(value string, exp *percentExpander) (next string, removed int) {
+	parts := strings.Split(value, ";")
+	var validParts []string
+	for _, p := range parts {
+		pTrimmed := strings.TrimSpace(p)
+		if pTrimmed == "" {
+			removed++
+			continue
+		}
+		exists, expandedP := pathEntryExists(pTrimmed, exp.lookup)
+		if !exists {
+			removed++
+			logInfo("[CleanEnvVarPath] removing invalid path: %s (expanded: %s)", pTrimmed, expandedP)
+			continue
+		}
+		validParts = append(validParts, p)
+	}
+	return strings.Join(validParts, ";"), removed
 }
 
 // CleanAllInvalidEnvVars iterates all env vars at the given level and cleans
@@ -577,7 +643,7 @@ func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
 			continue // valid �?nothing to do
 		}
 		// invalid or partial �?try cleaning
-		err := a.cleanEnvVarPath(v.Name, level, exp)
+		changed, err := a.cleanEnvVarPath(v.Name, level, exp)
 		if err != nil {
 			if strings.Contains(err.Error(), "admin") || strings.Contains(err.Error(), "ACCESS_DENIED") || strings.Contains(err.Error(), "error 5") {
 				results = append(results, CleanResult{Name: v.Name, Action: "skipped", Detail: "admin required"})
@@ -586,7 +652,15 @@ func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
 			}
 			continue
 		}
-		// Check if var was deleted (all paths invalid) or just cleaned (some paths removed)
+		// 第七轮审计 F-04：用实现回传的 changed 判定动作，不再靠回读值反推。
+		if !changed {
+			results = append(results, CleanResult{
+				Name:   v.Name,
+				Action: "kept",
+				Detail: "no entry could be removed (protected variable keeps its original value)",
+			})
+			continue
+		}
 		remaining, readErr := envGetEnvVarFn(v.Name, level)
 		if readErr != nil || remaining == "" {
 			results = append(results, CleanResult{Name: v.Name, Action: "deleted", Detail: "all paths were invalid"})

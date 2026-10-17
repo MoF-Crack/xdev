@@ -190,8 +190,11 @@ export default {
   'detail.deps_required': ' ≥ {version}',
   'detail.deps_reason_not_found': 'PATH 中未找到 {tool}',
   'detail.deps_reason_version_low': '已安装 {installed}，需要 {required}',
-  'detail.deps_reason_platform': '当前平台不支持',
+  'detail.deps_reason_platform': '当前平台不支持（需要 {needed}，当前 {current}）',
   'detail.deps_reason_unknown_tool': '未知工具',
+  // F-42：reasonCode "version_unknown"（Go 侧在依赖存在但版本串不可解析/不可
+  // 比较时设置）。缺这个键时抽屉会直接把键名渲染上屏。
+  'detail.deps_reason_version_unknown': '无法确定版本',
   'detail.launch': '启动',
   'detail.launched': '已启动 {name}',
   'detail.launch_failed': '启动失败',

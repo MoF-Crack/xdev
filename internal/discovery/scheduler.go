@@ -203,6 +203,20 @@ func (s *Scheduler) Shutdown() {
 	if s.startupCancel == nil {
 		return
 	}
+	// 第七轮审计 F-55：后台嗅探可能在进程收到退出信号**之前就已经正常跑完**——
+	// 那种情况下 sniffAllWithForce 已按 ctx.Err() 判定过 Partial 并保存了缓存
+	//（见本文件 sniffAllWithForce 的 `Partial: ctx.Err() != nil` 与随后的
+	// SaveCache）。旧代码在这里无条件把 Partial 覆写为 true，把一次**完整**的
+	// 嗅探错标成 partial，使 `xdev sniff` 摘要无条件多打一个 partial，误导排障。
+	// 因此先非阻塞探测完成信号：已完成则只释放 context，不再回写缓存。
+	select {
+	case <-s.startupDone:
+		// 已完成：Partial 已由 sniffAllWithForce 按 ctx.Err() 决定并落盘。
+		s.startupCancel()
+		return
+	default:
+	}
+
 	s.startupCancel()
 	select {
 	case <-s.startupDone:
@@ -210,7 +224,7 @@ func (s *Scheduler) Shutdown() {
 	case <-time.After(2 * time.Second):
 		log.Printf("[discovery] shutdown: timeout waiting for background sniff")
 	}
-	// Flush partial results to cache.
+	// Flush partial results to cache. 只有确实被中断的嗅探才走到这里。
 	if cache, err := s.LoadCache(); err == nil && cache != nil {
 		cache.Partial = true
 		cache.LastSniffAt = time.Now()

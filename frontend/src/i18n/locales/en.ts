@@ -211,8 +211,12 @@ export default {
   'detail.deps_required': ' ≥ {version}',
   'detail.deps_reason_not_found': '{tool} not found in PATH',
   'detail.deps_reason_version_low': 'Installed {installed}, requires {required}',
-  'detail.deps_reason_platform': 'Current platform not supported',
+  'detail.deps_reason_platform': 'Current platform not supported ({needed}; current: {current})',
   'detail.deps_reason_unknown_tool': 'Unknown tool',
+  // F-42: reasonCode "version_unknown" (Go side sets it when the dependency
+  // exists but its version string cannot be parsed/compared). Without this
+  // key the drawer rendered the raw key name.
+  'detail.deps_reason_version_unknown': 'Version could not be determined',
   'detail.launch': 'Launch',
   'detail.launched': 'Launched {name}',
   'detail.launch_failed': 'Launch failed',

@@ -603,9 +603,10 @@ func PathPrepend(path, shimDir string) string {
 	out := []string{shimDir}
 	for _, p := range parts {
 		if p == shimDir {
-			// already in there, skip
-			out = out[:0]
-			out = append(out, shimDir)
+			// Already in there (the shimDir we just prepended, or a
+			// duplicate later in PATH) — skip it.  Do NOT reset out:
+			// entries accumulated before this duplicate must survive
+			// (F-54).
 			continue
 		}
 		out = append(out, p)

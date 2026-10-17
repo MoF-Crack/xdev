@@ -320,6 +320,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refreshData()
 
 	case RemoteVersionsMsg:
+		// F-57: RemoteVersionsMsg 携带产出时的工具名。异步拉取期间用户
+		// 可能已经切到别的工具，迟到的回复若直接写入 m.remoteVersions
+		// 就会把「上一个工具的版本列表」显示成当前工具的——列表错位。
+		// 只接受与当前选中工具匹配的回复，其余整体丢弃。
+		if msg.Tool != m.currentToolName() {
+			return m, nil
+		}
 		m.remoteVersions = msg.Versions
 		return m, nil
 
@@ -639,6 +646,18 @@ func (m Model) refreshData() tea.Cmd {
 	return func() tea.Msg {
 		return RefreshMsg{}
 	}
+}
+
+// currentToolName returns the name of the tool currently selected in the
+// tools panel, or "" when the list is empty.
+//
+// F-57: RemoteVersionsMsg handlers use it to discard replies that belong
+// to a tool the user has already navigated away from.
+func (m Model) currentToolName() string {
+	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
+		return ""
+	}
+	return m.filteredTools[m.toolIdx].Name()
 }
 
 func (m Model) fetchRemoteVersions() tea.Cmd {

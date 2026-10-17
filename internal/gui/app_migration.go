@@ -259,7 +259,20 @@ func (a *App) InitConfig(baseDir string) error {
 		}
 	}
 
+	// 第七轮审计 F-07：切换 home 时必须**先清空派生子目录字段**再 ResolvePaths。
+	// config.ResolvePaths 对非空字段是 no-op（每个字段都是 `if c.Core.X == ""` 守卫），
+	// 因此只设 XMDevDir 再调用它，会让 InstallDir/ShimDir/CacheDir/ManifestDir/
+	// DownloadDir/EnvDir **继续指向旧 home** —— 用户看到「已切换到新目录」，
+	// 实际工具树、shim、缓存仍落在旧目录，且 Save() 会把这种不一致持久化。
+	// CLI 的同一场景（internal/cli/init.go:105-112）正是显式清空这 6 个字段后才
+	// ResolvePaths；此处与它对齐。
 	a.cfg.Core.XMDevDir = baseDir
+	a.cfg.Core.DownloadDir = ""
+	a.cfg.Core.InstallDir = ""
+	a.cfg.Core.ShimDir = ""
+	a.cfg.Core.CacheDir = ""
+	a.cfg.Core.EnvDir = ""
+	a.cfg.Core.ManifestDir = ""
 	a.cfg.ResolvePaths(baseDir)
 	if err := a.cfg.EnsureDirs(); err != nil {
 		logError("[InitConfig] EnsureDirs failed: %v", err)

@@ -49,3 +49,36 @@ func cacheEntryCategory(name string) string {
 		return "otherFiles"
 	}
 }
+
+// cacheMetadataFiles 是**住在 CacheDir 里但并非缓存**的用户状态文件与
+// xdev 派生索引（第七轮审计 F-06）。
+//
+// 背景：CacheDir 同时承载两类内容——
+//   - 真缓存：下载归档、`.sha256` 旁证、`.part` 中间态 —— 可安全重下；
+//   - 用户状态：收藏、更新忽略列表、自定义工具注册、TOFU 密钥库；
+//   - 派生索引：shim 索引、嗅探缓存、本地扫描缓存 —— 丢了会退化但可重建。
+//
+// 旧实现里 `CleanCache("all")` 与 `CleanCacheCategory("all")` 都会把 CacheDir
+// 下的**每一个**文件删掉，于是用户点一次「清理所有缓存」就静默清空了收藏、
+// 忽略列表、自定义工具与密钥库，而确认文案只说「需要重新下载」。
+//
+// 现在 `"all"` 只删真缓存（archives / shaFiles / partFiles）；本清单里的文件
+// 必须显式点名其分类才会被删除（例如 "scanCache" 删 tool_scan_cache.json）。
+var cacheMetadataFiles = map[string]bool{
+	"favorites.json":       true, // 用户收藏
+	"ignored_tools.json":   true, // 更新忽略列表
+	"custom_tools.json":    true, // 自定义工具注册
+	"keystore.dat":         true, // TOFU 密钥库
+	"shim-index.v1":        true, // shim 分发索引（派生，可重建）
+	"sniff-cache.json":     true, // 版本嗅探缓存（派生，可重建）
+	"tool_scan_cache.json": true, // 本地扫描缓存（scanCache 分类）
+}
+
+// isCacheMetadata 报告该文件名是否为「不可被 all 删除」的用户状态/派生索引。
+func isCacheMetadata(name string) bool {
+	if cacheMetadataFiles[name] {
+		return true
+	}
+	// 锁文件是运行态旁证（如 sniff-cache.json.lock），同属元数据。
+	return strings.HasSuffix(name, ".lock")
+}

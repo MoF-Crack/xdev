@@ -50,7 +50,12 @@ import (
 // rootPublicKeyB64 is the base64-encoded Ed25519 public key.
 // This value can be set at compile time via -ldflags:
 //
-//	go build -ldflags "-X internal/signer.rootPublicKeyB64=<base64_pub_key>" ./cmd/xmdevenvmt/
+//	go build -ldflags "-X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=<base64_pub_key>" .
+//
+// The -X target must be the FULL import path. A short path such as
+// "-X internal/signer.rootPublicKeyB64=..." is silently ignored by the Go
+// linker: the build succeeds, this variable stays empty, and signature
+// verification is silently disabled.
 //
 // When empty or equal to the placeholder "REPLACE_WITH_REAL_PUBLIC_KEY",
 // RootPublicKey() returns nil and signature verification is disabled.
@@ -75,9 +80,10 @@ func SetEmbeddedSignaturesFS(fsys embed.FS) {
 // which means downloads are NOT integrity-verified — this is a
 // security risk in production deployments.
 //
-// The key can be injected at build time via -ldflags:
+// The key can be injected at build time via -ldflags (FULL import path —
+// a short path is silently ignored by the linker):
 //
-//	go build -ldflags "-X internal/signer.rootPublicKeyB64=<key>" ./cmd/xmdevenvmt/
+//	go build -ldflags "-X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=<key>" .
 func RootPublicKey() []byte {
 	if rootPublicKeyB64 == "" || rootPublicKeyB64 == "REPLACE_WITH_REAL_PUBLIC_KEY" {
 		if rootPublicKeyB64 == "" {
@@ -89,6 +95,7 @@ func RootPublicKey() []byte {
 	}
 	pub, err := base64.StdEncoding.DecodeString(rootPublicKeyB64)
 	if err != nil || len(pub) != 32 {
+		log.Printf("[signer] ERROR: embedded root public key is corrupt (base64 decode failed or decoded length %d != 32 bytes); manifest signature verification is DISABLED — downloads will not be integrity-verified", len(pub))
 		return nil
 	}
 	return pub

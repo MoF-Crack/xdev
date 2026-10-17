@@ -102,10 +102,15 @@ func (a *App) install(spec InstallSpec) error {
 
 // installWithOptions is the shared install implementation.
 //
-// confirmed skips the unverified-version confirmation dialog; force
-// removes any existing install directory (complete or incomplete) before
-// downloading. formFilter, when non-empty, selects a form-specific
-// archive and does not silently fall back to a different form.
+// confirmed skips the unverified-version confirmation dialog. force records a
+// repair/force intent: the existing install directory (complete or incomplete)
+// is removed **only after the archive has been downloaded and its SHA-256
+// verified** — never before. That ordering mirrors internal/installer's A-07
+// fix (ticket 26) and is guarded here by F-05 (Round 7): the old
+// "remove first, then fetch" behaviour destroyed a working install whenever
+// the subsequent download failed (offline / 404 / mirror outage / user cancel).
+// formFilter, when non-empty, selects a form-specific archive and does not
+// silently fall back to a different form.
 func (a *App) installWithOptions(toolName, version string, confirmed, force bool, formFilter string) error {
 	p, err := a.mustGetPlugin(toolName)
 	if err != nil {
@@ -175,6 +180,17 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 
 	installPath := p.InstallDir(cfg.Core.InstallDir, ver)
 
+	// 第七轮审计 F-05（P1）：force/repair 重装**不得在下载之前删除**已有安装。
+	// CLI 侧（票 26 / A-07，internal/installer/installer.go）已把该顺序反转为
+	// 「先下载 + 校验哈希，成功后才 RemoveAll」，并有守卫
+	// TestForceInstall_DownloadFailKeepsOld。GUI 走的是自己另写的一套编排
+	// （BuildDownloadOptions → StartDownload → ExtractAndActivate），没有复用
+	// InstallWithProgress，因此**完全没有继承** A-07 的语义：旧代码在这里就
+	// os.RemoveAll(installPath)，一旦随后下载失败（离线 / 404 / 镜像全挂 /
+	// 哈希不符 / 用户取消），原本完好可用的安装就被摧毁，current/<tool> 变悬空。
+	// 现在只记录意图，真正的删除推迟到下载成功之后（见下方 StatusCompleted 分支）。
+	forceReinstall := false
+
 	// Already-installed fast path + incomplete-install handling.
 	if fi, err := os.Stat(installPath); err == nil && fi.IsDir() {
 		integrity := installer.VerifyInstallIntegrity(p, installPath)
@@ -215,26 +231,10 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 				Missing: integrity.Missing,
 			}
 		}
-		// User confirmed repair (or force was requested): remove the
-		// existing directory and reinstall from scratch.
-		//
-		// Ticket 19 (audit-fixes / B-02): the removal runs under the per-tool
-		// lock so a concurrent install of the same tool (CLI force install,
-		// GUI batch item, migration) cannot interleave with it. The lock is
-		// released before the download/install phase, which re-acquires it —
-		// keeping the existing "remove first, then fetch" behaviour while
-		// adding mutual exclusion. F-03 residual: the Windows named mutex is
-		// thread-affine, so this is best-effort (disclosed in the PR notes).
-		logInfo("[install] removing existing %s install dir %s for reinstall", toolName, installPath)
-		removeLock, removeLockErr := util.AcquireToolLock(cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
-		if removeLockErr != nil {
-			return fmt.Errorf("reinstall removal lock %s: %w", p.Name(), removeLockErr)
-		}
-		removeErr := os.RemoveAll(installPath)
-		removeLock.Release()
-		if removeErr != nil {
-			return fmt.Errorf("failed to remove existing install dir: %w", removeErr)
-		}
+		// User confirmed repair (or force was requested): record the intent.
+		// The actual removal now happens only after the download succeeded and
+		// its SHA-256 was verified (F-05), mirroring installer's A-07 fix.
+		forceReinstall = true
 	}
 
 	// Spec 039: npm-kind installs never go through the download manager —
@@ -379,6 +379,39 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 				}
 
 				installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+
+				// 第七轮审计 F-05：force/repair 的删除推迟到这里 —— 下载已完成
+				// 且哈希校验通过（downloader 在 StatusCompleted 前已校验
+				// ExpectedSHA），此时删除旧安装才是安全的：即便随后解压失败，
+				// 也不会出现「下载失败却把好安装删了」的数据丢失。
+				// 与 installer 的 A-07 语义对齐（见 installer.go 的 forceReinstall）。
+				if forceReinstall {
+					logInfo("[install] force reinstall: removing previous install dir %s (archive verified)", installPath)
+					removeLock, removeLockErr := util.AcquireToolLock(cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
+					if removeLockErr != nil {
+						wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+							"taskId":  taskID,
+							"tool":    toolName,
+							"version": version,
+							"error":   fmt.Sprintf("reinstall removal lock %s: %v", p.Name(), removeLockErr),
+						})
+						a.dlMgr.RemoveTask(taskID)
+						return
+					}
+					removeErr := os.RemoveAll(installPath)
+					removeLock.Release()
+					if removeErr != nil {
+						wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+							"taskId":  taskID,
+							"tool":    toolName,
+							"version": version,
+							"error":   fmt.Sprintf("failed to remove existing install dir: %v", removeErr),
+						})
+						a.dlMgr.RemoveTask(taskID)
+						return
+					}
+				}
+
 				err := ins.ExtractAndActivate(p, arch, ver, installPath)
 				if err != nil && !installer.IsActivationError(err) {
 					// Real failure (extraction/download) — report as error.

@@ -49,6 +49,20 @@ func TestPathPrependMultiple(t *testing.T) {
 	}
 }
 
+// TestPathPrepend_KeepsEntriesBeforeDuplicate (F-54): a duplicate of
+// shimDir later in PATH must only be skipped — the entries accumulated
+// before it (here /a) must survive. The old implementation reset the
+// accumulator (out = out[:0]), silently dropping /a.
+func TestPathPrepend_KeepsEntriesBeforeDuplicate(t *testing.T) {
+	in := "/a" + sep() + "/shims" + sep() + "/b"
+	got := PathPrepend(in, "/shims")
+	want := "/shims" + sep() + "/a" + sep() + "/b"
+	if got != want {
+		t.Errorf("PathPrepend(%q, %q) = %q, want %q (entries before the duplicate must be preserved)",
+			in, "/shims", got, want)
+	}
+}
+
 // --- FindInDir tests ---
 
 // helper: returns the executable suffix for the current OS

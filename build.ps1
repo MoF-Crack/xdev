@@ -1,11 +1,10 @@
 # XDev Build Script（单二进制模型）
-# Usage: .\build.ps1 [-SkipFrontend] [-SkipBuild] [-SkipAudit]
+# Usage: .\build.ps1 [-SkipBuild] [-SkipAudit]
 #
 # 一个可执行文件（xdev）按调用形态多态执行：无参数 → GUI；tui → TUI；
 # 其他参数 → CLI。CLI/GUI 不再分别编译（Spec 030 双二进制已合并）。
 
 param(
-    [switch]$SkipFrontend = $false,
     [switch]$SkipBuild = $false,
     [switch]$SkipAudit = $false
 )

@@ -5,14 +5,26 @@
 //
 // The Lua VM is sandboxed by:
 //  1. Skipping the io and os libraries (no file I/O or process execution)
-//  2. Restricting package.loaders to only the preload loader (index 1),
-//     which prevents loading arbitrary Lua files or C shared libraries
-//  3. Only opening safe standard libraries: package, base, table, string,
+//  2. Overriding dofile, loadfile, load and loadstring so they raise an
+//     error instead of compiling or running arbitrary chunks (票 20 / F-06)
+//  3. Banning require() outright, and additionally reducing both the
+//     package.loaders field and the registry entry _LOADERS (which is what
+//     gopher-lua's loRequire actually reads) to the preload loader only
+//     (票 21 / F-09)
+//  4. Only opening safe standard libraries: package, base, table, string,
 //     math, coroutine
 //
 // gopher-lua uses "package.loaders" (not "package.searchers" like PUC-Rio
 // Lua 5.3+). The preload loader only finds modules that were explicitly
 // preloaded via package.preload, which none are by default.
+//
+// Plugins never need require(): the xdev/vfox plugin format is a single
+// self-contained chunk.
+//
+// Plugin results are read back through getFieldString/getFieldInt/
+// getFieldStringSlice, each of which recovers a Lua error raised by a
+// plugin-supplied __index metamethod so it cannot panic the host
+// (票 21 / F-10).
 //
 // # Plugin Format Differences
 //
@@ -25,6 +37,7 @@ package plugin
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -188,6 +201,16 @@ func (e *LuaEngine) newSandboxedVM() (*lua.LState, error) {
 	// 票 20 / F-06: loadstring is Lua 5.1's alias for load, so leaving it
 	// in place let a plugin compile arbitrary chunks and walk straight
 	// around the load/dofile/loadfile overrides below.
+	//
+	// 票 21 / F-09: require() is banned outright. The loader-list
+	// hardening further down only rewrites the package.loaders *field*,
+	// but gopher-lua's loRequire (vendor/.../baselib.go:537) reads the
+	// loader list from the registry entry _LOADERS, which OpenPackage
+	// (vendor/.../loadlib.go:59) fills with the same two loaders —
+	// including loLoaderLua, the on-disk .lua searcher driven by
+	// LUA_PATH. Field and registry entry are two different tables, so
+	// require() kept executing arbitrary .lua files off disk. Plugins
+	// (archive()/install()/available()/env_vars()) never need require.
 	if err := L.DoString(`
 		dofile = function()
 			error("dofile is not allowed in sandboxed plugins")
@@ -201,9 +224,12 @@ func (e *LuaEngine) newSandboxedVM() (*lua.LState, error) {
 		loadstring = function()
 			error("loadstring is not allowed in sandboxed plugins")
 		end
+		require = function()
+			error("require is not allowed in sandboxed plugins")
+		end
 	`); err != nil {
 		L.Close()
-		return nil, fmt.Errorf("failed to override dofile/loadfile/load/loadstring: %w", err)
+		return nil, fmt.Errorf("failed to override dofile/loadfile/load/loadstring/require: %w", err)
 	}
 
 	// Restrict package.loaders to only the preload loader (index 1).
@@ -232,6 +258,37 @@ func (e *LuaEngine) newSandboxedVM() (*lua.LState, error) {
 		return nil, fmt.Errorf("failed to freeze package.loaders: %w", err)
 	}
 
+	// 票 21 / F-09 (defence in depth): the Lua-side rewrite above only
+	// replaces the package.loaders *field*, but gopher-lua's loRequire
+	// reads the loader list from the registry entry _LOADERS
+	// (vendor/.../baselib.go:537), and OpenPackage filled that entry with
+	// the full two-loader list (vendor/.../loadlib.go:59) — including
+	// loLoaderLua, the on-disk .lua searcher driven by LUA_PATH. Field
+	// and registry entry are separate tables, so the searcher stayed
+	// reachable through require(). Replace the registry entry with a
+	// table holding the preload loader only, mirroring package.loaders.
+	//
+	// lua.RegistryIndex is the library's registry index constant
+	// (vendor/.../state.go:23); L.Get on it returns the registry table.
+	// This runs at VM construction, before any plugin code, so a
+	// non-table registry/_LOADERS means OpenPackage did not run and the
+	// sandbox contract cannot be established — fail closed.
+	registry, ok := L.Get(lua.RegistryIndex).(*lua.LTable)
+	if !ok {
+		L.Close()
+		return nil, fmt.Errorf("failed to restrict registry _LOADERS: registry is not a table")
+	}
+	oldLoaders, ok := L.GetField(registry, "_LOADERS").(*lua.LTable)
+	if !ok {
+		L.Close()
+		return nil, fmt.Errorf("failed to restrict registry _LOADERS: _LOADERS is not a table")
+	}
+	safeLoaders := L.CreateTable(1, 0)
+	if preload := L.RawGetInt(oldLoaders, 1); preload != lua.LNil {
+		L.RawSetInt(safeLoaders, 1, preload)
+	}
+	L.SetField(registry, "_LOADERS", safeLoaders)
+
 	return L, nil
 }
 
@@ -243,34 +300,75 @@ type LuaArchive struct {
 }
 
 // getFieldString extracts a string field from a Lua table.
+//
+// 票 21 / F-10: L.GetField runs metamethod code (__index), and
+// gopher-lua signals a Lua error by panicking (ls.Panic →
+// panicWithTraceback). The result-extraction helpers used to sit
+// outside callProtected — which only wraps L.CallByParam — so a plugin
+// returning a table with a throwing __index took down the whole host
+// process. extractField routes every read through gopher-lua's own
+// PCall, covering all call sites (ArchiveFor, LoadPlugin, vfox
+// ResolveVersion, archive strip extraction) in one place.
 func getFieldString(L *lua.LState, table lua.LValue, key string) string {
-	v := L.GetField(table, key)
-	if v.Type() == lua.LTString {
-		return string(v.(lua.LString))
-	}
-	return ""
+	var out string
+	extractField(L, "getFieldString", key, func() {
+		if v := L.GetField(table, key); v.Type() == lua.LTString {
+			out = string(v.(lua.LString))
+		}
+	})
+	return out
 }
 
 // getFieldInt extracts an integer field from a Lua table.
 func getFieldInt(L *lua.LState, table lua.LValue, key string) int {
-	v := L.GetField(table, key)
-	if v.Type() == lua.LTNumber {
-		return int(v.(lua.LNumber))
-	}
-	return 0
+	var out int
+	extractField(L, "getFieldInt", key, func() {
+		if v := L.GetField(table, key); v.Type() == lua.LTNumber {
+			out = int(v.(lua.LNumber))
+		}
+	})
+	return out
 }
 
 // getFieldStringSlice extracts a string slice field from a Lua table.
 func getFieldStringSlice(L *lua.LState, table lua.LValue, key string) []string {
-	v := L.GetField(table, key)
-	if v.Type() != lua.LTTable {
-		return nil
-	}
 	var out []string
-	L.ForEach(v.(*lua.LTable), func(_ lua.LValue, val lua.LValue) {
-		if s, ok := val.(lua.LString); ok {
-			out = append(out, string(s))
+	extractField(L, "getFieldStringSlice", key, func() {
+		v := L.GetField(table, key)
+		if v.Type() != lua.LTTable {
+			return
 		}
+		L.ForEach(v.(*lua.LTable), func(_ lua.LValue, val lua.LValue) {
+			if s, ok := val.(lua.LString); ok {
+				out = append(out, string(s))
+			}
+		})
 	})
 	return out
+}
+
+// extractField runs fn — a plugin-result field read — inside a protected
+// Lua call (票 21 / F-10) so a Lua error raised by a plugin-supplied
+// metamethod is caught by gopher-lua's own PCall instead of escaping as
+// a Go panic into the host process. On error it logs a warning and
+// leaves the caller's zero value in place, which every call site already
+// handles (missing field / missing url).
+//
+// PCall is used rather than a bare `defer recover()` because a recovered
+// panic does NOT unwind the VM: ls.reg keeps the metatable/object/key
+// entries pushed by getFieldString and ls.stack keeps the metamethod's
+// call frame. A plugin that returns a throwing __index table would then
+// grow the register stack by a few entries per read — measured at 814
+// entries after 300 reads, after which the VM fails every call with
+// "stack overflow". PCall's own recovery (vendor/.../state.go:2082-2089)
+// restores the stack pointer, the current frame and the register top, so
+// repeated reads stay bounded and the VM remains usable.
+func extractField(L *lua.LState, helper, key string, fn func()) {
+	L.Push(L.NewFunction(func(*lua.LState) int {
+		fn()
+		return 0
+	}))
+	if err := L.PCall(0, 0, nil); err != nil {
+		log.Printf("[plugin] WARNING: %s(%q) raised a Lua error while reading a plugin result — treating the field as absent: %v", helper, key, err)
+	}
 }
