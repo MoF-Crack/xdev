@@ -638,6 +638,9 @@ export default {
   'install.tofu_warning_content': '{tool} {version} 未经预校验，已下载并计算校验值，后续安装将以此校验。',
   'install.tofu_warning_confirm': '继续',
 
+  // 第七轮审计 F-41：安装成功但激活失败——版本已落盘，但 current 未切换。
+  'install.activation_warning': '{tool} {version} 已安装但激活失败，尚未成为当前版本。原因：{message}。可运行 `xdev doctor --fix`，或在版本列表中手动激活。',
+
   // Install mutex (Spec 036 N2)
   'install.busy': '已有安装进行中',
   // Background install progress indicator (smoke feedback #4)

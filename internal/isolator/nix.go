@@ -161,9 +161,20 @@ func (n *nixIsolator) generateFlake() error {
 	}
 
 	// Build env vars as Nix env attributes
+	//
+	// 第七轮审计 F-50（nix 侧，与 container.go 同源）：**不要**把宿主的 PATH 写进
+	// flake 的 env。spec.Env["PATH"] 是「宿主 shim 目录 + 宿主 PATH」，那条语义只对
+	// `none` 模式成立（就地 os.Setenv）。写进 flake 后，`nix develop` 会用宿主 PATH
+	// **覆盖** Nix 自己装配的 profile PATH —— 上面刚列出的 pkgs（bash/coreutils 等）
+	// 反而从 PATH 里消失，容器内命令解析全落到宿主路径上（而宿主路径在 nix 沙箱里
+	// 大多不存在）。Nix 环境应由 Nix 决定 PATH。
 	var envLines []string
 	if n.spec != nil {
 		for k, v := range n.spec.Env {
+			if strings.EqualFold(k, "PATH") {
+				log.Printf("isolate: not injecting host PATH into the nix flake (F-50); Nix builds its own PATH from the declared packages")
+				continue
+			}
 			envLines = append(envLines, fmt.Sprintf("    %s = \"%s\";", n.sanitizeNixIdent(k), escapeNixString(v)))
 		}
 	}

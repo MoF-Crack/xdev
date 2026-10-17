@@ -639,6 +639,10 @@ export default {
   'install.tofu_warning_content': '{tool} {version} has not been pre-verified. The download has completed and its checksum has been recorded. Future installations of this version will verify against this checksum.',
   'install.tofu_warning_confirm': 'Continue',
 
+  // 第七轮审计 F-41: install succeeded but activation failed — the version is on
+  // disk, yet `current` was not switched. Backend emits xdev:activation-warning.
+  'install.activation_warning': '{tool} {version} was installed but could not be activated, so it is not the active version yet. Reason: {message}. Run `xdev doctor --fix` or activate it manually from the version list.',
+
   // Install mutex (Spec 036 N2)
   'install.busy': 'An installation is already in progress',
   // Background install progress indicator (smoke feedback #4)

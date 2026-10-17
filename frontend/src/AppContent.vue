@@ -118,6 +118,8 @@ onUnmounted(() => {
   // TOFU warning dialog / self-update toast fires duplicated.
   window.runtime?.EventsOff?.('xdev:tofu-warning');
   window.runtime?.EventsOff?.('self-update');
+  // F-41: 同样在 onMounted 注册，必须一并注销（否则重挂载后重复提示）。
+  window.runtime?.EventsOff?.('xdev:activation-warning');
 });
 
 onMounted(async () => {
@@ -152,6 +154,21 @@ onMounted(async () => {
       closable: false,
       maskClosable: false,
     });
+  });
+
+  // 第七轮审计 F-41：安装成功但**激活失败**的软告警。
+  // Go 侧在 ExtractAndActivate 返回激活类错误时会 emit 'xdev:activation-warning'
+  //（internal/gui/app_install.go），但前端从无监听者 —— 事件被静默丢弃，用户看到
+  // 的是「Completed」，而工具其实**没有**切到新版本（版本装上了、current 链接没动）。
+  // 这里补上监听，明确告知「已安装但未激活」以及如何修复。
+  window.runtime?.EventsOn?.('xdev:activation-warning', (data) => {
+    if (!data || !data.tool) return;
+    message.warning(
+      t('install.activation_warning', { tool: data.tool, version: data.version, message: data.message }),
+      { duration: 10000 },
+    );
+    // 激活失败通常意味着 shim/链接状态异常，刷新详情以便用户看到真实状态。
+    loadDashboard();
   });
 
   // Listen for dashboard stats refresh events from the backend
