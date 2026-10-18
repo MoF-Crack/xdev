@@ -521,7 +521,8 @@ func removePartLockIfUnheld(lockPath string) error {
 // Unix 上写进已解除链接的 inode），所以先试探锁：拿不到就原样保留。
 func removePartResidueIfUnheld(partPath string) error {
 	if _, err := os.Stat(partPath); err != nil {
-		// 没有 .part：仍清掉可能残留的孤儿锁。
+		// 没有 .part：仍清掉可能残留的孤儿锁与孤儿校验器（P2-6）。
+		_ = os.Remove(partPathValidatorSuffix(partPath))
 		return removePartLockIfUnheld(partPath + ".lock")
 	}
 	fl, err := util.AcquireFileLock(partPath+".lock", 0)
@@ -534,11 +535,17 @@ func removePartResidueIfUnheld(partPath string) error {
 	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
 		firstErr = err
 	}
+	// P2-6：内容身份旁路文件与 .part 同生共死。
+	_ = os.Remove(partValidatorFor(partPath))
 	if err := os.Remove(partPath + ".lock"); err != nil && !os.IsNotExist(err) && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
 }
+
+// partPathValidatorSuffix 返回某份 .part 的校验器旁路路径。
+// 抽成函数只是为了让 removePartResidueIfUnheld 的「无 .part」分支读起来不绕。
+func partPathValidatorSuffix(partPath string) string { return partValidatorFor(partPath) }
 
 // removePartialFiles 删除给定 dest/URL 组合的全部 .part 残留与 .part.lock
 // （best-effort，不存在的路径不算错误；被活跃下载持有的分代保持原样）。
@@ -621,6 +628,89 @@ func completePartResidue(resp *http.Response, fromBytes int64) bool {
 	}
 	// unsatisfied 形式（start == -1）只要 total 对上即可。
 	return start <= 0 || start == fromBytes
+}
+
+// partValidator 记录一份 `.part` 所对应的**内容身份**，用于 P2-6（同一 URL 内容
+// 变更后不得把旧前缀当续传前缀拼接）。
+//
+// 取值来源：响应头 ETag / Last-Modified。二者都可能缺失；缺失时 ifRange() 返回 ""
+// ，本地校验也退化为「无从证明」（此时保持既有行为：只按 Content-Range 偏移校验）。
+type partValidator struct {
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"last_modified,omitempty"`
+}
+
+// ifRange 返回适合放进 If-Range 的值。RFC 9110：ETag（强校验器）优先，
+// 否则用 Last-Modified（HTTP-date）。弱 ETag（W/"…"）不能用于 If-Range。
+func (v partValidator) ifRange() string {
+	if v.ETag != "" && !strings.HasPrefix(v.ETag, "W/") {
+		return v.ETag
+	}
+	return v.LastModified
+}
+
+// usable 报告是否有可用于一致性比较的校验器。
+func (v partValidator) usable() bool { return v.ETag != "" || v.LastModified != "" }
+
+// matchesResponse 比较响应携带的校验器与本地记录。任一维度不同即不匹配。
+//
+// 只比较**双方都存在**的维度（服务端不必同时回 ETag 与 Last-Modified）：
+//   - ETag 双方都有且不同 → 不匹配（强信号）；
+//   - Last-Modified 双方都有且不同 → 不匹配；
+//   - 只有一方存在 → 该维度不参与判定（不可证伪，不做猜测）。
+func (v partValidator) matchesResponse(resp *http.Response) bool {
+	gotETag := strings.TrimSpace(resp.Header.Get("ETag"))
+	gotLM := strings.TrimSpace(resp.Header.Get("Last-Modified"))
+	if v.ETag != "" && gotETag != "" && v.ETag != gotETag {
+		return false
+	}
+	if v.LastModified != "" && gotLM != "" && v.LastModified != gotLM {
+		return false
+	}
+	return true
+}
+
+// fromResponse 从响应头构造校验器。
+func validatorFromResponse(resp *http.Response) partValidator {
+	return partValidator{
+		ETag:         strings.TrimSpace(resp.Header.Get("ETag")),
+		LastModified: strings.TrimSpace(resp.Header.Get("Last-Modified")),
+	}
+}
+
+// partValidatorFor 返回某代 `.part` 的校验器旁路文件路径。
+func partValidatorFor(partPath string) string { return partPath + ".meta" }
+
+// readPartValidator 读取旁路校验器。缺失或损坏都返回 ok=false —— 校验器是
+// **尽力而为**的证据，缺失时退化为既有行为（不能因此拒绝续传）。
+func readPartValidator(path string) (partValidator, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return partValidator{}, false
+	}
+	var v partValidator
+	if err := json.Unmarshal(data, &v); err != nil {
+		log.Printf("[download] WARNING: partial-file validator %s is unreadable (%v) — continuing without content-identity check", path, err)
+		return partValidator{}, false
+	}
+	if !v.usable() {
+		return partValidator{}, false
+	}
+	return v, true
+}
+
+// writePartValidator 持久化校验器。失败只告警（不阻断下载）。
+func writePartValidator(path string, v partValidator) {
+	if !v.usable() {
+		return
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
+		log.Printf("[download] WARNING: could not persist partial-file validator %s: %v", path, err)
+	}
 }
 
 // isNotFoundError reports whether the error indicates the resource was
@@ -727,6 +817,27 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] Resuming from %d bytes (partial file exists)", fromBytes)
 	}
 
+	// 第九轮审计 P2-6（P2）：同一 URL 的内容变更后，旧残留被当作续传前缀拼接。
+	//
+	// F-12 让 `.part` 按 URL 分代，于是「不同 URL 互不干扰」成立；但**同一个 URL**
+	// 重新发布内容（nightly / 重打 tag / CDN 回源换了对象）时，代际键不变，旧内容的
+	// 前缀会与**新内容**的后缀拼成一份文件。F-12b 只校验偏移（起点对得上），
+	// `fromBytes` 那段前缀本身没有任何一致性证据。实测 H16：本地残留 = 旧内容前
+	// 2048 字节，服务端同 URL 现返回新内容（同长度）→ err=nil、拼接结果被接受并写 pin。
+	//
+	// 标准做法是 `If-Range`：把下载开始时记录的校验器（ETag / Last-Modified）带上，
+	// 不匹配时**服务端**回 200 全量，客户端自然丢弃旧前缀（下面的
+	// "Server did not honor Range header" 分支已覆盖）。但 If-Range 依赖服务端
+	// 合规，因此再加一道本地校验：拿到 206 后比对响应校验器与本地记录，
+	// 不一致就删 `.part` 并 fail closed。
+	partMeta := partValidatorFor(partPath)
+	var resumeValidator partValidator
+	if fromBytes > 0 {
+		if v, ok := readPartValidator(partMeta); ok {
+			resumeValidator = v
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", opts.URL, nil)
 	if err != nil {
 		log.Printf("[download] ERROR: failed to create request: %v", err)
@@ -735,6 +846,10 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	if fromBytes > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", fromBytes))
 		log.Printf("[download] Set Range header: bytes=%d-", fromBytes)
+		if ir := resumeValidator.ifRange(); ir != "" {
+			req.Header.Set("If-Range", ir)
+			log.Printf("[download] Set If-Range from stored validator")
+		}
 	}
 	req.Header.Set("User-Agent", "xdev/0.1")
 	if opts.Cookie != "" {
@@ -787,6 +902,19 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] Server did not honor Range header, restarting from scratch")
 		notifyStatus(opts, "Server ignored Range header — restarting from scratch")
 		fromBytes = 0
+		// 全量重下：旧的校验器与旧前缀一起作废（If-Range 命中了「内容已变」）。
+		_ = os.Remove(partMeta)
+		resumeValidator = partValidator{}
+	}
+	// P2-6：把本次响应的校验器记到该代的旁路文件，供**下一次**续传比对。
+	// 首次下载（fromBytes==0）与「服务端忽略 Range 后重下」都在这里落定；
+	// 续传时若原先没有校验器，也用本次响应补上（下一次就有据可依）。
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
+		if v := validatorFromResponse(resp); v.usable() {
+			if !resumeValidator.usable() || fromBytes == 0 {
+				writePartValidator(partMeta, v)
+			}
+		}
 	}
 
 	// P1-1 (a)：新鲜下载（未发 Range）绝不允许收到 206。
@@ -816,6 +944,22 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	// Content-Length: 100 → 组装出 600 字节就被接受并写 pin）。total 为 `*`
 	// （parseContentRange 返回 -1）时无从证明完整性 —— 也 fail closed。
 	if fromBytes > 0 && resp.StatusCode == http.StatusPartialContent {
+		// P2-6 本地校验（If-Range 的纵深防御）：服务端回了 206，说明它接受续传，
+		// 但**可能无视 If-Range**（非合规实现）。此时若响应携带的校验器与本地
+		// 记录不一致，说明同一 URL 的内容已经换过 —— 旧前缀与新后缀拼起来会得到
+		// 一份「长度正确、内容错误」的归档，并在 TOFU 通路上被 pin 永久固化
+		// （实测 H16：旧内容前 2048 字节 + 新内容后缀 = 被接受的拼接文件）。
+		// 因此这里删 .part 并 fail closed，让下一次从零重下。
+		if resumeValidator.usable() && !resumeValidator.matchesResponse(resp) {
+			got := validatorFromResponse(resp)
+			log.Printf("[download] ERROR: content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q) — discarding the partial file",
+				resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
+			f.Close()
+			_ = os.Remove(partPath)
+			_ = os.Remove(partMeta)
+			return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — the local prefix cannot be spliced onto the new content; discarding the partial file and retrying from scratch",
+				sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
+		}
 		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		if !ok || start != fromBytes {
 			log.Printf("[download] ERROR: Content-Range mismatch: server=%q requested-start=%d — discarding the partial file",
@@ -1110,6 +1254,9 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 		return err
 	}
 	log.Printf("[download] File renamed to final destination: %s", opts.Dest)
+
+	// P2-6：内容身份旁路文件只服务于「未完成的 .part」，收尾后即作废。
+	_ = os.Remove(partValidatorFor(partPath))
 
 	// Audit log
 	LogAudit(AuditEntry{
