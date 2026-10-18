@@ -19,10 +19,6 @@ const setupWizard = read('src/SetupWizard.vue');
 const commandPalette = read('src/components/CommandPalette.vue');
 const toolDetailDrawer = read('src/components/ToolDetailDrawer.vue');
 const theme = read('src/styles/theme.css');
-// R8-04 附带修复：窗口最大化逻辑在 dc6edf3 抽到了这个 composable（AppContent 只
-// 消费它）。原断言仍按 AppContent 的旧位置做字符串匹配 → 永久误报。这里改为对
-// **逻辑实际所在文件**断言（强度不变：仍然要求具体调用与 `.catch(` 出现）。
-const windowChrome = read('src/composables/useWindowChrome.js');
 function sourceFilesIn(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -50,8 +46,19 @@ const knownNavKeys = [...navigation.matchAll(/key:\s*'([^']+)'/g)].map(m => m[1]
 expect(!knownNavKeys.some(k => k === 'custom-tools' || k === 'plugins'), 'navigation registry should not contain custom-tools or plugins');
 expect(appShell.includes("window.addEventListener('keydown'"), 'AppShell should register global keyboard shortcuts');
 expect(appContent.includes('useWindowChrome()'), 'AppContent should wire window chrome through the composable');
-expect(windowChrome.includes('await WindowIsMaximised()'), 'maximize should immediately refresh Wails window state');
-expect(windowChrome.includes('.catch('), 'Wails maximize polling should handle rejected state checks');
+// R9：断言「行为存在」而不是「代码在某个固定文件」。
+//
+// 这两条原本按 AppContent 的位置做字符串匹配，dc6edf3 把窗口状态逻辑抽到
+// composables/useWindowChrome.js 后就永久误报（R8-04 已踩过一次）。但直接改成
+// 「在 src/** 里搜 `.catch(`」会**大幅削弱**断言（该串到处都是）。
+//
+// 正确做法：先按**行为**定位属主文件（唯一含 `await WindowIsMaximised()` 的那个），
+// 再在该文件内断言。这样代码在文件之间搬家不再误报，而「逻辑被删掉」仍会被抓住。
+const windowStateOwner = sourceFiles.find(file => file.includes('await WindowIsMaximised()'));
+expect(!!windowStateOwner, 'some source file should immediately refresh the Wails window state on maximize (await WindowIsMaximised())');
+if (windowStateOwner) {
+  expect(/WindowIsMaximised\(\)[\s\S]{0,600}?\.catch\(/.test(windowStateOwner), 'the file that polls Wails window state should handle rejected state checks');
+}
 expect(!setupWizard.includes('#7D56F4'), 'SetupWizard should not use the old purple accent');
 expect(!setupWizard.includes('#252540'), 'SetupWizard should not use the old purple card background');
 expect(!setupWizard.includes('#1a1a2e'), 'SetupWizard should not use the old purple page background');
