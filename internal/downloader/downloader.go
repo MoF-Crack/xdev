@@ -229,7 +229,7 @@ func Download(ctx context.Context, opts Options) error {
 	for _, fb := range opts.FallbackURLs {
 		fbParsed, err := url.Parse(fb)
 		if err != nil || fbParsed.Scheme != "https" {
-			log.Printf("[download] WARNING: skipping non-HTTPS fallback URL: %s", fb)
+			log.Printf("[download] WARNING: skipping non-HTTPS fallback URL: %s", sanitizedURL(fb))
 			continue
 		}
 		urls = append(urls, fb)
@@ -655,19 +655,41 @@ func (v partValidator) usable() bool { return v.ETag != "" || v.LastModified != 
 // matchesResponse 比较响应携带的校验器与本地记录。任一维度不同即不匹配。
 //
 // 只比较**双方都存在**的维度（服务端不必同时回 ETag 与 Last-Modified）：
-//   - ETag 双方都有且不同 → 不匹配（强信号）；
+//   - ETag 双方都有且不同 → 不匹配；
 //   - Last-Modified 双方都有且不同 → 不匹配；
 //   - 只有一方存在 → 该维度不参与判定（不可证伪，不做猜测）。
+//
+// 第九轮审计 P2-3（P2）：ETag 比较必须用 **RFC 9110 弱比较**（忽略 `W/` 前缀），
+// 而不是逐字节强比较。服务端在同一份内容上把 ETag 从强形式切成弱形式（或反向）
+// 是合法且常见的（网关/CDN 行为），强比较会误判「内容已变」→ 误删可续传的前缀
+// （实测：`.meta` 记 `"v1"`、服务端回 `W/"v1"` → 误报 content changed）。
+// 这里判断的是「**内容身份**是否相同」，与 If-Range 要求的强校验器是两件事：
+// If-Range 由 ifRange() 单独处理（那里正确地排除了弱 ETag）。
 func (v partValidator) matchesResponse(resp *http.Response) bool {
 	gotETag := strings.TrimSpace(resp.Header.Get("ETag"))
 	gotLM := strings.TrimSpace(resp.Header.Get("Last-Modified"))
-	if v.ETag != "" && gotETag != "" && v.ETag != gotETag {
+	if v.ETag != "" && gotETag != "" && !etagWeakEqual(v.ETag, gotETag) {
 		return false
 	}
 	if v.LastModified != "" && gotLM != "" && v.LastModified != gotLM {
 		return false
 	}
 	return true
+}
+
+// etagWeakEqual 按 RFC 9110 §8.8.3.2 的**弱比较**判定两个 ETag 是否同一身份：
+// 去掉可选的 `W/` 前缀后比较不透明标签。
+func etagWeakEqual(a, b string) bool {
+	return stripETagWeakPrefix(a) == stripETagWeakPrefix(b)
+}
+
+// stripETagWeakPrefix 去掉 ETag 的弱标记前缀 `W/`。
+func stripETagWeakPrefix(etag string) string {
+	etag = strings.TrimSpace(etag)
+	if strings.HasPrefix(etag, "W/") {
+		return etag[2:]
+	}
+	return etag
 }
 
 // fromResponse 从响应头构造校验器。
@@ -740,7 +762,7 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 			return nil
 		}
 		lastErr = err
-		log.Printf("[download] Attempt %d failed: %v", attempt, err)
+		log.Printf("[download] Attempt %d failed: %s", attempt, sanitizedReason(err))
 		// Don't retry on 404 — move to fallback immediately
 		if isNotFoundError(err) {
 			return err
@@ -860,7 +882,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	log.Printf("[download] Sending HTTP GET request to %s", sanitizedURL(opts.URL))
 	resp, err := opts.Client.Do(req)
 	if err != nil {
-		log.Printf("[download] ERROR: HTTP request failed: %v", err)
+		log.Printf("[download] ERROR: HTTP request failed: %s", sanitizedReason(err))
 		return err
 	}
 	defer resp.Body.Close()
@@ -877,7 +899,33 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	// 所以先确认本地确有内容、且（若服务端给了 Content-Range）声明的是
 	// `bytes */total` 且 total 与本地长度一致。
 	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		// 第九轮审计 P2-1（P2，P2-6 修复的补齐）：**416 提升路径同样需要内容身份证据**。
+		//
+		// P2-6 的本地校验原先只写在 `fromBytes > 0 && 206` 分支，416 提升分支只靠
+		// `completePartResidue` 的「长度 == total」就放行 —— 而「长度相等」不是
+		// 「内容相同」的证据。同一 URL 换了内容且**新旧同长度**时，本地那份满长的
+		// **旧内容**会被当成新归档 rename 并在 TOFU 通路上写 pin（实测：`ETag "v1"`
+		// 的 4096 字节旧内容 + 服务端 `ETag "v2"` 的 `bytes */4096` → `err=nil`，
+		// 落盘旧内容、pin 写入，之后正常下载新内容反被旧 pin 拒绝）。
+		//
+		// 客户端这时**手里已经有反证**（响应的 ETag/Last-Modified 与本地记录不同），
+		// 因此属于修复缺口而非不可判定。规则：
+		//   - 本地有校验器、响应也有校验器且**不一致** → 删 `.part`+`.meta`，放弃提升；
+		//   - 本地有校验器、响应无校验器 → 无法证伪，允许提升（与 206 分支同口径）；
+		//   - 本地无校验器（升级前的残留、或 `.meta` 被外部删除）→ 保持 P1-2 的
+		//     保守原则，仍按 `completePartResidue` 判定（不因此拒绝所有提升，
+		//     否则会让 P1-2 修好的恢复路径失效）。
 		if fromBytes > 0 && completePartResidue(resp, fromBytes) {
+			if resumeValidator.usable() && !resumeValidator.matchesResponse(resp) {
+				got := validatorFromResponse(resp)
+				log.Printf("[download] ERROR: 416 promotion refused — content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q); discarding the partial file",
+					resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
+				f.Close()
+				_ = os.Remove(partPath)
+				_ = os.Remove(partMeta)
+				return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — refusing to promote the stale local file as complete; discarding it and retrying from scratch",
+					sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
+			}
 			log.Printf("[download] HTTP 416 with a complete local .part (%d bytes) — verifying and promoting it instead of failing", fromBytes)
 			notifyStatus(opts, "Server reported the partial file is already complete — verifying it")
 			resp.Body.Close()
@@ -890,6 +938,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] ERROR: HTTP 416 for %s (local .part=%d bytes) — discarding the partial file", sanitizedURL(opts.URL), fromBytes)
 		f.Close()
 		_ = os.Remove(partPath)
+		_ = os.Remove(partMeta)
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 	}
 

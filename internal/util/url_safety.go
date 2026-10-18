@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -96,21 +97,58 @@ func isPrivateOrReservedIP(ip net.IP) bool {
 
 // SanitizeURL strips userinfo, query and fragment from a URL string for
 // safe inclusion in logs, audit entries, and error messages (F-15).
-// Returns the input unchanged when it cannot be parsed or has no scheme
-// (avoids re-encoding arbitrary non-URL text). Functional URLs used for
-// actual requests must NOT go through this function.
+// Returns the input unchanged when it has no scheme (avoids re-encoding
+// arbitrary non-URL text). Functional URLs used for actual requests must NOT
+// go through this function.
+//
+// 第九轮审计 P1-1（P1）：**解析失败时不能再原样返回**。
+//
+// 旧实现在 `url.Parse` 失败时 `return raw`。而「解析失败」恰恰是最需要脱敏的
+// 场景，也是**同一条错误链里必然出现**的场景：
+//   - `IsSafeExternalURL` 的 "invalid URL" 错误本身就是 `url.Parse` 的
+//     `*url.Error`，其文本内嵌**整段原始 URL**（含 userinfo 与 query）；
+//   - 调用方把该 URL 用 `%q` 插进错误后，`url.Parse` 再失败 → 脱敏整体失效。
+//
+// 实测（Round 9）：`https://user:hunter2@example.com/x%zz?token=TOPSECRET123`
+// 的错误链里 userinfo 与 `?token=` 原样出现；坏端口（`:bad`）与控制字符同样泄漏。
+// 对照：可解析但被策略拒绝的 URL 已被正确脱敏（只剩 scheme+host+path）。
+//
+// 修复：解析失败时退化为**正则脱敏** —— 先抹掉 `//user:pass@`，再截断
+// `?...` / `#...`。这是纯文本兜底，不追求还原 URL 结构，只保证「不泄漏凭据」。
 func SanitizeURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return sanitizeURLTextually(raw)
 	}
 	if parsed.Scheme == "" {
-		return raw
+		// 无 scheme：可能是任意非 URL 文本（错误消息片段等）。仍做一次文本兜底，
+		// 因为「无 scheme 但含 //user:pass@host」或「含 ?token=」的文本同样会泄漏。
+		return sanitizeURLTextually(raw)
 	}
 	parsed.User = nil
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String()
+}
+
+// urlTextUserinfoRe 匹配 `//<userinfo>@`（userinfo 不含 `/`、`@`、空白）。
+// 与 downloader.redactProxyCredentials 的判据一致，但这里作用于**任意文本**。
+var urlTextUserinfoRe = regexp.MustCompile(`//[^/@\s]*@`)
+
+// sanitizeURLTextually 在无法结构化解析时按文本脱敏：
+//  1. 抹掉 userinfo：`//user:pass@host` → `//<redacted>@host`
+//  2. 截断查询串/片段：`?token=…` / `#…` 一律丢弃
+//
+// 顺序很重要：先抹 userinfo 再截 query，避免 userinfo 里含 `?` 时残留。
+func sanitizeURLTextually(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	out := urlTextUserinfoRe.ReplaceAllString(raw, "//<redacted>@")
+	if idx := strings.IndexAny(out, "?#"); idx >= 0 {
+		out = out[:idx]
+	}
+	return out
 }
 
 // ValidateProxyURL validates a user-supplied HTTP/HTTPS/SOCKS proxy URL.

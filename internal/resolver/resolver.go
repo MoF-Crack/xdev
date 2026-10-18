@@ -293,7 +293,19 @@ func isConstraint(s string) bool {
 // We store major/minor/patch and optional pre-release tag.
 type semver struct {
 	major, minor, patch int
-	pre                 string // e.g. "beta.1", "rc1"
+	// extra 是第 4 段及以后的数值段（第九轮审计 P1-3）。
+	//
+	// 真实语料里存在 4 段构建号：clion/goland/webstorm 的 latest 是
+	// "2026.2.0.1"，jetbrains-idea-community "2025.2.6.3"、
+	// pycharm-community "2025.2.6.2"。旧实现用 SplitN(s, ".", 3)，于是第 3 段变成
+	// "0.1"、Atoi 失败 → `unrecognised version spec`：显式安装报错，而范围安装会
+	// 因 filterVersions 静默丢弃该条目而**永远选不到**（与 R8-2 同形态的
+	// 「以为在更新，其实没推上去」）。
+	//
+	// 按「缺失段视为 0」比较，使 "2026.2" 与 "2026.2.0.0" 相等（与 util.CompareSemver
+	// 对 3 段的既有语义一致），而 "2026.2.0.1" > "2026.2"。
+	extra []int
+	pre   string // e.g. "beta.1", "rc1"
 }
 
 func parseSemver(s string) (*semver, error) {
@@ -319,8 +331,10 @@ func parseSemver(s string) (*semver, error) {
 		pre = s[idx+1:]
 		s = s[:idx]
 	}
-	parts := strings.SplitN(s, ".", 3)
-	if len(parts) < 1 || len(parts) > 3 {
+	// 第九轮审计 P1-3：接受**任意段数**（≥1）。旧的 `SplitN(s, ".", 3)` 让第 3 段
+	// 变成 "0.1"，4 段版本（真实语料 2026.2.0.1 等）直接解析失败。
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 {
 		return nil, fmt.Errorf("not a semver: %q", s)
 	}
 	v := &semver{pre: pre}
@@ -336,6 +350,8 @@ func parseSemver(s string) (*semver, error) {
 			v.minor = n
 		case 2:
 			v.patch = n
+		default:
+			v.extra = append(v.extra, n)
 		}
 	}
 	return v, nil
@@ -360,6 +376,12 @@ func (a *semver) compare(b *semver) int {
 		}
 		return 1
 	}
+	// 第九轮审计 P1-3：第 4 段及以后按数值比较，**缺失段视为 0**
+	// （于是 "2026.2" == "2026.2.0.0"，而 "2026.2.0.1" > "2026.2"）。
+	// extra 属于「数值核心」，因此排在 pre-release 之前比较。
+	if c := compareExtraSegments(a.extra, b.extra); c != 0 {
+		return c
+	}
 	// Pre-release comparison: a version without pre-release is
 	// higher than one with a pre-release tag.
 	// e.g. 1.0.0 > 1.0.0-beta.1
@@ -370,6 +392,31 @@ func (a *semver) compare(b *semver) int {
 		return -1
 	}
 	return comparePreRelease(a.pre, b.pre)
+}
+
+// compareExtraSegments 比较第 4 段及以后的数值段，缺失段视为 0。
+// 长度不等时按最短长度补齐后比较（"1" vs "1.0" 相等，1 vs 1.0.1 → 后者更大）。
+func compareExtraSegments(a, b []int) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			if av < bv {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 // comparePreRelease compares two pre-release strings per SemVer 2.0.0.

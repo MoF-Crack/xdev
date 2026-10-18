@@ -147,6 +147,25 @@ func pluginLabel(vfox bool) string {
 // promotePluginMethods copies PLUGIN.available / PLUGIN.archive /
 // PLUGIN.env_vars (and vfox aliases) to globals when the global is
 // missing. Some templates nest the required functions inside PLUGIN.
+//
+// 第九轮审计 P0-1（P0）：写入必须用**原始写**（RawSetString），不能用 `L.SetGlobal`。
+//
+// A-01（Round 8）只把**读**侧（`GetGlobal`/`GetField`）包进了 `extractField →
+// L.PCall`，但这里把字段提升为全局用的是 `L.SetGlobal` —— 而 gopher-lua 的
+// `SetGlobal → setFieldString` 在**键不存在**时会走 `__newindex` 元方法。插件只要
+//
+//	setmetatable(_G, { __newindex = function(_, k) error("boom:"..k) end })
+//
+// 就能让 `ls.Panic`（Go panic，穿透一切 defer 之外的普通调用）打崩宿主：实测
+// `LoadPlugin` 直接 panic、进程 exit 2。**放大点与 A-01 完全一样，且不需要恶意**
+// —— 「严格全局变量」这种良性写法（插件作者自己用 `__newindex` 抓拼写错误）同样
+// 打崩 CLI/TUI/GUI 的**每一次启动**（`registerUserPlugins` 在 `RegisterAll` 里
+// 加载每个用户插件）。
+//
+// 即使 `__newindex` 只是吞掉写入而不抛错，用 `SetGlobal` 也不安全：实测全局没写
+// 进去 → 后续报 "available() function not found"（误报函数缺失）。
+//
+// `L.RawSetString` 绕过元方法直接写 globals 表，既避免 panic 又保证写入生效。
 func promotePluginMethods(L *lua.LState, pluginTable lua.LValue) {
 	if pluginTable == nil || pluginTable.Type() != lua.LTTable {
 		return
@@ -156,7 +175,12 @@ func promotePluginMethods(L *lua.LState, pluginTable lua.LValue) {
 			continue
 		}
 		if field := getFieldProtected(L, pluginTable, name); field.Type() == lua.LTFunction {
-			L.SetGlobal(name, field)
+			// 原始写：不触发 _G 的 __newindex（见上面的 P0-1 说明）。
+			globals, ok := L.Get(lua.GlobalsIndex).(*lua.LTable)
+			if !ok {
+				return // 理论上不可能；防御性返回而不是 panic
+			}
+			globals.RawSetString(name, field)
 		}
 	}
 }

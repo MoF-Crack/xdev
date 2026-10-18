@@ -410,24 +410,75 @@ func splitTopLevelKey(line string) (key, rest string, ok bool) {
 func yamlScalarFor(newValue, oldRaw string) string {
 	switch {
 	case len(oldRaw) >= 2 && oldRaw[0] == '\'' && oldRaw[len(oldRaw)-1] == '\'':
-		return "'" + strings.ReplaceAll(newValue, "'", "''") + "'"
+		// 第九轮审计 P2-2：单引号标量**不能**承载控制字符（YAML 只允许可打印字符）。
+		// 新值含控制字符时不能继续用单引号形态，落到下面的双引号分支。
+		if !hasControlChars(newValue) {
+			return "'" + strings.ReplaceAll(newValue, "'", "''") + "'"
+		}
+		return `"` + escapeYAMLDoubleQuoted(newValue) + `"`
 	case len(oldRaw) >= 2 && oldRaw[0] == '"' && oldRaw[len(oldRaw)-1] == '"':
-		esc := strings.ReplaceAll(newValue, `\`, `\\`)
-		esc = strings.ReplaceAll(esc, `"`, `\"`)
-		return `"` + esc + `"`
+		return `"` + escapeYAMLDoubleQuoted(newValue) + `"`
 	}
 	if !needsYAMLQuoting(newValue) {
 		return newValue
 	}
-	esc := strings.ReplaceAll(newValue, `\`, `\\`)
-	esc = strings.ReplaceAll(esc, `"`, `\"`)
-	return `"` + esc + `"`
+	return `"` + escapeYAMLDoubleQuoted(newValue) + `"`
+}
+
+// escapeYAMLDoubleQuoted 转义 YAML 双引号标量的内容。
+//
+// 第九轮审计 P2-2（A-17 残留）：旧实现只转义 `\` 与 `"`。而 `needsYAMLQuoting`
+// 对 `\n`/`\r`/`\t` 返回 true（加引号），却**没有转义它们** → 拼出的是
+// `"a<真实换行>b"`，而 YAML 双引号标量跨行会被**折叠成空格**：文件合法、值变了。
+// 实测 `latest = "1.0.0\n2.0.0"` 往返后变成 `"1.0.0 2.0.0"`；
+// `display_name = "a\nb"` 同样从两行变一行。
+//
+// 其它 `< 0x20` 的控制字符更糟：旧实现裸写 NUL，产出
+// `yaml: control characters are not allowed`（不可解析）。
+func escapeYAMLDoubleQuoted(v string) string {
+	var b strings.Builder
+	b.Grow(len(v) + 8)
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; c {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if c < 0x20 || c == 0x7f {
+				// 其余控制字符用 YAML 的 \xNN 转义（DEL 一并处理）。
+				b.WriteString(`\x`)
+				const hex = "0123456789ABCDEF"
+				b.WriteByte(hex[c>>4])
+				b.WriteByte(hex[c&0x0f])
+				continue
+			}
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// hasControlChars 报告字符串里是否含有必须转义的控制字符。
+func hasControlChars(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if c := v[i]; c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // needsYAMLQuoting 报告裸写该标量是否会产出非法/歧义 YAML。
 //
 // 覆盖：空串、首尾空白、YAML 指示符（`- ? : , [ ] { } # & * ! | > ' " % @ \“）、
-// 含 `: `（映射歧义）或 ` #`（注释歧义）、以及看起来像数字/布尔/null 的串
+// 含 `: `（映射歧义）或 ` #`（注释歧义）、控制字符、以及看起来像数字/布尔/null 的串
 // （裸写会被解析成非字符串类型）。
 func needsYAMLQuoting(v string) bool {
 	if v == "" {
@@ -437,6 +488,10 @@ func needsYAMLQuoting(v string) bool {
 		return true
 	}
 	if strings.ContainsAny(v, "\n\r\t") {
+		return true
+	}
+	// 第九轮审计 P2-2：任何控制字符都必须加引号（否则裸写会产出非法 YAML）。
+	if hasControlChars(v) {
 		return true
 	}
 	switch v[0] {

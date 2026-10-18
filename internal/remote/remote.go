@@ -530,7 +530,7 @@ func doWithProxyFallback(ctx context.Context, req *http.Request) (*http.Response
 	hasProxy := hasProxyConfigured()
 
 	if hasProxy {
-		log.Printf("[remote] ⚠️ Request failed, retrying with direct connection: %v", err)
+		log.Printf("[remote] ⚠️ Request failed, retrying with direct connection: %s", sanitizedReason(err.Error()))
 		directResp, directErr := retryDirect(ctx, req)
 		if directErr == nil {
 			return directResp, nil
