@@ -1117,6 +1117,25 @@ func (i *Installer) buildMirrorCandidates(tool string, a *manifest.Archive) []st
 //
 // It returns ("", error) when either component is unsafe. Callers must treat
 // that as a hard failure and must NOT fall back to an unsanitised name.
+//
+// 第九轮审计 P3-10：**空的 format 必须被拒绝**。
+//
+// 旧实现容忍空 format（注释称「产出 "tool-ver."，后续由 extractor 的 format 分支
+// 拒绝」），但那个名字带**尾随点**，而 Windows 会静默剥离尾随点/空格：
+//
+//	cacheArchiveName("go", "1.0",     "zip") -> "go-1.0.zip"
+//	cacheArchiveName("go", "1.0.zip", "")    -> "go-1.0.zip." == "go-1.0.zip"
+//
+// 两者**折叠成同一个缓存文件**：后写者覆盖先写者，其 sidecar pin 在下次安装时
+// 与内容不匹配（缓存串味）。已在本机实测碰撞（写 go-1.0.zip 后再写
+// go-1.0.zip.，目录里文件数 = 1）。
+//
+// util.SafeName 的文档正是针对这个危害；归档名必须服从同一规则，而不是指望
+// extractor 事后拒绝——那时字节已经落盘。
+//
+// 影响面已核对：`install_kind: npm` 不调本函数；`executable`/`script` 本就要求
+// format 非空（`manifest.Archive.Installable()`）；`extract` 与
+// `BuildDownloadOptions` 自动继承 fail-closed；既有测试无用例声明 `Format: ""`。
 func cacheArchiveName(tool, ver, format string) (string, error) {
 	if _, err := util.SafeName(tool); err != nil {
 		return "", fmt.Errorf("unsafe tool name %q for cache path: %w", tool, err)
@@ -1124,14 +1143,11 @@ func cacheArchiveName(tool, ver, format string) (string, error) {
 	if _, err := util.SafeName(ver); err != nil {
 		return "", fmt.Errorf("unsafe version %q for cache path: %w", ver, err)
 	}
-	// The format is manifest-controlled too. It is only checked for path
-	// traversal (an empty format is tolerated: it yields "tool-ver." inside
-	// CacheDir and is rejected later by the extractor's format switch, so
-	// rejecting it here would be a behaviour change beyond F-25's scope).
-	if format != "" {
-		if _, err := util.SafeName(format); err != nil {
-			return "", fmt.Errorf("unsafe archive format %q for cache path: %w", format, err)
-		}
+	if strings.TrimSpace(format) == "" {
+		return "", fmt.Errorf("empty archive format for cache path %s-%s — refusing to build a trailing-dot name that collides on Windows (P3-10)", tool, ver)
+	}
+	if _, err := util.SafeName(format); err != nil {
+		return "", fmt.Errorf("unsafe archive format %q for cache path: %w", format, err)
 	}
 	return fmt.Sprintf("%s-%s.%s", tool, ver, format), nil
 }
