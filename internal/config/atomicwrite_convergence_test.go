@@ -31,10 +31,14 @@ func repoRoot(t *testing.T) string {
 //
 // 票 31 的白名单约束：本票只收敛 internal/config（writeHomeCache）与
 // internal/update/policy.go 两处；其余同型克隆不在本 agent 的文件白名单内，
-// 只在票卡报告里列出（P1-24 本体 internal/util/fs.go 亦属白名单外）。
-// 该 map 是「允许存在」清单——新增任何未登记点都会让本测试变红。
+// 只在票卡报告里列出。该 map 是「允许存在」清单——新增任何未登记点都会让本测试变红。
+//
+// 第九轮审计 A-10 更新：**P1-24 本体 `internal/util/fs.go`（AtomicWriteFile）
+// 已完成 CreateTemp 迁移**，因此从本清单移除。它是所有调用点的共享底层
+// （config/manifest/discovery/isolator 都经它落盘），移除后由
+// internal/util/fs_test.go 的并发守卫直接钉住（16 写者 × 40 轮：固定 .tmp 下实测
+// 610 次失败/污染，迁移后为 0）。
 var fixedTmpExceptions = map[string]string{
-	"internal/util/fs.go":                   "P1-24 本体 AtomicWriteFile（internal/util 域，白名单外，待迁移 CreateTemp）",
 	"internal/installer/mirror_selector.go": "MirrorHealthCache.Save 克隆（internal/installer 域，白名单外，待迁移 CreateTemp）",
 	"toolsHashFullCheck/progress.go":        "Progress.Save 克隆（根级工具，白名单外，待迁移 CreateTemp）",
 	"internal/downloader/downloader.go":     "下载 sidecar 的 .tmp 中间文件（internal/downloader 域，票 21/23 负责）",

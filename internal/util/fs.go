@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // bufPool provides reusable 1MB buffers for concurrent file copies.
@@ -299,16 +300,92 @@ func CreateJunction(link, target string) error {
 // AtomicWriteFile atomically writes data to a file by first writing to a
 // temporary file in the same directory, then renaming. This ensures that a
 // crash during write leaves the original file intact (no partial writes).
+//
+// 第九轮审计 A-10（P1-24 本体迁移）：临时文件必须**唯名**。
+//
+// 旧实现用固定 `<path>.tmp`。本函数是**所有调用点的共享底层** ——
+// internal/config（home 缓存）、internal/manifest（文本级 manifest 改写）、
+// internal/discovery（sniff 缓存）、internal/isolator（隔离状态）等全部经它落盘。
+// 两个并发写者共享同一个中间文件时会：
+//   - **跨写者内容污染**：写者 A 写 tmp("AAAAAAAA")、写者 B 写 tmp("BBBBBBBB")、
+//     A 执行 rename → 目标文件内容是 "BBBBBBBB"（A 发布了 B 的字节）；
+//   - **大量并发失败**：16 写者 × 40 轮实测 610 次
+//     `rename ... The process cannot access the file because it is being used by
+//     another process` / `The system cannot find the file specified`
+//     （一个写者已把 tmp rename 走，另一个的 rename 便找不到源）。
+//
+// 仓库守卫 internal/config/atomicwrite_convergence_test.go 早已把本文件登记进
+// fixedTmpExceptions（注释：「P1-24 本体 AtomicWriteFile，待迁移 CreateTemp」）——
+// 本次完成该迁移。改用 os.CreateTemp 后每个写者持有自己的临时文件，rename 成为
+// 「自己的临时文件 → 目标」的原子发布，不再互相截断或污染。
+//
+// 命名沿用仓库既有约定 `<base>.tmp-*`（与 internal/config 的 writeHomeCache、
+// internal/update/policy.go 的 writeJSONAtomic 一致），使守卫的固定名正则
+// （`+ ".tmp"`）不会误报。
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	f, err := os.CreateTemp(dir, base+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file in %s: %w", dir, err)
+	}
+	tmpPath := f.Name()
+
+	// 任何失败路径都必须清掉临时文件。
+	cleanup := func() {
+		f.Close()
+		os.Remove(tmpPath)
+	}
+
+	if _, err := f.Write(data); err != nil {
+		cleanup()
 		return fmt.Errorf("write tmp %s: %w", tmpPath, err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	// 先落盘再发布：崩溃时不会发布空/半截文件。
+	if err := f.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync tmp %s: %w", tmpPath, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close tmp %s: %w", tmpPath, err)
+	}
+	// CreateTemp 固定 0600；显式套用调用方要求的权限位。
+	//（Windows 上仅只读位有效，但不要因此丢掉 perm 语义。）
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("chmod tmp %s: %w", tmpPath, err)
+	}
+	// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一
+	// 目标会偶发 ERROR_ACCESS_DENIED（已知行为，不是调用方的错）——直接冒泡会把
+	// 一次正常的并发写当成失败。与仓库既有收敛实现（internal/config 的
+	// writeFileCreateTemp → renameWithRetry，票 31）保持一致，做一次有界重试。
+	if err := renameWithRetry(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename %s -> %s: %w", tmpPath, path, err)
 	}
 	return nil
+}
+
+// renameWithRetry 以有界重试窗口执行 rename。
+//
+// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一目标
+// 时会偶发 ERROR_ACCESS_DENIED：直接冒泡会把这个正常的并发写当失败。重试窗口
+// ~55ms，超时后原样返回错误。
+//
+// 与 internal/config 的同名实现语义一致（那边是包内私有函数，本包不能引用，
+// 故在此保留一份等价实现；两边都由各自的并发守卫钉住）。
+func renameWithRetry(oldPath, newPath string) error {
+	const attempts = 10
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(oldPath, newPath); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return err
 }
 
 // ActiveVersion reads the current/<tool> symlink to determine the active
