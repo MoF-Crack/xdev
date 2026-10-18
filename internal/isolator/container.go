@@ -22,6 +22,12 @@ type containerIsolator struct {
 	projectDir  string
 	xmdeDir     string
 
+	// stateErr records that the persisted session could not be read
+	// (第九轮 A-02). A corrupt state file yields a zero-valued
+	// persistedState, and a zero value is NOT "no container": it is
+	// "unknown". Teardown must surface this instead of returning nil.
+	stateErr error
+
 	// writtenFiles records path → SHA-256 of the file generateDevcontainer
 	// wrote (C-07). Teardown deliberately deletes no files (see below), but
 	// the state stays truthful about what Setup created.
@@ -42,8 +48,17 @@ func newContainerIsolator() (*containerIsolator, error) {
 }
 
 // loadSaved restores a previously persisted container session.
+//
+// 第九轮 A-02：状态文件损坏时 loadState 返回错误，这里**必须**记下来而不是
+// 丢弃——零值的 persistedState 会被 Teardown 解读成「没有容器」，正是容器
+// 静默泄漏的根因。注意这里不清除、不改名损坏文件：quarantine 交给 Teardown
+// （唯一真正消费该状态的路径）做，NewIsolator/Exec 只读不写。
 func (c *containerIsolator) loadSaved() {
-	s := loadState(c.xmdeDir, string(ModeContainer))
+	s, err := loadState(c.xmdeDir, string(ModeContainer))
+	if err != nil {
+		c.stateErr = err
+		return
+	}
 	if s.ContainerID != "" {
 		c.containerID = s.ContainerID
 		c.image = s.Image
@@ -117,6 +132,14 @@ func (c *containerIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) er
 		return fmt.Errorf("docker run: %w", err)
 	}
 	c.containerID = strings.TrimSpace(string(out))
+	// 第九轮 A-02：本次 Setup 的新句柄即将覆盖旧的持久化会话。若旧会话是损坏的，
+	// 它的容器句柄将随覆盖**永久消失**，所以先把损坏文件改名留证（与 Teardown
+	// 同一策略），再写新状态。否则用户连 `docker ps -a` 的线索都没有了。
+	if c.stateErr != nil {
+		log.Printf("isolate setup (container): previous state was corrupt (%v); %s",
+			c.stateErr, quarantineState(c.xmdeDir, string(ModeContainer)))
+		c.stateErr = nil
+	}
 	saveState(c.xmdeDir, string(ModeContainer), persistedState{
 		ContainerID:  c.containerID,
 		Image:        c.image,
@@ -131,7 +154,19 @@ func (c *containerIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) er
 // (users commit it to version control, and the pre-existing content was never
 // ours to remove). Setup's existence gate — not a deletion — is what protects
 // a user-authored devcontainer.json.
+//
+// 第九轮 A-02：状态损坏时**不得**静默返回 nil。旧实现开头就是
+// `if c.containerID == "" { return nil }`，而损坏的 state 恰好让 containerID
+// 为空 —— 于是 CLI 打印 `✔ isolated environment destroyed`，state 里记录的
+// 容器却仍在运行（审计现场句柄 `deadbeefcafe`），容器/端口/磁盘永久泄漏。
+// 现在先检查 stateErr：损坏文件保留为 <mode>.json.corrupt-<时间戳>（证据不丢，
+// 同时清空 statePath 让后续 setup 可推进），并返回带可操作指引的错误。
 func (c *containerIsolator) Teardown(ctx context.Context) error {
+	if c.stateErr != nil {
+		hint := quarantineState(c.xmdeDir, string(ModeContainer))
+		return fmt.Errorf("cannot tear down container isolation: %w; %s",
+			c.stateErr, corruptStateHint(ModeContainer, hint))
+	}
 	if c.containerID == "" {
 		return nil
 	}
@@ -147,6 +182,15 @@ func (c *containerIsolator) Teardown(ctx context.Context) error {
 }
 
 func (c *containerIsolator) Exec(ctx context.Context, cmd []string) (*ExecResult, error) {
+	// 第九轮 A-02：状态损坏时不能笼统说「未 setup」——用户明明 setup 过，真实
+	// 原因是句柄读不出来，误导性的提示会把人引向重跑 setup（然后覆盖掉线索）。
+	// 这里**只读**：不改名损坏文件（quarantine 是 Teardown 的动作）。若 Exec
+	// 把坏文件挪走，紧随其后的 teardown 就会「文件不存在 → 静默成功」，容器
+	// 又悄悄泄漏一次。
+	if c.stateErr != nil {
+		return nil, fmt.Errorf("cannot exec in container isolation: %w; %s",
+			c.stateErr, corruptStateHint(ModeContainer, ""))
+	}
 	if c.containerID == "" {
 		return nil, fmt.Errorf("container not set up; run 'xdev isolate setup' first")
 	}

@@ -22,6 +22,12 @@ type nixIsolator struct {
 	// writtenFiles records path → SHA-256 of everything generateFlake wrote
 	// (C-07), so the persisted state can prove ownership at Teardown time.
 	writtenFiles map[string]string
+
+	// stateErr records that the persisted session could not be read
+	// (第九轮 A-02, container.go 同源)。零值状态不等于「没有会话」：
+	// writtenFiles 丢了就无法证明 flake.nix 的归属，Teardown 必须把这件事
+	// 说出来，而不是让用户以为环境已清理干净。
+	stateErr error
 }
 
 func newNixIsolator() (*nixIsolator, error) {
@@ -31,8 +37,14 @@ func newNixIsolator() (*nixIsolator, error) {
 	return &nixIsolator{}, nil
 }
 
+// loadSaved 恢复上次持久化的 nix 会话（第九轮 A-02 与 container.go 同源）：
+// 状态损坏时记下错误交给 Teardown 报出来，而不是退化成「没有会话」。
 func (n *nixIsolator) loadSaved() {
-	s := loadState(n.xmdeDir, string(ModeNix))
+	s, err := loadState(n.xmdeDir, string(ModeNix))
+	if err != nil {
+		n.stateErr = err
+		return
+	}
 	if s.FlakeDir != "" {
 		n.flakeDir = s.FlakeDir
 		n.projectDir = s.ProjectDir
@@ -59,6 +71,13 @@ func (n *nixIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) error {
 		return fmt.Errorf("generate flake.nix: %w", err)
 	}
 
+	// 第九轮 A-02（与 container.go 的 Setup 同源）：新会话即将覆盖旧的持久化
+	// 状态，若旧状态损坏，其 writtenFiles 归属记录会永久消失，先把损坏文件改名留证。
+	if n.stateErr != nil {
+		log.Printf("isolate setup (nix): previous state was corrupt (%v); %s",
+			n.stateErr, quarantineState(n.xmdeDir, string(ModeNix)))
+		n.stateErr = nil
+	}
 	saveState(n.xmdeDir, string(ModeNix), persistedState{
 		FlakeDir:     n.flakeDir,
 		ProjectDir:   n.projectDir,
@@ -79,7 +98,16 @@ func (n *nixIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) error {
 // itself), so it is removed unconditionally whenever a flake dir is known.
 // It is regenerable and carries no user content of its own.
 func (n *nixIsolator) Teardown(ctx context.Context) error {
-	state := loadState(n.xmdeDir, string(ModeNix))
+	state, err := loadState(n.xmdeDir, string(ModeNix))
+	if err != nil {
+		// 第九轮 A-02（与 container.go 同源）：损坏状态返回零值，而零值
+		// WrittenFiles 会走「legacy state，跳过删除」分支——用户被告知
+		// teardown 成功，xdev 生成的 flake.nix 却原样残留，重跑 setup 又被
+		// ensureOverwritable 拒绝。这里必须明确报错，而不是伪装成 legacy 降级。
+		hint := quarantineState(n.xmdeDir, string(ModeNix))
+		return fmt.Errorf("cannot tear down nix isolation: %w; %s",
+			err, corruptStateHint(ModeNix, hint))
+	}
 	flakeDir := state.FlakeDir
 	if flakeDir == "" {
 		flakeDir = n.flakeDir

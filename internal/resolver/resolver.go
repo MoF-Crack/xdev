@@ -298,14 +298,25 @@ type semver struct {
 
 func parseSemver(s string) (*semver, error) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	// 第九轮审计 A-16（P2）：**先剥 build metadata，再切 pre-release**。
+	//
+	// 缺陷原形是反过来的两步：先按 '-' 切 pre-release，再按 '+' 去 build
+	// metadata。对 "1.0.0-rc.1+build" 而言，第一步之后 '+' 已经落在
+	// pre-release 段里（pre="rc.1+build"），第二步的 '+' 查找只作用于主版本
+	// 段（此时已无 '+'）—— 于是 pre-release 残留 "+build"。实测
+	// compare("1.0.0-rc.1+build","1.0.0-rc.1") = 1，而 SemVer 2.0.0 §10 要求
+	// build metadata **不参与**优先级比较（应为 0）；同仓库的
+	// util.CompareSemver 给出的正是 0，两者结论相反。
+	//
+	// 顺序调换后："1.0.0-rc.1+build" → 剥 '+' 得 "1.0.0-rc.1" → 切 '-' 得
+	// pre="rc.1"。build metadata 里的 '-' 也不会再被误当成 pre-release 分隔符。
+	if idx := strings.Index(s, "+"); idx >= 0 {
+		s = s[:idx]
+	}
 	// Extract pre-release after '-'
 	var pre string
 	if idx := strings.Index(s, "-"); idx >= 0 {
 		pre = s[idx+1:]
-		s = s[:idx]
-	}
-	// Strip build metadata after '+'
-	if idx := strings.Index(s, "+"); idx >= 0 {
 		s = s[:idx]
 	}
 	parts := strings.SplitN(s, ".", 3)

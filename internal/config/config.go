@@ -368,13 +368,19 @@ func Load(xmdeDir string) (*Config, error) {
 		if expectedHMAC != cfg.Integrity {
 			safeDefaults := defaults(xmdeDir)
 			fmt.Fprintln(os.Stderr, "⚠ WARNING: config.yaml integrity check FAILED — the file may have been tampered with or edited outside xdev.")
-			fmt.Fprintln(os.Stderr, "  Security-sensitive fields (paths, mirrors, path mode) have been reset to safe defaults to protect against malicious redirection.")
+			fmt.Fprintln(os.Stderr, "  Security-sensitive fields (root dir, paths, mirrors, path mode) have been reset to safe defaults to protect against malicious redirection.")
 			fmt.Fprintln(os.Stderr, "  Run `xdev config set` to reconfigure and regenerate the integrity hash.")
-			log.Printf("[config] WARNING: integrity check failed — sensitive fields (paths, mirrors, path mode) reset to defaults")
+			log.Printf("[config] WARNING: integrity check failed — sensitive fields (root dir, paths, mirrors, path mode) reset to defaults")
+			// A-15：根目录同属敏感字段（它决定全部派生子目录的归属）。重置时把
+			// 根与**全部 6 个**派生子目录一起拉回 safeDefaults，避免留下
+			// 「新根 + 旧子目录」的混合状态（A-14 的同一类错配）。
+			cfg.Core.XMDevDir = safeDefaults.Core.XMDevDir
 			cfg.Core.InstallDir = safeDefaults.Core.InstallDir
 			cfg.Core.ShimDir = safeDefaults.Core.ShimDir
 			cfg.Core.ManifestDir = safeDefaults.Core.ManifestDir
 			cfg.Core.DownloadDir = safeDefaults.Core.DownloadDir
+			cfg.Core.CacheDir = safeDefaults.Core.CacheDir
+			cfg.Core.EnvDir = safeDefaults.Core.EnvDir
 			cfg.Mirror = safeDefaults.Mirror
 			cfg.Path.Mode = safeDefaults.Path.Mode
 			cfg.Integrity = ""
@@ -445,8 +451,20 @@ func Load(xmdeDir string) (*Config, error) {
 // of tampering with paths, mirror URLs, or other settings that could redirect
 // downloads or tool invocations.
 func (c *Config) computeIntegrityHMAC() string {
-	// Build a deterministic representation of security-sensitive fields
+	// Build a deterministic representation of security-sensitive fields.
+	//
+	// 第九轮审计 A-15（P2）：必须包含 XMDevDir。它是**重定向类**字段——决定全部
+	// 6 个派生子目录的归属。旧快照只覆盖 install/shim/manifest/download + mirror
+	// + path_mode，于是「只篡改 xmdevenv_dir」既不触发告警、也不被重置：H-12 的
+	// 「防重定向」对配置根本身失效。与 A-14（改根后派生子目录仍指向旧值）叠加时，
+	// 会放大成「根被换掉但工具/PATH 仍写旧目录」的静默错配。
+	//
+	// 代价（已由守卫钉住）：纳入该字段会**改变 HMAC 值**，升级前写下的配置文件
+	// 必然验签失败一次。Load 的既有行为是「告警 + 重置敏感字段 + 清空 Integrity」，
+	// **不拒绝启动**——这一契约被 TestIntegrityHMAC_LegacyConfigUpgradeIsNotFatal
+	// 显式钉死，因此升级不会锁死用户。
 	type integrityData struct {
+		XMDevDir    string            `json:"xmdevenv_dir"`
 		InstallDir  string            `json:"install_dir"`
 		ShimDir     string            `json:"shim_dir"`
 		ManifestDir string            `json:"manifest_dir"`
@@ -455,6 +473,7 @@ func (c *Config) computeIntegrityHMAC() string {
 		PathMode    string            `json:"path_mode"`
 	}
 	snapshot := integrityData{
+		XMDevDir:    c.Core.XMDevDir,
 		InstallDir:  c.Core.InstallDir,
 		ShimDir:     c.Core.ShimDir,
 		ManifestDir: c.Core.ManifestDir,
@@ -562,6 +581,34 @@ func defaults(xmdeDir string) *Config {
 	}
 	c.ResolvePaths(xmdeDir)
 	return c
+}
+
+// SetRootDir 把配置的根目录改为 newRoot，并把 6 个派生子目录**重新锚定**到
+// 新根之下。
+//
+// 第九轮审计 A-14（P2）：没有这个助手时，`xdev config set core.xmdevenv_dir X`
+// 只改 `XMDevDir` 然后 `Save()`。而 `defaults(xmdeDir)` 是按**初始** xmdeDir
+// 播种 install/shim/cache/env/manifest/downloads 的，`ResolvePaths` 又只填**空**
+// 字段（每个字段都有 `if ... == ""` 守卫）—— 于是「新根 + 旧子目录」的**混合
+// 状态**被持久化：工具仍装进旧 home、PATH 仍写旧 shims。
+//
+// 这是**重定根**而非普通配置修改，因此必须显式清空派生子目录后再解析。
+// 与既有先例一致（`internal/cli/init.go:105-112`、
+// `internal/gui/app_migration.go:269-276` 都显式清空同一组字段）。
+//
+// 注意：**不要**把这段语义塞进 `ResolvePaths` —— 它对非空字段的 no-op 契约是
+// 多个调用方依赖的（见 TestResolvePaths_KeepsNoOpContractForNonEmptyFields）。
+func (c *Config) SetRootDir(newRoot string) {
+	c.Core.XMDevDir = newRoot
+	// 清空派生子目录，让 ResolvePaths 按新根重算。显式覆盖过的字段同样清空：
+	// 否则「新根 + 旧覆盖」仍是混合状态。
+	c.Core.DownloadDir = ""
+	c.Core.InstallDir = ""
+	c.Core.ShimDir = ""
+	c.Core.CacheDir = ""
+	c.Core.EnvDir = ""
+	c.Core.ManifestDir = ""
+	c.ResolvePaths(newRoot)
 }
 
 // ResolvePaths fills in any empty path fields relative to the

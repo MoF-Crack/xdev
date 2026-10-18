@@ -54,6 +54,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -201,7 +202,58 @@ func UseInMemoryUserPathForTesting(initial string) (get func() string, restore f
 // (GUI + CLI, or two CLI invocations) could otherwise drop each other's
 // entries. The lock file lives under ~/.xdev/.locks — a fixed, user-owned
 // location that does not depend on config resolution.
+//
+// # Reentrancy (A-11, Round 9)
+//
+// The underlying util.AcquireFileLock is an OS byte-range lock
+// (Windows LockFileEx / Unix flock) and is **not** reentrant. Re-acquiring
+// the same lock file from the same process fails, so before this fix a
+// nested call stalled for the full 10s contention timeout and then took the
+// err != nil branch below — i.e. it logged "degraded" and ran its critical
+// section with **no cross-process serialization at all** (the exact PATH
+// lost-update this lock exists to prevent), plus a 10s UI freeze.
+//
+// The measured behaviour, and why the guard is shaped the way it is:
+//
+//   - same goroutine, nested → the inner acquire fails only after the full
+//     10s contention timeout (verified: elapsed=10.08s plus the
+//     "userpath lock degraded" WARN), so the inner critical section ran
+//     **unserialized** — the PATH lost-update this lock exists to prevent —
+//     and the caller (GUI) froze for 10s;
+//   - same process, a *different* goroutine → the inner acquire fails
+//     immediately instead (verified: two 300ms critical sections took 604ms
+//     total, i.e. the second caller waited out the first one's section rather
+//     than the 10s timeout) and then degrades. That shape is therefore
+//     unchanged here: it is genuinely cross-critical-section contention, and
+//     the existing 10s-then-degrade contract (relied on by the lock-location
+//     degradation guard) stays in force.
+//
+// Only the same-goroutine case is intercepted, so the cross-process lock is
+// still taken by exactly the goroutine that owns each critical section and
+// the existing concurrency guards (TestConcurrentPathRMW_NoLostWrite,
+// TestTransformUserPath_ConcurrentLockedMutators_NoLostWrite) keep exercising
+// the real lock. Holders are identified by goroutine id + depth; a bare
+// sync.Mutex is NOT usable because a repeated Lock() from the same goroutine
+// self-deadlocks — precisely the failure mode A-11 reports.
 func withUserPathLock(fn func() error) error {
+	// Depth is consulted first: when this goroutine already holds the lock,
+	// userPathLockDepth is non-zero, so the fast path needs no extra state.
+	if userPathLockDepth > 0 && userPathLockGID == curGoroutineID() {
+		// Nested call on the goroutine that holds the cross-process lock: the
+		// outer frame already serializes this critical section, so running fn
+		// here keeps the guarantee. Re-acquiring the lock file would stall 10s
+		// and then silently run fn with no serialization at all.
+		userPathLockMu.Lock()
+		userPathLockDepth++
+		userPathLockMu.Unlock()
+		defer func() {
+			userPathLockMu.Lock()
+			userPathLockDepth--
+			userPathLockMu.Unlock()
+		}()
+		return fn()
+	}
+
 	lockPath, pathErr := userPathLockPathFn()
 	if pathErr != nil {
 		// Cannot resolve the lock location — degrade to the unprotected
@@ -217,7 +269,69 @@ func withUserPathLock(fn func() error) error {
 		return fn()
 	}
 	defer fl.Release()
+
+	// Record the holder only once the lock is actually held: a degraded call
+	// does not hold anything, and must not be mistaken for a holder by a
+	// nested call (which would then run with no lock at all, silently).
+	gid := curGoroutineID()
+	userPathLockMu.Lock()
+	userPathLockGID = gid
+	userPathLockDepth = 1
+	userPathLockMu.Unlock()
+	defer func() {
+		userPathLockMu.Lock()
+		userPathLockDepth = 0
+		userPathLockGID = 0
+		userPathLockMu.Unlock()
+	}()
+
 	return fn()
+}
+
+// userPathLockMu guards userPathLockGID / userPathLockDepth, which implement
+// the same-goroutine reentrancy guard described on withUserPathLock. Reads of
+// the pair on the fast path are deliberately lock-free: only the owning
+// goroutine can observe its own non-zero depth, and it publishes both fields
+// under the mutex before any nested call can run.
+var (
+	userPathLockMu    sync.Mutex
+	userPathLockGID   uint64
+	userPathLockDepth int
+)
+
+// curGoroutineID extracts the current goroutine's id from the runtime stack
+// header ("goroutine <id> [running]:"). Holders are identified by goroutine
+// because the OS byte-range lock is not reentrant, while sync.Mutex is
+// reentrant for nobody — a bare mutex would self-deadlock on the very nesting
+// this guard exists to make safe.
+//
+// If the header cannot be parsed the id is 0. Zero never matches a real
+// holder (a holder's id comes from a successful parse), so the guard degrades
+// to "not reentrant" — the pre-A-11 behaviour — rather than to "wrongly
+// reentrant". The trade-off is deliberate: misreading an id as the holder
+// would run a critical section unprotected.
+func curGoroutineID() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	const prefix = "goroutine "
+	s := buf[:n]
+	if len(s) < len(prefix) || string(s[:len(prefix)]) != prefix {
+		return 0
+	}
+	s = s[len(prefix):]
+	var id uint64
+	digits := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			break
+		}
+		id = id*10 + uint64(c-'0')
+		digits++
+	}
+	if digits == 0 {
+		return 0
+	}
+	return id
 }
 
 // SetWindowsUserPath prepends shimDir to the user's PATH environment
@@ -560,7 +674,27 @@ func readUserPathFromRegistry() (string, error) {
 // REG_EXPAND_SZ so that %USERPROFILE% etc. are expanded at runtime.
 // Security (M-2): Rejects paths that exceed the Windows environment block
 // limit (~32,767 characters) to prevent silent truncation by CreateProcess.
+//
+// 第九轮审计 P2-3：**这条闸门只有上界，没有下界**。
+//
+// 实测：当用户的 user PATH 恰好只由 xdev 自有条目组成时，清理/移除流程会算出
+// 空字符串并原样写盘 —— 三个场景产出 `Path=""`，随后 BroadcastEnvironmentChange
+// 把「空值」广播出去，之后新建进程再也看不到任何用户级 PATH 条目。
+// （诚实标注：HKLM 的**系统** PATH 仍然生效，所以后果是「丢失全部用户级条目」，
+// 而不是「完全没有 PATH」。）
+//
+// 这是所有 PATH 写入的**唯一**收口（TransformUserPath、SetWindowsUserPath、
+// CleanupUserPath 等最终都走这里，`grep 'userPathWriteFn('` 只有一处调用），
+// 因此不变量放在这一层最可靠：拒绝把用户 PATH 写成空值。
+//
+// 为什么不是「自动还原旧值」：本函数拿不到旧值，且真正需要「清空用户 PATH」的
+// 合法场景不存在（xdev 只增删自己的条目）。给一个可诊断的错误、让调用方明确
+// 处理，比静默写空更安全。
 func WriteUserPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("refusing to write an empty user PATH: xdev only adds/removes its own entries, " +
+			"so an empty result means the computed value degenerated (check the caller's strip/anchor logic)")
+	}
 	return userPathWriteFn(path)
 }
 
@@ -571,6 +705,12 @@ func WriteUserPath(path string) error {
 // changed=false 或 next==current 时跳过写。读走 userPathReadFn、写走
 // userPathWriteFn（防污染 TestMain 的内存后端对 transform 同样生效）。
 // 写成功后广播 WM_SETTINGCHANGE（与 SetEnvVar 的 PATH 分支对齐）。
+//
+// 第九轮审计 A-12（P2）：入口处补 M-2 长度校验（checkPathLength）。此前只有
+// 真实注册表写函数 writeUserPathFromRegistry 做长度校验，而本函数直接调用
+// 可替换的 userPathWriteFn —— 在内存/替身后端下（测试、未来的可插拔后端）
+// 长度闸门完全不存在，实测可写入 40000 字符 PATH。校验必须在 transform 这一
+// 层，且与真身同一判据（`>` 32767）与同一文案口径。
 func TransformUserPath(transform func(current string) (next string, changed bool, err error)) (bool, error) {
 	var changed bool
 	err := withUserPathLock(func() error {
@@ -587,6 +727,10 @@ func TransformUserPath(transform func(current string) (next string, changed bool
 			changed = false
 			return nil
 		}
+		if lerr := checkPathLength(next); lerr != nil {
+			changed = false
+			return lerr
+		}
 		return WriteUserPath(next)
 	})
 	if err == nil && changed {
@@ -598,6 +742,10 @@ func TransformUserPath(transform func(current string) (next string, changed bool
 // TransformSystemPath（票 44 / P2-2）是机器级 PATH 的锁内 RMW。此前 GUI 的
 // 机器级 PATH 清理完全无锁（WriteSystemPath 直写）；复用 withUserPathLock
 // ——与 CleanupSystemPath 同一先例：注册表键不同，只加串行化、无死锁风险。
+//
+// 第九轮审计 A-12（P2）：同 TransformUserPath，入口补 M-2 长度校验 ——
+// WriteSystemPath（HKLM）自身也没有长度闸门，此前一次超限写会被 CreateProcess
+// 静默截断。
 func TransformSystemPath(transform func(current string) (next string, changed bool, err error)) (bool, error) {
 	var changed bool
 	err := withUserPathLock(func() error {
@@ -614,6 +762,10 @@ func TransformSystemPath(transform func(current string) (next string, changed bo
 			changed = false
 			return nil
 		}
+		if lerr := checkPathLength(next); lerr != nil {
+			changed = false
+			return lerr
+		}
 		return WriteSystemPath(next)
 	})
 	if err == nil && changed {
@@ -622,15 +774,32 @@ func TransformSystemPath(transform func(current string) (next string, changed bo
 	return changed, err
 }
 
+// maxWinRegValueLen 是 Windows 注册表单个 REG_SZ/REG_EXPAND_SZ 值的字符数
+// 上限（环境块整体约 32,767 字符）。writeUserPathFromRegistry（M-2）与本文件
+// 的 PATH 变换入口共用同一常量，避免两处判据漂移。
+const maxWinRegValueLen = 32767
+
+// checkPathLength 是 M-2 长度闸门的**单一判据**（第九轮审计 A-12）。
+//
+// 判据与文案口径与 writeUserPathFromRegistry 完全一致：`>` 32767 才拒绝
+// （恰好 32767 合法），错误信息同时给出实际长度与上限。
+func checkPathLength(path string) error {
+	if len(path) > maxWinRegValueLen {
+		return fmt.Errorf("PATH length %d exceeds Windows registry limit of %d characters — remove unused paths before adding new ones", len(path), maxWinRegValueLen)
+	}
+	return nil
+}
+
 // writeUserPathFromRegistry 是真实的注册表实现（含 M-2 长度上限校验）。
 func writeUserPathFromRegistry(path string) error {
 	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：在一切校验之前
 	// 计数一次真实写尝试。
 	realUserRegistryMutationCount.Add(1)
-	// Security (M-2): Check PATH length before writing
-	const maxWinRegValueLen = 32767
-	if len(path) > maxWinRegValueLen {
-		return fmt.Errorf("PATH length %d exceeds Windows registry limit of %d characters — remove unused paths before adding new ones", len(path), maxWinRegValueLen)
+	// Security (M-2): Check PATH length before writing.
+	// 第九轮审计 A-12：判据抽到 checkPathLength，供 transform 入口复用同一
+	// 口径（此前这里的内联常量/文案是唯一实现，transform 侧没有闸门）。
+	if err := checkPathLength(path); err != nil {
+		return err
 	}
 	var key uintptr
 	envName, err := syscall.UTF16PtrFromString(`Environment`)
@@ -1690,6 +1859,28 @@ func CleanupUserPath(home, shimDir, pathMode string) (bool, error) {
 }
 
 func cleanupUserPathLocked(home, shimDir, pathMode string) (bool, error) {
+	// 第九轮审计 A-13（P2）：**空锚点必须保守退出**。
+	//
+	// 缺陷原形：filepath.Clean("") 返回 "."，于是 home/shimDir 为空时锚点退化
+	// 为 "."：
+	//   - `normalized == homeClean` 对 PATH 里任何 `.` 条目为真 → 删除与 xdev
+	//     无关的 `.`（实测 "…;.;C:\Tools;…" → ";…;C:\Tools;…"）；
+	//   - shim 前插逻辑认为 "." 不在列表里 → 前插一个**空条目**（等价于 CWD）。
+	//
+	// 选择「直接 (false, nil)」而不是「换个更保守的锚点」：home/shimDir 为空
+	// 时调用方没有给出任何可判定的归属边界，本函数**无法区分**哪些条目属于
+	// xdev —— 任何猜测（跳过 home 锚定只做 legacy 子串清理、或按 shim 名匹配）
+	// 都仍然会删掉用户条目。全量保留是唯一不产生误删的语义，也符合 ticket 11
+	// 「nothing outside home is ever touched」的既定原则：没有 home 就没有
+	// 「outside home」的判据。
+	//
+	// 前置条件由调用方保证（doctor/install/GUI 均传 cfg.Core.XMDevDir /
+	// cfg.Core.ShimDir，为空说明配置尚未解析）；此处保守退出会把问题暴露给
+	// 调用方，而不是静默破坏用户 PATH。
+	if strings.TrimSpace(home) == "" || strings.TrimSpace(shimDir) == "" {
+		return false, nil
+	}
+
 	current, err := ReadUserPath()
 	if err != nil {
 		return false, err

@@ -142,7 +142,16 @@ func BuildIndexYAML(tools []*Tool, generated time.Time) ([]byte, error) {
 	for _, cat := range order {
 		tools := byCat[cat]
 		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
-		fmt.Fprintf(&b, "  - name: %s\n    display_name: %s\n", cat, indexDisplayName(cat))
+		// 第九轮审计 A-17（P2）：标量必须安全引用。此前直接 `%s` 拼接，
+		// 任何含 YAML 指示符的值都会产出**非法 index.yaml**：
+		//   display_name: Demo: Runtime   → 映射歧义（解析直接报错）
+		//   display_name: - leading dash  → 序列指示符（解析报错）
+		//   display_name: Foo #bar        → 注释吞掉后半段（静默丢字）
+		// 复用同包第八轮新增的 yamlScalarFor/needsYAMLQuoting
+		//（archive_sha_text.go），不复制第二份转义逻辑；oldRaw 传空串表示
+		// 「无既有引号风格」，由 needsYAMLQuoting 判定是否加双引号。
+		fmt.Fprintf(&b, "  - name: %s\n    display_name: %s\n",
+			yamlScalarFor(cat, ""), yamlScalarFor(indexDisplayName(cat), ""))
 		if len(tools) == 0 {
 			b.WriteString("    tools: []\n")
 			continue
@@ -150,7 +159,7 @@ func BuildIndexYAML(tools []*Tool, generated time.Time) ([]byte, error) {
 		b.WriteString("    tools:\n")
 		for _, t := range tools {
 			fmt.Fprintf(&b, "      - name: %s\n        display_name: %s\n        manifest: %s\n",
-				t.Name, t.DisplayName, t.Manifest)
+				yamlScalarFor(t.Name, ""), yamlScalarFor(t.DisplayName, ""), yamlScalarFor(t.Manifest, ""))
 		}
 	}
 	return []byte(b.String()), nil

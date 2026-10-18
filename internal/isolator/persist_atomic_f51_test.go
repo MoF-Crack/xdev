@@ -2,6 +2,7 @@ package isolator
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +29,10 @@ func TestSaveState_WritesAtomicallyAndRoundTrips(t *testing.T) {
 	}
 	saveState(dir, string(ModeContainer), want)
 
-	got := loadState(dir, string(ModeContainer))
+	got, err := loadState(dir, string(ModeContainer))
+	if err != nil {
+		t.Fatalf("loadState after an atomic save: %v", err)
+	}
 	if got.ContainerID != want.ContainerID {
 		t.Errorf("ContainerID = %q, want %q", got.ContainerID, want.ContainerID)
 	}
@@ -51,8 +55,9 @@ func TestSaveState_WritesAtomicallyAndRoundTrips(t *testing.T) {
 	}
 }
 
-// 守卫：状态文件损坏时必须明确告警，而不是静默返回零值（旧行为让调用方无法
-// 区分「从未 setup 过」与「凭证丢了」）。
+// 守卫：状态文件损坏时 loadState 必须返回零值**加明确错误**，而不是静默返回
+// 零值（旧行为让调用方无法区分「从未 setup 过」与「凭证丢了」，第九轮 A-02 的
+// 容器泄漏正是这个歧义造成的）。
 func TestLoadState_CorruptFileIsReported(t *testing.T) {
 	dir := t.TempDir()
 	p := statePath(dir, string(ModeContainer))
@@ -63,8 +68,15 @@ func TestLoadState_CorruptFileIsReported(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 必须返回零值（不能 panic、不能返回半截状态）——调用方据此跳过删除。
-	got := loadState(dir, string(ModeContainer))
+	// 必须返回零值（不能 panic、不能返回半截状态）——调用方据此跳过删除……
+	got, err := loadState(dir, string(ModeContainer))
+	if err == nil {
+		t.Fatal("corrupt state must be reported as an error, not silently swallowed (A-02)")
+	}
+	if !errors.Is(err, ErrStateCorrupt) {
+		t.Errorf("corrupt state error = %v, want it to wrap ErrStateCorrupt", err)
+	}
+	// ……并且零值必须伴随错误：零值本身绝不代表「没有会话」。
 	if got.ContainerID != "" {
 		t.Errorf("corrupt state must yield a zero value, got ContainerID=%q", got.ContainerID)
 	}
@@ -74,7 +86,10 @@ func TestLoadState_CorruptFileIsReported(t *testing.T) {
 // 不得因缺文件而报错路径与「损坏」混为一谈。
 func TestLoadState_MissingFileIsSilentZero(t *testing.T) {
 	dir := t.TempDir()
-	got := loadState(dir, string(ModeContainer))
+	got, err := loadState(dir, string(ModeContainer))
+	if err != nil {
+		t.Fatalf("missing state file must not be an error (first run), got: %v", err)
+	}
 	if got.ContainerID != "" || got.Image != "" || got.WrittenFiles != nil {
 		t.Errorf("missing state file must yield a zero value, got %+v", got)
 	}

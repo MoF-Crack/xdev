@@ -245,9 +245,17 @@ func TestSignManifests_FailsWhenASignatureCannotBeWritten(t *testing.T) {
 	signManifestFixture(t, manifests, "good")
 	signManifestFixture(t, manifests, "broken")
 
-	// 让 broken.yaml.sig 的原子写失败：把它会用的临时文件路径做成目录
-	// （AtomicWriteFile 先写 <path>.tmp）。
-	if err := os.MkdirAll(filepath.Join(outDir, "broken.yaml.sig.tmp"), 0o755); err != nil {
+	// 让 broken.yaml.sig 的原子写失败。
+	//
+	// 第九轮 A-10 更新：原实现把 `<sig 路径>.tmp` 做成目录来制造失败，这**耦合了
+	// 旧 AtomicWriteFile 的固定临时文件名**。A-10 迁移到 os.CreateTemp 后临时名是
+	// 唯名的（`<base>.tmp-*`），那个目录不再被触碰，故障注入随之失效——属「测试
+	// 依赖实现细节」而非断言过时。改为**与实现无关**的注入：把 .sig 目标本身做成
+	// 目录，任何「写临时文件再 rename 覆盖目标」的实现都会在 rename 阶段失败，
+	// 而 good.yaml.sig 仍可正常写出。
+	// 断言本身（必须返回错误、错误含 "failed"、good 仍写成功、--allow-partial 放行）
+	// 一字未改。
+	if err := os.MkdirAll(filepath.Join(outDir, "broken.yaml.sig"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
