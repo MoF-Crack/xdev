@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -280,21 +279,15 @@ func IsAllZeroHash(s string) bool {
 
 // CreateJunction creates a Windows junction (directory symlink) from
 // link to target. On non-Windows platforms it creates a symlink.
-// On Windows it uses `cmd /c mklink /J` (reliable). A native
-// DeviceIoControl implementation was prototyped (Spec 032) but
-// reverted because the hand-built REPARSE_DATA_BUFFER was fragile
-// across path lengths; mklink remains the supported path.
+//
+// 第九轮审计 P1-1（P1，安全）：实现已移到平台专属文件。
+// 旧实现在这里直接 `exec.Command("cmd", "/c", "mklink", "/J", link, target)`，
+// 而 cmd.exe 会**二次解析**命令行 —— 含 `&` 的 tool name / version / 安装根目录
+// 会把 mklink 参数切成多条命令，导致 **manifest 可控的任意命令执行**。
+// Windows 实现（junction_windows.go）改为自行构造命令行并对每个路径加双引号，
+// 同时拒绝无法安全表达的字符；非 Windows 实现走 os.Symlink（不经 shell）。
 func CreateJunction(link, target string) error {
-	if runtime.GOOS != "windows" {
-		return os.Symlink(target, link)
-	}
-	cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
-	HideWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("create junction %s -> %s: %v: %s", link, target, err, out)
-	}
-	return nil
+	return createJunction(link, target)
 }
 
 // AtomicWriteFile atomically writes data to a file by first writing to a
