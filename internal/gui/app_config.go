@@ -168,12 +168,29 @@ func (a *App) SetPathMode(mode string) error {
 		p    plugin.Plugin
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
+		// 第十轮审计 P3-8（P3）：current/ 下可能残留 xdev 自己的旁路条目
+		// （`.stale-*` 来自 removeLinkEntry 的重命名，`.tmp-*` 来自 Activate
+		// 的临时链接名）。它们不是工具，绝不能被当成"已激活工具"参与
+		// PATH 迁移 —— 否则会把残留目录的 bin 路径写进 PATH，或为其创建
+		// shim。过滤规则与 shim 反向索引共用同一份定义。
+		if shim.IsStaleResidueName(e.Name()) {
 			continue
 		}
-		// 检查是否是有效的 Junction/目录
+		// 检查是否是有效的 Junction/目录。
+		//
+		// 第十轮审计附带发现（**P0 级**，由本项守卫暴露）：不能用 `e.IsDir()`。
+		// `current/<tool>` 在 Windows 上是**目录联接（junction）**，而
+		// `os.ReadDir` 的 `DirEntry.IsDir()` 对重解析点返回 **false**
+		// （本机实测：`IsDir()=false`、`Type=?---------`；同一路径 `os.Stat`
+		// 的 `IsDir()` 为 **true**）。于是旧代码的 `!e.IsDir() { continue }`
+		// 会**跳过每一个真实工具** —— `SetPathMode("direct")` 静默地一个 bin
+		// 路径都不加，用户切到 direct 后 PATH 里没有工具，且没有任何报错。
+		//
+		// 正确判据是「**跟随**链接后确实是目录」，即 `os.Stat`（而非 Lstat）。
+		// 这同时保留原有语义：悬空链接会被 `os.Stat` 判为不存在而跳过。
 		linkPath := filepath.Join(currentDir, e.Name())
-		if _, err := os.Stat(linkPath); err != nil {
+		fi, statErr := os.Stat(linkPath)
+		if statErr != nil || !fi.IsDir() {
 			continue
 		}
 		if p, ok := a.registry.Get(e.Name()); ok {

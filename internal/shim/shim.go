@@ -330,6 +330,44 @@ func buildShimIndex(xmdeHome string) {
 	shimIndexMu.Unlock()
 }
 
+// staleResidueMarkers are the infixes xdev itself appends when it parks a
+// `current/<tool>` entry under a bypass name instead of removing it:
+//
+//   - ".stale-" — removeLinkEntry renames a legacy real directory to
+//     `<path>.stale-<base36 nanos>` before deleting it (Round 8 P1-3);
+//   - ".tmp-"   — Activate reserves its replacement link via
+//     os.CreateTemp(currentDir, "<tool>.tmp-*") (F-22 / P1-24).
+//
+// Both are SUFFIX forms on the tool name (`tool.stale-xyz`, `tool.tmp-123`),
+// not leading-dot prefixes — matching only a leading "." would therefore miss
+// every real residue.
+//
+// 第十轮审计 P3-8（P3）：这些旁路条目过去会被 `ReadDir(current)` 的目录
+// 扫描当成**一个工具**（审计实测 `[tool tool.stale-demo]`），残留目录里的
+// 可执行文件随之进入 shim 反向索引 —— `Lookup` 于是可能把命令分发到一条
+// 本不该存在的路径。扫描侧一律过滤掉它们。
+var staleResidueMarkers = []string{".stale-", ".tmp-"}
+
+// IsStaleResidueName reports whether a `current/` entry name is one of
+// xdev's own bypass/temporary names rather than a real tool directory.
+// Case-insensitive because Windows resolves these names case-insensitively.
+//
+// Exported so every `current/` scanner shares ONE definition of "not a tool":
+// the shim reverse index (buildShimIndexMap) and the GUI PATH-mode migration
+// (gui.SetPathMode) both enumerate current/* and must agree.
+func IsStaleResidueName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, marker := range staleResidueMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isStaleResidueName is the in-package alias used by the scanners below.
+func isStaleResidueName(name string) bool { return IsStaleResidueName(name) }
+
 // buildShimIndexMap is the pure scan that produces the reverse index
 // without touching the package-level shimIndex.
 func buildShimIndexMap(xmdeHome string) map[string]shimEntry {
@@ -340,6 +378,10 @@ func buildShimIndexMap(xmdeHome string) map[string]shimEntry {
 	}
 	idx := make(map[string]shimEntry)
 	for _, e := range entries {
+		// P3-8: skip xdev's own .stale-*/.tmp-* residue — it is not a tool.
+		if isStaleResidueName(e.Name()) {
+			continue
+		}
 		full := filepath.Join(currentDir, e.Name())
 		info, err := os.Stat(full)
 		if err != nil || !info.IsDir() {
