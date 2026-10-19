@@ -7,8 +7,22 @@ import (
 )
 
 // CompareSemver compares two version strings using SemVer 2.0.0 rules:
-// major.minor.patch first, then pre-release precedence.
-// Returns 1 if a > b, 0 if equal, -1 if a < b.
+// major.minor.patch first, then any extra numeric segments, then pre-release
+// precedence. Returns 1 if a > b, 0 if equal, -1 if a < b.
+//
+// 第十轮审计 P2-3（P2）：**必须支持 4 段及以上版本**。此前只比较前 3 段，
+// `2026.2.0.1` 被静默截断成 `[2026 2 0]`，于是
+// `CompareSemver("2026.2.0.1", "2026.2") == 0` —— 而真实语料里就有
+// `2026.2.0.1`、`2025.2.6.3`（四段构建号）。后果：已装 `2026.2`、latest 为
+// `2026.2.0.1` 时，所有走本函数的「是否有更新」门**判不出更新**，用户看到
+// 「已是最新」，四段构建**永远装不上**。
+//
+// Round 9 已修好 `internal/resolver` 的同一缺陷（那边新增 `extra []int`），
+// 但本函数是**第二套排序**，未被覆盖 —— 这正是 Round 8/9 反复出现的
+// 「只修了一个调用点」形态。
+//
+// 缺失段按 0 补齐（与 resolver 一致）：`2026.2` == `2026.2.0` == `2026.2.0.0`，
+// 且 `2026.2.0.1` > `2026.2`。
 //
 // Pre-release semantics (Spec 039, mirrors internal/resolver):
 //   - 1.0.0 > 1.0.0-rc.1          (release beats pre-release)
@@ -19,11 +33,22 @@ import (
 //
 // Build metadata ("+build") is stripped before comparison and ignored.
 func CompareSemver(a, b string) int {
-	pa := ParseSemverParts(a)
-	pb := ParseSemverParts(b)
-	for i := 0; i < 3; i++ {
-		if pa[i] != pb[i] {
-			if pa[i] > pb[i] {
+	pa := parseSemverAll(a)
+	pb := parseSemverAll(b)
+	n := len(pa)
+	if len(pb) > n {
+		n = len(pb)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(pa) {
+			av = pa[i]
+		}
+		if i < len(pb) {
+			bv = pb[i]
+		}
+		if av != bv {
+			if av > bv {
 				return 1
 			}
 			return -1
@@ -32,40 +57,58 @@ func CompareSemver(a, b string) int {
 	return comparePreReleaseCore(preReleaseOf(a), preReleaseOf(b))
 }
 
-// ParseSemverParts parses a version string into [3]int{major, minor, patch}.
-// Strips leading "v", pre-release suffixes (everything after "-"), and build
-// metadata ("+build"), and extracts numeric prefixes from each component.
-func ParseSemverParts(s string) [3]int {
-	var result [3]int
-	s = strings.TrimPrefix(s, "v")
+// parseSemverAll 解析**全部**数字点分段（不像 ParseSemverParts 那样截断到 3 段）。
+//
+// 每段沿用与 ParseSemverParts 相同的**饱和累加**语义（票 39 / P2-23）：超长数字
+// 段钳制在 math.MaxInt32，避免整数回绕导致「大版本排到小版本之下」。
+//
+// 返回的切片长度 == 输入里实际出现的数字段数；调用方按「缺失段视为 0」比较。
+func parseSemverAll(s string) []int {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
 	if idx := strings.Index(s, "+"); idx >= 0 {
 		s = s[:idx]
 	}
 	if idx := strings.Index(s, "-"); idx >= 0 {
 		s = s[:idx]
 	}
-	parts := strings.SplitN(s, ".", 3)
-	for i, p := range parts {
-		if i >= 3 {
+	raw := strings.Split(s, ".")
+	out := make([]int, 0, len(raw))
+	for _, p := range raw {
+		out = append(out, parseSaturatingComponent(p))
+	}
+	return out
+}
+
+// parseSaturatingComponent 解析一个版本分量里的数字前缀，带饱和累加。
+//
+// 票 39（P2-23）：30 位数字分量曾因 int 溢出**回绕**，从而排到小版本之下。
+// 钳制在版本分量的实用上限，使排序保持单调。
+func parseSaturatingComponent(p string) int {
+	const maxPart = math.MaxInt32
+	n := 0
+	for _, c := range p {
+		if c < '0' || c > '9' {
 			break
 		}
-		// Ticket 39 (P2-23): saturating accumulation. A component with a
-		// 30-digit number used to WRAP AROUND on int overflow and could then
-		// sort below a small version. Clamp at the practical ceiling for a
-		// version component so ordering stays monotonic.
-		const maxPart = math.MaxInt32
-		n := 0
-		for _, c := range p {
-			if c < '0' || c > '9' {
-				break
-			}
-			if n > (maxPart-int(c-'0'))/10 {
-				n = maxPart
-				break
-			}
-			n = n*10 + int(c-'0')
+		if n > (maxPart-int(c-'0'))/10 {
+			return maxPart
 		}
-		result[i] = n
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// ParseSemverParts parses a version string into [3]int{major, minor, patch}.
+// Strips leading "v", pre-release suffixes (everything after "-"), and build
+// metadata ("+build"), and extracts numeric prefixes from each component.
+//
+// 注意：本函数**只返回前 3 段**（历史签名，[3]int）。做**排序**请用
+// CompareSemver —— 它经 parseSemverAll 处理任意段数，不会静默截断 4 段版本。
+func ParseSemverParts(s string) [3]int {
+	var result [3]int
+	all := parseSemverAll(s)
+	for i := 0; i < 3 && i < len(all); i++ {
+		result[i] = all[i]
 	}
 	return result
 }
