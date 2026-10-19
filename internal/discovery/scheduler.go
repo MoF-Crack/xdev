@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -196,12 +197,22 @@ func (s *Scheduler) StartupSniffSpawned() bool {
 	return s.startupCancel != nil
 }
 
+// errShutdownFallbackSkipped 是 Shutdown 兜底事务的内部控制流信号：嗅探在我们
+// 拿到独占锁之前已经自行收尾并落盘，兜底**不得**回写（Round 8 A-04 契约）。
+// 它绝不会逃出 Shutdown。
+var errShutdownFallbackSkipped = errors.New("shutdown fallback skipped: sniff already completed")
+
 // Shutdown cancels the startup background sniff and waits up to 2 seconds
 // for partial results to be saved.  Call from the process shutdown hook
 // (SC-002).
-func (s *Scheduler) Shutdown() {
+//
+// 第十轮审计 P2-1：返回值报告**兜底落盘是否成功**。旧实现把错误吞掉
+// （`_ = s.SaveCache(cache)`），缓存损坏时既写坏了文件又对外报成功。现在读失败
+// /写失败一律返回错误（缓存文件保持原样，F-56），调用方可以据此判断。
+// 无兜底需求（嗅探已完成、或从未 spawn）时返回 nil。
+func (s *Scheduler) Shutdown() error {
 	if s.startupCancel == nil {
-		return
+		return nil
 	}
 	// 第七轮审计 F-55 + 第八轮审计 A-04：后台嗅探**自己**就是 Partial 的权威判定者
 	// —— sniffAllWithForce 在结尾按 `ctx.Err() != nil` 算出 Partial 并原子落盘
@@ -219,7 +230,7 @@ func (s *Scheduler) Shutdown() {
 	select {
 	case <-s.startupDone:
 		s.startupCancel()
-		return
+		return nil
 	default:
 	}
 
@@ -227,16 +238,47 @@ func (s *Scheduler) Shutdown() {
 	select {
 	case <-s.startupDone:
 		// 嗅探已收尾并自行保存（Partial 由它按 ctx.Err() 决定）——不要回写。
-		return
+		return nil
 	case <-time.After(2 * time.Second):
 		log.Printf("[discovery] shutdown: timeout waiting for background sniff")
 	}
 	// 兜底：嗅探仍在飞行，没能保存——把它已产出的部分结果标为 partial 落盘。
-	if cache, err := s.LoadCache(); err == nil && cache != nil {
+	//
+	// 第十轮审计 P2-1：兜底必须是**锁内 RMW**。旧实现是
+	// LoadCache()（共享锁 50ms 拿不到就无锁读）→ 改内存 → SaveCache()（此时才取
+	// 独占锁、且先 marshal 后取锁）——「读 → marshal → 写」跨了两把锁，在两者
+	// 之间由并发写者落地的条目会被这份过时快照整份覆盖（lost update，实测
+	// `concurrent_entry_survived=false`）。同一路径还把损坏缓存替换成空缓存
+	//（LoadCache 对损坏文件返回「空缓存 + nil」），违背 F-56「读失败绝不覆写」。
+	//
+	// 现在整个兜底交给 withCacheLock：锁内重新读取 → 只改 Partial/LastSniffAt
+	// → 写回。**不读全量快照、不整份写回**，因此并发条目不会被覆盖；读失败
+	//（损坏/不可读）时 withCacheLock 直接返回错误、原文件保持原样。
+	//
+	// 提交窗口（Round 8 A-04 契约的第三种时序）：若嗅探在 2s 超时**之后**、我们
+	// 拿到独占锁之前完成并自行落盘（它会先保存、再 close(startupDone)），锁内
+	// 复查 startupDone 就能确定性识别出「刚好完成」——此时兜底必须放弃回写，
+	// 不能把一个完整嗅探错标为 partial。用 startupDone 而不是时间戳启发式：
+	// 关闭信号是「后台嗅探已收尾」的**精确**判据，而时间戳会把并发写者刚落地的
+	// 条目误判成嗅探完成（那正是 P2-1 要修的 lost update）。
+	err := s.withCacheLock(func(cache *SniffCache) error {
+		select {
+		case <-s.startupDone:
+			return errShutdownFallbackSkipped
+		default:
+		}
 		cache.Partial = true
 		cache.LastSniffAt = time.Now()
-		_ = s.SaveCache(cache)
+		return nil
+	})
+	if errors.Is(err, errShutdownFallbackSkipped) {
+		return nil
 	}
+	if err != nil {
+		log.Printf("[discovery] shutdown: fallback cache update failed (cache left untouched): %v", err)
+		return err
+	}
+	return nil
 }
 
 // SniffNow discovers new versions for a single tool, merges them into
@@ -661,18 +703,22 @@ func (s *Scheduler) rateLimitWindowActive(c *SniffCache) bool {
 }
 
 // withCacheLock 在**同一把独占文件锁**内执行一次完整的「读 → 改 → 写」缓存事务
-// （第七轮审计 F-56）。mutate 收到的 cache 保证非 nil；锁不可得时降级为「读现有
-// 缓存 + 改 + 写」的无锁路径（与既有 SaveCache 的降级语义一致：拿不到锁不应让
-// 嗅探整体失败）。
+// （第七轮审计 F-56）。mutate 收到的 cache 保证非 nil。
+//
+// 第十轮审计 P2-1：拿不到独占锁时**不得**降级为无锁 RMW。旧实现是
+// `if lockErr == nil { defer lock.Release() }` —— 锁不可得就静默继续，于是
+// 「读 → 改 → 写」整段在无锁状态下执行，并发写者的条目会被覆盖（正是 F-56
+// 要消灭的 lost update）。明确失败优于静默丢写：这里直接返回错误，**不写盘**。
 func (s *Scheduler) withCacheLock(mutate func(*SniffCache) error) error {
 	if err := os.MkdirAll(filepath.Dir(s.cachePath), 0o755); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
 	lockPath := s.cachePath + ".lock"
 	lock, lockErr := util.AcquireFileLock(lockPath, 5*time.Second)
-	if lockErr == nil {
-		defer lock.Release()
+	if lockErr != nil {
+		return fmt.Errorf("acquire cache lock (refusing unlocked read-modify-write): %w", lockErr)
 	}
+	defer lock.Release()
 
 	// 锁内读取（绕过 LoadCache 的共享锁，避免同进程内两把锁互斥）。
 	//
