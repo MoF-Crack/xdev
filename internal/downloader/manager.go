@@ -213,8 +213,10 @@ func (m *Manager) runDownload(task *Task) {
 				// Windows the writer may still hold the handle. The
 				// .part.lock takeover semantics make the residue harmless.
 				for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
-					if rmErr := os.Remove(partPath); rmErr != nil && !os.IsNotExist(rmErr) {
-						log.Printf("[download] WARNING: 取消后删除临时文件失败 %s: %v", partPath, rmErr)
+					// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
+					discardPart(partPath)
+					if _, statErr := os.Stat(partPath); statErr == nil {
+						log.Printf("[download] WARNING: 取消后删除临时文件失败 %s", partPath)
 					}
 				}
 				log.Printf("[download] 已取消下载并清理临时文件: %s", task.opts.Dest)
@@ -344,8 +346,10 @@ func (m *Manager) Cancel(id string) error {
 	// 清理临时文件（F-12：按 URL 分代 —— 本 URL 的代 + 回退 URL 的代 +
 	// 历史未分代命名，全部删掉，否则会留下孤儿 .part 占着缓存目录）。
 	for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
-		if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[download] WARNING: 删除临时文件失败 %s: %v（下次下载将接管该残留）", partPath, err)
+		// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
+		discardPart(partPath)
+		if _, statErr := os.Stat(partPath); statErr == nil {
+			log.Printf("[download] WARNING: 删除临时文件失败 %s（下次下载将接管该残留）", partPath)
 		}
 	}
 
@@ -415,9 +419,11 @@ func (m *Manager) CleanupOnExit() {
 
 		if active {
 			// 清理临时文件（F-12：按 URL 分代，全部代 + 历史命名）
+			// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
 			for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
-				if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
-					log.Printf("[download] WARNING: 退出清理删除临时文件失败 %s: %v", partPath, err)
+				discardPart(partPath)
+				if _, statErr := os.Stat(partPath); statErr == nil {
+					log.Printf("[download] WARNING: 退出清理删除临时文件失败 %s", partPath)
 				}
 			}
 			log.Printf("[download] 退出清理: 取消下载 %s 并删除临时文件 %s", id, task.opts.Dest)
@@ -469,6 +475,13 @@ func CleanupPartialFile(dest string) error {
 	// 「.part 已删但锁还在」的孤儿锁：按目录扫描分代锁名。
 	for _, l := range partialLockPathsInDir(dest) {
 		if err := removePartLockIfUnheld(l); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	// P2-5（Round 10）：孤儿 .meta 同样要清 —— 否则「GUI 清缓存」之后目录里
+	// 仍残留上一代内容的 ETag，下一次续传会误报 content changed。
+	for _, mp := range partialMetaPathsInDir(dest) {
+		if err := os.Remove(mp); err != nil && !os.IsNotExist(err) && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -559,6 +572,43 @@ func partialLockPathsInDir(dest string) []string {
 	return paths
 }
 
+// partialMetaPathsInDir 返回该 dest 下存在的全部内容身份旁路文件
+// （`<dest>.part.meta` 与分代 `<dest>.<16hex>.part.meta`）。
+//
+// 第十轮审计 P2-5（P2）：`.meta` 此前没有任何目录级清扫路径 ——
+// `CleanupPartialFile` 只扫 `*.part`、`CleanupAllPartialsInDir` 只扫
+// `*.part` + `*.part.lock`。审计实测「GUI 清缓存」后目录仍残留
+// `archive.zip.<gen>.part.meta`。
+//
+// 与 partialPathsInDir 同款「按目录扫描 + 前缀匹配」策略（刻意不用
+// filepath.Glob —— dest 里的 `[`、`*`、`?` 会被当元字符而静默失配）。
+func partialMetaPathsInDir(dest string) []string {
+	paths := make([]string, 0, 2)
+	if _, err := os.Stat(partValidatorFor(dest + ".part")); err == nil {
+		paths = append(paths, partValidatorFor(dest+".part"))
+	}
+	dir := filepath.Dir(dest)
+	prefix := filepath.Base(dest) + "."
+	const suffix = ".part.meta"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return paths
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		if isPartGeneration(strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)) {
+			paths = append(paths, filepath.Join(dir, name))
+		}
+	}
+	return paths
+}
+
 // maxPartialFileSize 返回给定路径中最大的文件大小（都不存在则为 0）。
 func maxPartialFileSize(paths []string) int64 {
 	var max int64
@@ -616,6 +666,20 @@ func CleanupAllPartialsInDir(dir string) error {
 	for _, l := range locks {
 		if err := removePartLockIfUnheld(l); err != nil {
 			log.Printf("[download] WARNING: 清理锁文件失败 %s: %v", l, err)
+		}
+	}
+	// P2-5（Round 10）：孤儿 .meta（内容身份校验器）也要清。它不匹配 "*.part"
+	// 也不匹配 "*.part.lock"，此前**没有任何**目录级清扫路径覆盖它 —— 审计实测
+	// 「GUI 清缓存」（本函数）之后目录里仍残留 `archive.zip.<gen>.part.meta`。
+	metas, err := filepath.Glob(filepath.Join(dir, "*.part.meta"))
+	if err != nil {
+		return err
+	}
+	for _, mp := range metas {
+		if err := os.Remove(mp); err != nil && !os.IsNotExist(err) {
+			log.Printf("[download] WARNING: 清理校验器旁路文件失败 %s: %v", mp, err)
+		} else {
+			log.Printf("[download] 清理校验器旁路文件: %s", mp)
 		}
 	}
 	return nil

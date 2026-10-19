@@ -264,17 +264,7 @@ func Download(ctx context.Context, opts Options) error {
 
 	ok, failures, proxyFailed := tryURLList(ctx, opts, urls, true)
 	if ok {
-		// P2-5：成功收尾时清掉**其它候选 URL** 的代（主 URL 中途断流留下的
-		// <dest>.<other-url-gen>.part 及其 .part.lock）。F-12 让每个候选 URL
-		// 各有一份 .part，但修复前成功路径从不清理失败候选的代 —— dest 已经
-		// 生成，目录里却永久残留孤儿 .part 与 .part.lock（H1/H15）。
-		//
-		// 复用 removePartialFiles（修复前它是死代码，全仓无调用方），传入
-		// Fallbacks() 覆盖全部候选 URL + 历史未分代命名。注意成功的那一代
-		// .part 已在 finalizeDownload 里被 rename 掉，删除是幂等的。
-		if rmErr := removePartialFiles(opts.Dest, opts.Fallbacks()...); rmErr != nil {
-			log.Printf("[download] WARNING: 成功下载后清理残留临时文件失败: %v", rmErr)
-		}
+		cleanupAfterSuccess(opts)
 		return nil
 	}
 
@@ -291,6 +281,12 @@ func Download(ctx context.Context, opts Options) error {
 		directOpts.ProxyURL = ""
 		directOpts.Client = newHTTPClient(opts, true)
 		if ok, directFailures, _ := tryURLList(ctx, directOpts, urls, false); ok {
+			// 第十轮审计 P2-6（P2）：直连重试是**第二个成功出口**，此前它
+			// 直接 `return nil`，完全跳过了上面那段残留清理 —— 于是
+			// 「配了代理且代理不可用」这一常见组合下，失败候选的 .part /
+			// .part.lock 仍然永久残留（审计实测残留 .part + 2 个 .part.lock）。
+			// 两个成功出口现在共用同一个 helper。
+			cleanupAfterSuccess(opts)
 			return nil
 		} else {
 			// Actionable hint only when proxy-connection errors were
@@ -703,6 +699,24 @@ func validatorFromResponse(resp *http.Response) partValidator {
 // partValidatorFor 返回某代 `.part` 的校验器旁路文件路径。
 func partValidatorFor(partPath string) string { return partPath + ".meta" }
 
+// discardPart 丢弃某一代 `.part` 及其全部旁路文件。
+//
+// 第十轮审计 P2-5（P2）：`.meta`（内容身份校验器）此前只在 `finalizeDownload` 与
+// `removePartResidueIfUnheld` 两处被删除，而**所有其它**「删 `.part`」的地方都是裸
+// `os.Remove(partPath)` —— 于是失败路径、Cancel、退出清理、两个清理 API 全都会留下
+// 孤儿 `.meta`。审计实测：「GUI 清缓存」（`CleanupAllPartialsInDir`）之后目录里仍残留
+// `*.part.meta`，与 Round 9 commit 里声称的「同生共死」不符。
+//
+// 孤儿 `.meta` 的危害不只是卫生：下一次同代下载若响应**不带**校验器，旧 `.meta` 不会
+// 被覆盖；若那次下载中断，续传会带着**上一代内容的 ETag** 发 If-Range → 产生难以解释的
+// "content changed" 报错。
+//
+// 因此把「丢弃一代」收敛成这一个 helper，所有删除点都走它，避免下次再漏。
+func discardPart(partPath string) {
+	_ = os.Remove(partPath)
+	_ = os.Remove(partValidatorFor(partPath))
+}
+
 // readPartValidator 读取旁路校验器。缺失或损坏都返回 ok=false —— 校验器是
 // **尽力而为**的证据，缺失时退化为既有行为（不能因此拒绝续传）。
 func readPartValidator(path string) (partValidator, bool) {
@@ -732,6 +746,25 @@ func writePartValidator(path string, v partValidator) {
 	}
 	if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
 		log.Printf("[download] WARNING: could not persist partial-file validator %s: %v", path, err)
+	}
+}
+
+// cleanupAfterSuccess 清理一次成功下载留下的残留。
+//
+// 第十轮审计 P2-6（P2）：清理此前只挂在 `tryURLList` 成功的**第一个**出口上，
+// 而「代理失败 → 直连重试成功」是**第二个**成功出口 —— 它直接 return，于是
+// 「配了代理且代理不可用」这一常见组合下，失败候选的 `.part` / `.part.lock` /
+// `.meta` 仍然永久残留（审计实测残留 `.part` + 2 个 `.part.lock`）。
+//
+// 抽成一个 helper，两个成功出口共用，避免下次再加出口时又漏。
+//
+// 复用 removePartialFiles（P2-5 修复前它是死代码，全仓无调用方），传入
+// Fallbacks() 覆盖全部候选 URL + 历史未分代命名。成功的那一代 `.part` 已在
+// finalizeDownload 里被 rename 掉，删除是幂等的；`.meta` 也由
+// removePartResidueIfUnheld 一并清掉。
+func cleanupAfterSuccess(opts Options) {
+	if rmErr := removePartialFiles(opts.Dest, opts.Fallbacks()...); rmErr != nil {
+		log.Printf("[download] WARNING: 成功下载后清理残留临时文件失败: %v", rmErr)
 	}
 }
 
@@ -825,7 +858,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			flags = os.O_CREATE | os.O_WRONLY
 			f, openErr = os.OpenFile(partPath, flags, 0o644)
 		} else {
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			f, openErr = os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 		}
 	}
@@ -921,7 +954,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 				log.Printf("[download] ERROR: 416 promotion refused — content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q); discarding the partial file",
 					resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
 				f.Close()
-				_ = os.Remove(partPath)
+				discardPart(partPath)
 				_ = os.Remove(partMeta)
 				return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — refusing to promote the stale local file as complete; discarding it and retrying from scratch",
 					sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
@@ -937,7 +970,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// 让下次能从头重来，而不是把一个永不满足的 Range 留给下一次。
 		log.Printf("[download] ERROR: HTTP 416 for %s (local .part=%d bytes) — discarding the partial file", sanitizedURL(opts.URL), fromBytes)
 		f.Close()
-		_ = os.Remove(partPath)
+		discardPart(partPath)
 		_ = os.Remove(partMeta)
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 	}
@@ -978,7 +1011,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] ERROR: server returned 206 Partial Content for a fresh request without Range (Content-Range=%q) — discarding",
 			resp.Header.Get("Content-Range"))
 		f.Close()
-		_ = os.Remove(partPath)
+		discardPart(partPath)
 		return fmt.Errorf("server returned 206 Partial Content with Content-Range %q for a request that asked for the whole file — the response is only part of the archive; discarding the partial file and retrying from scratch",
 			resp.Header.Get("Content-Range"))
 	}
@@ -1004,7 +1037,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			log.Printf("[download] ERROR: content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q) — discarding the partial file",
 				resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
 			f.Close()
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			_ = os.Remove(partMeta)
 			return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — the local prefix cannot be spliced onto the new content; discarding the partial file and retrying from scratch",
 				sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
@@ -1014,7 +1047,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			log.Printf("[download] ERROR: Content-Range mismatch: server=%q requested-start=%d — discarding the partial file",
 				resp.Header.Get("Content-Range"), fromBytes)
 			f.Close()
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			return fmt.Errorf("server returned Content-Range %q which does not start at the requested offset %d for %s — discarding the partial file and retrying from scratch",
 				resp.Header.Get("Content-Range"), fromBytes, sanitizedURL(opts.URL))
 		}
@@ -1022,7 +1055,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			log.Printf("[download] ERROR: Content-Range %q declares an unknown total — cannot prove the assembled archive is complete",
 				resp.Header.Get("Content-Range"))
 			f.Close()
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			return fmt.Errorf("server returned Content-Range %q with an unknown total for %s — cannot verify that the assembled archive is complete; discarding the partial file",
 				resp.Header.Get("Content-Range"), sanitizedURL(opts.URL))
 		}
@@ -1033,7 +1066,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			log.Printf("[download] ERROR: Content-Range %q declares total=%d which is smaller than the local partial file (%d bytes) — discarding",
 				resp.Header.Get("Content-Range"), total, fromBytes)
 			f.Close()
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			return fmt.Errorf("server declared Content-Range total %d for %s but the local partial file already holds %d bytes — discarding the partial file and retrying from scratch",
 				total, sanitizedURL(opts.URL), fromBytes)
 		}
@@ -1042,7 +1075,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			log.Printf("[download] ERROR: Content-Range total=%d but local=%d + Content-Length=%d = %d — discarding the partial file",
 				total, fromBytes, resp.ContentLength, fromBytes+resp.ContentLength)
 			f.Close()
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			return fmt.Errorf("server returned Content-Range %q for %s but the declared total %d does not match the assembled length %d (local %d + response %d) — discarding the partial file and retrying from scratch",
 				resp.Header.Get("Content-Range"), sanitizedURL(opts.URL), total, fromBytes+resp.ContentLength, fromBytes, resp.ContentLength)
 		}
@@ -1108,7 +1141,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	if resp.ContentLength >= 0 && resp.ContentLength+fromBytes != written+fromBytes {
 		f.Close()
 		log.Printf("[download] ERROR: short body: wrote %d bytes, server declared %d", written+fromBytes, resp.ContentLength+fromBytes)
-		_ = os.Remove(partPath)
+		discardPart(partPath)
 		return fmt.Errorf("incomplete download for %s: wrote %d bytes but the server declared %d — discarding the partial file",
 			sanitizedURL(opts.URL), written+fromBytes, resp.ContentLength+fromBytes)
 	}
@@ -1123,7 +1156,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 				f.Close()
 				log.Printf("[download] ERROR: assembled length %d != Content-Range total %d (local=%d written=%d) — discarding",
 					assembled, total, fromBytes, written)
-				_ = os.Remove(partPath)
+				discardPart(partPath)
 				return fmt.Errorf("incomplete download for %s: the assembled archive is %d bytes but the server declared a total of %d — discarding the partial file",
 					sanitizedURL(opts.URL), assembled, total)
 			}
@@ -1140,7 +1173,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	if written == 0 && fromBytes == 0 {
 		f.Close()
 		log.Printf("[download] ERROR: empty download (0 bytes written) for %s — discarding", sanitizedURL(opts.URL))
-		_ = os.Remove(partPath)
+		discardPart(partPath)
 		return fmt.Errorf("empty download for %s: the server returned 0 bytes — refusing to promote an empty file to a complete archive",
 			sanitizedURL(opts.URL))
 	}
@@ -1228,7 +1261,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 			// verdict applies before AND after the TOFU write-back.
 			if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU && !opts.UnsignedVersion {
 				log.Printf("[download] ERROR: sha256 is all-zero placeholder and signature verification is enabled — refusing download")
-				_ = os.Remove(partPath)
+				discardPart(partPath)
 				return fmt.Errorf("manifest has all-zero SHA-256 placeholder for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
 			}
 			// Security (F-04 / D15): 已有 sidecar pin 时校验本次下载内容，
@@ -1239,7 +1272,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 				if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
 					if !strings.EqualFold(gotHash, parts[0]) {
 						log.Printf("[download] ERROR: sha256 mismatch with cached sidecar pin! cached=%s got=%s", parts[0], gotHash)
-						_ = os.Remove(partPath)
+						discardPart(partPath)
 						return fmt.Errorf("sha256 mismatch with cached sidecar pin: expected %s, got %s", parts[0], gotHash)
 					}
 					log.Printf("[download] SHA-256 verification passed (cached sidecar pin): %s", gotHash[:16]+"...")
@@ -1257,7 +1290,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 		} else {
 			if !strings.EqualFold(gotHash, expectedSHA) {
 				log.Printf("[download] ERROR: sha256 mismatch! expected=%s got=%s", expectedSHA, gotHash)
-				_ = os.Remove(partPath)
+				discardPart(partPath)
 				return fmt.Errorf("sha256 mismatch: expected %s, got %s", expectedSHA, gotHash)
 			}
 			log.Printf("[download] SHA-256 verification passed: %s", gotHash[:16]+"...")
@@ -1271,7 +1304,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 		// (Discovered / Unverified / custom / Lua) keep the TOFU path.
 		if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU && !opts.UnsignedVersion {
 			log.Printf("[download] ERROR: no sha256 hash provided and signature verification is enabled — refusing download")
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			return fmt.Errorf("manifest has no SHA-256 hash for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
 		}
 		// No root key embedded: fall back to sidecar TOFU model (with warnings)
@@ -1282,7 +1315,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 			if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
 				if !strings.EqualFold(gotHash, parts[0]) {
 					log.Printf("[download] ERROR: sha256 mismatch with cached hash! cached=%s got=%s", parts[0], gotHash)
-					_ = os.Remove(partPath)
+					discardPart(partPath)
 					return fmt.Errorf("sha256 mismatch with cached hash: expected %s, got %s", parts[0], gotHash)
 				}
 				log.Printf("[download] SHA-256 verification passed (cached sidecar): %s", gotHash[:16]+"...")
