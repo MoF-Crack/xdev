@@ -65,6 +65,25 @@ import (
 // even if Load is called concurrently from multiple goroutines.
 var migrateOnce sync.Once
 
+// integritySchemaVersion 是**落盘配置的完整性 schema 版本**（第十轮审计 P2-4）。
+//
+// 为什么需要它：H-12 的校验原先只在 Integrity 非空时进行
+// （`if cfg.Integrity != ""`），于是「把 config.yaml 里的 integrity: 那一行
+// 删掉」等价于**完全关闭**完整性校验，且没有任何告警 —— 运维无法区分
+// 「从未配置过 integrity」（全新安装的正常状态，首次 Save 才写入）与
+// 「integrity 被删掉了」。
+//
+// 落盘时写入本版本号（config.yaml 的 integrity_schema）；Load 时据此判断
+// 「文件由 xdev 写出、本应有 integrity，但这一行不见了」→ 告警 + 按既有路径
+// 重置敏感字段，但**不拒绝启动**（硬失败会让全新安装无法启动）。
+//
+// 定性（必须如实）：这是**可运维性**标记，不是防篡改机制 —— 能写
+// config.yaml 的攻击者同样能改本字段。与 internal/util/hmac_key.go 声明的
+// 威胁模型自洽（P2-22 / F-14：该 HMAC 只防误改 / 意外损坏，不防本地攻击者）。
+// 本字段要挡的是「误改 / 脚本重写 / 传输损坏把 integrity 行弄丢」这一类
+// **非预期改动**，让它在加载时至少留下一次告警。
+const integritySchemaVersion = 1
+
 // SniffConfig controls the automatic tool-discovery sniffing behaviour
 // (spec 011-tool-discovery-automanage).
 type SniffConfig struct {
@@ -122,7 +141,11 @@ type Config struct {
 	Migration   MigrationConfig        `yaml:"migration"`              // Local-tool migration mode
 	CustomTools []CustomToolConfig     `yaml:"custom_tools,omitempty"` // User-defined custom tools
 	Integrity   string                 `yaml:"integrity,omitempty"`    // Security (H-12): HMAC-SHA256 of sensitive fields
-	mu          sync.Mutex             `yaml:"-"`                      // protects Save and field mutations
+	// IntegritySchema 是落盘配置的完整性 schema 版本（第十轮审计 P2-4）。
+	// 见 integritySchemaVersion 的说明：它让「文件本应有 integrity 却缺失」
+	// 可被识别并告警，而不是被当作「从未配置过」静默放行。
+	IntegritySchema int        `yaml:"integrity_schema,omitempty"`
+	mu              sync.Mutex `yaml:"-"` // protects Save and field mutations
 }
 
 // CoreConfig holds the high-level paths and global toggles.
@@ -216,12 +239,13 @@ func (c *Config) SetProxy(http, https, noProxy string, enabled bool) error {
 // 的并发修改影响；副本上的修改不会写回原配置。
 func (c *Config) Clone() *Config {
 	cp := Config{
-		Core:      c.Core,
-		Path:      c.Path,
-		Proxy:     c.Proxy,
-		Sniff:     c.Sniff,
-		Migration: c.Migration,
-		Integrity: c.Integrity,
+		Core:            c.Core,
+		Path:            c.Path,
+		Proxy:           c.Proxy,
+		Sniff:           c.Sniff,
+		Migration:       c.Migration,
+		Integrity:       c.Integrity,
+		IntegritySchema: c.IntegritySchema,
 	}
 	cp.Mirror = make(map[string]string, len(c.Mirror))
 	for k, v := range c.Mirror {
@@ -355,6 +379,27 @@ func Load(xmdeDir string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
+	// 第十轮审计 P2-5 附带修正：yaml.v3 对 **map** 字段的语义是**合并**而非替换
+	// ——cfg 在 Unmarshal 前已被 defaults() 播种了 defaultMirrors()，因此
+	// 文件里写了 `mirror: {}`（或只写了部分键）时，解码后仍是「默认表 ∪ 文件表」。
+	//
+	// 这会直接破坏 HMAC 往返：Save 时 mirror 为空 → HMAC 按空表算；Load 时
+	// 同一个文件被合并回默认表 → HMAC 按默认表算 → **无篡改也验签失败**。
+	// 在 P2-5 把 mirror 之外的字段也纳入覆盖之前，这个错配被「重置后恰好又
+	// 等于默认表」掩盖了；现在它会把正常配置误判成篡改并**清空 CustomTools**
+	// （internal/gui 的 TestConfigCustomToolsRoundTrip 正是这样被暴露的）。
+	//
+	// 修法：先探测文件里是否**显式**声明了 mirror 段，是则清空播种值再解码，
+	// 使「文件里的 mirror」成为唯一事实来源（与用户在文件里写的内容一致）。
+	// 文件完全没有 mirror 段时保留默认表 —— 那是全新安装/极简手写配置的既有
+	// 行为，且此时不会有 HMAC（首次 Save 才会写入），不会产生往返错配。
+	if fileDeclaresKey(data, "mirror") {
+		cfg.Mirror = nil
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+	}
+
 	// Security (H-12): Verify config integrity if HMAC is present.
 	// A mismatch indicates the config was tampered with or edited
 	// outside of xdev. To protect against malicious redirection of
@@ -363,28 +408,41 @@ func Load(xmdeDir string) (*Config, error) {
 	// (e.g., AI config) are preserved to support legitimate cross-
 	// machine migration. The user is prompted to reconfigure via
 	// `xdev config set` which regenerates the HMAC.
+	//
+	// 第十轮审计 P2-4（可运维性缺口）：校验原先只在 Integrity **非空**时进行，
+	// 于是「删掉 config.yaml 里的 integrity: 那一行」等价于**完全关闭**校验且
+	// 无任何告警 —— 运维无法区分「从未配置过 integrity」（全新安装的正常状态）
+	// 与「integrity 被删掉了」。现在分两条路径，但都走同一套「告警 + 重置 +
+	// 清空 Integrity，不拒绝启动」的既有契约（A-15）：
+	//
+	//	a) Integrity 非空但验签失败 —— 篡改或跨机迁移（原有路径，文案不变）；
+	//	b) Integrity 为空、但落盘文件带 schema 标记 —— 说明本文件**由 xdev 写出**
+	//	   （本应有 integrity），那一行却不见了：误改 / 脚本重写 / 传输损坏。
+	//
+	// 注意 (b) 的判据是**文件里的** schema 标记（cfg.IntegritySchema 来自
+	// yaml.Unmarshal），而不是内存默认值 —— 否则全新安装（无 config.yaml）与
+	// 用户手写的极简配置都会被误报。
 	if cfg.Integrity != "" {
 		expectedHMAC := cfg.computeIntegrityHMAC()
 		if expectedHMAC != cfg.Integrity {
 			safeDefaults := defaults(xmdeDir)
 			fmt.Fprintln(os.Stderr, "⚠ WARNING: config.yaml integrity check FAILED — the file may have been tampered with or edited outside xdev.")
-			fmt.Fprintln(os.Stderr, "  Security-sensitive fields (root dir, paths, mirrors, path mode) have been reset to safe defaults to protect against malicious redirection.")
+			fmt.Fprintln(os.Stderr, "  Security-sensitive fields (root dir, paths, mirrors, mirror preference, proxy, custom tools, path mode) have been reset to safe defaults to protect against malicious redirection.")
 			fmt.Fprintln(os.Stderr, "  Run `xdev config set` to reconfigure and regenerate the integrity hash.")
-			log.Printf("[config] WARNING: integrity check failed — sensitive fields (root dir, paths, mirrors, path mode) reset to defaults")
-			// A-15：根目录同属敏感字段（它决定全部派生子目录的归属）。重置时把
-			// 根与**全部 6 个**派生子目录一起拉回 safeDefaults，避免留下
-			// 「新根 + 旧子目录」的混合状态（A-14 的同一类错配）。
-			cfg.Core.XMDevDir = safeDefaults.Core.XMDevDir
-			cfg.Core.InstallDir = safeDefaults.Core.InstallDir
-			cfg.Core.ShimDir = safeDefaults.Core.ShimDir
-			cfg.Core.ManifestDir = safeDefaults.Core.ManifestDir
-			cfg.Core.DownloadDir = safeDefaults.Core.DownloadDir
-			cfg.Core.CacheDir = safeDefaults.Core.CacheDir
-			cfg.Core.EnvDir = safeDefaults.Core.EnvDir
-			cfg.Mirror = safeDefaults.Mirror
-			cfg.Path.Mode = safeDefaults.Path.Mode
-			cfg.Integrity = ""
+			log.Printf("[config] WARNING: integrity check failed — sensitive fields (root dir, paths, mirrors, mirror preference, proxy, custom tools, path mode) reset to defaults")
+			cfg.resetSensitiveFields(safeDefaults)
 		}
+	} else if cfg.IntegritySchema >= integritySchemaVersion {
+		// P2-4：文件声明「由完整性感知的版本写出」，integrity 却不见了。
+		// 与验签失败同样处理（告警 + 重置 + 清空），但**不拒绝启动**：硬失败
+		// 会让所有全新安装（首次 Save 之前本就没有 integrity）无法启动。
+		safeDefaults := defaults(xmdeDir)
+		fmt.Fprintln(os.Stderr, "⚠ WARNING: config.yaml integrity check FAILED — the `integrity` field is MISSING from a file that xdev wrote (integrity_schema is set).")
+		fmt.Fprintln(os.Stderr, "  The integrity hash was deleted or lost, so tampering with the fields it covers can no longer be detected.")
+		fmt.Fprintln(os.Stderr, "  Security-sensitive fields (root dir, paths, mirrors, mirror preference, proxy, custom tools, path mode) have been reset to safe defaults.")
+		fmt.Fprintln(os.Stderr, "  Run `xdev config set` to reconfigure and regenerate the integrity hash.")
+		log.Printf("[config] WARNING: integrity field is missing while integrity_schema=%d is set — sensitive fields reset to defaults", cfg.IntegritySchema)
+		cfg.resetSensitiveFields(safeDefaults)
 	}
 
 	// Security (H-12): Validate mirror URLs use HTTPS.
@@ -446,6 +504,49 @@ func Load(xmdeDir string) (*Config, error) {
 	return cfg, nil
 }
 
+// fileDeclaresKey 判断 YAML 文档在**顶层**是否显式声明了 key（第十轮 P2-5）。
+//
+// 用途：Load 前 cfg 已被 defaults() 播种，而 yaml.v3 对 map 字段是**合并**
+// 语义 —— 只有先知道「文件里到底写没写这一段」，才能决定是否清空播种值，
+// 让文件成为唯一事实来源。这里只看顶层键，解析失败（坏 YAML）交由调用方的
+// 主 Unmarshal 报错，本函数返回 false 不改变既有错误路径。
+func fileDeclaresKey(data []byte, key string) bool {
+	var top map[string]interface{}
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return false
+	}
+	_, ok := top[key]
+	return ok
+}
+
+// resetSensitiveFields 把全部**重定向类**敏感字段拉回 safeDefaults，并清空
+// Integrity 以便下一次 Save 按当前格式重新生成。
+//
+// 第九轮 A-15：根目录同属敏感字段（它决定全部派生子目录的归属）。重置时把
+// 根与**全部 6 个**派生子目录一起拉回 safeDefaults，避免留下「新根 + 旧子目录」
+// 的混合状态（A-14 的同一类错配）。
+//
+// 第十轮 P2-5：新增 mirror_preference / proxy / custom_tools 三项。它们与既有的
+// mirror 表同属**下载重定向面**（mirror_preference 是最高优先级下载源，
+// proxy 决定流量去向，custom_tools[].source_url 决定自定义工具从哪里取版本），
+// 因此一律按同一语义**重置**而非仅告警——理由见 computeIntegrityHMAC 的注释。
+func (c *Config) resetSensitiveFields(safeDefaults *Config) {
+	c.Core.XMDevDir = safeDefaults.Core.XMDevDir
+	c.Core.InstallDir = safeDefaults.Core.InstallDir
+	c.Core.ShimDir = safeDefaults.Core.ShimDir
+	c.Core.ManifestDir = safeDefaults.Core.ManifestDir
+	c.Core.DownloadDir = safeDefaults.Core.DownloadDir
+	c.Core.CacheDir = safeDefaults.Core.CacheDir
+	c.Core.EnvDir = safeDefaults.Core.EnvDir
+	c.Mirror = safeDefaults.Mirror
+	c.Path.Mode = safeDefaults.Path.Mode
+	// P2-5：下载重定向面。
+	c.Core.MirrorPreference = nil
+	c.Proxy = safeDefaults.Proxy
+	c.CustomTools = nil
+	c.Integrity = ""
+}
+
 // computeIntegrityHMAC computes an HMAC-SHA256 over the security-sensitive
 // fields of the config using the machine-specific key. This allows detection
 // of tampering with paths, mirror URLs, or other settings that could redirect
@@ -459,18 +560,55 @@ func (c *Config) computeIntegrityHMAC() string {
 	// 「防重定向」对配置根本身失效。与 A-14（改根后派生子目录仍指向旧值）叠加时，
 	// 会放大成「根被换掉但工具/PATH 仍写旧目录」的静默错配。
 	//
-	// 代价（已由守卫钉住）：纳入该字段会**改变 HMAC 值**，升级前写下的配置文件
+	// 第十轮审计 P2-5（P2）：补齐三项下载重定向面的残留覆盖 ——
+	//
+	//   - mirror_preference：**最高优先级**下载源（installer.go:1087 的
+	//     buildMirrorCandidates 把它排在 manifest 镜像与官方 URL 之前），篡改它
+	//     可把下载重定向到攻击者控制的镜像；
+	//   - proxy.*：决定下载流量走哪个代理（installer.go:744 ProxyURL）；
+	//   - custom_tools[].source_url：决定自定义工具从哪里取版本清单。
+	//
+	// 为什么这三项**重置**而不是「只告警」：它们与既有被重置的 mirror 表同属
+	// 同一类字段（重定向面），拆分两种语义会让「验签失败」的含义变得不一致，
+	// 用户也无从预期。重置的代价已由既有提示文案覆盖（"Run `xdev config set`
+	// to reconfigure"）：proxy 重置**确实**会让用户暂时失去代理配置（表现为
+	// 直连），custom_tools 的重置会清掉自定义工具注册（manifest 文件仍在
+	// ManifestDir 下，可重新添加）。这是「不静默采信被改过的重定向配置」与
+	// 「不打断用户既有配置」之间的取舍，本轮选前者：一次告警 + 重配，好过把
+	// 被篡改的镜像/代理静默用于后续所有下载。
+	//
+	// 代价（已由守卫钉住）：纳入字段会**改变 HMAC 值**，升级前写下的配置文件
 	// 必然验签失败一次。Load 的既有行为是「告警 + 重置敏感字段 + 清空 Integrity」，
 	// **不拒绝启动**——这一契约被 TestIntegrityHMAC_LegacyConfigUpgradeIsNotFatal
-	// 显式钉死，因此升级不会锁死用户。
+	// 与 TestIntegrityHMAC_Round9FormatUpgradeIsNotFatal 显式钉死，因此升级不会
+	// 锁死用户。
+	// 用**独立的只含敏感子字段**的结构体，而不是直接序列化 ProxyConfig /
+	// CustomToolConfig：后者的 yaml/json tag 一旦调整（例如新增展示字段）会
+	// 无声地改变 HMAC，把一次无害的重构变成全员验签失败。
+	type proxyIntegrityData = struct {
+		HTTP    string `json:"http"`
+		HTTPS   string `json:"https"`
+		NoProxy string `json:"no_proxy"`
+		Enabled bool   `json:"enabled"`
+	}
+	type customToolIntegrity = struct {
+		Name       string `json:"name"`
+		SourceURL  string `json:"source_url"`
+		SourceType string `json:"source_type"`
+		Shim       string `json:"shim"`
+		EnvVar     string `json:"env_var"`
+	}
 	type integrityData struct {
-		XMDevDir    string            `json:"xmdevenv_dir"`
-		InstallDir  string            `json:"install_dir"`
-		ShimDir     string            `json:"shim_dir"`
-		ManifestDir string            `json:"manifest_dir"`
-		DownloadDir string            `json:"download_dir"`
-		Mirror      map[string]string `json:"mirror"`
-		PathMode    string            `json:"path_mode"`
+		XMDevDir         string                `json:"xmdevenv_dir"`
+		InstallDir       string                `json:"install_dir"`
+		ShimDir          string                `json:"shim_dir"`
+		ManifestDir      string                `json:"manifest_dir"`
+		DownloadDir      string                `json:"download_dir"`
+		Mirror           map[string]string     `json:"mirror"`
+		PathMode         string                `json:"path_mode"`
+		MirrorPreference []string              `json:"mirror_preference"`
+		Proxy            proxyIntegrityData    `json:"proxy"`
+		CustomTools      []customToolIntegrity `json:"custom_tools"`
 	}
 	snapshot := integrityData{
 		XMDevDir:    c.Core.XMDevDir,
@@ -480,10 +618,35 @@ func (c *Config) computeIntegrityHMAC() string {
 		DownloadDir: c.Core.DownloadDir,
 		Mirror:      make(map[string]string),
 		PathMode:    c.Path.Mode,
+		Proxy: proxyIntegrityData{
+			HTTP:    c.Proxy.HTTP,
+			HTTPS:   c.Proxy.HTTPS,
+			NoProxy: c.Proxy.NoProxy,
+			Enabled: c.Proxy.Enabled,
+		},
+		CustomTools: make([]customToolIntegrity, 0, len(c.CustomTools)),
+	}
+	// 规范化 nil / 空切片：yaml 把 nil 与空切片都写成 `key: []`，回读时得到
+	// **非 nil 空切片**，而 encoding/json 对二者的编码不同（null vs []）。
+	// 若不归一，「Save 写 nil → Load 读空切片」会在**没有任何篡改**的情况下
+	// 造成验签失败，把正常往返误判成篡改（TestIntegrityHMAC_SaveLoadRoundTripStillValid
+	// 正是钉住这一点的守卫）。
+	if len(c.Core.MirrorPreference) > 0 {
+		snapshot.MirrorPreference = append([]string(nil), c.Core.MirrorPreference...)
 	}
 	// Sort mirror keys for deterministic output
 	for k, v := range c.Mirror {
 		snapshot.Mirror[k] = v
+	}
+	// 顺序敏感：保持配置里的原始顺序（顺序本身影响候选优先级）。
+	for _, ct := range c.CustomTools {
+		snapshot.CustomTools = append(snapshot.CustomTools, customToolIntegrity{
+			Name:       ct.Name,
+			SourceURL:  ct.SourceURL,
+			SourceType: ct.SourceType,
+			Shim:       ct.Shim,
+			EnvVar:     ct.EnvVar,
+		})
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -496,11 +659,14 @@ func (c *Config) computeIntegrityHMAC() string {
 // pattern (write to .tmp, then os.Rename) to prevent corruption.
 // Security (H-12): Before saving, an HMAC of sensitive fields is computed
 // and stored in the Integrity field so tampering can be detected on next load.
+// 第十轮 P2-4：同时盖上 integritySchemaVersion 标记，使「本文件由 xdev 写出」
+// 这一事实在 integrity 行丢失时仍可辨认（见 integritySchemaVersion 的说明）。
 func (c *Config) Save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Compute and store integrity HMAC before saving
 	c.Integrity = c.computeIntegrityHMAC()
+	c.IntegritySchema = integritySchemaVersion
 	return c.saveLocked()
 }
 
