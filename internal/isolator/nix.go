@@ -22,12 +22,6 @@ type nixIsolator struct {
 	// writtenFiles records path → SHA-256 of everything generateFlake wrote
 	// (C-07), so the persisted state can prove ownership at Teardown time.
 	writtenFiles map[string]string
-
-	// stateErr records that the persisted session could not be read
-	// (第九轮 A-02, container.go 同源)。零值状态不等于「没有会话」：
-	// writtenFiles 丢了就无法证明 flake.nix 的归属，Teardown 必须把这件事
-	// 说出来，而不是让用户以为环境已清理干净。
-	stateErr error
 }
 
 func newNixIsolator() (*nixIsolator, error) {
@@ -38,11 +32,11 @@ func newNixIsolator() (*nixIsolator, error) {
 }
 
 // loadSaved 恢复上次持久化的 nix 会话（第九轮 A-02 与 container.go 同源）：
-// 状态损坏时记下错误交给 Teardown 报出来，而不是退化成「没有会话」。
+// 只填充句柄；状态损坏**不缓存**成字段，交给真正消费状态的路径在当下重新
+// loadState 判定（第十轮 P2-3 让 container 侧也改成同样的形态，两侧对称）。
 func (n *nixIsolator) loadSaved() {
 	s, err := loadState(n.xmdeDir, string(ModeNix))
 	if err != nil {
-		n.stateErr = err
 		return
 	}
 	if s.FlakeDir != "" {
@@ -73,17 +67,45 @@ func (n *nixIsolator) Setup(ctx context.Context, spec *EnvironmentSpec) error {
 
 	// 第九轮 A-02（与 container.go 的 Setup 同源）：新会话即将覆盖旧的持久化
 	// 状态，若旧状态损坏，其 writtenFiles 归属记录会永久消失，先把损坏文件改名留证。
-	if n.stateErr != nil {
+	// 第十轮 P2-3：在**当下**重新 loadState 判定（不再用构造时的缓存字段）。
+	if _, stateErr := loadState(n.xmdeDir, string(ModeNix)); stateErr != nil {
 		log.Printf("isolate setup (nix): previous state was corrupt (%v); %s",
-			n.stateErr, quarantineState(n.xmdeDir, string(ModeNix)))
-		n.stateErr = nil
+			stateErr, quarantineState(n.xmdeDir, string(ModeNix)))
 	}
-	saveState(n.xmdeDir, string(ModeNix), persistedState{
+	// 第十轮 P2-2（与 container.go 的 Setup 同源）：state 落盘失败必须**报错并
+	// 回滚**。修复前 saveState 无返回值，这里静默通过：flake.nix 已经写进项目，
+	// 归属记录（WrittenFiles）却没落盘 → Teardown 读不到会话，只会静默成功 →
+	// flake.nix 永久残留，用户重跑 setup 又被 ensureOverwritable 拒绝（环境卡死）。
+	// 审计现场：`nix setup err=<nil> state_exists=false flake_written=true`。
+	if err := saveState(n.xmdeDir, string(ModeNix), persistedState{
 		FlakeDir:     n.flakeDir,
 		ProjectDir:   n.projectDir,
 		WrittenFiles: n.writtenFiles,
-	})
+	}); err != nil {
+		return n.rollbackFailedSetup(err)
+	}
 	return nil
+}
+
+// rollbackFailedSetup 在 state 无法落盘时删除本次 Setup 刚写的 flake.nix，
+// 并返回说明「两件事」的错误：state 没落盘 + 回滚是否成功。
+//
+// 回滚复用 C-07 的内容 hash 归属规则（removeIfContentUnchanged）：只删
+// **内容仍与本次写入一致**的文件。这同时保证了 --force 场景下的正确性——若用户
+// 在 Setup 与回滚之间改写了 flake.nix，文件不再属于 xdev，必须原样留下。
+func (n *nixIsolator) rollbackFailedSetup(cause error) error {
+	if n.flakeDir == "" {
+		return fmt.Errorf("nix isolation setup could not persist its state: %w", cause)
+	}
+	flakePath := filepath.Join(n.flakeDir, "flake.nix")
+	removed := removeIfContentUnchanged(flakePath, writtenHash(n.writtenFiles, flakePath))
+	if !removed {
+		return fmt.Errorf("nix isolation setup could not persist its state: %w; "+
+			"the generated %s could not be rolled back (it may have been changed or removed) — "+
+			"delete it manually before re-running setup", cause, flakePath)
+	}
+	return fmt.Errorf("nix isolation setup could not persist its state, so the generated flake was rolled back "+
+		"(removed) to avoid leaving an unowned file behind: %w", cause)
 }
 
 // Teardown removes the flake files this isolator wrote (C-07 / P1-34).
@@ -127,7 +149,13 @@ func (n *nixIsolator) Teardown(ctx context.Context) error {
 			log.Printf("isolate teardown (nix): removed nix develop artifact %s", lockPath)
 		}
 	}
-	clearState(n.xmdeDir, string(ModeNix))
+	// 第十轮 P2-3：与 container.go 的 Teardown 对齐——只清除**仍然属于本次
+	// 处理的那个会话**的 state。上面刚刚重新 loadState 过，这里的 guard 再读一次
+	// 磁盘，挡住「loadState 与 clearState 之间另一个进程 setup 了新会话」的窗口，
+	// 否则新会话的归属记录会被连带删除。
+	clearState(n.xmdeDir, string(ModeNix), func(s persistedState) bool {
+		return s.FlakeDir == state.FlakeDir && s.ProjectDir == state.ProjectDir
+	})
 	return nil
 }
 

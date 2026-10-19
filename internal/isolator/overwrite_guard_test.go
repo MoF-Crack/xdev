@@ -219,7 +219,10 @@ func TestNixTeardownLegacyStateSkipsRemovalAndLogs(t *testing.T) {
 	writeFileT(t, flake, userFlakeContent)
 	writeFileT(t, lock, "{}\n")
 	// 旧格式：只有 flakeDir/projectDir，没有 writtenFiles。
-	saveState(home, string(ModeNix), persistedState{FlakeDir: proj, ProjectDir: proj})
+	// 第十轮 P2-2：saveState 现在返回 error（正常路径为 nil）。
+	if err := saveState(home, string(ModeNix), persistedState{FlakeDir: proj, ProjectDir: proj}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
 
 	logs := captureLog(t)
 	n := &nixIsolator{xmdeDir: home}

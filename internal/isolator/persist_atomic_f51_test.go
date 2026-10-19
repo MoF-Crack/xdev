@@ -27,7 +27,10 @@ func TestSaveState_WritesAtomicallyAndRoundTrips(t *testing.T) {
 			"/workspace/.devcontainer/devcontainer.json": "deadbeef",
 		},
 	}
-	saveState(dir, string(ModeContainer), want)
+	// 第十轮 P2-2：saveState 现在返回 error（写盘失败不再被吞），此处是正常路径。
+	if err := saveState(dir, string(ModeContainer), want); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
 
 	got, err := loadState(dir, string(ModeContainer))
 	if err != nil {
@@ -98,7 +101,10 @@ func TestLoadState_MissingFileIsSilentZero(t *testing.T) {
 // 守卫：saveState 的 JSON 必须能被标准解析（形状契约）。
 func TestSaveState_ProducesValidJSON(t *testing.T) {
 	dir := t.TempDir()
-	saveState(dir, string(ModeNix), persistedState{FlakeDir: "/tmp/f", ProjectDir: "/p"})
+	// 第十轮 P2-2：同上，正常路径必须返回 nil。
+	if err := saveState(dir, string(ModeNix), persistedState{FlakeDir: "/tmp/f", ProjectDir: "/p"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
 	data, err := os.ReadFile(statePath(dir, string(ModeNix)))
 	if err != nil {
 		t.Fatal(err)
