@@ -634,6 +634,23 @@ func completePartResidue(resp *http.Response, fromBytes int64) bool {
 type partValidator struct {
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"last_modified,omitempty"`
+	// Unreliable 标记「该 URL 的校验器不稳定」，用于化解 P2-6 与「轮换 ETag」的冲突。
+	//
+	// 第十轮审计 P2-2（P2，Round 9 P2-6 修复引入的可用性回归）：部分 CDN / 对象存储 /
+	// 网关的 ETag **不是内容哈希**，同一份内容每次响应都换一个值。此时 P2-6 的本地校验
+	// 会把「续传」变成「永远从零开始」：每次响应中断后，下一次续传拿到新 ETag → 判定
+	// 「内容已变」→ 删 `.part` → 从头下 → 再次中断 …… 审计实测 MaxRetries=8 全部失败、
+	// dest 长度 0（对照：固定 ETag 时 7 次请求成功）。
+	//
+	// 这是**根本性的语义张力**：既想用 ETag 检测「内容变更」，又想跨响应累积字节，
+	// 而一个每次都变的 ETag 无法同时满足两者。
+	//
+	// 化解方式：**首次**不匹配时仍然按 P2-6 处理（删前缀 —— 那是真正危险的场景：
+	// 旧内容前缀拼到新内容上会被 TOFU 永久固化），但在新一代 `.meta` 里打上
+	// Unreliable；此后该 URL 的续传**不再因校验器不一致而丢弃前缀**，累积恢复正常。
+	// 这样 P2-6 的核心保护（首次发现内容变更即丢弃）保留，而「校验器不稳定」的
+	// 服务端不会让下载永远无法完成。
+	Unreliable bool `json:"unreliable,omitempty"`
 }
 
 // ifRange 返回适合放进 If-Range 的值。RFC 9110：ETag（强校验器）优先，
@@ -892,6 +909,14 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			resumeValidator = v
 		}
 	}
+	// P2-2（Round 10）：校验器**不可靠**这一标记必须跨代保留 —— 它在 `.part` 被丢弃后
+	// 仍然有效（同一 URL 的性质，不是某一代 `.part` 的性质）。因此这里无论 fromBytes
+	// 是否为 0 都读一次，后续写回时把它带上，否则下一次从零下载会把标记覆盖掉，
+	// 「轮换 ETag 永远下不完」的问题就会复发。
+	validatorUnreliable := false
+	if v, ok := readPartValidator(partMeta); ok && v.Unreliable {
+		validatorUnreliable = true
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", opts.URL, nil)
 	if err != nil {
@@ -993,6 +1018,10 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	// 续传时若原先没有校验器，也用本次响应补上（下一次就有据可依）。
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
 		if v := validatorFromResponse(resp); v.usable() {
+			// P2-2：把「校验器不可靠」的既有标记带上（它是 URL 的性质，不是某一代
+			// `.part` 的性质）—— 否则下一次从零下载会把标记覆盖掉，轮换 ETag 的
+			// 服务端又会回到「永远下不完」。
+			v.Unreliable = validatorUnreliable
 			if !resumeValidator.usable() || fromBytes == 0 {
 				writePartValidator(partMeta, v)
 			}
@@ -1031,16 +1060,29 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// 记录不一致，说明同一 URL 的内容已经换过 —— 旧前缀与新后缀拼起来会得到
 		// 一份「长度正确、内容错误」的归档，并在 TOFU 通路上被 pin 永久固化
 		// （实测 H16：旧内容前 2048 字节 + 新内容后缀 = 被接受的拼接文件）。
-		// 因此这里删 .part 并 fail closed，让下一次从零重下。
+		//
+		// P2-2（Round 10）：若该 URL 已被标记为**校验器不可靠**（同一内容每次换
+		// ETag 的 CDN），则不再因不一致而丢弃前缀 —— 否则续传永远无法累积字节
+		// （审计实测 8 次重试全部失败、dest 长度 0）。首次不匹配时仍按 P2-6 处理，
+		// 并在新一代 `.meta` 里打上 Unreliable。
 		if resumeValidator.usable() && !resumeValidator.matchesResponse(resp) {
 			got := validatorFromResponse(resp)
-			log.Printf("[download] ERROR: content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q) — discarding the partial file",
-				resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
-			f.Close()
-			discardPart(partPath)
-			_ = os.Remove(partMeta)
-			return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — the local prefix cannot be spliced onto the new content; discarding the partial file and retrying from scratch",
-				sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
+			if resumeValidator.Unreliable {
+				log.Printf("[download] NOTE: validator changed again (stored etag=%q → response etag=%q) but this URL is marked as having unstable validators — keeping the local prefix so the transfer can make progress",
+					resumeValidator.ETag, got.ETag)
+			} else {
+				log.Printf("[download] ERROR: content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q) — discarding the partial file",
+					resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
+				f.Close()
+				discardPart(partPath)
+				// P2-2（Round 10）：把本次响应作为**新一代**的基准，并标记
+				// Unreliable —— 下一次若又变，就不再丢弃前缀（避免「轮换 ETag 的
+				// 服务端永远下不完」）。首次不匹配仍然丢弃前缀，P2-6 的核心保护不变。
+				got.Unreliable = true
+				writePartValidator(partMeta, got)
+				return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — the local prefix cannot be spliced onto the new content; discarding the partial file and retrying from scratch",
+					sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
+			}
 		}
 		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		if !ok || start != fromBytes {
