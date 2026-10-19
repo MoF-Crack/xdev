@@ -294,6 +294,21 @@ func CreateJunction(link, target string) error {
 // temporary file in the same directory, then renaming. This ensures that a
 // crash during write leaves the original file intact (no partial writes).
 //
+// 第十轮审计 P2-1（P2）：唯名临时文件把「崩溃残留」从**有界 1** 变成**每次中断 1**，
+// 而全仓没有回收者。审计实测：50 次中断写 → 50 个孤儿；**成功写入也不回收**；硬杀后
+// 留下 `state.cache.tmp-3564375558`。
+//
+// 这是 `os.CreateTemp` 方案的固有代价（固定名时最多 1 个孤儿），但「无界」不可接受 ——
+// 缓存目录会随每次崩溃线性增长。这里在**每次成功发布之后**顺带做一次**有界、按年龄**
+// 的清扫（见 sweepStaleTempFiles）：只删「同一个 base 前缀、且 mtime 早于 cutoff」的
+// 兄弟临时文件。
+//
+// **为什么按年龄而不是无条件删**：并发写者各自持有自己的临时文件，无条件删会把
+// **别人正在写**的临时文件抽走（Windows 上删除会失败、Unix 上写进已解除链接的 inode）。
+// 年龄门槛（默认 1 小时）远大于任何一次原子写的耗时（毫秒级），因此不会误伤在途写者。
+//
+// 清扫是 best-effort：失败只记日志，绝不影响本次写入的结果。
+//
 // 第九轮审计 A-10（P1-24 本体迁移）：临时文件必须**唯名**。
 //
 // 旧实现用固定 `<path>.tmp`。本函数是**所有调用点的共享底层** ——
@@ -358,7 +373,49 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename %s -> %s: %w", tmpPath, path, err)
 	}
+	// P2-1：发布成功后顺带回收**陈旧**的兄弟临时文件（best-effort）。
+	sweepStaleTempFiles(dir, base)
 	return nil
+}
+
+// staleTempAge 是判定 `<base>.tmp-*` 为「崩溃残留」而非「在途写者」的年龄门槛。
+//
+// 远大于任何一次原子写的耗时（毫秒级），因此不会误删正在被别的写者持有的临时文件。
+// 变量而非常量，便于测试注入较短的窗口。
+var staleTempAge = time.Hour
+
+// sweepStaleTempFiles 回收 dir 下「同一个 base 前缀、且 mtime 早于 cutoff」的
+// 临时文件（`<base>.tmp-*`）。
+//
+// 第十轮审计 P2-1（P2）：`os.CreateTemp` 方案的唯名临时文件在**进程被硬杀**时无法
+// 自我清理（正常失败路径都会 `os.Remove`），于是残留从固定名时代的「有界 1」变成
+// 「每次中断 1 且永不回收」。审计实测 50 次中断写 → 50 个孤儿。
+//
+// 判定依据是 **mtime 年龄**而非「是否存在」——并发写者各自持有自己的临时文件，
+// 无条件删会把在途写者抽走。清扫只删明确过期的（默认 1 小时）。
+//
+// 返回删除数量（供测试断言）；失败一律吞掉（best-effort，绝不影响本次写入）。
+func sweepStaleTempFiles(dir, base string) int {
+	prefix := base + ".tmp-"
+	cutoff := time.Now().Add(-staleTempAge)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		fi, ierr := e.Info()
+		if ierr != nil || fi.ModTime().After(cutoff) {
+			continue // 在途写者（或无法判定）—— 不动
+		}
+		if rerr := os.Remove(filepath.Join(dir, e.Name())); rerr == nil {
+			removed++
+		}
+	}
+	return removed
 }
 
 // renameWithRetry 以有界重试窗口执行 rename。
