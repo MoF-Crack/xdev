@@ -69,6 +69,56 @@ type cachedVM struct {
 	poisoned bool
 }
 
+// loadTimeout is the maximum time allowed for a plugin's top-level chunk
+// (L.DoFile). 第十轮审计 P1-2：此前加载阶段**完全没有超时**。
+const loadTimeout = 5 * time.Second
+
+// loadProtected 在**有超时**的独立 goroutine 里执行插件顶层代码（L.DoFile）。
+//
+// 第十轮审计 P1-2（P1）：M-12 的三处超时全部在**调用期**（`L.CallByParam`），
+// 而 `L.DoFile` 是裸调用 —— 插件顶层写 `while true do end` 就能让 CLI/TUI/GUI
+// **每次启动永久挂起**（无日志、无错误），因为 `registerUserPlugins` 在
+// `RegisterAll` 里对每个 `.lua` 执行它。
+//
+// 审计实测（把调用超时注入为 100ms）：
+//
+//	插件顶层： local n=0 while n < 1e8 do n=n+1 end
+//	RESULT L3: LoadPlugin err=<nil> elapsed=2.9663249s
+//	CONFIRMED L3: 顶层代码在加载期无界执行（elapsed 2.97s，调用超时 100ms）
+//
+// 与调用期超时的一个关键差别：**超时后可以安全地 Close 这个 VM** —— 此时还没有
+// 任何 goroutine 需要保留它（调用期超时的 VM 因为可能仍在被孤儿 goroutine 使用，
+// 只能"poison + 不 Close"）。这里的孤儿 goroutine 仍跑在 L 上，所以 Close 仍有
+// 风险；因此采用与调用期一致的策略：**放弃该 VM 并让调用方丢弃它**（不缓存、
+// 不复用），把 L 留给 GC。这样顶层死循环最多消耗一个 goroutine，不会阻塞启动。
+func (e *LuaEngine) loadProtected(path string) (*lua.LState, error) {
+	L, err := e.newSandboxedVM()
+	if err != nil {
+		return nil, err
+	}
+
+	doneCh := make(chan error, 1)
+	callProtected(doneCh, func() error {
+		if derr := L.DoFile(path); derr != nil {
+			return fmt.Errorf("load lua plugin %s: %w", path, derr)
+		}
+		return nil
+	})
+
+	select {
+	case derr := <-doneCh:
+		if derr != nil {
+			L.Close()
+			return nil, derr
+		}
+		return L, nil
+	case <-time.After(e.callTimeout(loadTimeout)):
+		// 顶层代码超时：不 Close（孤儿 goroutine 可能仍在 L 上执行），
+		// 直接丢弃这个 VM —— 调用方不会缓存它。
+		return nil, fmt.Errorf("loading plugin %s timed out after %s (the top-level chunk did not return) — the plugin is refusing to load and has been abandoned", path, e.callTimeout(loadTimeout))
+	}
+}
+
 // callTimeout returns def unless a test injected a shorter override.
 func (e *LuaEngine) callTimeout(def time.Duration) time.Duration {
 	if e.callTimeoutOverride > 0 {
@@ -119,19 +169,12 @@ func (e *LuaEngine) vmFor(path string, vfox bool) (*lua.LState, *cachedVM, error
 		e.mu.Lock()
 		cv, ok := e.vms[path]
 		if !ok {
-			L, err := e.newSandboxedVM()
+			// 第十轮审计 P1-2：加载阶段必须有超时（此前 L.DoFile 是裸调用，
+			// 顶层 `while true do end` 会让每次启动永久挂起）。
+			L, err := e.loadProtected(path)
 			if err != nil {
 				e.mu.Unlock()
 				return nil, nil, err
-			}
-			if err := L.DoFile(path); err != nil {
-				L.Close()
-				e.mu.Unlock()
-				label := "lua"
-				if vfox {
-					label = "vfox"
-				}
-				return nil, nil, fmt.Errorf("load %s plugin %s: %w", label, path, err)
 			}
 			// 第八轮审计 A-01：PLUGIN 表本身的读取也要受保护（插件可给它挂抛错的
 			// __index；裸 GetGlobal 会以 Go panic 打崩宿主）。

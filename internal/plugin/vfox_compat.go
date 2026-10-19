@@ -54,19 +54,29 @@ func (e *LuaEngine) LoadVfoxPlugin(path string) (*VfoxPlugin, error) {
 // PLUGIN fields directly. It validates required functions based on the
 // specs and returns a populated luaBasePlugin.
 func (e *LuaEngine) loadLuaBase(path string, specs luaCallSpecs, vfox bool) (*luaBasePlugin, error) {
-	L, err := e.newSandboxedVM()
+	// 第十轮审计 P1-2（P1）：加载必须走**带超时**的 loadProtected。
+	//
+	// 此前这里是裸 `L.DoFile(path)`（且 `defer L.Close()`）—— 插件顶层
+	// `while true do end` 就能让 CLI/TUI/GUI **每次启动永久挂起**（无日志、无错误），
+	// 因为 `registerUserPlugins` 在 `RegisterAll` 里对每个 `.lua` 执行它。
+	// 注意这条路径**不经过 `vmFor`**（它自建 VM 并在返回前 Close），所以只在
+	// `vmFor` 里加超时是不够的 —— 必须同时修这里。
+	//
+	// 超时后**不能** `L.Close()`：孤儿 goroutine 仍在 L 上执行（见 loadProtected 的
+	// 注释），Close 会与它竞争。loadProtected 在超时分支直接丢弃 VM，因此这里改为
+	// 只在成功路径 Close。
+	L, err := e.loadProtected(path)
 	if err != nil {
-		return nil, err
-	}
-	defer L.Close()
-
-	if err := L.DoFile(path); err != nil {
 		label := "lua"
 		if vfox {
 			label = "vfox"
 		}
+		if strings.Contains(err.Error(), "timed out") {
+			return nil, err
+		}
 		return nil, fmt.Errorf("load %s plugin %s: %w", label, path, err)
 	}
+	defer L.Close()
 
 	// 第八轮审计 A-01（P0）：PLUGIN 表本身的读取必须走受保护调用 —— 插件可以给
 	// PLUGIN 挂抛错的 __index 元方法，裸 L.GetGlobal/L.GetField 会以 Go panic
@@ -205,7 +215,18 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 	}
 	defer cv.mu.Unlock()
 
-	// Security (M-12): Add execution timeout
+	// Security (M-12): Add execution timeout.
+	//
+	// 第十轮审计 P1-1（P1）：**结果提取必须在同一个超时窗口内**（同 callArchive）。
+	// `available()` 的提取有两处会执行插件代码：
+	//   - vfox 格式：`getFieldString(L, entry, "version")` 走 `L.GetField` → 执行
+	//     条目表的 `__index`；
+	//   - `L.ForEach` 本身是原始遍历（不走 `__pairs`），但回调里的上述读取会。
+	// 审计实测（注入调用超时 400ms，`__index` 内跑 1e8 次有界自增 ≈2.3s/次）：
+	// vfox 的 `available()` 条目 `__index` → `err=<nil> elapsed=2.90s`。
+	// 因此把「调用 + 遍历 + 提取」整体放进受保护的闭包。
+	resCh := make(chan []string, 1)
+	extractErrCh := make(chan error, 1)
 	doneCh := make(chan error, 1)
 	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
@@ -215,6 +236,31 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 		}); err != nil {
 			return fmt.Errorf("available(): %w", err)
 		}
+		result := L.Get(-1)
+		L.Pop(1)
+		if result.Type() != lua.LTTable {
+			extractErrCh <- fmt.Errorf("available() must return a table, got %s", result.Type())
+			return nil
+		}
+		var versions []string
+		L.ForEach(result.(*lua.LTable), func(_ lua.LValue, v lua.LValue) {
+			if p.specs.vfoxFormat {
+				switch entry := v.(type) {
+				case lua.LString:
+					versions = append(versions, string(entry))
+				case *lua.LTable:
+					ver := getFieldString(L, entry, "version")
+					if ver != "" {
+						versions = append(versions, ver)
+					}
+				}
+			} else {
+				if s, ok := v.(lua.LString); ok {
+					versions = append(versions, string(s))
+				}
+			}
+		})
+		resCh <- versions
 		return nil
 	})
 	select {
@@ -230,32 +276,17 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 		return nil, fmt.Errorf("available() timed out after %s for plugin %s", e.callTimeout(availableCallTimeout), p.name)
 	}
 
-	result := L.Get(-1)
-	L.Pop(1)
-
-	if result.Type() != lua.LTTable {
-		return nil, fmt.Errorf("available() must return a table, got %s", result.Type())
+	select {
+	case e := <-extractErrCh:
+		return nil, e
+	default:
 	}
-
-	var versions []string
-	L.ForEach(result.(*lua.LTable), func(_ lua.LValue, v lua.LValue) {
-		if p.specs.vfoxFormat {
-			switch entry := v.(type) {
-			case lua.LString:
-				versions = append(versions, string(entry))
-			case *lua.LTable:
-				ver := getFieldString(L, entry, "version")
-				if ver != "" {
-					versions = append(versions, ver)
-				}
-			}
-		} else {
-			if s, ok := v.(lua.LString); ok {
-				versions = append(versions, string(s))
-			}
-		}
-	})
-	return versions, nil
+	select {
+	case versions := <-resCh:
+		return versions, nil
+	default:
+		return nil, fmt.Errorf("available() returned without a result table")
+	}
 }
 
 // callArchive runs the Lua archive() or install() function (based on specs).
@@ -267,7 +298,23 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 	defer cv.mu.Unlock()
 
 	fnName := p.specs.archiveFn
-	// Security (M-12): Add execution timeout
+	// Security (M-12): Add execution timeout.
+	//
+	// 第十轮审计 P1-1（P1）：**结果提取必须在同一个超时窗口内**。
+	// 此前 `time.After` 只守 `L.CallByParam`，而提取（`L.Get`/`getFieldString`/
+	// `getFieldInt`）在 select **之后**执行 —— 那些 helper 的 `L.GetField` 会执行
+	// 插件返回的表上的 `__index`，而 `extractField` 的 `L.PCall` 会**一直等它返回**。
+	// 于是 `__index` 里写 `while true do end` 就能让宿主永久挂起，尽管调用本身
+	// 早已"超时失败"。审计实测（注入调用超时 400ms，`__index` 内跑 1e8 次有界自增
+	// ≈2.3s/次）：`err=<nil> elapsed=7.43s`（3 次字段读取）。
+	// 把提取搬进受超时保护的闭包后，整个「调用 + 提取」是一个原子单元。
+	type archiveResult struct {
+		url    string
+		format string
+		strip  int
+		err    error
+	}
+	resCh := make(chan archiveResult, 1)
 	doneCh := make(chan error, 1)
 	callProtected(doneCh, func() error {
 		if err := L.CallByParam(lua.P{
@@ -276,6 +323,18 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 			Protect: true,
 		}, lua.LString(version), lua.LString(goos), lua.LString(arch)); err != nil {
 			return fmt.Errorf("%s(%s,%s,%s): %w", fnName, version, goos, arch, err)
+		}
+		// 提取在**同一 goroutine 内**完成（P1-1）。
+		result := L.Get(-1)
+		L.Pop(1)
+		if result.Type() != lua.LTTable {
+			resCh <- archiveResult{err: fmt.Errorf("%s() must return a table, got %s", fnName, result.Type())}
+			return nil
+		}
+		resCh <- archiveResult{
+			url:    getFieldString(L, result, "url"),
+			format: getFieldString(L, result, "format"),
+			strip:  getFieldInt(L, result, "strip"),
 		}
 		return nil
 	})
@@ -290,18 +349,17 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 		return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(archiveCallTimeout), p.name)
 	}
 
-	result := L.Get(-1)
-	L.Pop(1)
-
-	if result.Type() != lua.LTTable {
-		return nil, fmt.Errorf("%s() must return a table, got %s", fnName, result.Type())
+	var got archiveResult
+	select {
+	case got = <-resCh:
+	default:
+		return nil, fmt.Errorf("%s() returned without a result table", fnName)
+	}
+	if got.err != nil {
+		return nil, got.err
 	}
 
-	a := &LuaArchive{
-		URL:    getFieldString(L, result, "url"),
-		Format: getFieldString(L, result, "format"),
-		Strip:  getFieldInt(L, result, "strip"),
-	}
+	a := &LuaArchive{URL: got.url, Format: got.format, Strip: got.strip}
 	if a.URL == "" {
 		return nil, fmt.Errorf("%s() result missing 'url' field", fnName)
 	}
