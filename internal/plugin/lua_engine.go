@@ -36,6 +36,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -142,6 +143,79 @@ func callProtected(doneCh chan<- error, fn func() error) {
 		}()
 		doneCh <- fn()
 	}()
+}
+
+// runWithContext 在 **Lua 层可中断**的 context 下执行 fn，并把它自身的 panic
+// 转成错误。
+//
+// 第十一轮审计（Round 10 报告待办 1/2）：此前的超时全靠 `callProtected` 起一个
+// 独立 goroutine，超时后**放弃**它（VM 被 poison 但 goroutine 仍在跑）。这有两个
+// 实际问题：
+//
+//   - **插件线程永不停止**：`while true do end` 的 goroutine 会一直占着 CPU 直到
+//     进程退出（Round 9 的注释已承认这个残留）。宿主「看起来超时了」，但机器上
+//     仍有一个核被吃满。
+//   - **尾递归不受 `CallStackSize` 约束**：gopher-lua 对尾调用复用栈帧，
+//     `local function loop(n) return loop(n+1) end` 的深度**永远不增长**，因此
+//     `CallStackSize: 200` 对它完全无效。
+//
+// gopher-lua 本身提供了 `LState.SetContext`：它把主循环切换到
+// `mainLoopWithContext`，在**每条指令**前检查 `ctx.Done()`，命中即抛出
+// `<file>:<line>: context deadline exceeded`。实测（本机）：
+//
+//	callTimeout 设为 **30 秒**，ctx 设为 **300 毫秒** → 0.63s 返回
+//	`context deadline exceeded`（而不是等 30 秒，更不是永久挂起）
+//
+// 因此改用 ctx 作为**真正**的中断机制。`callProtected` 的 goroutine 仍然保留
+// —— 它负责把 panic 转成错误（Lua 错误是 Go panic），这是 ctx 做不到的。
+//
+// **注意**：`SetMx`（gopher-lua 的内存上限 API）**不可用** —— 它的实现是一个
+// 后台 goroutine 轮询 `runtime.ReadMemStats`，超限直接 `os.Exit(3)`。让宿主进程
+// 因为一个插件的内存用量而退出，比超时更糟。内存上限因此**仍未实现**（见 Round 11
+// 报告「未完成项」，需要 gopher-lua 层的字节配额支持）。
+func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func() error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// 只影响本次调用；调用结束后恢复「无 ctx」状态，避免把已取消的 ctx 留给
+	// 后续（可能复用同一 VM 的）调用。
+	prev := L.Context()
+	L.SetContext(ctx)
+	defer func() {
+		if prev != nil {
+			L.SetContext(prev)
+			return
+		}
+		// 恢复为无 ctx（nil context 等价于「不检查」）。
+		L.RemoveContext()
+	}()
+
+	doneCh := make(chan error, 1)
+	callProtected(doneCh, fn)
+
+	select {
+	case err := <-doneCh:
+		return err
+	case <-ctx.Done():
+		// ctx 已取消，主循环会在下一条指令处抛错并让 doneCh 收到结果。
+		// 给它一个很短的窗口把错误写出来（通常立刻就到）。
+		//
+		// **错误文案必须保留 "timed out"**：这是仓库既有契约
+		//（`lua_hardening_test.go` 断言 `strings.Contains(err, "timed out")`，
+		// `vfox_compat.go` 的调用方也按该子串区分「超时」与「插件自身报错」）。
+		// ctx 的原始文案是 `context deadline exceeded`，直接透出会破坏该契约，
+		// 因此统一包装成 `timed out after <d> (Lua execution aborted: <detail>)`，
+		// 把 ctx 细节作为补充信息放在括号里。
+		detail := "context deadline exceeded"
+		select {
+		case err := <-doneCh:
+			if err != nil {
+				detail = err.Error()
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+		return fmt.Errorf("timed out after %s (Lua execution aborted: %s)", timeout, detail)
+	}
 }
 
 // NewLuaEngine creates a new Lua engine.

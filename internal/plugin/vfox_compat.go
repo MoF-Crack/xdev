@@ -227,8 +227,10 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 	// 因此把「调用 + 遍历 + 提取」整体放进受保护的闭包。
 	resCh := make(chan []string, 1)
 	extractErrCh := make(chan error, 1)
-	doneCh := make(chan error, 1)
-	callProtected(doneCh, func() error {
+	// 第十一轮审计（待办 1/2）：改用 runWithContext —— 超时由 **Lua 主循环**在每条
+	// 指令前检查 ctx 并抛出 `context deadline exceeded`，因此插件线程**真的会停**，
+	// 而不是被放弃后继续吃 CPU。尾递归也因此被中断（它不受 CallStackSize 约束）。
+	callErr := e.runWithContext(L, e.callTimeout(availableCallTimeout), func() error {
 		if err := L.CallByParam(lua.P{
 			Fn:      getGlobalProtected(L, "available"),
 			NRet:    1,
@@ -263,17 +265,14 @@ func (e *LuaEngine) callAvailable(p *luaBasePlugin) ([]string, error) {
 		resCh <- versions
 		return nil
 	})
-	select {
-	case err := <-doneCh:
-		if err != nil {
-			return nil, err
-		}
-	case <-time.After(e.callTimeout(availableCallTimeout)):
-		// 票 20 / F-04: the abandoned goroutine still runs on this LState,
-		// so flag the VM before cv.mu is released — the next caller must
-		// rebuild it instead of sharing the corrupted stack.
+	if callErr != nil {
+		// 票 20 / F-04：VM 可能停在半途（ctx 取消抛出后栈状态不可信），
+		// 在释放 cv.mu 之前 poison —— 下一个调用方必须重建 VM。
 		cv.poisoned = true
-		return nil, fmt.Errorf("available() timed out after %s for plugin %s", e.callTimeout(availableCallTimeout), p.name)
+		if strings.Contains(callErr.Error(), "timed out after") {
+			return nil, fmt.Errorf("available() timed out after %s for plugin %s", e.callTimeout(availableCallTimeout), p.name)
+		}
+		return nil, callErr
 	}
 
 	select {
@@ -315,8 +314,7 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 		err    error
 	}
 	resCh := make(chan archiveResult, 1)
-	doneCh := make(chan error, 1)
-	callProtected(doneCh, func() error {
+	callErr := e.runWithContext(L, e.callTimeout(archiveCallTimeout), func() error {
 		if err := L.CallByParam(lua.P{
 			Fn:      getGlobalProtected(L, fnName),
 			NRet:    1,
@@ -338,15 +336,13 @@ func (e *LuaEngine) callArchive(p *luaBasePlugin, version, goos, arch string) (*
 		}
 		return nil
 	})
-	select {
-	case err := <-doneCh:
-		if err != nil {
-			return nil, err
-		}
-	case <-time.After(e.callTimeout(archiveCallTimeout)):
+	if callErr != nil {
 		// 票 20 / F-04: poison before releasing cv.mu (see callAvailable).
 		cv.poisoned = true
-		return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(archiveCallTimeout), p.name)
+		if strings.Contains(callErr.Error(), "timed out after") {
+			return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(archiveCallTimeout), p.name)
+		}
+		return nil, callErr
 	}
 
 	var got archiveResult
@@ -385,8 +381,7 @@ func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[strin
 
 	fnName := p.specs.envVarsFn
 	// Security (M-12): Add execution timeout
-	doneCh := make(chan error, 1)
-	callProtected(doneCh, func() error {
+	callErr := e.runWithContext(L, e.callTimeout(envVarsCallTimeout), func() error {
 		if err := L.CallByParam(lua.P{
 			Fn:      getGlobalProtected(L, fnName),
 			NRet:    1,
@@ -396,15 +391,13 @@ func (e *LuaEngine) callEnvVars(p *luaBasePlugin, installPath string) (map[strin
 		}
 		return nil
 	})
-	select {
-	case err := <-doneCh:
-		if err != nil {
-			return nil, err
-		}
-	case <-time.After(e.callTimeout(envVarsCallTimeout)):
+	if callErr != nil {
 		// 票 20 / F-04: poison before releasing cv.mu (see callAvailable).
 		cv.poisoned = true
-		return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(envVarsCallTimeout), p.name)
+		if strings.Contains(callErr.Error(), "timed out after") {
+			return nil, fmt.Errorf("%s() timed out after %s for plugin %s", fnName, e.callTimeout(envVarsCallTimeout), p.name)
+		}
+		return nil, callErr
 	}
 
 	result := L.Get(-1)
