@@ -422,7 +422,18 @@ func ReapStaleResidue(xmdeHome string) int {
 	}
 	if removed > 0 {
 		log.Printf("[shim] reaped %d stale residue entr(ies) under %s", removed, currentDir)
-		InvalidateShimIndex()
+		// **绝不在这里调用 InvalidateShimIndex()。**
+		//
+		// 第十一轮审计（本轮自查抓到的死循环）：`ReapStaleResidue` 被
+		// `buildShimIndexMap` 调用，而 `InvalidateShimIndex` → `writeDiskShimIndex`
+		// → 若内存索引为 nil 又会回调 `buildShimIndexMap` ——
+		// 形成 `buildShimIndexMap → ReapStaleResidue → InvalidateShimIndex →
+		// writeDiskShimIndex → buildShimIndexMap` 的**无限递归**（实测全量测试
+		// 从 ~6 分钟变成 >20 分钟仍未结束）。
+		//
+		// 回收是「卫生工作」，不需要让调用方失效索引：残留本来就不进索引
+		//（`isStaleResidueName` 已过滤），删掉它们不改变索引内容。
+		// 调用方若需要刷新索引，自己已经处在正确的刷新路径上。
 	}
 	return removed
 }
