@@ -1923,6 +1923,21 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	target := p.InstallDir(i.cfg.Core.InstallDir, ver)
 	log.Printf("[install] Uninstalling: %s@%s from %s", p.Name(), ver, target)
 
+	// 第十一轮审计（Round 10 报告待办 5 / P3-7）：**必须在删除目标之前**读活跃版本。
+	//
+	// 旧代码把 `currentVersion`（→ `util.ActiveVersion`）放在 `os.RemoveAll(target)`
+	// **之后**。它能工作，只是因为 `ActiveVersion` 当时**不检查目标是否存在** ——
+	// 删掉 install/<tool>/<ver> 后 `current/<tool>` 变成悬空链接，而旧实现仍
+	// 报「已激活」，于是 `activeVer == ver` 成立、下面的重指向/清理分支才会执行。
+	//
+	// 也就是说：Uninstall 一直**依赖那个幻影行为**来判断「被卸载的是当前活跃版本」。
+	// P3-7 修复后 `ActiveVersion` 正确地返回 ("", false)，这个依赖就断了 ——
+	// 卸载活跃版本时既不重指向也不清理 shim/环境变量，`current/<tool>` 永久悬空。
+	// 这是「修掉一个 bug 暴露出另一个隐藏依赖」的典型形态。
+	//
+	// 正确做法：在删除前把活跃版本读出来，之后只用这个快照判断。
+	activeVer, _ := i.currentVersion(p.Name())
+
 	// 1. Remove the installation directory
 	if err := os.RemoveAll(target); err != nil {
 		log.Printf("[install] ERROR: uninstall failed for %s@%s: %v", p.Name(), ver, err)
@@ -1930,7 +1945,6 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	}
 
 	// 2. Check if the uninstalled version was the active one
-	activeVer, _ := i.currentVersion(p.Name())
 	if activeVer == ver {
 		// Remove the current symlink
 		currentLink := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())

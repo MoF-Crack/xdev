@@ -440,10 +440,31 @@ func renameWithRetry(oldPath, newPath string) error {
 
 // ActiveVersion reads the current/<tool> symlink to determine the active
 // version of a tool. Returns ("", false) when no active version exists.
+//
+// 第十一轮审计（Round 10 报告待办 5 / P3-7）：**必须确认目标真的存在**。
+// 旧实现只做 `os.Readlink` 就直接返回 `(base, true)`，于是**悬空**链接也会被
+// 报成「已激活」。
+//
+// 触发路径（F-23 场景）：解压失败后 `RemoveAll(install/<tool>/<ver>)` 删掉了目标，
+// 但 `current/<tool>` 链接还在 → 链接悬空。实测（修复前）：
+//
+//	ActiveVersion = "1.0.0" ok=true   而   target_exists=false
+//
+// 危害面：`xdev current`、`IsUpgradeAvailable`（经 `currentVersion`）、GUI 的
+// `GetActiveVersion`、`doctor`、`profile` 全都看到**幻影**激活版本 —— 用户以为
+// 工具可用（PATH 里也有它的 bin），实际二进制不存在；升级判断还会因此认为
+// 「已装 1.0.0」而**不提示**重新安装。
+//
+// 这里用 `os.Stat`（**跟随**链接）而不是 `os.Lstat`：要确认的是**目标**存在，
+// 而不是链接本身存在（链接本身由 Readlink 已证明存在）。
 func ActiveVersion(xmdeDir, toolName string) (string, bool) {
 	link := filepath.Join(xmdeDir, "current", toolName)
 	target, err := os.Readlink(link)
 	if err != nil {
+		return "", false
+	}
+	// P3-7：目标必须真实存在，否则链接悬空 —— 不得报「已激活」。
+	if _, err := os.Stat(link); err != nil {
 		return "", false
 	}
 	return filepath.Base(target), true
@@ -451,10 +472,18 @@ func ActiveVersion(xmdeDir, toolName string) (string, bool) {
 
 // ActiveInstallPath returns the install path of the currently active version
 // of a tool by reading the current/<tool> symlink, or "" if no version is active.
+//
+// 第十一轮审计（Round 10 报告待办 5 / P3-7）：与 ActiveVersion 同源 ——
+// 悬空链接必须返回 ""，否则调用方（doctor / GUI）会拿到一条**不存在**的路径，
+// 进而把「工具已装好」的错误结论呈现给用户。
 func ActiveInstallPath(xmdeDir, toolName string) string {
 	link := filepath.Join(xmdeDir, "current", toolName)
 	target, err := os.Readlink(link)
 	if err != nil {
+		return ""
+	}
+	// P3-7：目标必须真实存在（os.Stat 跟随链接）。
+	if _, err := os.Stat(link); err != nil {
 		return ""
 	}
 	return target
