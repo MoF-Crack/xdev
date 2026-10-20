@@ -75,7 +75,15 @@ func main() {
 	// 会把 sniff-cache 的 last_sniff_at 刷成 now，令 interval 策略的 TTL
 	// 判定失真（从「到期」翻成「新鲜」）。谓词语义见 cli.HasStartupSniff。
 	startupSniffPending := cli.HasStartupSniff()
-	cli.ShutdownSniffScheduler()
+	// 第十一轮审计（Round 10 报告待办 6）：收尾刷盘失败必须**可见**（此前静默）。
+	//
+	// 刻意**不影响退出码**：票 33（P1-29 / E-10）确立的契约是「退出码原样反映子进程
+	// 真实退出码」，一次收尾缓存刷盘失败不该覆盖它 —— 那会让 CI 脚本把「工具跑成功
+	// 但缓存没刷上」误判成命令失败。因此只写 stderr 提示，退出码仍由下面的
+	// execErr / exitCodeForError 决定。
+	if shutdownErr := cli.ShutdownSniffScheduler(); shutdownErr != nil {
+		fmt.Fprintf(os.Stderr, "xdev: warning: %v\n", shutdownErr)
+	}
 
 	if execErr != nil {
 		// 票 33（P1-29 / E-10）：子进程退出码原样传播——isolate exec /

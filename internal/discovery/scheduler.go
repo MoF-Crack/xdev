@@ -326,6 +326,21 @@ func (s *Scheduler) catalog() (*manifest.Catalog, error) {
 	return load(s.manifestDir)
 }
 
+// SetStartupStateForTest 手工搭建「后台嗅探仍在飞行」的状态，供跨包守卫使用。
+//
+// 为什么需要它：`Shutdown` 的**第一个** select 在 `startupDone` 已关闭时直接
+// `return nil`（「嗅探已自行落盘，无需回写」）。因此想确定性地驱动**兜底写盘**分支，
+// 必须构造出「startupDone 尚未关闭」的飞行中状态 —— 而 `startupDone`/`startupCancel`
+// 是包内私有字段，`internal/cli` 的守卫无法直接赋值。
+//
+// 与 Scheduler 包内既有守卫 `shutdown_f55_a04_test.go` 的做法一致（那边直接在包内
+// 赋值），这里只是把同一构造开放给跨包测试。**仅测试使用**：生产代码不得调用。
+func (s *Scheduler) SetStartupStateForTest(ctx context.Context, cancel context.CancelFunc, done chan struct{}) {
+	s.startupCtx = ctx
+	s.startupCancel = cancel
+	s.startupDone = done
+}
+
 // sniffNowTool sniffs one already-loaded tool. SniffAll must pass the
 // snapshot *Tool so the catalog is not re-parsed per worker (Spec 030).
 func (s *Scheduler) sniffNowTool(ctx context.Context, t *manifest.Tool, force bool) error {
@@ -650,6 +665,18 @@ func (s *Scheduler) sniffAllWithForce(ctx context.Context, force bool) error {
 	})
 	if mergeErr != nil {
 		log.Printf("[discovery] SniffAll: merge write failed: %v", mergeErr)
+		// 第十一轮审计（Round 10 报告待办 8）：**必须把合并写失败上报**。
+		//
+		// `withCacheLock` 在读失败（缓存损坏/不可读）时会正确地返回错误并拒绝写
+		// 空缓存（Round 10 P2-1 的修复）。但此前调用方**只记日志、不返回**，于是
+		// 缓存损坏时 `xdev sniff --all` / GUI「全部嗅探」**显示成功**，而这一轮的
+		// 嗅探结果**一个字节都没落盘** —— 用户以为嗅探过了，下次启动仍是旧数据。
+		//
+		// 这与 Round 10 P2-2（isolator `saveState` 失败被吞）是**完全相同的形态**：
+		// 底层返回了错误，调用方没检查。修 A-02 的写侧时修了 isolator，这里漏了。
+		//
+		// 与逐工具 sniff 错误（errs）合并上报：两类失败都让本次 SniffAll 不算成功。
+		errs = append(errs, fmt.Sprintf("cache write: %v", mergeErr))
 	}
 
 	if len(errs) > 0 {

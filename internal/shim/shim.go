@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/util"
@@ -368,10 +369,76 @@ func IsStaleResidueName(name string) bool {
 // isStaleResidueName is the in-package alias used by the scanners below.
 func isStaleResidueName(name string) bool { return IsStaleResidueName(name) }
 
+// staleResidueMaxAge 是「该回收的 `.stale-*` 残留」的年龄门槛。
+//
+// 第十一轮审计（Round 10 报告待办 3）：Round 10 只做了**过滤**（`IsStaleResidueName`），
+// 没有做**回收** —— `.stale-*` 会永久占着 `current/` 下的目录。`removeLinkEntry`
+// 在 `os.RemoveAll(stale)` 失败时只记 WARNING（那是刻意的：失败不该让安装流程中断），
+// 但没有任何后续清扫，于是残留只增不减。
+//
+// 为什么按**年龄**而不是无条件删：`removeLinkEntry` 先 `os.Rename` 再 `RemoveAll`，
+// 中间那一瞬 `.stale-*` 是**活着的临时名**。并发进程（GUI 与 CLI）同时扫描时，
+// 无条件删会把另一个进程正在删除的目录抽走。1 小时远大于任何一次激活/卸载的耗时。
+var staleResidueMaxAge = time.Hour
+
+// ReapStaleResidue 回收 `current/` 下**已过期**的 `.stale-*` / `.tmp-*` 残留。
+//
+// 只在条目**确实过期**（mtime 早于 cutoff）时删除，且失败一律忽略（best-effort）——
+// 回收是卫生工作，绝不该让调用方（安装/激活/扫描）失败。
+//
+// 返回删除的条目数，便于调用方与测试断言。
+//
+// 安全性：这些名字**只**由 xdev 自己产生（`removeLinkEntry` 的 rename 产物、
+// `Activate` 的 `os.CreateTemp` 临时链接名），不可能是用户工具名 —— Round 10 的
+// `IsStaleResidueName` 已把这条契约钉住（扫描侧一律过滤）。
+func ReapStaleResidue(xmdeHome string) int {
+	currentDir := filepath.Join(xmdeHome, "current")
+	entries, err := os.ReadDir(currentDir)
+	if err != nil {
+		return 0
+	}
+	cutoff := time.Now().Add(-staleResidueMaxAge)
+	removed := 0
+	for _, e := range entries {
+		if !isStaleResidueName(e.Name()) {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || info.ModTime().After(cutoff) {
+			continue // 在途（或无法判定）—— 不动
+		}
+		full := filepath.Join(currentDir, e.Name())
+		// 只删 xdev 自己重命名出来的**真实目录**或普通文件；绝不顺着 reparse
+		// point 递归（与 removeLinkEntry 的「绝不 RemoveAll 链接」同一条铁律）。
+		if li, lerr := os.Lstat(full); lerr == nil && li.Mode()&os.ModeSymlink != 0 {
+			if rerr := os.Remove(full); rerr == nil {
+				removed++
+			}
+			continue
+		}
+		if rerr := os.RemoveAll(full); rerr == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.Printf("[shim] reaped %d stale residue entr(ies) under %s", removed, currentDir)
+		InvalidateShimIndex()
+	}
+	return removed
+}
+
 // buildShimIndexMap is the pure scan that produces the reverse index
 // without touching the package-level shimIndex.
 func buildShimIndexMap(xmdeHome string) map[string]shimEntry {
 	currentDir := filepath.Join(xmdeHome, "current")
+	// 第十一轮审计（Round 10 报告待办 3）：在**扫描时**顺带回收过期的 `.stale-*` /
+	// `.tmp-*` 残留。buildShimIndexMap 已经是「枚举 current/ 的唯一热点」，且本就
+	// 在读目录 —— 在这里回收不需要额外遍历，也不会引入新的调用时序。
+	//
+	// 必须在 ReadDir **之前**回收：否则本次索引仍会把（已过期的）残留算进去，
+	// 虽然下面的 isStaleResidueName 会过滤掉它们，但「回收过了」与「还没回收」
+	// 两种状态应当给出同一个索引。
+	_ = ReapStaleResidue(xmdeHome)
 	entries, err := os.ReadDir(currentDir)
 	if err != nil {
 		return make(map[string]shimEntry)
