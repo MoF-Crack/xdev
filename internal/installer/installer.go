@@ -78,6 +78,17 @@ type Installer struct {
 	mirrorCache     *MirrorHealthCache // Lazy-loaded mirror health cache
 
 	tofuCB TOFUWarningCallback // Optional callback for TOFU warnings (set by GUI)
+
+	// lastBuildOptionsErr 记录最近一次 BuildDownloadOptions 的失败原因
+	// （第十一轮审计，Round 10 报告待办 7）。
+	//
+	// `BuildDownloadOptions` 刻意不返回 error（四处调用点直接消费它的四个返回值），
+	// 但缓存路径不安全时它会把 dest 置空当作 fail-closed。早先的做法**丢掉了原因**，
+	// 于是 GUI 用户只看到 downloader 的 `"empty destination"` —— 无法定位是工具名、
+	// 版本号还是 format 非法。这里留下精确原因，由 `LastDownloadOptionsError()` 读取。
+	//
+	// 只在 `dest == ""` 时有意义；每次调用开头都会重置，避免跨调用的陈旧值误导。
+	lastBuildOptionsErr error
 }
 
 // New constructs an Installer with the given config and plugin registry.
@@ -958,12 +969,36 @@ func (i *Installer) getMirrorHealthCache() *MirrorHealthCache {
 	return i.mirrorCache
 }
 
+// LastDownloadOptionsError 返回最近一次 `BuildDownloadOptions` 拒绝构造缓存路径的
+// **精确**原因（无错误时返回 nil）。
+//
+// 第十一轮审计（Round 10 报告待办 7）：`BuildDownloadOptions` 在缓存路径不安全时把
+// dest 置空（fail closed），但原因此前**完全丢失** —— 调用方（GUI 安装面板）只能
+// 看到 `downloader.Download` 报的 `"empty destination"`，无法告诉用户到底哪个组件
+// 非法。调用方应在 `dest == ""` 时读本函数并把它作为错误呈现。
+func (i *Installer) LastDownloadOptionsError() error {
+	return i.lastBuildOptionsErr
+}
+
 // buildDownloadOptions constructs the download URL, fallback URLs, and cache
 // destination path for a tool archive. It applies mirror rewriting and
 // smart mirror selection (concurrent HEAD probe, health cache, user preference).
 //
 // Returns (primaryURL, fallbackURLs, cacheDestPath, urlShaMap).
+//
+// 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 时**原因不再丢失**。
+//
+// 本函数刻意不返回 error（GUI 的 `SetPathMode`/安装面板直接消费它的四个返回值，
+// 改签名会波及 CLI 与既有测试的四处调用点）。早先的做法是：缓存路径不安全时
+// 把 dest 置空，让 `downloader.Download` 以 `"empty destination"` 失败 ——
+// **fail closed 是对的**，但用户看到的错误是 `empty destination`，完全无法定位
+// 真实原因（是工具名非法？版本号含分隔符？format 为空？）。
+//
+// 现在额外记录诊断信息：调用方在 `dest == ""` 时可读 `LastDownloadOptionsError()`
+// 拿到**精确**原因（含被拒绝的组件与原始错误）。CLI 侧本来就在更早的位置以精确
+// 错误拒绝非法名，因此这条只是补上 GUI 的可见性缺口。
 func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string) {
+	i.lastBuildOptionsErr = nil
 	// 1. Build candidate list from multiple sources.
 	candidates := i.buildMirrorCandidates(tool, a)
 
@@ -1035,6 +1070,9 @@ func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) 
 	if nameErr != nil {
 		log.Printf("[install] ERROR: refusing unsafe cache path: %v", nameErr)
 		dest = ""
+		// 待办 7：把精确原因留给调用方（GUI 的 dest=="" 分支据此给出可操作错误）。
+		i.lastBuildOptionsErr = fmt.Errorf(
+			"refusing to build a cache path for %s@%s (format %q): %w", tool, ver, a.Format, nameErr)
 	}
 
 	// 6. Build URL→SHA256 map so the downloader can verify each URL

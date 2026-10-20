@@ -254,6 +254,18 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 	// 构造下载选项 — use shared installer.BuildDownloadOptions
 	url, fallbackURLs, dest, urlShaMap := ins.BuildDownloadOptions(toolName, ver, arch)
 
+	// 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 是 **fail-closed**（缓存路径
+	// 不安全），但原因此前完全丢失 —— 用户只会看到 downloader 报的
+	// `"empty destination"`，无法定位是工具名/版本号/format 哪个组件非法。
+	// 这里读回精确原因并以可操作错误返回（不再让「空目的地」把真实原因盖住）。
+	if dest == "" {
+		if err := ins.LastDownloadOptionsError(); err != nil {
+			return fmt.Errorf("cannot start download: %w", err)
+		}
+		// 理论上不可达（dest=="" 只由上面那条路径产生），但仍明确失败而非继续。
+		return fmt.Errorf("cannot start download: no cache destination for %s@%s (format %q)", toolName, ver, arch.Format)
+	}
+
 	// 加载 manifest 签名（内置/第三方/嵌入式，与 CLI 一致，Spec 021 D6）。
 	// 真实根密钥嵌入时，缺签名的 GUI 下载会被 downloader 拒绝。
 	manifestSig, isThirdParty := ins.LoadManifestSignature(toolName)
