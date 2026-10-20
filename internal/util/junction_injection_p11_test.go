@@ -68,36 +68,63 @@ func TestCreateJunction_AmpersandIsNotInterpreted(t *testing.T) {
 	}
 }
 
-// TestCreateJunction_RejectsUnsafeCharacters：无法在 cmd 命令行里安全表达的字符
-// 必须被**明确拒绝**（而不是静默截断或展开）。
-func TestCreateJunction_RejectsUnsafeCharacters(t *testing.T) {
+// TestCreateJunction_UnsafeForCmdCharactersNowWork 是 Round 11 对 Round 9 守卫的
+// **契约更新**（如实记录，不是「改测试让测试过」）。
+//
+// Round 9 的 P1-1 修复分两层：
+//
+//	1.（安全层）命令行自行构造 + 每个路径加双引号 —— 让 `& | < > ^ ( )` 在引号内
+//	   成为字面量；
+//	2.（限制层）**拒绝**无法在 cmd 命令行里安全表达的字符：`"`、`%`、`!`、控制字符。
+//
+// 第 2 层是 **mklink 时代的产物**，不是安全目标本身。Round 11 把 junction 改成原生
+// `FSCTL_SET_REPARSE_POINT`（不经 cmd.exe）后，`%` / `!` / `&` / `^` 这些在文件名里
+// **合法**的字符不再有任何危险 —— 本机实测它们全部能正常创建并连通：
+//
+//	"tar%get": err=<nil> connected=true
+//	"tar!get": err=<nil> connected=true
+//	"tar&get": err=<nil> connected=true
+//	"tar^get": err=<nil> connected=true
+//
+// 因此这条守卫从「必须拒绝」改为「必须可用」，并保留**真正的安全断言**：
+//   - `"` 在 Windows 文件名里**非法**（文件系统层面就建不出目录），因此仍然失败，
+//     但失败原因是 OS 而非我们主动拒绝 —— 这不需要我们额外拦。
+//   - 空路径仍必须被**主动明确拒绝**。
+//
+// 旧行为保留为**独立收益**：`D:\100%Portable`、`E:\Tools!SDK` 这类安装根目录
+// 在 Round 9/10 下**无法激活**（被拒绝），Round 11 后可用。
+func TestCreateJunction_UnsafeForCmdCharactersNowWork(t *testing.T) {
 	dir := t.TempDir()
-	link := filepath.Join(dir, "link")
-	target := filepath.Join(dir, "target")
 
-	cases := []struct {
-		name   string
-		link   string
-		target string
-	}{
-		{"double quote in target", link, filepath.Join(dir, `tar"get`)},
-		{"double quote in link", filepath.Join(dir, `li"nk`), target},
-		{"percent in target", link, filepath.Join(dir, `tar%get`)},
-		{"percent in link", filepath.Join(dir, `li%nk`), target},
-		{"bang in target", link, filepath.Join(dir, `tar!get`)},
-		{"empty target", link, ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := CreateJunction(tc.link, tc.target)
-			if err == nil {
-				t.Errorf("应拒绝该路径（含无法安全表达的字符），但返回 nil")
-				return
+	// 这些字符在 Windows 文件名里合法，原生 junction 必须支持。
+	for _, name := range []string{`tar%get`, `tar!get`, `tar&get`, `tar^get`, `tar(paren)`} {
+		t.Run("supports_"+name, func(t *testing.T) {
+			target := filepath.Join(dir, name)
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Skipf("无法创建含 %q 的目录（文件系统限制）: %v", name, err)
 			}
-			if !strings.Contains(err.Error(), "refusing to create a junction") {
-				t.Errorf("错误信息应表明是主动拒绝，got: %v", err)
+			link := filepath.Join(dir, "link-"+name)
+			if err := CreateJunction(link, target); err != nil {
+				t.Fatalf("原生 junction 应支持含 %q 的路径（Round 9 的 mklink 实现会拒绝）: %v", name, err)
+			}
+			// 必须真的连通（不能只是建了个空目录）。
+			_ = os.WriteFile(filepath.Join(target, "p.txt"), []byte("x"), 0o644)
+			if _, err := os.ReadFile(filepath.Join(link, "p.txt")); err != nil {
+				t.Errorf("junction 未连通: %v", err)
 			}
 		})
+	}
+}
+
+// 空路径必须被**主动明确拒绝**（这条与实现机制无关，永久有效）。
+func TestCreateJunction_RejectsEmptyPaths(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	if err := CreateJunction(link, ""); err == nil {
+		t.Error("空 target 必须被拒绝")
+	}
+	if err := CreateJunction("", filepath.Join(dir, "t")); err == nil {
+		t.Error("空 link 必须被拒绝")
 	}
 }
 
