@@ -28,7 +28,7 @@ func TestBuildDownloadOptionsPrefersConcreteManifestMirror(t *testing.T) {
 		MirrorURL: "https://mirror.example/android/platform-tools_r35.0.2-win.zip",
 		Format:    "zip",
 	}
-	primary, fallbacks, _, _ := inst.BuildDownloadOptions("android-platform-tools", "35.0.2", archive)
+	primary, fallbacks, _, _, _ := inst.BuildDownloadOptionsE("android-platform-tools", "35.0.2", archive)
 	// With smart mirror selection, the candidates list includes:
 	//   [mirror.example, official (no rewrite triggered for example.test)]
 	// Since both are unreachable (test URLs), the probe will fail and the

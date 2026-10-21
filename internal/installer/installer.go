@@ -606,13 +606,14 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 //   - Progress reporting via the onProgress callback
 func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, batchIndex, batchTotal int) error {
 	// F-25: reject an unsafe tool/version BEFORE anything touches the cache.
-	// BuildDownloadOptions fails closed (empty dest) but the error there is
-	// only logged; this gives the user an actionable message.
-	if _, err := i.cacheArchivePath(tool, ver, a.Format); err != nil {
-		log.Printf("[install] ERROR: refusing unsafe cache path: %v", err)
-		return err
+	// 上面的 cacheArchivePath 已经给出精确错误；这里改用 E 版本并把诊断错误也
+	// 检查一遍（**防御性**：若日后有人删掉上面的预检，这里仍然会以可读错误失败，
+	// 而不是带着空 dest 继续走到 downloader 的 "empty destination"）。
+	url, fallbackURLs, dest, urlShaMap, optErr := i.BuildDownloadOptionsE(tool, ver, a)
+	if optErr != nil {
+		log.Printf("[install] ERROR: %v", optErr)
+		return optErr
 	}
-	url, fallbackURLs, dest, urlShaMap := i.BuildDownloadOptions(tool, ver, a)
 	log.Printf("[install] Cache destination: %s", dest)
 
 	progressDesc := fmt.Sprintf("%s@%s", tool, ver)
@@ -958,63 +959,32 @@ func (i *Installer) getMirrorHealthCache() *MirrorHealthCache {
 	return i.mirrorCache
 }
 
-// LastDownloadOptionsError 返回最近一次 `BuildDownloadOptions` 拒绝构造缓存路径的
-// **精确**原因（无错误时返回 nil）。
-//
-// 第十一轮审计（Round 10 报告待办 7）：`BuildDownloadOptions` 在缓存路径不安全时把
-// dest 置空（fail closed），但原因此前**完全丢失** —— 调用方（GUI 安装面板）只能
-// 看到 `downloader.Download` 报的 `"empty destination"`，无法告诉用户到底哪个组件
-// 非法。
-//
-// **第十二轮审计：本函数已弃用，改用 `BuildDownloadOptionsE` 的第五个返回值。**
-//
-// 为什么弃用：`lastBuildOptionsErr` 是**未同步的实例字段**，两个 goroutine 同时调
-// `BuildDownloadOptions` 会互相覆盖 —— 既产生 `-race` 意义上的数据竞争，也会让
-// A 调用方读到 B 调用的错误（**错误的诊断信息比没有诊断更糟**：它会把排查方向
-// 引到完全无关的工具/版本上）。目前 GUI 是单线程调用，但这是个随时会被打破的隐含
-// 假设，不该靠「现在只有一处调用」来成立。
-//
-// 保留本方法只是为了不破坏现有调用点：它现在返回 nil 并**不再被写入**。
-//
-// Deprecated: use `BuildDownloadOptionsE`。
-func (i *Installer) LastDownloadOptionsError() error {
-	return nil
-}
-
-// BuildDownloadOptionsE 是 `BuildDownloadOptions` 的**无共享状态**版本：把诊断错误
-// 作为第五个返回值直接交给调用方，不再依赖实例字段。
+// BuildDownloadOptionsE 构造下载所需的 URL、回退 URL 列表与缓存目标路径，
+// 并把**诊断错误作为第五个返回值**交给调用方。
 //
 // 返回 (primaryURL, fallbackURLs, cacheDestPath, urlShaMap, err)。
-// 当 err != nil 时 cacheDestPath 一定为空（fail closed），调用方应直接呈现 err。
+// 当 err != nil 时 cacheDestPath 一定为空（**fail closed**），调用方应直接呈现 err。
+//
+// # 为什么是这个签名（而不是四返回值 + 访问器）
+//
+// 第十一轮先用「实例字段 `lastBuildOptionsErr` + 访问器」承载诊断信息。它能工作，
+// 但有**隐含的单线程假设**：两个 goroutine 同时调用会互相覆盖，A 调用方读到 B 的
+// 错误 —— 既是真实数据竞争，也**比没有诊断更糟**（把排查引向无关的工具/版本）。
+//
+// 第十二轮改成第五个返回值；第十三轮把四返回值版**内联掉**（它当时已是纯兼容壳，
+// 生产代码只剩一处调用）。留两个版本就有「行为分叉」的长期风险 ——
+// 这正是本仓库 Round 8-11 反复出现的失败模式。
 func (i *Installer) BuildDownloadOptionsE(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
-	url, fallbacks, dest, shaMap, err := i.buildDownloadOptionsChecked(tool, ver, a)
-	return url, fallbacks, dest, shaMap, err
+	return i.buildDownloadOptions(tool, ver, a)
 }
 
-// buildDownloadOptions constructs the download URL, fallback URLs, and cache
-// destination path for a tool archive. It applies mirror rewriting and
-// smart mirror selection (concurrent HEAD probe, health cache, user preference).
-//
-// Returns (primaryURL, fallbackURLs, cacheDestPath, urlShaMap).
+// buildDownloadOptions 是真正的实现（见 BuildDownloadOptionsE 的文档）。
 //
 // 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 时**原因不再丢失**。
-//
-// 本函数刻意不返回 error（GUI 的 `SetPathMode`/安装面板直接消费它的四个返回值，
-// 改签名会波及 CLI 与既有测试的四处调用点）。早先的做法是：缓存路径不安全时
-// 把 dest 置空，让 `downloader.Download` 以 `"empty destination"` 失败 ——
-// **fail closed 是对的**，但用户看到的错误是 `empty destination`，完全无法定位
-// 真实原因（是工具名非法？版本号含分隔符？format 为空？）。
-//
-// 现在**不再**记录共享字段：`BuildDownloadOptionsE` 把精确原因作为第五个返回值
-// 直接交给调用方（见上一段注释：实例字段在并发下会互相覆盖）。
-func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string) {
-	url, fallbacks, dest, shaMap, _ := i.buildDownloadOptionsChecked(tool, ver, a)
-	return url, fallbacks, dest, shaMap
-}
-
-// buildDownloadOptionsChecked 是真正的实现：与 BuildDownloadOptions 相同，但把
-// 诊断错误作为返回值而不是写共享字段。
-func (i *Installer) buildDownloadOptionsChecked(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
+// 早先的做法是：缓存路径不安全时把 dest 置空，让 `downloader.Download` 以
+// `"empty destination"` 失败 —— **fail closed 是对的**，但用户看到的错误是
+// `empty destination`，完全无法定位真实原因（工具名非法？版本号含分隔符？format 为空？）。
+func (i *Installer) buildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
 	// 1. Build candidate list from multiple sources.
 	candidates := i.buildMirrorCandidates(tool, a)
 

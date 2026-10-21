@@ -37,7 +37,7 @@ func TestCacheDestPath_RejectsTraversalVersion(t *testing.T) {
 		`a\b`,
 	} {
 		t.Run("ver="+ver, func(t *testing.T) {
-			_, _, dest, _ := ins.BuildDownloadOptions("safetool", ver, arch)
+			_, _, dest, _, _ := ins.BuildDownloadOptionsE("safetool", ver, arch)
 			// Whatever the implementation does, the resolved path must stay
 			// inside CacheDir — or the call must be rejected outright.
 			if dest == "" {
@@ -62,7 +62,7 @@ func TestCacheDestPath_RejectsTraversalTool(t *testing.T) {
 
 	for _, tool := range []string{"../../evil", `..\..\evil`, "..", "a/b"} {
 		t.Run("tool="+tool, func(t *testing.T) {
-			_, _, dest, _ := ins.BuildDownloadOptions(tool, "1.0.0", arch)
+			_, _, dest, _, _ := ins.BuildDownloadOptionsE(tool, "1.0.0", arch)
 			if dest == "" {
 				return
 			}

@@ -164,7 +164,7 @@ func TestBuildDownloadOptions_FailClosedContractUnchanged(t *testing.T) {
 		URL: "https://example.test/x.zip",
 	}
 	for _, ver := range []string{"../../evil", `..\..\evil`, "..", "a/b", `a\b`} {
-		_, _, dest, _ := ins.BuildDownloadOptions("safetool", ver, arch)
+		_, _, dest, _, _ := ins.BuildDownloadOptionsE("safetool", ver, arch)
 		if dest == "" {
 			continue // 显式拒绝是可接受的
 		}
@@ -185,13 +185,9 @@ func TestGUIInstall_SurfacesDownloadOptionsError(t *testing.T) {
 	}
 	src := string(data)
 
-	// 必须用无共享状态的 E 版本。
+	// 必须用 E 版本（唯一版本）。
 	if !strings.Contains(src, "ins.BuildDownloadOptionsE(") {
-		t.Error("GUI 应使用 BuildDownloadOptionsE（无共享状态版本）取诊断错误")
-	}
-	// 不得再依赖弃用的字段访问器（并发下会串味）。
-	if strings.Contains(src, "ins.LastDownloadOptionsError()") {
-		t.Error("GUI 不应再用 LastDownloadOptionsError()（实例字段，并发会串味）")
+		t.Error("GUI 应使用 BuildDownloadOptionsE 取诊断错误")
 	}
 	// 必须把原因包装进返回错误（%w），而不是忽略。
 	if !strings.Contains(src, "cannot start download: %w") {
@@ -199,16 +195,66 @@ func TestGUIInstall_SurfacesDownloadOptionsError(t *testing.T) {
 	}
 }
 
-// 弃用访问器必须恒为 nil —— 它已无字段可读；仍在使用它的调用方不会拿到陈旧值。
-func TestLastDownloadOptionsError_DeprecatedAlwaysNil(t *testing.T) {
-	ins, _, _ := newTestInstaller(t)
-	arch := &manifest.Archive{
-		OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
-		URL: "https://example.test/x.zip",
+// 第十三轮内联后的**唯一性守卫**：全仓不得再有「四返回值 + 旁路字段/访问器」
+// 那一套残留。留两个版本就有「行为分叉」的长期风险 —— 这正是本仓库
+// Round 8-11 反复出现的失败模式。
+func TestBuildDownloadOptions_OnlyOneVersionRemains(t *testing.T) {
+	// 1. 全仓（含测试）不得再调用四返回值版 `BuildDownloadOptions(`。
+	//    注意区分 `BuildDownloadOptionsE(` —— 用负向断言匹配调用形态。
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// 即使刚发生过失败，弃用访问器也不得返回内容（它已不读任何字段）。
-	_, _, _, _ = ins.BuildDownloadOptions("safetool", "../../evil", arch)
-	if err := ins.LastDownloadOptionsError(); err != nil {
-		t.Errorf("弃用访问器应恒为 nil（无共享字段），got %v", err)
+	for _, f := range files {
+		// 跳过本守卫自身：它必须**写出**那个被禁的调用形态才能做断言。
+		if f == "download_options_error_r11_test.go" {
+			continue
+		}
+		data, rerr := os.ReadFile(f)
+		if rerr != nil {
+			continue
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			// 跳过注释行。
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			if strings.Contains(line, ".BuildDownloadOptions(") {
+				t.Errorf("%s:%d 仍在调用四返回值版 BuildDownloadOptions（应改用 E 版）: %s",
+					f, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	// 2. 生产代码不得再出现共享字段/弃用访问器/四返回值版定义。
+	//    判据必须**剥掉注释** —— 迁移说明的注释里恰恰写着这些名字
+	//    （本守卫初版就因此对自己误报）。
+	srcRaw, err := os.ReadFile("installer.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var codeOnly strings.Builder
+	for _, line := range strings.Split(string(srcRaw), "\n") {
+		if idx := strings.Index(line, "//"); idx >= 0 {
+			line = line[:idx]
+		}
+		codeOnly.WriteString(line)
+		codeOnly.WriteString("\n")
+	}
+	code := codeOnly.String()
+
+	for _, gone := range []string{
+		"lastBuildOptionsErr",
+		"func (i *Installer) LastDownloadOptionsError(",
+		"func (i *Installer) BuildDownloadOptions(",
+	} {
+		if strings.Contains(code, gone) {
+			t.Errorf("installer.go 仍残留 %q —— 四返回值/共享字段那一套应已完全内联掉", gone)
+		}
+	}
+
+	// 3. 唯一入口必须存在且带 error。
+	if !strings.Contains(code, "func (i *Installer) BuildDownloadOptionsE(") {
+		t.Error("installer.go 必须有 BuildDownloadOptionsE")
 	}
 }
