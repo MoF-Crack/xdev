@@ -13,6 +13,7 @@ import (
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/gui"
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/shim"
 )
 
 // runGUI 启动桌面 GUI（Wails）。embed manifests/signer 初始化在 main.go。
@@ -29,6 +30,17 @@ func runGUI() {
 	reg := cli.LoadRegistry(cat)
 	app := gui.NewApp(cfg, cat, reg)
 	webviewDir := filepath.Join(cfg.Core.XMDevDir, "cache", "webview2")
+
+	// 第十二轮收口（Round 12 报告 §七-③）：GUI 是**长驻宿主**，在这里启动进程内
+	// **唯一**的 `.stale-*` 残留清扫 goroutine（幂等，60s 一次）。
+	//
+	// 为什么只有 GUI 需要它：CLI 是短命进程，ticker 还没来得及触发进程就退出了；
+	// 而 CLI 的卫生由 `Activate`/`Uninstall` 后的一次即时回收 + `removeLinkEntry`
+	// 的**归档式改名**（把残留搬到 current/ 之外）共同保证 —— 后者让 `current/`
+	// 根本不会再出现 `.stale-*`。GUI 可能连续驻留数天，且用户在其中反复
+	// install/uninstall，因此需要后台兜底。
+	shim.StartStaleResidueSweeper(cfg.Core.XMDevDir)
+	defer shim.StopStaleResidueSweeper()
 
 	if app.IsInitialized() {
 		logDir := filepath.Join(cfg.Core.XMDevDir, "logs")

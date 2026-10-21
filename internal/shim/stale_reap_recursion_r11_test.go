@@ -29,15 +29,16 @@ import (
 
 // TestReapStaleResidue_SourceHasNoIndexInvalidation 是确定性守卫。
 //
-// 注意：判据必须**忽略注释**。`ReapStaleResidue` 的文档注释里为了解释这条递归
+// 注意 1：判据必须**忽略注释**。`ReapStaleResidue` 的文档注释里为了解释这条递归
 // 恰恰**写着** `InvalidateShimIndex` 这个名字（本守卫初版就因此对自己误报）。
 // 这里逐行剥掉 `//` 注释与 `/* */` 块后再匹配。
+//
+// 注意 2（第十二轮收口时的位置变更）：`ReapStaleResidue` 已从 `shim.go` 移到
+// `residue.go`（与采集/归档/清扫器生命周期放在一起）。本守卫原先硬编码读
+// `shim.go`，迁移后立刻红 —— **这不是行为回归，是守卫的位置耦合**。
+// 现在改为在**包内所有 .go 文件**里找该函数定义，避免它再因为搬家而假红。
 func TestReapStaleResidue_SourceHasNoIndexInvalidation(t *testing.T) {
-	data, err := os.ReadFile("shim.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(data)
+	src := findFuncSourceInPackage(t, "ReapStaleResidue")
 
 	start := strings.Index(src, "func ReapStaleResidue(")
 	if start < 0 {
@@ -127,4 +128,31 @@ func TestWriteDiskShimIndex_RebuildTerminates(t *testing.T) {
 		t.Fatal("待办 3 回归：writeDiskShimIndex 在 20 秒内未返回 —— " +
 			"Rebuild 路径疑似再次陷入 buildShimIndexMap ↔ InvalidateShimIndex 递归")
 	}
+}
+
+// findFuncSourceInPackage 返回**包含** `func <name>(` 定义的那个 .go 文件的全文
+// （包内所有非测试文件）。用于让源码级守卫不依赖函数所在的文件名 ——
+// 函数搬家不该让守卫假红。
+func findFuncSourceInPackage(t *testing.T, name string) string {
+	t.Helper()
+	// 自测：先确认这些文件名是相对包目录的（go test 的 CWD 就是包目录）。
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	needle := "func " + name + "("
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		data, rerr := os.ReadFile(f)
+		if rerr != nil {
+			continue
+		}
+		if strings.Contains(string(data), needle) {
+			return string(data)
+		}
+	}
+	t.Fatalf("在包内任何 .go 文件中都未找到 %q 的定义", needle)
+	return ""
 }

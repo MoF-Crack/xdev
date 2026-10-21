@@ -1713,14 +1713,33 @@ func removeLinkEntry(path string) {
 	}
 
 	// 遗留的真实目录（旧 CopyDir 产物）：rename 到旁路名后再删。
-	stale := path + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	//
+	// 第十二轮收口（Round 12 报告 §七-③）：**rename 的目标改到 `current/` 之外**。
+	//
+	// 旧实现是 `path + ".stale-" + <nano>`，也就是残留**留在 `current/` 里**。
+	// 这导致一组互相矛盾的需求：回收方要「够旧就删」，而并发写方可能刚 rename 完、
+	// 正要去 RemoveAll —— 为保证不误删在途条目，回收方只能按年龄等 1 小时，
+	// 于是刚产生的残留必然在 `current/` 里停留一小时，期间仍是一个需要被所有扫描方
+	// 过滤掉的污染源。
+	//
+	// 搬到 `current/` 之外（`<xmdeHome>/.stale-residue/`）就解开了这对矛盾：
+	// 归档目录里的条目**永远不可能在途**，因此可以安全删除；而 `current/`
+	// 从此**根本不会**出现 `.stale-*`（除历史遗留，由 shim.ReapStaleResidue 清）。
+	stale, staleErr := shim.ResidueArchivePath(filepath.Dir(filepath.Dir(path)), filepath.Base(path))
+	if staleErr != nil {
+		// 归档目录建不出来：退回「就地改名 + 立即删」（旧行为），至少不阻塞安装。
+		log.Printf("[install] WARNING: cannot create residue archive dir: %v — falling back to in-place rename", staleErr)
+		stale = path + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
 	if rerr := os.Rename(path, stale); rerr != nil {
 		log.Printf("[install] WARNING: failed to remove legacy directory %s: %v", path, rerr)
 		return
 	}
 	log.Printf("[install] removed legacy CopyDir directory at %s (moved to %s)", path, stale)
+	// 归档目录里的条目不在 current/ 下，可以直接删；失败也没关系 ——
+	// 它已经不再污染 current/，shim.ReapStaleResidue 会按年龄收尾。
 	if rerr := os.RemoveAll(stale); rerr != nil {
-		log.Printf("[install] WARNING: could not fully delete legacy directory %s: %v", stale, rerr)
+		log.Printf("[install] WARNING: could not fully delete legacy directory %s (archived; will be reaped): %v", stale, rerr)
 	}
 }
 

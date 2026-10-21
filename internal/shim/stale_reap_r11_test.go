@@ -123,13 +123,20 @@ func TestBuildShimIndexMap_ReapsAgedResidue(t *testing.T) {
 	if e, ok := idx[normalizeShimAlias("tool")]; !ok || e.toolName != "tool" {
 		t.Errorf("真工具别名未进索引: %+v", e)
 	}
-	// 过期残留已被物理删除。
-	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
-		t.Errorf("待办 3 复现：buildShimIndexMap 后过期残留仍在: %s", staleDir)
-	}
-	// 残留里的 ghost 不在索引里。
+	// 残留里的 ghost **永不**进索引（这一条与回收时机无关，是永久的过滤契约）。
 	if e, ok := idx[normalizeShimAlias("ghost")]; ok {
 		t.Errorf("残留里的 ghost 进了索引: %+v", e)
+	}
+
+	// 第十二轮收口：**`buildShimIndexMap` 不再回收**（扫描必须纯读 ——
+	// 扫描里的副作用正是 Round 11 无限递归的根因）。因此这里**不再**断言
+	// 「过期残留已被物理删除」，而是断言它**仍然存在**：这才是本轮契约。
+	//
+	// 回收改由 `ReapStaleResidue` / `StartStaleResidueSweeper` 负责，
+	// 其行为由 `residue_r13_test.go` 的用例覆盖。
+	if _, err := os.Stat(staleDir); err != nil {
+		t.Errorf("本轮契约：buildShimIndexMap 是纯读，不应删除残留；"+
+			"但它不见了（%s）—— 说明扫描里又混进了副作用: %v", staleDir, err)
 	}
 }
 
