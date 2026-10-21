@@ -346,8 +346,10 @@ func buildShimIndex(xmdeHome string) {
 // 扫描当成**一个工具**（审计实测 `[tool tool.stale-demo]`），残留目录里的
 // 可执行文件随之进入 shim 反向索引 —— `Lookup` 于是可能把命令分发到一条
 // 本不该存在的路径。扫描侧一律过滤掉它们。
-var staleResidueMarkers = []string{".stale-", ".tmp-"}
-
+// 20261021 审计：标记清单已移到 `internal/util`（`util.IsResidueName`），
+// 因为 `util.LooksLikeVersionDirName` 需要同一份判据，而 shim 已 import util，
+// 反向依赖会成环。这里的导出函数保留为委托，所有现有调用点不变。
+//
 // IsStaleResidueName reports whether a `current/` entry name is one of
 // xdev's own bypass/temporary names rather than a real tool directory.
 // Case-insensitive because Windows resolves these names case-insensitively.
@@ -356,13 +358,7 @@ var staleResidueMarkers = []string{".stale-", ".tmp-"}
 // the shim reverse index (buildShimIndexMap) and the GUI PATH-mode migration
 // (gui.SetPathMode) both enumerate current/* and must agree.
 func IsStaleResidueName(name string) bool {
-	lower := strings.ToLower(name)
-	for _, marker := range staleResidueMarkers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	return util.IsResidueName(name)
 }
 
 // isStaleResidueName is the in-package alias used by the scanners below.

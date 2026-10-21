@@ -33,6 +33,7 @@ import (
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/util"
+	"github.com/xmdemt/xdev/internal/version"
 )
 
 // doctorFixPlan 集中决定 doctor 允许执行哪些**宿主写**操作。
@@ -125,10 +126,21 @@ func newDoctorCmd() *cobra.Command {
 				cfg.Core.XMDevDir)
 
 			// 2. every required subdir exists
+			//
+			// 20261021 审计 P3-12：未初始化的 home 原先逐目录打 ✘（实测 6 行
+			// 噪声）。合并成一行并给出下一步动作；失败语义不变（allOK=false）。
+			var missingDirs []string
 			for _, d := range []string{cfg.Core.DownloadDir, cfg.Core.InstallDir,
 				cfg.Core.ShimDir, cfg.Core.CacheDir, cfg.Core.EnvDir, cfg.Core.ManifestDir} {
-				_, err := os.Stat(d)
-				check("dir: "+filepath.Base(d), err == nil, d)
+				if _, err := os.Stat(d); err != nil {
+					missingDirs = append(missingDirs, filepath.Base(d))
+				}
+			}
+			if len(missingDirs) > 0 {
+				check("required dirs", false,
+					fmt.Sprintf("missing %d: %s — run `xdev init`", len(missingDirs), strings.Join(missingDirs, ", ")))
+			} else {
+				check("required dirs", true, "all present")
 			}
 
 			// 3. shim dir in PATH
@@ -147,10 +159,26 @@ func newDoctorCmd() *cobra.Command {
 			sh := env.DetectShell()
 			if sh.RCFile != "" {
 				hasBlock := false
+				var rcData []byte
 				if data, err := os.ReadFile(sh.RCFile); err == nil {
+					rcData = data
 					hasBlock = hasXdevRCBlock(data)
 				}
-				check("shell rc injected", hasBlock, sh.RCFile)
+				switch {
+				case !hasBlock:
+					check("shell rc injected", false, sh.RCFile)
+				default:
+					// 20261021 审计 P3-12：RC 是**全局**文件，可能由另一个
+					// xmdevenv home 写入。块存在但指向别的 home 时不能再报 ✔，
+					// 否则用户会在错误的 home 里排查。
+					if home, ok := rcBlockHome(rcData); ok && !samePath(home, cfg.Core.XMDevDir) {
+						check("shell rc injected", false,
+							fmt.Sprintf("%s sets XMDEV_HOME=%s, current home is %s — re-run `xdev init` or remove the stale block",
+								sh.RCFile, home, cfg.Core.XMDevDir))
+					} else {
+						check("shell rc injected", true, sh.RCFile)
+					}
+				}
 			} else {
 				fmt.Println("• shell rc injection: not applicable")
 			}
@@ -165,11 +193,30 @@ func newDoctorCmd() *cobra.Command {
 			shimsOK, shimMsg := shimDirCheck(cfg.Core.ShimDir)
 			check("shims", shimsOK, shimMsg)
 
+			// 5b. running binary vs the managed copy (20261021 审计 P1-3).
+			//
+			// `EnsureSelfInstalled` 只在 GUI 启动时跑，CLI 用户手工替换根副本后
+			// current/xdev 可能长期停在旧版（本机实测停在 0.3.3-rc.2）。这里用
+			// 版本号判定，而不是比较路径：运行根副本但 current 已指向同版本是
+			// 可以接受的；版本不一致才是“PATH 上的 xdev 不是这份代码”。
+			runningExe, _ := os.Executable()
+			if ok, infoOnly, msg := runningCopyStatus(cfg, runningExe); infoOnly {
+				fmt.Println("• running copy: " + msg)
+			} else {
+				check("running copy", ok, msg)
+			}
+
 			// 6. catalog is non-empty
 			cat := loadCatalog()
 			tools := cat.Tools()
+			// 20261021 审计 P3-12：未初始化 home 时 manifest 目录不存在，
+			// 实际使用的是内置 FS；此前却把外部路径打印成“discovered at”。
+			catalogSource := cfg.Core.ManifestDir
+			if fi, err := os.Stat(cfg.Core.ManifestDir); err != nil || !fi.IsDir() {
+				catalogSource = "embedded manifests"
+			}
 			check("manifest catalog", len(tools) > 0,
-				fmt.Sprintf("%d tool(s) discovered at %s", len(tools), cfg.Core.ManifestDir))
+				fmt.Sprintf("%d tool(s) from %s", len(tools), catalogSource))
 
 			// 6a. 不可安装条目（票 18 / P2-29）：manifest 里可以有「有版本、没有
 			// url/format」的占位条目（实测 mingw 曾整条如此）——`xdev available`
@@ -337,6 +384,64 @@ func hasXdevRCBlock(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// rcBlockHome 提取 RC 注入块里声明的 XMDEV_HOME 值。
+//
+// 三种 shell 的写法都由 env.InjectShellRC 生成，值总是被引号包住：
+//
+//	PowerShell: $env:XMDEV_HOME = "E:\XDev"
+//	POSIX:      export XMDEV_HOME='E:\XDev'
+//	fish:       set -gx XMDEV_HOME 'E:\XDev'
+//
+// 找不到（例如旧版块只写 PATH）时返回 ok=false，调用方按“无法判定”处理。
+func rcBlockHome(data []byte) (string, bool) {
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.Contains(line, "XMDEV_HOME") {
+			continue
+		}
+		i := strings.IndexAny(line, "\"'")
+		if i < 0 {
+			continue
+		}
+		rest := line[i+1:]
+		j := strings.IndexAny(rest, "\"'")
+		if j < 0 {
+			continue
+		}
+		if v := strings.TrimSpace(rest[:j]); v != "" {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// samePath 比较两个路径是否指向同一位置（Windows 大小写不敏感）。
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// runningCopyStatus 判定“当前运行的二进制”与 current/xdev 管理的副本是否一致。
+//
+// infoOnly=true 表示不该算检查失败（home 尚未初始化，属于新用户首跑）。
+func runningCopyStatus(cfg *config.Config, runningExe string) (ok, infoOnly bool, msg string) {
+	activeSelf, selfOK := util.ActiveVersion(cfg.Core.XMDevDir, "xdev")
+	switch {
+	case selfOK && activeSelf == version.Get():
+		return true, false, fmt.Sprintf("%s (current/xdev -> %s)", runningExe, activeSelf)
+	case !selfOK:
+		if _, err := os.Stat(cfg.Core.InstallDir); err == nil {
+			return false, false, fmt.Sprintf("current/xdev is missing — run `xdev self install` with %s", runningExe)
+		}
+		return false, true, "home not initialized (run `xdev init`)"
+	default:
+		return false, false, fmt.Sprintf("running %s (v%s) but current/xdev -> %s — run `xdev self install` with the new binary",
+			runningExe, version.Get(), activeSelf)
+	}
 }
 
 // notInstallableTools 返回本平台不可安装的工具名（排序）——票 18 / P2-29。

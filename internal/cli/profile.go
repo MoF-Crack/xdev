@@ -94,21 +94,20 @@ func newExportCmd() *cobra.Command {
 				activeVer, _ := activeVersion(p.Name())
 
 				// List installed versions from install/<tool>/ directory
+				// 20261021 审计 P1-4：只导出真实版本目录，避免 profile
+				// 把 gopath / export_templates 当版本带给导入方。
 				installDir := filepath.Join(cfg.Core.InstallDir, p.Name())
-				entries, err := os.ReadDir(installDir)
-				if err != nil {
+				versionNames, verr := util.ListVersionDirNames(installDir)
+				if verr != nil {
 					continue
 				}
-				for _, e := range entries {
-					if !e.IsDir() {
-						continue
-					}
+				for _, ver := range versionNames {
 					entry := map[string]string{
 						"tool":    p.Name(),
-						"version": e.Name(),
+						"version": ver,
 						"active":  "",
 					}
-					if e.Name() == activeVer {
+					if ver == activeVer {
 						entry["active"] = "true"
 					}
 					tools = append(tools, entry)

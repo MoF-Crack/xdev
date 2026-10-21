@@ -860,20 +860,16 @@ func (a *App) currentVersion(toolName string) (string, bool) {
 }
 
 // installedVersions lists version directories under install/<tool>.
+//
+// 20261021 审计 P1-4：与 CLI 共用 util.ListVersionDirNames，过滤
+// gopath / export_templates / unsafe-version-blocked 等辅助目录。
 func (a *App) installedVersions(toolName string) []string {
 	cfg := a.getCfg()
-	dir := filepath.Join(cfg.Core.InstallDir, toolName)
-	entries, err := os.ReadDir(dir)
+	versions, err := util.ListVersionDirNames(filepath.Join(cfg.Core.InstallDir, toolName))
 	if err != nil {
 		return nil
 	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() {
-			out = append(out, e.Name())
-		}
-	}
-	return out
+	return versions
 }
 
 // logInfo/logWarn/logError are defined in log.go

@@ -2110,17 +2110,13 @@ func (i *Installer) ListInstalledTools() []string {
 		if !e.IsDir() {
 			continue
 		}
-		toolDir := filepath.Join(i.cfg.Core.InstallDir, e.Name())
-		versions, err := os.ReadDir(toolDir)
-		if err != nil {
+		// 20261021 审计 P1-4：与 CLI/GUI 共用版本判据；只含辅助目录的
+		// 工具（Godot/export_templates）与空目录（perl）不算已安装。
+		versions, verr := util.ListVersionDirNames(filepath.Join(i.cfg.Core.InstallDir, e.Name()))
+		if verr != nil || len(versions) == 0 {
 			continue
 		}
-		for _, v := range versions {
-			if v.IsDir() {
-				tools = append(tools, e.Name())
-				break
-			}
-		}
+		tools = append(tools, e.Name())
 	}
 	return tools
 }
@@ -2135,22 +2131,19 @@ func (i *Installer) currentVersion(toolName string) (string, bool) {
 // (excluding the one being uninstalled), or "" if none exist.
 func (i *Installer) findOtherVersion(p plugin.Plugin) string {
 	dir := filepath.Join(i.cfg.Core.InstallDir, p.Name())
-	entries, err := os.ReadDir(dir)
+	versions, err := util.ListVersionDirNames(dir)
 	if err != nil {
 		return ""
 	}
 	var best string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
+	for _, v := range versions {
 		if best == "" {
-			best = e.Name()
+			best = v
 			continue
 		}
 		// Compare using semver, not lexicographic ordering
-		if util.CompareSemver(e.Name(), best) > 0 {
-			best = e.Name()
+		if util.CompareSemver(v, best) > 0 {
+			best = v
 		}
 	}
 	return best

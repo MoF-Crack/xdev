@@ -11,6 +11,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 func newUpgradeCmd() *cobra.Command {
@@ -145,17 +146,13 @@ func installedToolDirs(installDir string) []string {
 		if !e.IsDir() {
 			continue
 		}
-		toolDir := filepath.Join(installDir, e.Name())
-		versions, err := os.ReadDir(toolDir)
-		if err != nil {
+		// 20261021 审计 P1-4：与 xdev list 共用同一版本判据，避免把
+		// gopath / export_templates 之类辅助目录当成“已安装版本”。
+		versions, err := util.ListVersionDirNames(filepath.Join(installDir, e.Name()))
+		if err != nil || len(versions) == 0 {
 			continue
 		}
-		for _, v := range versions {
-			if v.IsDir() {
-				tools = append(tools, e.Name())
-				break
-			}
-		}
+		tools = append(tools, e.Name())
 	}
 	return tools
 }

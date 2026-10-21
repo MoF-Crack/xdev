@@ -229,19 +229,23 @@ func newListCmd() *cobra.Command {
 					continue
 				}
 				tool := e.Name()
-				versions, _ := os.ReadDir(filepath.Join(installRoot, tool))
+				// 20261021 审计 P1-4：只枚举“看起来是版本”的目录。
+				// 空工具目录（实测 perl）与只含辅助目录的工具（gopath /
+				// export_templates / unsafe-version-blocked）不再显示。
+				versions, verr := util.ListVersionDirNames(filepath.Join(installRoot, tool))
+				if verr != nil || len(versions) == 0 {
+					continue
+				}
 				active := ""
 				if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
 					active = filepath.Base(target)
 				}
 				vs := make([]string, 0, len(versions))
 				for _, v := range versions {
-					if v.IsDir() {
-						if v.Name() == active {
-							vs = append(vs, "★ "+v.Name())
-						} else {
-							vs = append(vs, v.Name())
-						}
+					if v == active {
+						vs = append(vs, "★ "+v)
+					} else {
+						vs = append(vs, v)
 					}
 				}
 
