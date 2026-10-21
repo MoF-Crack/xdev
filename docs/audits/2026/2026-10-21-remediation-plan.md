@@ -538,6 +538,7 @@ func FuncBody(t *testing.T, pkgDir, funcName string) string
 | B0 | ✅ | `bf2bcdb` | 2 个测试文件平台化；`scripts/ci/check-cross-compile.sh`；ubuntu job 增加 darwin `go vet`；`GOOS=linux/darwin go vet ./...` 均为 0 |
 | B1 | ✅ | `076554f` | `xdev self install`；doctor running-copy / RC-home / catalog-source / 缺失目录合并；`util.LooksLikeVersionDirName` + `ListVersionDirNames` 接入 6 个消费点；主机 `current/xdev` 已从 0.3.3-rc.2 切到 0.4.0 |
 | B2 | ✅ | `7f0f7e9` | 安装/激活/卸载/npm 入口 fail-closed；Lua 计量串行化 + 诊断日志；shim `TestMain`（覆盖率 0.0% → 82.4%）；`removeLinkEntry(path, xmdeHome)` + 删除死开关 |
+| B2b | ✅ | `28a02b3` | 整包测试暴露：孤儿 Lua goroutine 污染进程级堆基线 → 新增 `luaActive` 归因守卫（有其它 Lua goroutine 时关闭监控）；plugin 测试用 TestMain 关闭默认监控、内存用例显式注入上限；R8-05 文档守卫排除 `docs/audits`/`docs/history` 快照 |
 | B3 | ✅ | 见最终提交 | ADR-0006 + ADR-0002 纠偏；architecture/installation/usage 修订；HANDOFF 单节重置；`docs/audits/2026/` 归档；`.gitignore` 覆盖 bugx/handoff-history；`build.ps1` 构建后自证版本 + SHA256 |
 | B2 阶段 2 | ⏸ 另立 Spec | — | `plugin.InstallDir` 接口 error 化（20 个生产调用点 + 9 个测试 fake）。阶段 1 已封闭所有写路径，接口改造属 API 硬化 |
 | B1 遗留 | ⏳ 待确认 | — | 全局 PowerShell profile 的 `XMDEV_HOME` 仍指向已删除的临时目录（见审计报告 §9.1）；需要用户确认后改为 `E:\XDev` 或删除 |
@@ -551,6 +552,7 @@ go vet ./...                        exit 0
 GOOS=linux  go vet ./...            exit 0
 GOOS=darwin go vet ./...            exit 0
 go test ./... -count=1              32 包全绿
+go test ./internal/plugin -count=5  绿（看门狗归因稳定）
 go test ./internal/shim -cover      82.4%
 npx vitest run                      48 files / 303 tests
 npx vite build                      exit 0
