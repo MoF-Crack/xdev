@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-10-21-adr-0006-001",
+  "asset_type": "adr",
+  "target_path": "docs/adr/0006-single-binary-distribution.md",
+  "decision": "approve",
+  "target_version": "1.0.0",
+  "target_state": "Accepted",
+  "scope": "固化既成的单二进制分发（CLI/TUI/GUI/shim 同一产物），取代 ADR-0002 中独立 xdev-gui 产物的部分；同步修订 architecture/installation/usage 文档",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-10-21",
+  "authorization_text": "按照方案执行",
+  "recorded_at": "2026-10-21",
+  "recorded_by": "Cline (DeepSeek Harness)"
+}

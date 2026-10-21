@@ -83,6 +83,18 @@ if (-not $SkipBuild) {
         Write-Host "  -> $output" -ForegroundColor Green
         Write-Host "  -> $plain (copy)" -ForegroundColor Green
     }
+
+    # 20261021 审计 P2-11：构建产物必须可自证版本，避免“代码是新的、跑的是旧的”。
+    if (Test-Path $output) {
+        $reported = (& $output version 2>&1 | Select-Object -First 1)
+        if ($reported -notmatch [regex]::Escape("xdev $version")) {
+            Write-Host "ERROR: built binary reports '$reported', expected 'xdev $version'" -ForegroundColor Red
+            exit 1
+        }
+        $sha = (Get-FileHash $output -Algorithm SHA256).Hash
+        Write-Host "  version: $reported"
+        Write-Host "  sha256 : $sha"
+    }
 } else {
     Write-Host "[1/1] Skipping build (-SkipBuild)" -ForegroundColor Gray
 }

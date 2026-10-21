@@ -89,3 +89,8 @@ test-results/
 build/*validate*
 build/gov-*
 build/local-*
+
+# BugX audit evidence + pre-reset HANDOFF history (machine-local).
+# Durable copies live in docs/audits/2026/ so a `git clean -fdx` cannot destroy them.
+.scratch/bugx-round*/
+.scratch/handoff-history/

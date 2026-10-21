@@ -19,14 +19,18 @@
 
 | 文件 | 说明 |
 |------|------|
-| `xdev-<version>-windows-amd64.exe` | Windows CLI 工具 |
-| `xdev-gui-<version>-windows-amd64.exe` | Windows GUI 工具 |
-| `xdev-<version>-linux-amd64` | Linux CLI 工具 |
-| `xdev-gui-<version>-linux-amd64` | Linux GUI 工具 |
-| `xdev-<version>-darwin-amd64` | macOS Intel CLI 工具 |
-| `xdev-<version>-darwin-arm64` | macOS Apple Silicon CLI 工具 |
-| `xdev-gui-<version>-darwin-amd64` | macOS Intel GUI 工具 |
-| `xdev-gui-<version>-darwin-arm64` | macOS Apple Silicon GUI 工具 |
+| `xdev-windows-amd64-v<version>.zip` | Windows（CLI/TUI/GUI 单文件） |
+| `xdev-linux-amd64-v<version>.tar.gz` | Linux x86_64 |
+| `xdev-linux-arm64-v<version>.tar.gz` | Linux arm64 |
+| `xdev-darwin-amd64-v<version>.tar.gz` | macOS Intel |
+| `xdev-darwin-arm64-v<version>.tar.gz` | macOS Apple Silicon |
+| `xdev-<version>-linux-amd64.deb` / `.rpm` | Debian / Fedora 安装包 |
+| `xdev-<version>-x86_64.AppImage` | Linux 便携包 |
+| `xdev-darwin-arm64-v<version>.dmg` | macOS 安装镜像 |
+| `SHA256SUMS` | 全部产物的校验和 |
+
+> 0.3.3 起为**单二进制**（ADR-0006）：CLI、TUI、GUI 与所有工具 shim 都是同一个
+> `xdev[.exe]`，不再有 `xdev-gui-*` 产物。无参数运行即启动 GUI。
 
 下载后将二进制文件放到 PATH 中的任意目录，或直接运行：
 
@@ -57,20 +61,21 @@ sudo dnf install xdev
 
 或直接下载 `.deb` / `.rpm` 包从 Releases 页面安装。
 
-## 3. 通过 AppImage 安装（Linux GUI）
+## 3. 通过 AppImage 安装（Linux）
 
 ```bash
 # 下载 AppImage
-chmod +x xdev-gui-<version>-linux-amd64.AppImage
-./xdev-gui-<version>-linux-amd64.AppImage
+chmod +x xdev-<version>-x86_64.AppImage
+./xdev-<version>-x86_64.AppImage        # 无参数 → 启动 GUI
+./xdev-<version>-x86_64.AppImage list   # 带参数 → CLI
 ```
 
-## 4. 通过 DMG 安装（macOS GUI）
+## 4. 通过 DMG 安装（macOS）
 
 ```bash
 # 挂载 DMG
-hdiutil attach xdev-gui-<version>-darwin-amd64.dmg
-# 将 xdev-gui.app 拖入 Applications 文件夹
+hdiutil attach xdev-darwin-arm64-v<version>.dmg
+# 将 xdev.app 拖入 Applications 文件夹
 # 弹出 DMG
 hdiutil detach /Volumes/XDev
 ```
@@ -79,31 +84,35 @@ hdiutil detach /Volumes/XDev
 
 ### 前置要求
 
-- Go 1.22+
+- Go 1.25+（见 `go.mod`）
 - Git
-- （构建 GUI 需要）Node.js 18+ + npm + Wails CLI
+- Node.js 18+ + npm（前端资源由 `//go:embed all:dist` 嵌入）
+- （可选）Wails CLI：仅用于生成绑定或 `wails build`
 
-### 构建 CLI
+### 构建单二进制
 
 ```bash
-git clone https://github.com/xmdemt/xmdevenvmt
-cd xmdevenvmt
+git clone https://github.com/xmdemt/xdev
+cd xdev
 
-# CLI 二进制（Spec 030：根入口，默认不链接 Wails）
-go build -ldflags "-s -w -X github.com/xmdemt/xdev/internal/version.Version=$(git describe --tags)" -o build/xdev.exe .
+# 先构建前端资源（否则 embed 失败）
+cd frontend && npm ci && npm run build && cd ..
+
+# 单二进制（CLI/TUI/GUI/shim；ADR-0006）
+go build -ldflags "-s -w" -o build/xdev .
 ```
 
-### 构建 GUI
+### 构建 GUI（可选）
 
 ```bash
 # 安装 Wails CLI
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-# 构建 GUI（需要 Node.js + npm 前端构建）
-wails build -ldflags "-X github.com/xmdemt/xdev/internal/version.Version=$(git describe --tags)"
+# wails 会编译前端并嵌入，产物仍是同一个 xdev 二进制
+wails build -ldflags "-s -w"
 ```
 
-GUI 构建步骤会自动编译 `frontend/` 目录下的 Vue.js 项目，产出 `xdev-gui` 二进制文件。
+`wails build` 只负责前端构建与资源嵌入，产物名由 `wails.json` 决定（`xdev`）。
 
 ### 构建脚本
 

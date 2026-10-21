@@ -1,0 +1,539 @@
+﻿# XDev 代码审查与进展审计报告
+
+> 报告文件：`20261021审计.md`
+> 审计日期：2026-10-21
+> 审计对象：`D:\Env\Android\ReverseTools\ReverseEng\xmdevenvmt`
+> 审计基线：`main` @ `6151252`（Round 13 收口 3）
+> 对照远端：`origin/main` @ `09eb1f3`（2026-09-08，落后 69 个提交）
+> 审计方式：源码走查 + 全量构建/测试实跑 + 真实宿主状态取样 + 跨平台编译验证
+> 报告性质：只读审计。除本报告外未修改仓库文件；所有验证均在临时目录/临时二进制上完成。
+
+---
+
+## 一、结论摘要
+
+| 维度 | 判断 |
+|---|---|
+| 功能完成度 | **高**。v0.4.0 已发布；未发提交含 Spec 039（dsh/npm 安装）与 9 月至 10 月共 13 轮审计修复 |
+| 代码健康度 | **良好**。构建、vet、gofmt、Go 全量测试、前端测试与构建均通过；测试/生产代码约 1.1:1 |
+| 工程流程 | **断裂**。最近 7 周 69 个提交从未进入 CI，且当前代码在 Linux/macOS 上测试编译失败 |
+| 实际可运行状态 | **滞后**。本机 PATH 上的 xdev 是 0.3.3-rc.2（8 月），不含 9 月以来的修复 |
+| 最大风险 | 质量结论全部来自单机 Windows、无 race detector 的本地验证，缺少外部交叉验证 |
+
+**一句话结论：产品代码是健康的，工程闭环是断的。** 审计轮次本身质量高、证据链完整，但“本地全绿 + 未推送”使这些结论无法被 CI、跨平台与 race detector 证实。
+
+### 优先级最高的 5 件事
+
+1. 修复两个非 Windows 平台的测试编译错误（否则一推 CI 必红）。
+2. 推送分支开 PR，让 CI 首次覆盖这 69 个提交（`-race` + Linux/macOS + integration）。
+3. 用当前 HEAD 构建并替换本机 `current/xdev`，再做一次最小桌面冒烟。
+4. 修 `xdev list` 把非版本目录当版本显示的问题，以及 `InstallDir` 的 fail-open。
+5. 收口架构/安装/使用三份对外文档与 HANDOFF 结构。
+
+---
+
+## 二、审计范围与方法
+
+### 2.1 覆盖范围
+
+- 全部第一方 Go 代码：32 个包、186 个生产文件（44,238 行）、282 个测试文件（48,533 行）。
+- 前端：`frontend/src` 5,096 行、48 个测试文件 / 303 个用例。
+- 构建与 CI：`build.ps1` / `build.sh` / `.github/workflows/ci.yaml`。
+- 文档：README、`docs/architecture.md`、`docs/installation-guide.md`、`docs/usage-manual.md`、HANDOFF。
+- 运行状态：真实 xdev home（`E:\XDev`）与本机 PATH/环境变量。
+- 历史：v0.4.0 以来 75 个提交、Round 7–13 的 `.scratch` 审计报告。
+
+### 2.2 未覆盖范围（受环境限制）
+
+- GUI 真实交互与桌面冒烟（MS-N2/MS-TUI 类）。
+- 真实网络安装、Docker/Nix/SSH 隔离运行时。
+- macOS/Linux 运行时行为（本机仅能做交叉编译验证）。
+- `go test -race`（本机工具链不可用，详见 §五-4）。
+
+---
+
+## 三、实测验证结果
+
+以下均为本会话真实执行结果，不是引用历史文档。
+
+| 检查项 | 命令 | 结果 |
+|---|---|---|
+| 构建 | `go build ./...` | exit 0，13s |
+| 静态检查 | `go vet ./...` | exit 0，8s |
+| 格式 | `gofmt -l .`（排除 vendor/.scratch） | clean |
+| Go 测试 | `go test ./... -short -count=1` | **32 包全 ok，0 FAIL，59s** |
+| 前端单测 | `npx vitest run` | 48 文件 / **303 用例全过**（首次 exit 1，重跑 exit 0，见 §四-9） |
+| 前端构建 | `npx vite build` | exit 0，8.1s |
+| Linux 生产构建 | `GOOS=linux GOARCH=amd64 go build ./...` | exit 0 |
+| Darwin 生产构建 | `GOOS=darwin GOARCH=arm64 go build ./...` | exit 0 |
+| **Linux 测试编译** | `GOOS=linux GOARCH=amd64 go vet ./...` | **exit 1（见 §四-1）** |
+| **Darwin 测试编译** | `GOOS=darwin GOARCH=arm64 go vet ./...` | **exit 1（见 §四-1）** |
+| integration 标签 | `go vet -tags=integration ./...` | exit 0 |
+| bindings 标签 | `go build -tags=bindings ./...` | exit 0 |
+| CLI 冒烟 | `xdev version` / `list` / `doctor`（temp home） | 可运行 |
+| 宿主安全 | 运行前后比对 HKCU PATH | 33 值 / 1150 字符 / `REG_EXPAND_SZ` / 无 GOROOT，**未变** |
+
+> 说明：`-short` 实际无效果——全仓没有任何 `testing.Short()` 调用。本地跑的等价于 CI 的全量测试（除 OS 与 race 外）。
+
+### 3.1 覆盖率抽样
+
+| 包 | 语句覆盖率 |
+|---|---|
+| `internal/plugin` | 78.1% |
+| `internal/downloader` | 77.6% |
+| `internal/installer` | 69.0% |
+| `internal/discovery` | 63.7% |
+| `internal/gui` | 44.6% |
+| `internal/shim` | 0.0%（测量伪象，见 §四-13） |
+
+---
+
+## 四、代码审查发现
+
+### P1-1 非 Windows 平台测试编译失败（一推 CI 必红）
+
+**证据**
+
+```text
+GOOS=linux GOARCH=amd64 go vet ./...
+# github.com/xmdemt/xdev/internal/util
+#   internal\util\junction_native_r11_test.go:267:14: undefined: buildMountPointReparseBuffer
+# github.com/xmdemt/xdev/internal/cli
+#   internal\cli\config_path_guard_test.go:72:42: undefined: driveFixture
+```
+
+- `internal/util/junction_native_r11_test.go:267` 没有 build tag，却调用 `internal/util/junction_windows.go:151`（`//go:build windows`）中的 `buildMountPointReparseBuffer`。
+- `internal/cli/config_path_guard_test.go:72` 没有 build tag，却依赖 `driveFixture()`；该 helper 定义在带 `//go:build windows` 的 `internal/cli/drive_prompt_test.go:88`。
+
+**影响**
+
+CI 的 ubuntu/macos 矩阵会在两步编译失败：
+
+- `.github/workflows/ci.yaml:114` → `go test ./... -count=1`
+- `.github/workflows/ci.yaml:121` → `go test -race ./internal/... -count=1`
+
+**为何至今未暴露**
+
+两个文件分别最后修改于 2026-09-14 与 2026-10-20，均晚于最后一次 CI（2026-09-08）。
+
+**建议**
+
+给两个文件补 `//go:build windows`；把 `GOOS=linux go vet ./...`（或 `go test -run XXX` 编译检查）加入本地验证清单。
+
+**严重度**：P1（阻断发布/PR 合并）
+
+---
+
+### P1-2 69 个提交 / 13 轮审计从未进入 CI
+
+**证据**
+
+```text
+git rev-list --left-right --count origin/main...HEAD  →  0    69
+git log -1 origin/main  →  09eb1f3（2026-09-08）
+git log -1 HEAD         →  6151252（2026-10-21）
+```
+
+`-race`、Linux/macOS 测试、integration-tests 三条门禁只存在于 CI，而 CI 自 9/8 后从未运行。HANDOFF 中所有“全绿”均为单机 Windows、无 race detector 的结论。
+
+**影响**
+
+- Round 9–13 的并发修复没有经过 race detector。
+- 跨平台行为、macOS/Linux 文件语义没有经过真实运行。
+- P1-1 这类问题无法被及时发现。
+- v0.4.0 之后的安全修复（下载、Lua、PATH、junction）未做过发布级回归。
+
+**建议**
+
+推分支开 PR（CI 触发策略见 `ci.yaml:8-13`），优先看 ubuntu 的 `-race` 与 macos 的构建/测试。
+
+**严重度**：P1（质量门禁失效）
+
+---
+
+### P1-3 本机实际运行的 xdev 落后 3 个版本
+
+**实测状态**
+
+| 位置 | 版本/时间 |
+|---|---|
+| PATH 解析 `xdev` → `E:\XDev\current\xdev\xdev.exe` | **0.3.3-rc.2**（2026-08-29） |
+| `E:\XDev\xdev.exe`（根副本） | 0.4.0 |
+| `E:\XDev\install\xdev\` | 仅 `0.3.3-rc.2`、`1.2.2-alpha`，**无 0.4.0** |
+| 仓库根 `xdev.exe` | 构建于 2026-10-17 |
+| `build/bin/xdev.exe` | 构建于 2026-09-18 |
+| HEAD | 2026-10-21 |
+
+**根因**
+
+`EnsureSelfInstalled()` 只在 GUI 启动路径调用（`internal/gui/app.go:546`），CLI 入口不做自愈；`xdev self update` 只替换当前正在运行的 exe，不会重建 `install/xdev/<version>` 与 `current/xdev`。
+
+**影响**
+
+本机任何手工冒烟实际跑的是 8 月代码，不含 2026-09-09 的 shim 透传 P0 修复，也不含后续安全修复。HANDOFF 中依赖本机二进制的冒烟结论需重新评估。
+
+**建议**
+
+用当前 HEAD 构建后执行 `xdev self update` 或手工安装 0.4.0+，确认 `current/xdev` 指向新版本，再跑最小冒烟。
+
+**严重度**：P1（验证对象与代码不一致）
+
+---
+
+### P1-4 `xdev list` 把 install/ 下的非版本目录当成版本（已复现）
+
+**真实输出（本机）**
+
+```text
+Tool         Installed                              Active
+Godot        export_templates
+gradle       9.6.1, 9.7.0, ★ 9.7.1, unsafe…        9.7.1
+llvm         ★ 22.1.8, lld_is_a_generic_driver._    22.1.8
+go           ★ 1.26.5, go1.22.10, gopath            1.26.5
+perl         (无版本)
+```
+
+**代码位置**
+
+- CLI：`internal/cli/install.go:227-246` 仅判断 `e.IsDir()` / `v.IsDir()`。
+- GUI：`internal/gui/app.go:863-877` 同样只判断 `IsDir()`。
+- 已有的过滤函数 `isComparableVersion` 只存在于 GUI 更新路径（`internal/gui/app_updates.go:125`）——典型的“同一判据只修一个调用点”。
+
+**影响**
+
+- 用户可见的版本列表污染。
+- `findOtherVersion`（`internal/installer/installer.go:2136`）会把这些目录纳入“其他版本”候选；当前垃圾名解析为 `[0]`，通常排在真实版本之后，但极端情况下会选错。
+- GUI 的安装/卸载/修复入口同样读取该列表。
+
+**建议**
+
+抽出共享的 `IsVersionDirName`（复用 `isComparableVersion` 语义），供 CLI `list`、GUI `installedVersions`、`findOtherVersion`、升级判断统一使用；对 Godot `export_templates`、Go `gopath` 这类合法辅助目录建立白名单或迁移到版本目录之外。
+
+**严重度**：P1（功能/数据展示错误）
+
+---
+
+### P1-5 `InstallDir` 的安全校验是 fail-open
+
+**代码位置**
+
+- `internal/plugin/generic.go:204-239`
+- `internal/plugin/lua_plugin.go:122-143`
+
+**行为**
+
+`SafeName` 校验失败时不报错，而是把名字替换成 `unsafe-version-blocked` / `unsafe-name-blocked` 后继续安装，并返回一个“合法”路径。
+
+**实证**
+
+宿主上存在 `install/gradle/unsafe-version-blocked`，说明该分支在真实环境中被触发过。
+
+**影响**
+
+- 不会造成路径穿越（仍在 installRoot 内），但会把内容安装到伪版本目录并报告成功。
+- 后续 `list`、升级判断、卸载都会看到这个假版本。
+- 用户无法从 UI 得知“版本名非法、安装被降级”。
+
+**根因**
+
+插件接口是 `InstallDir(installRoot, version string) string`，无法返回 error；改签名需要动 `plugin.Plugin` 与约 23 个调用点。
+
+**建议**
+
+中期改为 `(string, error)`；短期至少在返回值上带可识别标记，并在安装入口 fail-closed。
+
+**严重度**：P1（安全校验语义错误，非穿透）
+
+---
+
+### P2 级问题
+
+#### P2-6 对外文档与实现相反（用户可见）
+
+| 文档 | 内容 | 实际 |
+|---|---|---|
+| `docs/architecture.md:20` | “GUI 是独立的 `xdev-gui`（`-tags gui`），默认 `go build` 不链接 Wails” | 单二进制，`main.go` + `main_gui.go`（`//go:build !bindings`）进程内启动 GUI，默认链接 Wails |
+| `docs/architecture.md:26` | “CLI/GUI/bindings 三变体” | 已合并为单入口 |
+| `docs/architecture.md:405` | `build/bin/xdev-gui.exe` | 0.4.0 起单产物 `xdev` |
+| `docs/installation-guide.md:23-29` | 列出 `xdev-gui-<version>-*` 产物 | Release 已收口为 `xdev-*` |
+| `docs/usage-manual.md:390,399` | “或直接运行 xdev-gui.exe” | 不存在该产物 |
+
+`docs/architecture.md` 状态标为 **Living**，却描述已被推翻的核心架构，属于最高优先级的文档缺陷。
+
+**建议**：补一份单二进制 ADR，统一修订三份文档，并在 CI 里加一条“文档中不得出现 `xdev-gui` 产物”的守卫（可复用现有 docs 校验脚本）。
+
+---
+
+#### P2-7 HANDOFF.md 结构腐化
+
+**实测**
+
+- 文件 150,868 字节、220 行（大量长行）。
+- **5 个重复的** `# 交接文档 / ## 当前状态` 标题：第 1、183、193、204、224 行。
+- 旧状态（v0.4.0 发布、0.3.3 等）与最新状态并存，顺序阅读容易误判。
+- 记录“HKCU PATH = 1150 字节”，实测为 1150 **字符**（2300 字节）。
+
+**影响**
+
+AGENTS.md 规定新会话必须先读 HANDOFF；当前结构会让新会话把过期段落当现状。
+
+**建议**
+
+只保留最新一节 + 历史索引；历史轮次移到 `.scratch/handoff-history/`。宿主基线统一写“字符数 + 字节数”。
+
+---
+
+#### P2-8 Lua 内存看门狗是进程级启发式
+
+**代码**：`internal/plugin/lua_engine.go:302-340`
+
+- 用 `runtime.ReadMemStats` 的**全进程堆增量**，20ms 采样。
+- 并行插件调用（批量安装/并发嗅探）会互相污染基线：一个调用的内存分配可能让另一个调用被误杀。
+- `ReadMemStats` 每 20ms 一次，存在 STW 成本，随并发调用数线性叠加。
+- 采样间隔内的一次巨量分配（如 `string.rep`）仍可能漏过。
+
+**定性**
+
+HANDOFF 已如实登记“不是硬边界”。当前 64 MiB 默认值对正常插件足够，但**不构成对抗恶意插件的安全边界**；真正的硬保证需要 fork `vendor` 的 gopher-lua 做字节配额。
+
+---
+
+#### P2-9 源码级守卫占比过高
+
+- 约 187 个测试读取 `.go` 源文件做字符串断言（`os.ReadFile` + `Contains`）。
+- HANDOFF 自述同一坑复发三次：守卫匹配到自己写的断言字符串、注释误伤、函数搬家导致位置耦合。
+- 这类测试能钉死“禁止回退”，但维护成本高、假红概率大，且无法验证行为。
+
+**建议**
+
+把“禁止调用 X”的守卫限制在少数关键不变量；优先用行为断言（可用依赖注入/接缝）替代源码文本匹配。
+
+---
+
+#### P2-10 审计证据未跟踪
+
+`git status` 显示 `.scratch/bugx-round7` 至 `round13` 共 7 个目录为 **untracked**，且 `.scratch` 未被 `.gitignore` 覆盖。一次 `git clean -fdx` 会删除全部审计报告（HANDOFF.md 已正确 ignore）。
+
+**建议**：把 `.scratch/` 纳入 `.gitignore`，或把报告归档到 `docs/audits/` 并提交。
+
+---
+
+#### P2-11 可运行产物滞后
+
+| 产物 | 构建时间 | 对应代码 |
+|---|---|---|
+| 根 `xdev.exe` | 2026-10-17 | 早于 Round 12（10/20）、Round 13（10/21） |
+| Cache `build/bin/xdev.exe` | 2026-09-18 | 早于 Round 9 之后的大部分修复 |
+| `current/xdev` | 0.3.3-rc.2（8/29） | 早于 9 月全部修复 |
+
+Round 12/13 没有任何对应二进制，无法做“当前代码”的端到端冒烟。
+
+---
+
+### P3 / 观察项
+
+#### P3-12 `xdev doctor` 在全新 home 上的误导性输出
+
+- 报 `✘ dir: manifests`，却同时报 `✔ manifest catalog: 53 tool(s) discovered at <home>/manifests`（实际使用了内置 manifest，却打印外部路径）。
+- shell rc 检查是全局的，不区分当前 `--xmdevenv-dir`，多 home 场景会误报。
+
+#### P3-13 `internal/shim` 覆盖率显示 0.0% 是测量伪象
+
+shim 测试会 re-exec 测试二进制；子进程的 `coverage: 0.0%` 行覆盖了父进程的真实值。`go test -json` 可见 71 run / 68 pass / 4 skip，并非没跑。若未来加覆盖率门禁，需要先修这个测量问题。
+
+#### P3-14 死开关
+
+`internal/shim/residue.go:53` 的 `sweepDisabled` 只在测试 reset 中置位，生产代码从不设为 true。
+
+#### P3-15 隐式路径契约
+
+`internal/installer/installer.go:1698` 通过 `filepath.Dir(filepath.Dir(path))` 反推 xmdeHome，只对 `<home>/current/<tool>` 这一种形状成立；未来若调用方传入其他形状，残留可能被归档到错误位置。
+
+---
+
+## 五、项目实际进展
+
+### 5.1 版本与发布
+
+- `v0.4.0` tag 位于 `7782b4b`，是 `origin/main` 的祖先，GitHub Release 14 个产物（2026-09-08）。
+- 2026-09-08 之后本地新增 **69 个提交**，覆盖 Round 9–13 审计、单二进制收口、Spec 039（dsh npm 安装）等。
+- `internal/version` 仍为 `0.4.0`；CHANGELOG `[Unreleased]` 已积累变更，尚未 bump。
+
+### 5.2 代码规模
+
+| 类别 | 文件 | 行数 |
+|---|---:|---:|
+| 生产 Go | 186 | 44,238 |
+| 测试 Go | 282 | 48,533 |
+| 前端 `src` | — | 5,096 |
+| 内置 manifest | 53 | — |
+
+自 v0.4.0 以来（`git diff v0.4.0..HEAD`）：
+
+- Go：`+46,189 / -1,921`（其中非测试 Go `+13,931 / -1,699`，触及 121 个文件）
+- 前端：`+3,034 / -241`
+- 文档：`+4,674 / -8`
+
+即 7 周内生产代码净增约 1.2 万行、测试增约 3.2 万行。测试/生产比约 1.1:1，整体健康，但 **70% 的新增代码是测试**，说明审计轮次主要在生产“验证资产”而非新功能。
+
+### 5.3 功能面
+
+- CLI / TUI / GUI 单二进制多态入口可用。
+- 安装、激活、卸载、断点续传、签名校验、镜像、嗅探、Lua 插件、隔离（none/container/nix）、远程编排均有实现与测试。
+- v0.4.0 后的主要产品增量是 Spec 039：dsh 的 npm 托管安装与预发布版本语义。
+- 本机真实环境安装了 17 类工具（go/node/python/java/rust/llvm/gradle 等），说明主链路在真实使用。
+
+### 5.4 审计轮次的健康度
+
+- Round 7–13 的报告、红/绿证据、提交信息都完整，可追溯性好。
+- 但 Round 8–12 连续五轮呈现“修上一轮自己引入/漏掉的问题”，Round 13 才做结构性收口。
+- 继续“再挖一轮”的边际收益，已经低于“把 CI 接上、把文档收口、把安装目录语义统一”的收益。
+
+---
+
+## 六、遗留疑难问题
+
+### 6.1 低成本、高收益（建议立即做）
+
+| # | 问题 | 动作 |
+|---|---|---|
+| 1 | 非 Windows 测试编译失败 | 补 2 个 build tag；本地加 `GOOS=linux go vet` |
+| 2 | 69 个提交未过 CI | 推分支开 PR，跑 `-race` + Linux/macOS + integration |
+| 3 | 文档漂移 | 修订 architecture/installation/usage；补单二进制 ADR |
+| 4 | 伪版本目录显示 | 抽共享 `IsVersionDirName`，统一 4 个消费点 |
+| 5 | HANDOFF 结构 | 只留最新一节 + 历史索引 |
+| 6 | `.scratch` 证据 | 忽略或归档提交 |
+
+### 6.2 中成本
+
+| # | 问题 | 动作 |
+|---|---|---|
+| 7 | `InstallDir` fail-open | 接口改 `(string, error)`，清理宿主伪版本目录 |
+| 8 | 本机运行版本滞后 | 重建并替换 `current/xdev`，跑桌面冒烟 |
+| 9 | GUI 覆盖率 44.6% | 补 GUI 绑定层的关键路径测试（安装/切换/PATH 模式） |
+
+### 6.3 高成本 / 环境限制
+
+| # | 问题 | 现状 | 出路 |
+|---|---|---|---|
+| 10 | Lua 硬内存配额 | 启发式，非安全边界 | fork gopher-lua 做字节计数，或换实现 |
+| 11 | 本机 `-race` 不可用 | 根因定位到 3 个符号的 kernel32/KernelBase 归属错误 | 装 MSVC 或 MinGW ≥ 11；但 CI Linux 可替代 |
+| 12 | junction 长路径矩阵 | 本机无 `LongPathsEnabled`，>260 字符只能 Skip | 在启用长路径的主机补跑 |
+| 13 | 桌面/TUI 手工冒烟 | 一直标记“待桌面环境” | 用当前 HEAD 产物执行 `manual-smoke.md` 清单 |
+| 14 | BugX 引擎内容过期门 | `tools-kb.md` 超过 30 天，无受支持刷新入口 | 降级手工 `.scratch` 流程（当前做法），或等上游修复 |
+
+---
+
+## 七、建议的下一步（按顺序）
+
+1. **修 P1-1**：两个测试文件补 `//go:build windows`；本地验证 `GOOS=linux/darwin go vet ./...` 通过。
+2. **接 CI**：推送分支开 PR，确认 ubuntu `-race`、macOS 测试、integration 三条门禁结果。
+3. **对齐运行态**：用 HEAD 构建 xdev，更新 `E:\XDev\current\xdev`，执行最小桌面冒烟（GUI 启动、安装、切换版本、direct PATH、批量更新取消）。
+4. **修 P1-4 / P1-5**：抽共享版本目录判据；把 `InstallDir` 改为 fail-closed，并清理宿主上的 `unsafe-version-blocked`、`gopath`、`export_templates` 等伪版本。
+5. **收口文档**：architecture / installation / usage + HANDOFF；补单二进制 ADR。
+6. **最后再评估** gopher-lua 硬配额这类高成本项。
+
+---
+
+## 八、附录：本会话执行的验证命令
+
+```powershell
+# 构建与测试
+go build ./...
+go vet ./...
+gofmt -l .
+go test ./... -short -count=1
+
+# 前端
+cd frontend
+npx vitest run
+npx vite build
+
+# 跨平台编译（生产代码通过，测试编译失败）
+$env:GOOS='linux';  $env:GOARCH='amd64'; go build ./...   # exit 0
+$env:GOOS='darwin'; $env:GOARCH='arm64'; go build ./...   # exit 0
+$env:GOOS='linux';  go vet ./...                          # exit 1
+$env:GOOS='darwin'; go vet ./...                          # exit 1
+
+# 标签构建
+go vet -tags=integration ./...
+go build -tags=bindings ./...
+
+# 覆盖率抽样
+go test ./internal/shim ./internal/installer ./internal/downloader `
+        ./internal/gui ./internal/discovery ./internal/plugin -cover -count=1
+
+# 真实状态取样（只读）
+xdev list
+xdev doctor --xmdevenv-dir <temp-home>
+Get-Item HKCU:\Environment
+```
+
+### 8.1 关键数据
+
+```text
+HEAD              6151252  2026-10-21 22:26
+origin/main       09eb1f3  2026-09-08 23:54
+领先提交数        69
+Go 版本           go1.26.5 windows/amd64
+go.mod            go 1.25.0
+CI setup-go       1.25
+包数              32（测试全绿）
+测试耗时          59s
+vitest            48 files / 303 tests
+生产 Go           186 files / 44,238 lines
+测试 Go           282 files / 48,533 lines
+HKCU PATH         33 values / 1150 chars / REG_EXPAND_SZ / 无 GOROOT
+```
+
+### 8.2 局限性声明
+
+- 本报告未执行 GUI 真实交互、真实网络安装、Docker/Nix/SSH 隔离与 macOS/Linux 运行时验证。
+- 本机 `go test -race` 不可用，并发结论仅来自行为断言与源码审查。
+- 所有“实测/复现”结论均有本会话命令输出支撑；“推断”类结论已在正文注明依据。
+- 本报告是**执行前快照**：写作时未修改仓库代码；随后的 B0–B3 修复见
+  [2026-10-21-remediation-plan.md](2026-10-21-remediation-plan.md) 与 `HANDOFF.md`。
+
+---
+
+## 九、执行期新增发现（2026-10-21 晚）
+
+以下两项是在按方案执行 B0–B3 时由新守卫/新 doctor 检查暴露的，补充记录：
+
+### 9.1 P1-6：全局 PowerShell profile 指向已删除的临时 home
+
+**证据**
+
+```text
+C:\Users\xinyan\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
+  # >>> xdev init >>>                                  (2026-06-28)
+  $env:XMDEV_HOME = "C:/Users/xinyan/AppData/Local/Temp/tmp.MVjKf1Gd09"
+  $env:Path = "C:\Users\...\Temp\tmp.MVjKf1Gd09\shims;" + $env:Path
+  # <<< xdev init <<<
+```
+
+该临时目录早已不存在。每个新 PowerShell 会话都会把 `XMDEV_HOME` 指向悬空路径。
+这是 2026-07 报告里「测试隔离写宿主环境」P0 的**同类残留**（当时只处理了注册表 GOROOT，
+没有处理 shell RC）。
+
+**现状**：B1 新增的 doctor 检查已能报出（`shell rc injected` → 失败，指出 stale home）。
+**待办**：把该块改为 `E:\XDev` / `E:\XDev\shims`（或删除），需要用户确认后执行。
+
+### 9.2 P3-16：运行期 manifest 损坏被静默跳过
+
+**证据**
+
+```text
+[manifest] WARNING: skip unparseable cursor.yaml: yaml: unmarshal errors:
+  line 59: mapping key "arch" already defined at line 51
+  ...
+```
+
+`E:\XDev\manifests\cursor.yaml`（mtime 2026-08-04）的 Linux 注释行缺少换行，
+导致下一条 `- os: linux` 被并入上一映射，产生重复键；`LoadCatalog` 跳过该文件。
+由于 embedded manifest 仍提供 cursor，doctor 的 `manifest catalog` 仍报 ✔ 53 tools，
+**运行期损坏对用户不可见**（与“写侧守住了、调用方吞掉失败”同一形态）。
+
+**建议**：doctor 汇总“被跳过的 manifest 文件名 + 原因”；`doctor --fix` 对被判定为
+损坏且与 embedded 同名的文件提供重新播种（需保留用户嗅探合并的版本）。
+

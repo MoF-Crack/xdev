@@ -387,16 +387,17 @@ TUI 提供交互式界面，使用 Bubble Tea 框架构建，适合在终端中�
 
 ```bash
 xdev gui
-# 或直接运行 xdev-gui.exe
+# 或无参数直接运行 xdev（单二进制，ADR-0006）
+xdev
 ```
 
-GUI 通过 Wails v2 构建，Go 后端 + Vue.js 前端，单二进制打包。支持：
+GUI 通过 Wails v2 构建，Go 后端 + Vue.js 前端，与 CLI/TUI 打包在同一个二进制中。支持：
 - 暗色/浅色主题切换
 - 工具浏览和安装
 - 版本管理
 - 收藏工具
 
-GUI 二进制命名约定：`xdev-gui` 或 `xdev-gui-<version>` 会自动启动 GUI 界面。
+入口约定：无参数 → GUI；`xdev tui` → TUI；其余参数 → CLI。不再有独立的 `xdev-gui` 二进制。
 
 ---
 
