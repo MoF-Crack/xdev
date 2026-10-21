@@ -39,7 +39,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -57,6 +61,18 @@ type LuaEngine struct {
 	// far too long for a unit test to exercise the timeout → poisoned
 	// path. Only tests set it; zero means "use the production default".
 	callTimeoutOverride time.Duration
+	// memLimitOverride, when non-nil, replaces the per-call Lua heap-growth
+	// limit（Round 12 test seam）。用指针而不是 `uint64`：**0 是有意义的取值**
+	//（关闭监控），必须能与「未设置」区分开。
+	memLimitOverride *uint64
+}
+
+// effectiveMemLimit 返回本次调用生效的内存上限（字节；0 = 关闭监控）。
+func (e *LuaEngine) effectiveMemLimit() uint64 {
+	if e.memLimitOverride != nil {
+		return *e.memLimitOverride
+	}
+	return luaMemoryLimit()
 }
 
 type cachedVM struct {
@@ -171,9 +187,19 @@ func callProtected(doneCh chan<- error, fn func() error) {
 //
 // **注意**：`SetMx`（gopher-lua 的内存上限 API）**不可用** —— 它的实现是一个
 // 后台 goroutine 轮询 `runtime.ReadMemStats`，超限直接 `os.Exit(3)`。让宿主进程
-// 因为一个插件的内存用量而退出，比超时更糟。内存上限因此**仍未实现**（见 Round 11
-// 报告「未完成项」，需要 gopher-lua 层的字节配额支持）。
+// 因为一个插件的内存用量而退出，比超时更糟（一个失控插件能杀掉整个 CLI）。
+//
+// 第十二轮审计改用**自建内存看门狗**（`watchMemory`）：同样轮询
+// `runtime.ReadMemStats`，但超限时**取消这个 ctx** —— 于是 Lua 主循环在下一条指令
+// 处抛错、插件线程**真的停下**，调用方拿到一个普通错误。既不退出进程，也不需要
+// gopher-lua 层的字节配额（它没有分配钩子：`newLTable` 直接 `make`）。
 func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func() error) error {
+	return e.runWithContextLimited(L, timeout, e.effectiveMemLimit(), fn)
+}
+
+// runWithContextLimited 是 runWithContext 的完整形态，可注入内存上限
+// （0 表示不监控；测试用小上限来快速触发）。
+func (e *LuaEngine) runWithContextLimited(L *lua.LState, timeout time.Duration, memLimit uint64, fn func() error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -190,6 +216,12 @@ func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func
 		L.RemoveContext()
 	}()
 
+	// 内存看门狗：超限时 cancel 这个 ctx，让 Lua 主循环在下一条指令处中断。
+	// 返回的 stop 会停掉轮询 goroutine（否则每次调用泄漏一个 ticker）；
+	// 返回的 exceeded 用来在下面**区分**「内存中止」与「时间超时」。
+	stopWatch, memExceeded := watchMemory(ctx, cancel, memLimit)
+	defer stopWatch()
+
 	doneCh := make(chan error, 1)
 	callProtected(doneCh, fn)
 
@@ -199,13 +231,6 @@ func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func
 	case <-ctx.Done():
 		// ctx 已取消，主循环会在下一条指令处抛错并让 doneCh 收到结果。
 		// 给它一个很短的窗口把错误写出来（通常立刻就到）。
-		//
-		// **错误文案必须保留 "timed out"**：这是仓库既有契约
-		//（`lua_hardening_test.go` 断言 `strings.Contains(err, "timed out")`，
-		// `vfox_compat.go` 的调用方也按该子串区分「超时」与「插件自身报错」）。
-		// ctx 的原始文案是 `context deadline exceeded`，直接透出会破坏该契约，
-		// 因此统一包装成 `timed out after <d> (Lua execution aborted: <detail>)`，
-		// 把 ctx 细节作为补充信息放在括号里。
 		detail := "context deadline exceeded"
 		select {
 		case err := <-doneCh:
@@ -214,8 +239,104 @@ func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func
 			}
 		case <-time.After(50 * time.Millisecond):
 		}
+
+		// 第十二轮审计：**必须区分内存中止与时间超时**。
+		//
+		// 否则一次 41ms 就被内存看门狗掐掉的调用会报
+		// `timed out after 10s` —— 用户看到「等了 10 秒」，实际只过了 41 毫秒，
+		// 而且完全看不出真正原因是内存。这种**错误归因**比没有错误更糟：
+		// 它会把排查方向引向网络/超时，而真凶是插件的分配量。
+		if memExceeded() {
+			return fmt.Errorf("Lua memory limit exceeded (%d MiB heap growth) — "+
+				"plugin execution aborted: %s", memLimit>>20, detail)
+		}
+
+		// 时间超时：**错误文案必须保留 "timed out"** —— 这是仓库既有契约
+		//（`lua_hardening_test.go` 断言 `strings.Contains(err, "timed out")`，
+		// `vfox_compat.go` 的调用方也按该子串区分「超时」与「插件自身报错」）。
+		// ctx 的原始文案是 `context deadline exceeded`，直接透出会破坏该契约，
+		// 因此统一包装成 `timed out after <d> (Lua execution aborted: <detail>)`。
 		return fmt.Errorf("timed out after %s (Lua execution aborted: %s)", timeout, detail)
 	}
+}
+
+// luaMemoryLimitDefault 是单次 Lua 调用允许的**堆增长**上限。
+//
+// 第十二轮审计：实测一个普通的 200 万次表构造循环
+// （`local t = {} for i=1,2000000 do t[i] = {i} end`）在 **367ms** 内分配
+// **325 MiB** 且**完全没有上限** —— 而这远不是最坏情况（`while true` 里塞表
+// 可以在超时窗口内吃光内存）。64 MiB 比任何正常 `available`/`archive`/`env_vars`
+// 返回值高三个数量级（它们只返回几个字符串），因此不会误伤合法插件。
+//
+// 可用环境变量 `XDEV_LUA_MEM_LIMIT_MB` 覆盖（0 = 关闭监控）。
+const luaMemoryLimitDefault = 64 << 20 // 64 MiB
+
+// luaMemoryLimit 返回当前生效的内存上限（字节；0 = 不监控）。
+func luaMemoryLimit() uint64 {
+	if v := os.Getenv("XDEV_LUA_MEM_LIMIT_MB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return uint64(n) << 20
+		}
+		log.Printf("[plugin] WARNING: ignoring invalid XDEV_LUA_MEM_LIMIT_MB=%q", v)
+	}
+	return luaMemoryLimitDefault
+}
+
+// watchMemory 轮询堆占用，超过 limit（**相对于开始时的基线**）时调用 cancel
+// 中断 Lua 执行。
+//
+// 返回：
+//   - stop：停止轮询（必须调用，否则每次插件调用泄漏一个 ticker goroutine）
+//   - exceeded：报告**是否**因内存超限而中断。调用方据此区分「内存中止」与
+//     「时间超时」—— 不区分的话，41ms 就被掐掉的调用会报 `timed out after 10s`，
+//     既不符合事实、又把排查方向引向网络/超时（真凶是插件分配量）。
+//
+// 为什么用**增量**而不是绝对 `HeapAlloc`：宿主进程本身可能已经占了几百 MiB
+// （GUI/构建缓存等），用绝对阈值会让所有插件调用立刻超限。我们只约束**这次调用
+// 新增**的内存。
+//
+// 为什么不用 gopher-lua 的 `SetMx`：它超限直接 `os.Exit(3)` —— 一个插件就能把整个
+// CLI 杀掉。这里改走 ctx 取消，插件线程会真正停下并返回普通错误。
+//
+// limit == 0 时直接返回空操作（不启 goroutine）。
+func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (stop func(), exceeded func() bool) {
+	var tripped atomic.Bool
+	if limit == 0 {
+		return func() {}, func() bool { return false }
+	}
+	var base runtime.MemStats
+	runtime.ReadMemStats(&base)
+
+	done := make(chan struct{})
+	go func() {
+		// 20ms 的采样间隔：325 MiB 在 367ms 内产生（约 0.9 MiB/ms），
+		// 20ms 的粒度足以在远超上限前就抓住；同时不会明显增加 CPU 负担。
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				var used uint64
+				if m.HeapAlloc > base.HeapAlloc {
+					used = m.HeapAlloc - base.HeapAlloc
+				}
+				if used > limit {
+					log.Printf("[plugin] Lua memory limit exceeded: %.1f MiB > %.1f MiB — aborting plugin execution",
+						float64(used)/(1<<20), float64(limit)/(1<<20))
+					tripped.Store(true)
+					cancel() // 让 mainLoopWithContext 在下一条指令处中断
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done) }, tripped.Load
 }
 
 // NewLuaEngine creates a new Lua engine.
