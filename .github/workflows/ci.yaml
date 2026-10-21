@@ -106,6 +106,13 @@ jobs:
       - name: Lint
         run: go vet ./...
 
+      # 20261021 审计 P1-1：`go build` 不编译测试文件，Windows-only 符号
+      # 被无 tag 的 _test.go 引用时只有在 Linux/macOS 跑 `go test` 才会暴露。
+      # 交叉 GOOS 的 `go vet` 会编译测试文件，是最便宜的防线。
+      - name: Cross-platform test compilation (non-Windows)
+        if: matrix.goos == 'ubuntu-latest'
+        run: bash scripts/ci/check-cross-compile.sh
+
       - name: Build CLI
         run: go build -ldflags="-s -w" -o xdev${{ matrix.ext }} .
 
