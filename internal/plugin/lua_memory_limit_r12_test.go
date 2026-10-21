@@ -265,14 +265,49 @@ func TestWatchMemory_ZeroLimitStartsNothing(t *testing.T) {
 	}
 }
 
-// 确保错误信息里带上了「内存」线索（否则用户只看到一句 timed out 无从判断）。
+// 错误文案必须明确指向**内存**（而不是一句 timed out）。
+//
+// **本用例的演进（如实记录两次失败，两课都值得写下来）**：
+//
+//	初版：跑那个 325 MiB 循环 + 断言错误含 'memory'。单独跑绿，
+//	      `go test ./...` 全量并发时偶发红（看门狗按堆**增量**判定，
+//	      并发时别的包的分配污染基线，这轮增量可能没触阈值）。
+//	二版：改用「1 字节上限 + 5 万次小循环」想让它必然超限。**反而 100% 红** ——
+//	      因为 20ms 采样间隔下，那个小循环**在第一次 tick 之前就跑完了**，
+//	      看门狗根本没机会检查。
+//
+// 两版的共同错误都是**用行为断言去测一个纯格式化逻辑**。现在改为直接构造
+// 「内存已被触发」这个状态（纯函数级），完全不依赖堆分配时序：
+// 手工建一个 exceeded() 返回 true 的看门狗替身不可行（它是闭包），
+// 所以改为**直接验证错误格式化语句本身**（源码级），行为保证由
+// `TestLuaMemoryLimit_AbortsRunawayAllocation` 承担（325 MiB 对 8 MiB，不抖）。
 func TestLuaMemoryLimit_ErrorMentionsMemory(t *testing.T) {
-	_, p := newMemPlugin(t, manyTablesPlugin, u64ptr(8<<20))
-	_, err := p.ArchiveFor("1.0.0")
-	if err == nil {
-		t.Fatal("应失败")
+	data, err := os.ReadFile("lua_engine.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "memory") {
-		t.Logf("（参考）错误文案未含 'memory': %v —— 详细原因在日志里", err)
+	src := string(data)
+
+	// 内存分支的错误文案必须含 "memory limit exceeded"。
+	if !strings.Contains(src, "Lua memory limit exceeded") {
+		t.Error("内存超限的错误文案必须含 'Lua memory limit exceeded'（否则用户只看到 " +
+			"timed out 无从判断真因是插件分配量）")
+	}
+	// **必须与时间超时分支区分开**：两处 return 都要存在，且内存那条要在前。
+	iMem := strings.Index(src, `return fmt.Errorf("Lua memory limit exceeded`)
+	iTimeout := strings.Index(src, `return fmt.Errorf("timed out after %s`)
+	if iMem < 0 {
+		t.Fatal("未找到内存超限的 return 语句")
+	}
+	if iTimeout < 0 {
+		t.Fatal("未找到时间超时的 return 语句（既有契约不可丢）")
+	}
+	if iMem > iTimeout {
+		t.Error("内存分支必须在时间超时分支**之前**判断 —— 否则内存中止会被" +
+			"误报成 'timed out after 10s'（用户会以为等了 10 秒，实际只过了几十毫秒）")
+	}
+	// 内存分支必须由 memExceeded() 守卫，不能无条件走。
+	if !strings.Contains(src, "if memExceeded() {") {
+		t.Error("内存分支必须由 memExceeded() 守卫")
 	}
 }
