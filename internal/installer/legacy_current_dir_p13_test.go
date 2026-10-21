@@ -29,7 +29,7 @@ func TestRemoveLinkEntry_ClearsLegacyRealDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removeLinkEntry(legacy)
+	removeLinkEntry(legacy, dir)
 
 	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
 		t.Errorf("P1-3 复现：遗留真实目录 %s 未被清除（err=%v）—— Activate 会永久失败", legacy, err)
@@ -51,7 +51,7 @@ func TestRemoveLinkEntry_ClearsEmptyRealDirectory(t *testing.T) {
 	if err := os.MkdirAll(empty, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	removeLinkEntry(empty)
+	removeLinkEntry(empty, dir)
 	if _, err := os.Lstat(empty); !os.IsNotExist(err) {
 		t.Errorf("空目录未被清除（err=%v）", err)
 	}
@@ -81,7 +81,7 @@ func TestRemoveLinkEntry_NeverDeletesSymlinkTarget(t *testing.T) {
 		t.Skipf("cannot create symlink: %v", err)
 	}
 
-	removeLinkEntry(link)
+	removeLinkEntry(link, dir)
 
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
 		t.Errorf("链接未被移除（err=%v）", err)
@@ -94,7 +94,8 @@ func TestRemoveLinkEntry_NeverDeletesSymlinkTarget(t *testing.T) {
 
 // 守卫：路径不存在时静默返回（幂等）。
 func TestRemoveLinkEntry_MissingPathIsNoOp(t *testing.T) {
-	removeLinkEntry(filepath.Join(t.TempDir(), "current", "nope"))
+	tmp := t.TempDir()
+	removeLinkEntry(filepath.Join(tmp, "current", "nope"), tmp)
 }
 
 // 单元：isLegacyRealDir 的判定矩阵。

@@ -442,6 +442,14 @@ func prependEnvPath(env []string, dir string) []string {
 // Activated=false with ActivationError set when the version installs but
 // cannot be switched (locked binary), mirroring InstallWithProgress.
 func (i *Installer) InstallNPMPackage(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) (*InstallResult, error) {
+	// 20261021 审计 P1-5（阶段 1）：npm 通道绕过 archive 下载，但仍会把
+	// ver 写进 install 树与包管理器命令行，必须在任何副作用之前校验。
+	if err := validateInstallComponent("tool name", p.Name()); err != nil {
+		return nil, err
+	}
+	if err := validateInstallComponent("version", ver); err != nil {
+		return nil, err
+	}
 	installLock, lockErr := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
 	if lockErr != nil {
 		return nil, fmt.Errorf("install lock %s: %w", p.Name(), lockErr)

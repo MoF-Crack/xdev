@@ -54,6 +54,7 @@ func TestMaybeExec_AliasCaseMatrixDispatches(t *testing.T) {
 	// 必须中和 test flags 防止递归跑套件（先例 shim_test.go L428）。
 	origArgs := os.Args
 	defer func() { os.Args = origArgs }()
+	t.Setenv("XDEV_SHIM_CHILD", "1")
 
 	variants := []string{
 		"fakepy" + ext, // 基线：小写（修复前即应通过）
@@ -62,7 +63,7 @@ func TestMaybeExec_AliasCaseMatrixDispatches(t *testing.T) {
 		"FakePy.Exe",   // 混合
 	}
 	for _, v := range variants {
-		os.Args = []string{origArgs[0], "-test.run=^$"}
+		os.Args = []string{origArgs[0]}
 		handled, err := MaybeExec(v)
 		if !handled {
 			t.Fatalf("variant %q: handled = false, want true", v)
@@ -171,7 +172,8 @@ func TestMaybeExec_PassthroughUppercaseSelfName(t *testing.T) {
 
 	origArgs := os.Args
 	defer func() { os.Args = origArgs }()
-	os.Args = []string{origArgs[0], "-test.run=^$"}
+	t.Setenv("XDEV_SHIM_CHILD", "1")
+	os.Args = []string{origArgs[0]}
 
 	handled, err := MaybeExec("mytool.EXE")
 	if !handled {

@@ -434,13 +434,12 @@ func TestMaybeExec_AliasDispatchesToRealTarget(t *testing.T) {
 	InvalidateShimIndex()
 
 	// MaybeExec passes os.Args[1:] through to the dispatched child.  The
-	// child is a copy of this very test binary: the inherited -test.*
-	// flags would make it re-run the whole suite (and this test again)
-	// recursively.  Neutralize the args so the child matches no tests
-	// ("-test.run=^$") and exits 0 immediately, standing in for a real
-	// tool invoked with zero arguments.
+	// child is a copy of this very test binary.  XDEV_SHIM_CHILD makes
+	// TestMain exit 0 before testing.Main runs, so the child neither
+	// re-runs the suite nor prints testing/coverage output (P3-13).
+	t.Setenv("XDEV_SHIM_CHILD", "1")
 	origArgs := os.Args
-	os.Args = []string{origArgs[0], "-test.run=^$"}
+	os.Args = []string{origArgs[0]}
 	defer func() { os.Args = origArgs }()
 
 	handled, err := MaybeExec("fakepy" + ext)

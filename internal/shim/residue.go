@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -50,7 +49,6 @@ var (
 	sweepStopOnce sync.Once
 	sweepStop     chan struct{}
 	sweepStopped  chan struct{}
-	sweepDisabled atomic.Bool
 )
 
 // SetResidueSweepIntervalForTest 让测试用极短周期驱动后台清扫。
@@ -71,7 +69,6 @@ func ResetResidueSweeperForTest() {
 	sweepStopOnce = sync.Once{}
 	sweepStop = nil
 	sweepStopped = nil
-	sweepDisabled.Store(false)
 	residueSweepInterval = defaultResidueSweepInterval
 }
 
@@ -107,9 +104,6 @@ func StartStaleResidueSweeper(xmdeHome string) {
 				case <-sweepStop:
 					return
 				case <-ticker.C:
-					if sweepDisabled.Load() {
-						continue
-					}
 					ReapStaleResidue(xmdeHome)
 				}
 			}
@@ -134,7 +128,7 @@ func StopStaleResidueSweeper() {
 //
 // 返回搬走 + 删除的条目总数，便于调用方与测试断言。
 func ReapStaleResidue(xmdeHome string) int {
-	if xmdeHome == "" || sweepDisabled.Load() {
+	if xmdeHome == "" {
 		return 0
 	}
 	cutoff := time.Now().Add(-staleResidueMaxAge)

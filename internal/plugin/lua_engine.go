@@ -161,6 +161,16 @@ func callProtected(doneCh chan<- error, fn func() error) {
 	}()
 }
 
+// luaMemMu 让“内存看门狗”在任一时刻只计量**一个** Lua 调用。
+//
+// 20261021 审计 P2-8：`watchMemory` 比较的是**全进程** HeapAlloc 增量。并行
+// 插件调用（批量安装、GUI 后台任务）时，A 的分配会记到 B 的基线上，可能把
+// 一个正常调用误判为超限。插件调用本身很短，串行化计量的代价远小于误杀。
+//
+// 只有启用监控（limit > 0）时才加锁；`XDEV_LUA_MEM_LIMIT_MB=0` 可同时关闭
+// 监控与串行化。
+var luaMemMu sync.Mutex
+
 // runWithContext 在 **Lua 层可中断**的 context 下执行 fn，并把它自身的 panic
 // 转成错误。
 //
@@ -200,6 +210,13 @@ func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func
 // runWithContextLimited 是 runWithContext 的完整形态，可注入内存上限
 // （0 表示不监控；测试用小上限来快速触发）。
 func (e *LuaEngine) runWithContextLimited(L *lua.LState, timeout time.Duration, memLimit uint64, fn func() error) error {
+	// 串行化“被计量的 Lua 调用”（见 luaMemMu 注释）。limit=0 时不监控，
+	// 也就不需要串行化。
+	if memLimit > 0 {
+		luaMemMu.Lock()
+		defer luaMemMu.Unlock()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -327,8 +344,13 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 					used = m.HeapAlloc - base.HeapAlloc
 				}
 				if used > limit {
-					log.Printf("[plugin] Lua memory limit exceeded: %.1f MiB > %.1f MiB — aborting plugin execution",
-						float64(used)/(1<<20), float64(limit)/(1<<20))
+					// 20261021 审计 P2-8：把判定依据一起打出来，便于区分
+					// “真超限”与“并发/宿主分配污染基线”。
+					log.Printf("[plugin] Lua memory limit exceeded: used=%.1f MiB > limit=%.1f MiB "+
+						"(base=%.1f MiB, total_heap=%.1f MiB, goroutines=%d) — aborting plugin execution",
+						float64(used)/(1<<20), float64(limit)/(1<<20),
+						float64(base.HeapAlloc)/(1<<20), float64(m.HeapAlloc)/(1<<20),
+						runtime.NumGoroutine())
 					tripped.Store(true)
 					cancel() // 让 mainLoopWithContext 在下一条指令处中断
 					return

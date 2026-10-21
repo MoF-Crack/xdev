@@ -50,7 +50,7 @@ func TestRemoveLinkEntry_ArchivesOutsideCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removeLinkEntry(link)
+	removeLinkEntry(link, home)
 
 	// 1. current/<tool> 必须已消失。
 	if _, err := os.Stat(link); !os.IsNotExist(err) {
@@ -93,7 +93,7 @@ func TestRemoveLinkEntry_LinkRemovedWithoutArchive(t *testing.T) {
 		t.Fatalf("makeLink: %v", err)
 	}
 
-	removeLinkEntry(link)
+	removeLinkEntry(link, home)
 
 	// 链接本身被解开。
 	if _, err := os.Lstat(link); !os.IsNotExist(err) {
@@ -125,7 +125,7 @@ func TestRemoveLinkEntry_FallsBackWhenArchiveUnavailable(t *testing.T) {
 	}
 
 	// 必须不 panic、且 current/<tool> 仍然消失（退回旧行为：就地改名后删）。
-	removeLinkEntry(link)
+	removeLinkEntry(link, home)
 
 	if _, err := os.Stat(link); !os.IsNotExist(err) {
 		t.Errorf("归档不可用时也必须让 current/%s 消失（安装不能卡住）: %v", "faketool", err)

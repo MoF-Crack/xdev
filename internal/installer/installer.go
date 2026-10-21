@@ -408,6 +408,18 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	}
 	log.Printf("[install] Resolved version: %s -> %s", spec, ver)
 
+	// 20261021 审计 P1-5（阶段 1）：在**任何文件系统写入之前**拒绝非法
+	// tool/version。插件 `InstallDir` 的 SafeName 失败是 fail-open 的
+	// （替换成 `unsafe-version-blocked` 后继续安装，宿主实测留下过该目录）。
+	// 这里集中 fail-closed，保证新代码不再产生伪版本目录；阶段 2 再把
+	// 插件接口改为返回 error。
+	if err := validateInstallComponent("tool name", p.Name()); err != nil {
+		return nil, err
+	}
+	if err := validateInstallComponent("version", ver); err != nil {
+		return nil, err
+	}
+
 	arch, err := p.ArchiveFor(ver)
 	if err != nil {
 		log.Printf("[install] ERROR: archive resolution failed for %s@%s: %v", p.Name(), ver, err)
@@ -1131,6 +1143,19 @@ func (i *Installer) buildMirrorCandidates(tool string, a *manifest.Archive) []st
 	return candidates
 }
 
+// validateInstallComponent 在写任何文件之前校验 tool/version 是安全的
+// 单路径分量（20261021 审计 P1-5 阶段 1）。
+//
+// 这不是“防御性重复”：`plugin.InstallDir` 在 SafeName 失败时是 fail-open 的
+// （替换成 unsafe-version-blocked 后继续），因此在安装器入口集中 fail-closed
+// 才是当前接口下唯一能保证“非法值零副作用”的位置。
+func validateInstallComponent(kind, value string) error {
+	if _, err := util.SafeName(value); err != nil {
+		return fmt.Errorf("refusing install: unsafe %s %q: %w", kind, value, err)
+	}
+	return nil
+}
+
 // cacheArchiveName builds the on-disk cache file name
 // "<tool>-<version>.<format>" for a downloaded archive.
 //
@@ -1448,6 +1473,11 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	if _, err := util.SafeName(p.Name()); err != nil {
 		return fmt.Errorf("refusing to activate tool with unsafe name %q: %w", p.Name(), err)
 	}
+	// 20261021 审计 P1-5（阶段 1）：版本同样进入 current 的解析与安装树
+	// 定位，必须在落任何文件之前拒绝非法值。
+	if _, err := util.SafeName(ver); err != nil {
+		return fmt.Errorf("refusing to activate tool %q with unsafe version %q: %w", p.Name(), ver, err)
+	}
 
 	currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current")
 	if err := os.MkdirAll(currentDir, 0o755); err != nil {
@@ -1493,21 +1523,21 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	}
 	tmpLink := tmpFile.Name()
 	tmpFile.Close()
-	removeLinkEntry(tmpLink)
+	removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
 
 	if err := linkCurrent(installPath, tmpLink); err != nil {
 		log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", currentLink, installPath, err)
-		removeLinkEntry(tmpLink)
+		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
 		// The previous link was never touched — nothing to restore.
 		return fmt.Errorf("symlink %s -> %s (all link methods failed: %v)", currentLink, installPath, err)
 	}
 
 	// The new link exists. Swap it in; removeLinkEntry only unlinks the
 	// current entry and never follows it into the install tree.
-	removeLinkEntry(currentLink)
+	removeLinkEntry(currentLink, i.cfg.Core.XMDevDir)
 	if err := os.Rename(tmpLink, currentLink); err != nil {
 		log.Printf("[install] ERROR: failed to swap in the new link %s: %v", currentLink, err)
-		removeLinkEntry(tmpLink)
+		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
 		// F-22: restore the previous link instead of leaving the tool
 		// un-activated.
 		i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
@@ -1669,7 +1699,11 @@ func defaultLinkCurrent(target, link string) error {
 // 有界的（只删这个我们已确认是遗留产物的目录）。
 //
 // 绝不在此对**链接**调用 RemoveAll —— 那会顺着 reparse point 删掉安装树。
-func removeLinkEntry(path string) {
+// removeAllResidue 是测试接缝：让归档后的删除失败，从而保留归档条目，
+// 用于断言“归档位置确实由显式 xmdeHome 决定”。生产路径就是 os.RemoveAll。
+var removeAllResidue = os.RemoveAll
+
+func removeLinkEntry(path, xmdeHome string) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return // nothing there
@@ -1695,7 +1729,7 @@ func removeLinkEntry(path string) {
 	// 搬到 `current/` 之外（`<xmdeHome>/.stale-residue/`）就解开了这对矛盾：
 	// 归档目录里的条目**永远不可能在途**，因此可以安全删除；而 `current/`
 	// 从此**根本不会**出现 `.stale-*`（除历史遗留，由 shim.ReapStaleResidue 清）。
-	stale, staleErr := shim.ResidueArchivePath(filepath.Dir(filepath.Dir(path)), filepath.Base(path))
+	stale, staleErr := shim.ResidueArchivePath(xmdeHome, filepath.Base(path))
 	if staleErr != nil {
 		// 归档目录建不出来：退回「就地改名 + 立即删」（旧行为），至少不阻塞安装。
 		log.Printf("[install] WARNING: cannot create residue archive dir: %v — falling back to in-place rename", staleErr)
@@ -1708,7 +1742,7 @@ func removeLinkEntry(path string) {
 	log.Printf("[install] removed legacy CopyDir directory at %s (moved to %s)", path, stale)
 	// 归档目录里的条目不在 current/ 下，可以直接删；失败也没关系 ——
 	// 它已经不再污染 current/，shim.ReapStaleResidue 会按年龄收尾。
-	if rerr := os.RemoveAll(stale); rerr != nil {
+	if rerr := removeAllResidue(stale); rerr != nil {
 		log.Printf("[install] WARNING: could not fully delete legacy directory %s (archived; will be reaped): %v", stale, rerr)
 	}
 }
@@ -1736,7 +1770,7 @@ func (i *Installer) rollbackActivation(currentLink string, junctionExisted bool,
 	log.Printf("[install] Rolling back activation for %s", currentLink)
 	// removeLinkEntry (not os.RemoveAll): a legacy CopyDir fallback left a
 	// REAL directory here, and RemoveAll would delete the installed files.
-	removeLinkEntry(currentLink)
+	removeLinkEntry(currentLink, i.cfg.Core.XMDevDir)
 	if junctionExisted && oldTarget != "" {
 		if err := linkCurrent(oldTarget, currentLink); err != nil {
 			log.Printf("[install] WARNING: failed to restore previous link during rollback: %v", err)
@@ -1949,6 +1983,14 @@ func (i *Installer) MirrorApply(tool, url string) string {
 func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	if ver == "" {
 		return fmt.Errorf("uninstall requires an explicit version")
+	}
+	// 20261021 审计 P1-5（阶段 1）：卸载路径同样用 SafeName 校验
+	// tool/version，避免把非法值带进 install/current 的路径拼接。
+	if err := validateInstallComponent("tool name", p.Name()); err != nil {
+		return err
+	}
+	if err := validateInstallComponent("version", ver); err != nil {
+		return err
 	}
 	lock, err := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 30*time.Second)
 	if err != nil {
