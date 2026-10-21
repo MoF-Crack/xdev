@@ -251,17 +251,20 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		logWarn("[install] WARNING: %s@%s requires a proxy but none is configured", toolName, ver)
 	}
 
-	// 构造下载选项 — use shared installer.BuildDownloadOptions
-	url, fallbackURLs, dest, urlShaMap := ins.BuildDownloadOptions(toolName, ver, arch)
-
+	// 构造下载选项 — 用 BuildDownloadOptionsE（**无共享状态**版本）。
+	//
 	// 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 是 **fail-closed**（缓存路径
 	// 不安全），但原因此前完全丢失 —— 用户只会看到 downloader 报的
 	// `"empty destination"`，无法定位是工具名/版本号/format 哪个组件非法。
-	// 这里读回精确原因并以可操作错误返回（不再让「空目的地」把真实原因盖住）。
+	//
+	// 第十二轮审计：改为从**返回值**取诊断错误，不再读 `LastDownloadOptionsError()`
+	// 那个实例字段 —— 后者在两个 goroutine 同时调用时会互相覆盖，让 A 调用方读到
+	// B 的错误（错误的诊断信息比没有诊断更糟：它把排查引向无关的工具/版本）。
+	url, fallbackURLs, dest, urlShaMap, buildErr := ins.BuildDownloadOptionsE(toolName, ver, arch)
+	if buildErr != nil {
+		return fmt.Errorf("cannot start download: %w", buildErr)
+	}
 	if dest == "" {
-		if err := ins.LastDownloadOptionsError(); err != nil {
-			return fmt.Errorf("cannot start download: %w", err)
-		}
 		// 理论上不可达（dest=="" 只由上面那条路径产生），但仍明确失败而非继续。
 		return fmt.Errorf("cannot start download: no cache destination for %s@%s (format %q)", toolName, ver, arch.Format)
 	}

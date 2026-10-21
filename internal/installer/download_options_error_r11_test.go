@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/manifest"
@@ -20,14 +21,22 @@ import (
 //  4. GUI 安装面板把这个字符串直接呈现给用户：**无法定位**是工具名、版本号还是
 //     format 非法。
 //
-// 修复：`BuildDownloadOptions` 记录精确原因，调用方在 `dest == ""` 时用
-// `LastDownloadOptionsError()` 读回，GUI 以 `cannot start download: <真实原因>` 返回。
+// # 第十二轮的重要修正：诊断信息**不能**走实例字段
 //
-// 本守卫钉住三件事：① 失败时原因**可读且含具体组件**；② **成功时不残留**上一次的
-// 错误（跨调用陈旧值是这类「旁路字段」最经典的坑）；③ fail-closed 契约本身不变。
+// 第十一轮的修法是加一个 `lastBuildOptionsErr` 字段 + `LastDownloadOptionsError()`
+// 访问器。它能工作，但**有一个隐含的单线程假设**：两个 goroutine 同时调
+// `BuildDownloadOptions` 时会互相覆盖，让 A 调用方读到 B 的错误 —— 这既是真实的
+// 数据竞争，也比「没有诊断」更糟（**错误的诊断信息会把排查引向无关的工具/版本**）。
+//
+// 第十二轮改为**无共享状态**：`BuildDownloadOptionsE` 把诊断错误作为第五个返回值。
+// 本文件相应重写为断言新契约（**保证不变、机制更好**），并新增一条并发守卫钉住
+// 「两个并发调用不能互相串味」—— 那条用例在旧的字段实现下**必然失败**。
+//
+// 本守卫钉住：① 失败时原因**可读且含具体组件**；② 成功时**没有**错误；
+// ③ **并发调用互不串味**；④ fail-closed 契约本身不变；⑤ GUI 走无状态路径。
 
-// TestLastDownloadOptionsError_PopulatedOnUnsafeVersion 是核心守卫。
-func TestLastDownloadOptionsError_PopulatedOnUnsafeVersion(t *testing.T) {
+// TestBuildDownloadOptionsE_PopulatedOnUnsafeVersion 是核心守卫。
+func TestBuildDownloadOptionsE_PopulatedOnUnsafeVersion(t *testing.T) {
 	ins, _, _ := newTestInstaller(t)
 
 	arch := &manifest.Archive{
@@ -36,14 +45,12 @@ func TestLastDownloadOptionsError_PopulatedOnUnsafeVersion(t *testing.T) {
 	}
 
 	// 不安全版本号 → dest 必须为空（fail closed），且原因必须可读。
-	_, _, dest, _ := ins.BuildDownloadOptions("safetool", "../../evil", arch)
+	_, _, dest, _, err := ins.BuildDownloadOptionsE("safetool", "../../evil", arch)
 	if dest != "" {
 		t.Fatalf("前置条件失败：不安全版本号仍产出了 dest=%q（fail-closed 契约被破坏）", dest)
 	}
-
-	err := ins.LastDownloadOptionsError()
 	if err == nil {
-		t.Fatal("待办 7 复现：dest 为空但 LastDownloadOptionsError() 返回 nil —— " +
+		t.Fatal("待办 7 复现：dest 为空但错误为 nil —— " +
 			"调用方只能看到 'empty destination'，真实原因丢失")
 	}
 	// 诊断必须能定位到**具体组件**，而不是泛泛的「路径不安全」。
@@ -54,24 +61,22 @@ func TestLastDownloadOptionsError_PopulatedOnUnsafeVersion(t *testing.T) {
 	if !strings.Contains(msg, "../../evil") {
 		t.Errorf("错误未含被拒绝的版本号，无法定位: %v", msg)
 	}
-	// 不得只说 "empty destination"。
 	if strings.TrimSpace(msg) == "empty destination" {
 		t.Errorf("错误仍是降级后的 'empty destination': %v", msg)
 	}
 }
 
 // 不安全工具名同源覆盖。
-func TestLastDownloadOptionsError_PopulatedOnUnsafeTool(t *testing.T) {
+func TestBuildDownloadOptionsE_PopulatedOnUnsafeTool(t *testing.T) {
 	ins, _, _ := newTestInstaller(t)
 	arch := &manifest.Archive{
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
 		URL: "https://example.test/x.zip",
 	}
-	_, _, dest, _ := ins.BuildDownloadOptions("../../evil", "1.0.0", arch)
+	_, _, dest, _, err := ins.BuildDownloadOptionsE("../../evil", "1.0.0", arch)
 	if dest != "" {
 		t.Fatalf("前置条件失败：不安全工具名仍产出了 dest=%q", dest)
 	}
-	err := ins.LastDownloadOptionsError()
 	if err == nil {
 		t.Fatal("待办 7 复现：不安全工具名时原因丢失")
 	}
@@ -80,11 +85,8 @@ func TestLastDownloadOptionsError_PopulatedOnUnsafeTool(t *testing.T) {
 	}
 }
 
-// **跨调用不得残留**：成功调用之后，上一次的错误必须被清掉。
-//
-// 这是「旁路字段」最经典的坑 —— 如果只在失败时赋值、成功时不重置，调用方会在一次
-// 正常下载里读到一个**陈旧的**错误，给出完全误导的提示。
-func TestLastDownloadOptionsError_ClearedOnSuccess(t *testing.T) {
+// **成功时不得有错误**（返回值天然无残留 —— 这正是相对旧字段实现的优势）。
+func TestBuildDownloadOptionsE_NoErrorOnSuccess(t *testing.T) {
 	ins, _, _ := newTestInstaller(t)
 	arch := &manifest.Archive{
 		OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
@@ -92,21 +94,65 @@ func TestLastDownloadOptionsError_ClearedOnSuccess(t *testing.T) {
 	}
 
 	// 先制造一次失败。
-	_, _, badDest, _ := ins.BuildDownloadOptions("safetool", "../../evil", arch)
-	if badDest != "" {
-		t.Fatal("前置条件：不安全版本号应 fail closed")
+	if _, _, _, _, err := ins.BuildDownloadOptionsE("safetool", "../../evil", arch); err == nil {
+		t.Fatal("前置条件：不安全版本号应报错")
 	}
-	if ins.LastDownloadOptionsError() == nil {
-		t.Fatal("前置条件：失败后应有错误")
-	}
-
-	// 再做一次**合法**调用。
-	_, _, goodDest, _ := ins.BuildDownloadOptions("safetool", "1.0.0", arch)
-	if goodDest == "" {
+	// 再做一次**合法**调用：不得带出上一次的错误。
+	_, _, dest, _, err := ins.BuildDownloadOptionsE("safetool", "1.0.0", arch)
+	if dest == "" {
 		t.Fatal("合法调用不应 fail closed")
 	}
-	if err := ins.LastDownloadOptionsError(); err != nil {
-		t.Errorf("待办 7 复现：成功调用后仍残留上一次的错误（调用方会给出误导提示）: %v", err)
+	if err != nil {
+		t.Errorf("待办 7 复现：成功调用仍带出错误（旧字段实现会读到陈旧值）: %v", err)
+	}
+}
+
+// **并发守卫**：两个 goroutine 用不同工具名交替调用，各自的诊断不得互相串味。
+//
+// 这是第十一轮「实例字段」实现**必然失败**的用例（A 读到 B 的错误），
+// 也是它必须在第十二轮被替换掉的根本原因。
+func TestBuildDownloadOptionsE_ConcurrentCallsDoNotCrossContaminate(t *testing.T) {
+	ins, _, _ := newTestInstaller(t)
+	arch := &manifest.Archive{
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
+		URL: "https://example.test/x.zip",
+	}
+
+	const perGoroutine = 200
+	var wg sync.WaitGroup
+	errCh := make(chan string, 2*perGoroutine)
+
+	// 两个 goroutine 用**不同**的工具名做同样的非法版本号调用。
+	for _, tool := range []string{"alpha", "bravo"} {
+		tool := tool
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perGoroutine; i++ {
+				_, _, _, _, err := ins.BuildDownloadOptionsE(tool, "../../evil", arch)
+				if err == nil {
+					errCh <- tool + ": 期望错误但为 nil"
+					continue
+				}
+				// 本次调用的错误里必须含**自己的**工具名。
+				if !strings.Contains(err.Error(), tool) {
+					errCh <- tool + ": 错误串味了 -> " + err.Error()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	n := 0
+	for msg := range errCh {
+		if n < 3 {
+			t.Errorf("%s", msg)
+		}
+		n++
+	}
+	if n > 0 {
+		t.Errorf("并发调用出现 %d 次错误串味/缺失（实例字段实现必然失败）", n)
 	}
 }
 
@@ -129,21 +175,40 @@ func TestBuildDownloadOptions_FailClosedContractUnchanged(t *testing.T) {
 	}
 }
 
-// 端到端：GUI 的 dest=="" 分支必须把真实原因带进错误（而不是 "empty destination"）。
+// 端到端（源码级）：GUI 的 dest=="" 分支必须把真实原因带进错误。
 //
-// 源码级断言：GUI 在 dest=="" 时必须调用 LastDownloadOptionsError()。
+// 第十二轮改为检查 `BuildDownloadOptionsE` 的返回值路径（不再是字段访问器）。
 func TestGUIInstall_SurfacesDownloadOptionsError(t *testing.T) {
 	data, err := os.ReadFile("../gui/app_install.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(data)
-	if !strings.Contains(src, "ins.LastDownloadOptionsError()") {
-		t.Error("待办 7 复现：GUI 的 dest==\"\" 分支未读回 LastDownloadOptionsError()，" +
-			"用户仍只会看到 'empty destination'")
+
+	// 必须用无共享状态的 E 版本。
+	if !strings.Contains(src, "ins.BuildDownloadOptionsE(") {
+		t.Error("GUI 应使用 BuildDownloadOptionsE（无共享状态版本）取诊断错误")
 	}
-	// 必须在返回错误里带上原因（%w 包装），而不是忽略。
+	// 不得再依赖弃用的字段访问器（并发下会串味）。
+	if strings.Contains(src, "ins.LastDownloadOptionsError()") {
+		t.Error("GUI 不应再用 LastDownloadOptionsError()（实例字段，并发会串味）")
+	}
+	// 必须把原因包装进返回错误（%w），而不是忽略。
 	if !strings.Contains(src, "cannot start download: %w") {
-		t.Error("GUI 应把 BuildDownloadOptions 的真实原因包装进返回错误")
+		t.Error("GUI 应把真实原因包装进返回错误")
+	}
+}
+
+// 弃用访问器必须恒为 nil —— 它已无字段可读；仍在使用它的调用方不会拿到陈旧值。
+func TestLastDownloadOptionsError_DeprecatedAlwaysNil(t *testing.T) {
+	ins, _, _ := newTestInstaller(t)
+	arch := &manifest.Archive{
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Format: "zip",
+		URL: "https://example.test/x.zip",
+	}
+	// 即使刚发生过失败，弃用访问器也不得返回内容（它已不读任何字段）。
+	_, _, _, _ = ins.BuildDownloadOptions("safetool", "../../evil", arch)
+	if err := ins.LastDownloadOptionsError(); err != nil {
+		t.Errorf("弃用访问器应恒为 nil（无共享字段），got %v", err)
 	}
 }

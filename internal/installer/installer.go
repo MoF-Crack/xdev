@@ -78,17 +78,6 @@ type Installer struct {
 	mirrorCache     *MirrorHealthCache // Lazy-loaded mirror health cache
 
 	tofuCB TOFUWarningCallback // Optional callback for TOFU warnings (set by GUI)
-
-	// lastBuildOptionsErr 记录最近一次 BuildDownloadOptions 的失败原因
-	// （第十一轮审计，Round 10 报告待办 7）。
-	//
-	// `BuildDownloadOptions` 刻意不返回 error（四处调用点直接消费它的四个返回值），
-	// 但缓存路径不安全时它会把 dest 置空当作 fail-closed。早先的做法**丢掉了原因**，
-	// 于是 GUI 用户只看到 downloader 的 `"empty destination"` —— 无法定位是工具名、
-	// 版本号还是 format 非法。这里留下精确原因，由 `LastDownloadOptionsError()` 读取。
-	//
-	// 只在 `dest == ""` 时有意义；每次调用开头都会重置，避免跨调用的陈旧值误导。
-	lastBuildOptionsErr error
 }
 
 // New constructs an Installer with the given config and plugin registry.
@@ -975,9 +964,31 @@ func (i *Installer) getMirrorHealthCache() *MirrorHealthCache {
 // 第十一轮审计（Round 10 报告待办 7）：`BuildDownloadOptions` 在缓存路径不安全时把
 // dest 置空（fail closed），但原因此前**完全丢失** —— 调用方（GUI 安装面板）只能
 // 看到 `downloader.Download` 报的 `"empty destination"`，无法告诉用户到底哪个组件
-// 非法。调用方应在 `dest == ""` 时读本函数并把它作为错误呈现。
+// 非法。
+//
+// **第十二轮审计：本函数已弃用，改用 `BuildDownloadOptionsE` 的第五个返回值。**
+//
+// 为什么弃用：`lastBuildOptionsErr` 是**未同步的实例字段**，两个 goroutine 同时调
+// `BuildDownloadOptions` 会互相覆盖 —— 既产生 `-race` 意义上的数据竞争，也会让
+// A 调用方读到 B 调用的错误（**错误的诊断信息比没有诊断更糟**：它会把排查方向
+// 引到完全无关的工具/版本上）。目前 GUI 是单线程调用，但这是个随时会被打破的隐含
+// 假设，不该靠「现在只有一处调用」来成立。
+//
+// 保留本方法只是为了不破坏现有调用点：它现在返回 nil 并**不再被写入**。
+//
+// Deprecated: use `BuildDownloadOptionsE`。
 func (i *Installer) LastDownloadOptionsError() error {
-	return i.lastBuildOptionsErr
+	return nil
+}
+
+// BuildDownloadOptionsE 是 `BuildDownloadOptions` 的**无共享状态**版本：把诊断错误
+// 作为第五个返回值直接交给调用方，不再依赖实例字段。
+//
+// 返回 (primaryURL, fallbackURLs, cacheDestPath, urlShaMap, err)。
+// 当 err != nil 时 cacheDestPath 一定为空（fail closed），调用方应直接呈现 err。
+func (i *Installer) BuildDownloadOptionsE(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
+	url, fallbacks, dest, shaMap, err := i.buildDownloadOptionsChecked(tool, ver, a)
+	return url, fallbacks, dest, shaMap, err
 }
 
 // buildDownloadOptions constructs the download URL, fallback URLs, and cache
@@ -994,11 +1005,16 @@ func (i *Installer) LastDownloadOptionsError() error {
 // **fail closed 是对的**，但用户看到的错误是 `empty destination`，完全无法定位
 // 真实原因（是工具名非法？版本号含分隔符？format 为空？）。
 //
-// 现在额外记录诊断信息：调用方在 `dest == ""` 时可读 `LastDownloadOptionsError()`
-// 拿到**精确**原因（含被拒绝的组件与原始错误）。CLI 侧本来就在更早的位置以精确
-// 错误拒绝非法名，因此这条只是补上 GUI 的可见性缺口。
+// 现在**不再**记录共享字段：`BuildDownloadOptionsE` 把精确原因作为第五个返回值
+// 直接交给调用方（见上一段注释：实例字段在并发下会互相覆盖）。
 func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string) {
-	i.lastBuildOptionsErr = nil
+	url, fallbacks, dest, shaMap, _ := i.buildDownloadOptionsChecked(tool, ver, a)
+	return url, fallbacks, dest, shaMap
+}
+
+// buildDownloadOptionsChecked 是真正的实现：与 BuildDownloadOptions 相同，但把
+// 诊断错误作为返回值而不是写共享字段。
+func (i *Installer) buildDownloadOptionsChecked(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
 	// 1. Build candidate list from multiple sources.
 	candidates := i.buildMirrorCandidates(tool, a)
 
@@ -1067,11 +1083,12 @@ func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) 
 	// (InstallWithProgress / ExtractAndActivate) reject unsafe names earlier
 	// with a precise error, so this is defence in depth.
 	dest, nameErr := i.cacheArchivePath(tool, ver, a.Format)
+	var diagErr error
 	if nameErr != nil {
 		log.Printf("[install] ERROR: refusing unsafe cache path: %v", nameErr)
 		dest = ""
-		// 待办 7：把精确原因留给调用方（GUI 的 dest=="" 分支据此给出可操作错误）。
-		i.lastBuildOptionsErr = fmt.Errorf(
+		// 精确原因作为返回值交给调用方（不再写共享字段 —— 并发下会互相覆盖）。
+		diagErr = fmt.Errorf(
 			"refusing to build a cache path for %s@%s (format %q): %w", tool, ver, a.Format, nameErr)
 	}
 
@@ -1100,7 +1117,7 @@ func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) 
 		shaMap[u] = a.SHA256
 	}
 
-	return primary, fallbackURLs, dest, shaMap
+	return primary, fallbackURLs, dest, shaMap, diagErr
 }
 
 // buildMirrorCandidates assembles the ordered list of candidate mirror URLs
@@ -1599,6 +1616,14 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 
 	log.Printf("[install] Activation complete: %s@%s (%d shims)", p.Name(), ver, len(p.Shims()))
 	shim.InvalidateShimIndex()
+	// 第十二轮审计（Round 11 报告 §七-④）：**激活成功后顺带回收 `.stale-*` 残留**。
+	//
+	// 之前只在 `buildShimIndexMap` 里回收，而那个函数只在「重建 shim 反向索引」时
+	// 才跑 —— 长期不触发索引重建的用户（例如只用 `xdev use` 切换、从不安装新 shim）
+	// 残留永远不会被回收。激活是**必然经过**的路径，在这里补一次覆盖。
+	//
+	// best-effort：失败绝不影响激活结果（回收是卫生工作）。
+	_ = shim.ReapStaleResidue(i.cfg.Core.XMDevDir)
 
 	// Ticket 01 (audit-fixes / X-07): for the go tool, self-heal the stale
 	// GOROOT registry value left by the pre-v2 manifest (GOROOT pointed one
@@ -2048,6 +2073,11 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 
 	log.Printf("[install] Uninstall complete: %s@%s", p.Name(), ver)
 	shim.InvalidateShimIndex()
+	// 第十二轮审计（Round 11 报告 §七-④）：卸载成功后同样回收 `.stale-*` 残留。
+	// 卸载是产生残留的另一条主要路径（removeLinkEntry 的 rename+RemoveAll 可能
+	// 因文件被占用而只完成 rename），在这里补一次覆盖。
+	// best-effort：失败绝不影响卸载结果。
+	_ = shim.ReapStaleResidue(i.cfg.Core.XMDevDir)
 	return nil
 }
 
