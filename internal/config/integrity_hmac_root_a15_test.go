@@ -271,6 +271,29 @@ func TestIntegrityHMAC_LegacyConfigUpgradeIsNotFatal(t *testing.T) {
 
 // captureStderr 把 os.Stderr 换成管道，返回内容读取器与还原函数。
 // 仅捕获 fmt.Fprintln(os.Stderr, ...)（log 包在 init 时已捕获原始 os.Stderr）。
+//
+// 第十二轮审计（Round 11 报告 §七-②）：**修掉这里的输出丢失竞态**。
+//
+// 旧实现的 restore() 是：
+//
+//	os.Stderr = old
+//	_ = w.Close()
+//	_ = r.Close()      // ← 立刻关闭**读端**
+//
+// 读端 goroutine 可能还没被调度去读，`r.Close()` 就让它在「已读到的部分」处退出，
+// **管道里剩余的数据永久丢失**。实测（300 轮、每轮写 3 行，与 integrity 告警同量级）：
+//
+//	139/300 轮丢失了输出  ← 46%
+//
+// 这就是 Round 11 那次「`TestIntegrityHMAC_CoversMirrorPreference` 偶发失败」的
+// 真实原因 —— **它不是负载抖动，是一个 46% 概率的确定性竞态**。Round 11 我把它
+// 归因为「负载引起」（因为单跑/整包/`-count=3` 都过），那是**误判**：这几个方式
+// 只是恰好没命中那 46%。特此更正。
+//
+// 正确做法：
+//  1. restore() 只 `w.Close()`（关闭写端 = 给读端发 EOF），**不碰 r**；
+//  2. 由读端 goroutine 自己在 EOF 后 `r.Close()` 并交付内容；
+//  3. 读取器 `<-done` 自然等待 EOF 后的完整内容。
 func captureStderr(t *testing.T) (func() string, func()) {
 	t.Helper()
 	old := os.Stderr
@@ -282,6 +305,7 @@ func captureStderr(t *testing.T) (func() string, func()) {
 
 	done := make(chan string, 1)
 	go func() {
+		defer r.Close() // 读端由**自己**关闭（restore 不再插手）
 		var sb strings.Builder
 		buf := make([]byte, 4096)
 		for {
@@ -290,7 +314,7 @@ func captureStderr(t *testing.T) (func() string, func()) {
 				sb.Write(buf[:n])
 			}
 			if err != nil {
-				break
+				break // EOF：写端已关闭且数据已全部读出
 			}
 		}
 		done <- sb.String()
@@ -298,8 +322,9 @@ func captureStderr(t *testing.T) (func() string, func()) {
 
 	restore := func() {
 		os.Stderr = old
+		// **只关闭写端**：这就是给读端发 EOF 的信号。绝不能在这里 r.Close() ——
+		// 那会丢弃管道中尚未被读走的数据（本函数旧实现的 46% 丢数据竞态）。
 		_ = w.Close()
-		_ = r.Close()
 	}
 	return func() string { return <-done }, restore
 }
