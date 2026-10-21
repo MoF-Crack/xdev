@@ -23,6 +23,10 @@ const REMOVED_FLAGS = ['-SkipFrontend', '-SkipCLI', '-SkipGUI'];
 
 function markdownFilesIn(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    // docs/audits 与 docs/history 是**时间点快照**：它们可以引用当时的
+    // 已删除参数作为缺陷证据（例如 Round 7 报告）。活文档（architecture /
+    // installation / usage）仍被下面的双向断言覆盖。
+    if (entry.isDirectory() && (entry.name === 'audits' || entry.name === 'history')) return [];
     const full = join(dir, entry.name);
     if (entry.isDirectory()) return markdownFilesIn(full);
     return entry.name.endsWith('.md') ? [full] : [];

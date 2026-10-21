@@ -161,6 +161,15 @@ func callProtected(doneCh chan<- error, fn func() error) {
 	}()
 }
 
+// luaActive 统计仍在运行的 Lua 调用 goroutine（含超时后被放弃的孤儿）。
+//
+// 20261021 审计 P2-8：内存看门狗只能看到**进程级** HeapAlloc。如果上一次
+// 调用超时后仍有一个孤儿在 VM 里执行（F-04 的既定行为），它的分配会被算到
+// 下一次调用的基线上 —— 整包测试里曾把一次正常的 `available()` 误判为
+// 64 MiB 超限。规律：**只要还有别的 Lua goroutine 活着，就无法归因**，
+// 此时关闭本次调用的内存监控（时间超时与 ctx 中断仍然生效）。
+var luaActive atomic.Int32
+
 // luaMemMu 让“内存看门狗”在任一时刻只计量**一个** Lua 调用。
 //
 // 20261021 审计 P2-8：`watchMemory` 比较的是**全进程** HeapAlloc 增量。并行
@@ -236,11 +245,24 @@ func (e *LuaEngine) runWithContextLimited(L *lua.LState, timeout time.Duration, 
 	// 内存看门狗：超限时 cancel 这个 ctx，让 Lua 主循环在下一条指令处中断。
 	// 返回的 stop 会停掉轮询 goroutine（否则每次调用泄漏一个 ticker）；
 	// 返回的 exceeded 用来在下面**区分**「内存中止」与「时间超时」。
-	stopWatch, memExceeded := watchMemory(ctx, cancel, memLimit)
+	//
+	// 归因守卫：并发/孤儿 Lua goroutine 存在时，进程级堆增量不再属于本次
+	// 调用，关闭监控（见 luaActive 注释）。
+	luaActive.Add(1)
+	watchLimit := memLimit
+	if watchLimit > 0 && luaActive.Load() > 1 {
+		log.Printf("[plugin] memory watchdog disabled for this call: %d other Lua goroutine(s) still running",
+			luaActive.Load()-1)
+		watchLimit = 0
+	}
+	stopWatch, memExceeded := watchMemory(ctx, cancel, watchLimit)
 	defer stopWatch()
 
 	doneCh := make(chan error, 1)
-	callProtected(doneCh, fn)
+	callProtected(doneCh, func() error {
+		defer luaActive.Add(-1)
+		return fn()
+	})
 
 	select {
 	case err := <-doneCh:
@@ -330,6 +352,11 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 		// 20ms 的粒度足以在远超上限前就抓住；同时不会明显增加 CPU 负担。
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
+		// 必须**连续两次**超限才中止：HeapAlloc 是进程级指标，GC 未回收的
+		// 垃圾或宿主的瞬时分配都可能让单次采样出现 >limit 的尖峰。整包测试
+		// 中曾因此把一次正常的 `available()` 误判为 64 MiB 超限。两次采样
+		// 只需要多 20ms，而真实失控分配（325 MiB/367ms）仍远早于超时。
+		over := 0
 		for {
 			select {
 			case <-done:
@@ -343,18 +370,24 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 				if m.HeapAlloc > base.HeapAlloc {
 					used = m.HeapAlloc - base.HeapAlloc
 				}
-				if used > limit {
-					// 20261021 审计 P2-8：把判定依据一起打出来，便于区分
-					// “真超限”与“并发/宿主分配污染基线”。
-					log.Printf("[plugin] Lua memory limit exceeded: used=%.1f MiB > limit=%.1f MiB "+
-						"(base=%.1f MiB, total_heap=%.1f MiB, goroutines=%d) — aborting plugin execution",
-						float64(used)/(1<<20), float64(limit)/(1<<20),
-						float64(base.HeapAlloc)/(1<<20), float64(m.HeapAlloc)/(1<<20),
-						runtime.NumGoroutine())
-					tripped.Store(true)
-					cancel() // 让 mainLoopWithContext 在下一条指令处中断
-					return
+				if used <= limit {
+					over = 0
+					continue
 				}
+				over++
+				if over < 2 {
+					continue
+				}
+				// 20261021 审计 P2-8：把判定依据一起打出来，便于区分
+				// “真超限”与“并发/宿主分配污染基线”。
+				log.Printf("[plugin] Lua memory limit exceeded: used=%.1f MiB > limit=%.1f MiB "+
+					"(base=%.1f MiB, total_heap=%.1f MiB, goroutines=%d, samples=%d) — aborting plugin execution",
+					float64(used)/(1<<20), float64(limit)/(1<<20),
+					float64(base.HeapAlloc)/(1<<20), float64(m.HeapAlloc)/(1<<20),
+					runtime.NumGoroutine(), over)
+				tripped.Store(true)
+				cancel() // 让 mainLoopWithContext 在下一条指令处中断
+				return
 			}
 		}
 	}()

@@ -72,7 +72,25 @@ func u64ptr(v uint64) *uint64 { return &v }
 //  3. 堆**确实被刹住**（远低于无限制时的 325 MiB）；
 //  4. 那个跑插件的 goroutine **真的退出了**（Round 11 的教训：只看「返回了错误」
 //     测不出线程还在跑）。
+//
+// waitLuaIdle 等待其它 Lua goroutine 退出后再测“内存归因”。
+//
+// 看门狗只能看进程级堆；并发/孤儿调用存在时会主动关闭监控（见 luaActive
+// 的注释）。内存上限用例需要干净的归因基线，因此先等孤儿收敛。
+func waitLuaIdle(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if luaActive.Load() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("other Lua goroutines still active after 10s: %d — cannot attribute heap growth", luaActive.Load())
+}
+
 func TestLuaMemoryLimit_AbortsRunawayAllocation(t *testing.T) {
+	waitLuaIdle(t)
 	const limit = 8 << 20 // 8 MiB
 	_, p := newMemPlugin(t, manyTablesPlugin, u64ptr(limit))
 
@@ -175,6 +193,7 @@ func TestLuaMemoryLimit_NormalPluginUnaffected(t *testing.T) {
 // `TestLuaMemoryLimit_AbortsRunawayAllocation` 承担，那条用 325 MiB 对 8 MiB，
 // 量级差 40 倍，不受噪声影响。
 func TestLuaMemoryLimit_AppliesToAvailablePath(t *testing.T) {
+	waitLuaIdle(t)
 	_, p := newMemPlugin(t, `PLUGIN = {
   name = "r12avail",
   available = function()
