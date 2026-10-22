@@ -103,3 +103,4 @@ build/local-*
 # per-machine state, never part of the repository.
 .opencode/images/
 .opencode/*.bak_*
+.opencode/*.json
