@@ -94,3 +94,12 @@ build/local-*
 # Durable copies live in docs/audits/2026/ so a `git clean -fdx` cannot destroy them.
 .scratch/bugx-round*/
 .scratch/handoff-history/
+
+# Local agent issue tracker (machine-local per docs/agents/issue-tracker.md;
+# issue/spec markdown is working state, not product source).
+.scratch/
+
+# OpenCode session artifacts: clipboard screenshots and config backups are
+# per-machine state, never part of the repository.
+.opencode/images/
+.opencode/*.bak_*

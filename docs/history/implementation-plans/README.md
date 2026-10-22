@@ -18,3 +18,10 @@
 - 添加原始路径、状态、冻结日期和替代文档；
 - 未完成工作必须创建新的 Feature Spec，不能继续修改已冻结计划；
 - 迁移后必须更新仓库内所有有效引用。
+
+## 目录
+
+- `2026-07-11-xdev-ui-download-sources.md`
+- `2026-09-10-audit-remediation-plan.md`（原仓库根《审计发现问题修复方案》）
+- `git-initial-import-plan.md`
+- Superpowers/SpecKit 工作流计划见 `docs/history/superpowers/`

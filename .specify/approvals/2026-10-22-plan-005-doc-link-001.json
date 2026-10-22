@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-10-22-plan-005-doc-link-001",
+  "asset_type": "plan",
+  "target_path": "specs/005-test-host-state-snapshot/plan.md",
+  "decision": "approve-doc-maintenance",
+  "target_version": "0.1.0",
+  "target_state": "Ready",
+  "scope": "Update the archived Superpowers plan link after docs/superpowers -> docs/history/superpowers move; no plan decision or technical content changed",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-10-22",
+  "authorization_text": "\u4e00\u8d77\u5904\u7406",
+  "recorded_at": "2026-10-22",
+  "recorded_by": "Cline"
+}

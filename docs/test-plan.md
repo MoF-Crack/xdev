@@ -265,7 +265,7 @@ go test -tags online ./internal/integration/...   # 手动
 | 在线（每日） | `go test -tags online ...`（GitHub Actions 定时） | cron |
 
 ### 覆盖率目标
-- 单元层 ≥ 80%（`go test -cover`，对齐 `UNI_ENV_开发文档.md` 目标）
+- 单元层 ≥ 80%（`go test -cover`，对齐 `docs/history/2026-06-15-uni-env-design-vision.md` 目标）
 - 集成层：关键链路 100%（init/install/use/uninstall/local/lockfile/shim）
 - 关注点：本次新增的 `InstallResult.Spec/URL/SHA256` 与 `updateLockfile` 必须有断言保护
 

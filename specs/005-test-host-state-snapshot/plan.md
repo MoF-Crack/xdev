@@ -1,4 +1,4 @@
-﻿# Implementation Plan: 测试宿主状态快照
+# Implementation Plan: 测试宿主状态快照
 
 > **文档类型**：Implementation Plan
 > **状态**：Ready
@@ -8,7 +8,7 @@
 > **所有者**：xinyan <zuijiuhjd@foxmail.com>
 > **关联 Spec**：`specs/005-test-host-state-snapshot/spec.md` `0.2.0` (Approved)
 > **权威范围**：定义所选技术方案、模块边界、接口、数据流和验证方案
-> **替代文档**：`docs/superpowers/plans/2026-07-23-test-host-state-snapshot.md`（执行任务清单同源）
+> **替代文档**：`docs/history/superpowers/plans/2026-07-23-test-host-state-snapshot.md`（执行任务清单同源）
 
 **Branch**: `005-test-host-state-snapshot` | **Date**: 2026-07-23 | **Spec**: `specs/005-test-host-state-snapshot/spec.md` `0.2.0`
 
@@ -218,7 +218,7 @@ internal/integration/
 
 ## 实施任务草图（待 Plan Ready 后细化为 tasks.md）
 
-详见 `docs/superpowers/plans/2026-07-23-test-host-state-snapshot.md` Task 1–6（TDD）。
+详见 `docs/history/superpowers/plans/2026-07-23-test-host-state-snapshot.md` Task 1–6（TDD）。
 
 ---
 
@@ -229,6 +229,7 @@ internal/integration/
 | Plan 起草 | Planned | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-planned-001` |
 | Plan 批准 | Ready | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-23 | `0.1.0` | `2026-07-23-plan-005-ready-001`；用户原文「同意方案并且实施」；批准技术方案并授权 TDD 实现 |
 | Plan 批准 | Ready | `xinyan <zuijiuhjd@foxmail.com>` | 2026-07-25 | `0.1.0` | `2026-07-25-plan-005-001`；SDD Loop 补全 |
+| 文档维护 | Ready | `xinyan <zuijiuhjd@foxmail.com>` | 2026-10-22 | `0.1.0` | `2026-10-22-plan-005-doc-link-001`；仅更新归档计划链接（`docs/superpowers` → `docs/history/superpowers`），技术内容不变 |
 
 ---
 

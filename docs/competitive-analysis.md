@@ -286,9 +286,9 @@ XDev 将以下功能集成到单一工具中，竞品通常需要多个工具组
 
 ---
 
-## 8. 对标愿景（UNI_ENV_开发文档）
+## 8. 对标愿景（已归档：`docs/history/2026-06-15-uni-env-design-vision.md`）
 
-`UNI_ENV_开发文档.md` 描述了对标 mise + devcontainer + Nix + DevPod 的统一环境管理愿景（`env.uni.yaml` 声明式配置 + 渐进隔离 + Adapter 后端无关）。XDev 当前的 isolator/orchestrator 模块已实现该愿景的框架基础（none/container/nix 隔离 + docker/ssh adapter），后续演进方向为：
+`docs/history/2026-06-15-uni-env-design-vision.md` 描述了对标 mise + devcontainer + Nix + DevPod 的统一环境管理愿景（`env.uni.yaml` 声明式配置 + 渐进隔离 + Adapter 后端无关）。XDev 当前的 isolator/orchestrator 模块已实现该愿景的框架基础（none/container/nix 隔离 + docker/ssh adapter），后续演进方向为：
 
 1. 统一环境定义文件（当前 `.xdev.toml` → 演进为 `env.uni.yaml` 含隔离/钩子/策略）
 2. 模板继承机制（当前无 → 支持 `inherit:` git/file 模板）

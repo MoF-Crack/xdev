@@ -102,7 +102,7 @@ git switch -c audit/2026-10-21
 git push -u origin audit/2026-10-21
 gh pr create --base main --head audit/2026-10-21 \
   --title "audit: 2026-10-21 修复（门禁/运行态/版本目录/文档）" \
-  --body-file 20261021审计-解决方案.md
+  --body-file docs/audits/2026/2026-10-21-remediation-plan.md
 ```
 
 **预期与预算**

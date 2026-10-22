@@ -162,7 +162,7 @@ EXIT=0
 
 ### 🟢 P2 — 文档同步滞后（本会话已部分修正）
 
-**现象**：README/technical-reference 已在本会话更新（Phase 3/4 状态修正、命令表补全、§14/§15 Lockfile/隔离章节已存在）。但 `UNI_ENV_开发文档.md` 仍标「规划阶段」，易误读为 xdev 待办。
+**现象**：README/technical-reference 已在本会话更新（Phase 3/4 状态修正、命令表补全、§14/§15 Lockfile/隔离章节已存在）。但 `docs/history/2026-06-15-uni-env-design-vision.md` 仍标「规划阶段」，易误读为 xdev 待办。
 
 **修改建议**：已在计划中（第 5 项）——顶部加「竞品对标愿景，非 xdev 功能规格」声明。
 

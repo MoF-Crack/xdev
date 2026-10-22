@@ -18,3 +18,4 @@
 ## 子目录
 
 - `implementation-plans/`：已经执行、被替代或冻结的一次性实施计划。
+- `superpowers/`：Superpowers/SpecKit Agent 工作流的旧计划与设计稿（2026-10-22 从 `docs/superpowers/` 归档）。
