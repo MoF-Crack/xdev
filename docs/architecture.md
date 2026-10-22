@@ -17,7 +17,7 @@ XDev 是一个跨平台开发环境版本管理器，用 Go 1.25 编写。它提
 - **TUI** — 基于 Bubble Tea 的终端用户界面
 - **GUI** — 基于 Wails v2 + Vue 3 的桌面图形界面
 
-核心设计理念：**单二进制多入口**（Shim Dispatch）—— `xdev` 同时充当 CLI/TUI/GUI 和所有托管工具的 shim。默认 `go build` 即链接 Wails；`bindings` 标签仅用于生成 Wails 绑定（见 ADR-0006；ADR-0002 的 Wails 选型仍然有效）。
+核心设计理念：**单二进制多入口**（Shim Dispatch）—— `xdev` 同时充当 CLI/TUI/GUI 和所有托管工具的 shim。GUI 需要 Wails 的 `desktop,production` 构建标签（`wails build` 自动带上；手工 `go build` 必须显式传入，否则 GUI 启动会弹“without the correct build tags”）；`bindings` 标签仅用于生成 Wails 绑定（见 ADR-0006；ADR-0002 的 Wails 选型仍然有效）。
 
 ## 2. 目录结构
 

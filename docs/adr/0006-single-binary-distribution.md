@@ -34,7 +34,12 @@ GUI 由 `wails build -tags gui` 产出 `xdev-gui`。
    - `xdev tui`：TUI；
    - `xdev gui`：进程内启动 GUI；
    - 其余参数：CLI 子命令。
-3. **构建标签**：`bindings` 仅用于生成 Wails 绑定；发行构建不带 `-tags gui`。
+3. **构建标签**：`bindings` 仅用于生成 Wails 绑定。GUI **必须**带
+   `-tags desktop,production`（`wails build` 自动带入；手工 `go build`
+   必须显式传入，否则 Wails 运行时会弹出
+   “Wails applications will not build without the correct build tags”，
+   GUI 完全不可用）。CI/Release 的每一条 `go build` 都由
+   `frontend/test/r9-ci-wails-tags.spec.js` 守卫。
 4. **发布产物命名**：`xdev-<version>-<os>-<arch>[.exe]`（归档为 `.tar.gz` / `.zip`，
    Linux 另有 `.deb` / `.rpm` / `.AppImage`），**不再有** `xdev-gui-*`。
 

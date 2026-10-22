@@ -99,7 +99,9 @@ cd xdev
 cd frontend && npm ci && npm run build && cd ..
 
 # 单二进制（CLI/TUI/GUI/shim；ADR-0006）
-go build -ldflags "-s -w" -o build/xdev .
+# GUI 必须带 Wails 标签：desktop,production。缺标签的二进制启动 GUI 会弹
+# "Wails applications will not build without the correct build tags"。
+go build -tags desktop,production -ldflags "-s -w" -o build/xdev .
 ```
 
 ### 构建 GUI（可选）
