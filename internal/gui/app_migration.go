@@ -569,7 +569,10 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 	if err != nil {
 		return err
 	}
-	targetPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	targetPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+	if dirErr != nil {
+		return dirErr
+	}
 
 	// 4. 如果目标路径已存在，返回错误
 	if _, err := os.Stat(targetPath); err == nil {
@@ -760,7 +763,11 @@ func (a *App) postMigrateSetup(tool env.LocalTool, cfg *config.Config) {
 	if ver == "" {
 		ver = a.detectToolVersion(tool.Name, tool.Path)
 	}
-	installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+	if dirErr != nil {
+		logWarn("[postMigrateSetup] resolve install dir for %s@%s: %v", tool.Name, ver, dirErr)
+		return
+	}
 
 	// 创建 shim 文件
 	if cfg.GetPathMode() == "shim" {

@@ -54,8 +54,8 @@ func (p *versionListPlugin) ArchiveFor(version string) (*manifest.Archive, error
 	return &manifest.Archive{URL: "https://example.test/" + p.name + "-" + version + ".zip"}, nil
 }
 
-func (p *versionListPlugin) InstallDir(root, version string) string {
-	return filepath.Join(root, p.name, version)
+func (p *versionListPlugin) InstallDir(root, version string) (string, error) {
+	return filepath.Join(root, p.name, version), nil
 }
 
 func (p *versionListPlugin) ResolveVersion(spec string) (string, error) {

@@ -33,7 +33,9 @@ func (s *shimPlugin) DefaultVersion() string                { return s.name }
 func (s *shimPlugin) ArchiveFor(string) (*manifest.Archive, error) {
 	return nil, nil
 }
-func (s *shimPlugin) InstallDir(root, v string) string { return filepath.Join(root, s.name, v) }
+func (s *shimPlugin) InstallDir(root, v string) (string, error) {
+	return filepath.Join(root, s.name, v), nil
+}
 func (s *shimPlugin) EnvVars(string) map[string]string { return nil }
 func (s *shimPlugin) PostInstall(context.Context, string) error {
 	return nil

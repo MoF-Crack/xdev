@@ -99,7 +99,10 @@ func TestInstall_ExtractFailureLeavesNoHalfTree(t *testing.T) {
 	// NOTE: installPath is deliberately NOT pre-created. An existing empty
 	// dir would short-circuit into IncompleteInstallError before extraction
 	// ever runs, which would not exercise the F-23 path at all.
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 
 	_, err := ins.InstallWithProgress(context.Background(), p, "1.0.0", nil, InstallOptions{NoActivate: true})
 	if err == nil {
@@ -136,7 +139,10 @@ func TestInstall_ExtractFailureTreeNotReusedAsInstalled(t *testing.T) {
 		},
 	}
 	// NOTE: installPath is deliberately NOT pre-created (see the test above).
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 
 	_, err := ins.InstallWithProgress(context.Background(), p, "1.0.0", nil, InstallOptions{NoActivate: true})
 	if err == nil {
@@ -175,7 +181,10 @@ func TestInstall_IntegrityFailureStillCleansTree(t *testing.T) {
 	if !strings.Contains(err.Error(), "post-extract integrity check failed") {
 		t.Fatalf("error = %v, want a post-extract integrity failure", err)
 	}
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if _, statErr := os.Stat(installPath); statErr == nil {
 		t.Error("broken install dir still exists after the integrity gate failed")
 	}

@@ -178,7 +178,10 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		}
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	installPath, err := p.InstallDir(cfg.Core.InstallDir, ver)
+	if err != nil {
+		return err
+	}
 
 	// 第七轮审计 F-05（P1）：force/repair 重装**不得在下载之前删除**已有安装。
 	// CLI 侧（票 26 / A-07，internal/installer/installer.go）已把该顺序反转为
@@ -393,7 +396,17 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 					}
 				}
 
-				installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+				installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+				if dirErr != nil {
+					wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+						"taskId":  taskID,
+						"tool":    toolName,
+						"version": version,
+						"error":   dirErr.Error(),
+					})
+					a.dlMgr.RemoveTask(taskID)
+					return
+				}
 
 				// 第七轮审计 F-05：force/repair 的删除推迟到这里 —— 下载已完成
 				// 且哈希校验通过（downloader 在 StatusCompleted 前已校验
@@ -622,7 +635,10 @@ func (a *App) UseVersion(toolName, version string) error {
 		return err
 	}
 	cfg := a.getCfg()
-	installPath := p.InstallDir(cfg.Core.InstallDir, version)
+	installPath, err := p.InstallDir(cfg.Core.InstallDir, version)
+	if err != nil {
+		return err
+	}
 	// B-06（票 29 / P1-19）：存在性门 —— 未安装的版本必须在动任何东西之前
 	// 就明确报「未安装」。旧代码把不存在的 installPath 直接交给
 	// Activate：Activate 先建 current/<tool> 链接（失败路径还会尝试 symlink/

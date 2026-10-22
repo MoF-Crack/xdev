@@ -31,7 +31,9 @@ func (c *catFakePlugin) DefaultVersion() string                { return "1.0.0" 
 func (c *catFakePlugin) ArchiveFor(string) (*manifest.Archive, error) {
 	return nil, nil
 }
-func (c *catFakePlugin) InstallDir(root, v string) string { return root + "/" + c.name + "/" + v }
+func (c *catFakePlugin) InstallDir(root, v string) (string, error) {
+	return root + "/" + c.name + "/" + v, nil
+}
 func (c *catFakePlugin) Shims() []string                  { return nil }
 func (c *catFakePlugin) EnvVars(string) map[string]string { return nil }
 func (c *catFakePlugin) PostInstall(_ context.Context, _ string) error {

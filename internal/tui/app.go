@@ -728,7 +728,11 @@ func (m Model) activateVersion() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ver := versions[m.versionIdx]
-	installPath := p.InstallDir(m.config.Core.InstallDir, ver)
+	installPath, dirErr := p.InstallDir(m.config.Core.InstallDir, ver)
+	if dirErr != nil {
+		m.errMsg = fmt.Sprintf("%s@%s: %v", p.Name(), ver, dirErr)
+		return m, nil
+	}
 	if _, err := os.Stat(installPath); err != nil {
 		m.errMsg = fmt.Sprintf("%s@%s not installed", p.Name(), ver)
 		return m, nil

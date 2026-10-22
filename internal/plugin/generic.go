@@ -31,7 +31,6 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -201,42 +200,40 @@ func (g *Generic) ArchiveFor(version string) (*manifest.Archive, error) {
 // Security: The manifest's Name, InstallRoot, and the version string
 // are validated with util.SafeName and the final path is checked with
 // util.ValidateSubPath to prevent path traversal attacks (C-1).
-func (g *Generic) InstallDir(installRoot, version string) string {
+//
+// 20261021 审计 P1-5（阶段 2）：校验失败返回 ErrUnsafeInstallPath，而不是
+// 替换成 `unsafe-version-blocked` 继续（旧行为会在 install/ 下留下伪版本目录）。
+func (g *Generic) InstallDir(installRoot, version string) (string, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
+
+	if _, err := util.SafeName(g.M.Name); err != nil {
+		return "", fmt.Errorf("%w: tool name %q: %v", ErrUnsafeInstallPath, g.M.Name, err)
+	}
 	base := g.M.Name
 
-	// Validate tool name is a safe path component
-	if _, err := util.SafeName(g.M.Name); err != nil {
-		log.Printf("[plugin] CRITICAL: tool name %q is not a safe path component: %v — using sanitized fallback", g.M.Name, err)
-		base = "unsafe-name-blocked"
-	}
-
 	if g.M.InstallRoot != "" {
-		// Validate install_root doesn't escape the install directory
+		// Validate install_root doesn't escape the install directory.
 		candidate := filepath.Join(installRoot, g.M.InstallRoot, g.M.Name)
 		if err := util.ValidateSubPath(installRoot, candidate); err != nil {
-			log.Printf("[plugin] CRITICAL: install_root %q escapes install dir %q: %v — ignoring install_root", g.M.InstallRoot, installRoot, err)
-		} else {
-			base = filepath.Join(g.M.InstallRoot, g.M.Name)
+			return "", fmt.Errorf("%w: install_root %q escapes %q: %v",
+				ErrUnsafeInstallPath, g.M.InstallRoot, installRoot, err)
 		}
+		base = filepath.Join(g.M.InstallRoot, g.M.Name)
 	}
 
-	// Validate version is a safe path component
 	if _, err := util.SafeName(version); err != nil {
-		log.Printf("[plugin] CRITICAL: version %q is not a safe path component: %v — using sanitized fallback", version, err)
-		version = "unsafe-version-blocked"
+		return "", fmt.Errorf("%w: version %q: %v", ErrUnsafeInstallPath, version, err)
 	}
 
 	result := filepath.Join(installRoot, base, version)
 
-	// Final safety check: the resolved path must be under installRoot
+	// Final safety check: the resolved path must be under installRoot.
 	if err := util.ValidateSubPath(installRoot, result); err != nil {
-		log.Printf("[plugin] CRITICAL: InstallDir %q escapes install root %q — using safe fallback", result, installRoot)
-		return filepath.Join(installRoot, base, "unsafe-path-blocked")
+		return "", fmt.Errorf("%w: %q escapes %q: %v", ErrUnsafeInstallPath, result, installRoot, err)
 	}
 
-	return result
+	return result, nil
 }
 
 // EnvVars interpolates {{install}} placeholders in the manifest's

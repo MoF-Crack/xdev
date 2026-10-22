@@ -183,7 +183,10 @@ func TestGeneric_ConcurrentSetManifestAndReads(t *testing.T) {
 	})
 	check("InstallDir", func() error {
 		root := filepath.Join("C:", "root")
-		dir := g.InstallDir(root, "1.0.0")
+		dir, err := g.InstallDir(root, "1.0.0")
+		if err != nil {
+			return err
+		}
 		if !strings.HasPrefix(dir, root) {
 			return fmt.Errorf("InstallDir=%q 逃出 install root", dir)
 		}

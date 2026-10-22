@@ -148,7 +148,10 @@ func newUseCmd() *cobra.Command {
 			if ver == "" {
 				return fmt.Errorf("use requires a version, e.g. %s@3.12.0", name)
 			}
-			installPath := p.InstallDir(Cfg().Core.InstallDir, ver)
+			installPath, dirErr := p.InstallDir(Cfg().Core.InstallDir, ver)
+			if dirErr != nil {
+				return dirErr
+			}
 			if _, err := os.Stat(installPath); err != nil {
 				return fmt.Errorf("%s@%s is not installed (run `xdev install %s@%s`)",
 					name, ver, name, ver)

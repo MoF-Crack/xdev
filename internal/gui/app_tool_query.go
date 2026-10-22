@@ -393,7 +393,11 @@ func (a *App) CheckInstallIntegrity(toolName, version string) IntegrityInfo {
 		return info
 	}
 	cfg := a.getCfg()
-	installPath := p.InstallDir(cfg.Core.InstallDir, version)
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, version)
+	if dirErr != nil {
+		info.Reason = dirErr.Error()
+		return info
+	}
 	info.Path = installPath
 	if fi, err := os.Stat(installPath); err != nil || !fi.IsDir() {
 		info.Reason = "not installed"

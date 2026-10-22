@@ -315,8 +315,10 @@ func newImportCmd() *cobra.Command {
 				if activeField == "true" {
 					p, ok := reg.Get(r.Tool)
 					if ok {
-						installPath := p.InstallDir(cfg.Core.InstallDir, r.Version)
-						if err := ins.Activate(p, installPath, r.Version); err != nil {
+						installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, r.Version)
+						if dirErr != nil {
+							fmt.Printf("  ✗ %s use %s: %v\n", r.Tool, r.Version, dirErr)
+						} else if err := ins.Activate(p, installPath, r.Version); err != nil {
 							fmt.Printf("  ✗ %s use %s: %v\n", r.Tool, r.Version, err)
 						} else {
 							fmt.Printf("  ✔ %s@%s: activated\n", r.Tool, r.Version)

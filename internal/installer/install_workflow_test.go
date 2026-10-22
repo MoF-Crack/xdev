@@ -52,8 +52,8 @@ func (f *fakePlugin) Category() string                           { return "langu
 func (f *fakePlugin) Manifest() *manifest.Tool                   { return nil }
 func (f *fakePlugin) ResolveVersion(spec string) (string, error) { return "1.0.0", nil }
 func (f *fakePlugin) DefaultVersion() string                     { return "1.0.0" }
-func (f *fakePlugin) InstallDir(root, version string) string {
-	return filepath.Join(root, f.name, version)
+func (f *fakePlugin) InstallDir(root, version string) (string, error) {
+	return filepath.Join(root, f.name, version), nil
 }
 func (f *fakePlugin) Shims() []string                              { return f.shims }
 func (f *fakePlugin) EnvVars(installPath string) map[string]string { return nil }
@@ -406,12 +406,14 @@ func (e *errPlugin) Manifest() *manifest.Tool                     { return nil }
 func (e *errPlugin) ResolveVersion(string) (string, error)        { return "", errNoVersion }
 func (e *errPlugin) DefaultVersion() string                       { return "" }
 func (e *errPlugin) ArchiveFor(string) (*manifest.Archive, error) { return nil, errNoVersion }
-func (e *errPlugin) InstallDir(root, v string) string             { return filepath.Join(root, e.name, v) }
-func (e *errPlugin) Shims() []string                              { return nil }
-func (e *errPlugin) EnvVars(string) map[string]string             { return nil }
-func (e *errPlugin) PostInstall(context.Context, string) error    { return nil }
-func (e *errPlugin) Deactivate(string) error                      { return nil }
-func (e *errPlugin) RequiredPlugin() []string                     { return nil }
+func (e *errPlugin) InstallDir(root, v string) (string, error) {
+	return filepath.Join(root, e.name, v), nil
+}
+func (e *errPlugin) Shims() []string                           { return nil }
+func (e *errPlugin) EnvVars(string) map[string]string          { return nil }
+func (e *errPlugin) PostInstall(context.Context, string) error { return nil }
+func (e *errPlugin) Deactivate(string) error                   { return nil }
+func (e *errPlugin) RequiredPlugin() []string                  { return nil }
 
 var errNoVersion = errString("no such version")
 

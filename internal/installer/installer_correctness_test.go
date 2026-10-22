@@ -23,7 +23,10 @@ func TestForceInstall_DownloadFailKeepsOld(t *testing.T) {
 
 	// Pre-existing (intact) installation of demo@1.0.0 with an active link.
 	p := &fakePlugin{name: "demo", shims: []string{"demo"}}
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	binDir := filepath.Join(installPath, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)

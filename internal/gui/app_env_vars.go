@@ -836,7 +836,10 @@ func (a *App) SwitchToXdevVersion(toolName, version string) error {
 	}
 
 	cfg := a.getCfg()
-	installPath := p.InstallDir(cfg.Core.InstallDir, version)
+	installPath, err := p.InstallDir(cfg.Core.InstallDir, version)
+	if err != nil {
+		return err
+	}
 
 	if _, err := os.Stat(installPath); err != nil {
 		return fmt.Errorf("version %s of %s is not installed", version, toolName)

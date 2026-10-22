@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -119,27 +118,23 @@ func (p *luaBasePlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 // Security: p.name and version are validated with util.SafeName and
 // the final path is checked with util.ValidateSubPath to prevent
 // path traversal attacks (C-2).
-func (p *luaBasePlugin) InstallDir(installRoot, version string) string {
-	safeName := p.name
+//
+// 20261021 审计 P1-5（阶段 2）：校验失败返回 ErrUnsafeInstallPath。
+func (p *luaBasePlugin) InstallDir(installRoot, version string) (string, error) {
 	if _, err := util.SafeName(p.name); err != nil {
-		log.Printf("[plugin] CRITICAL: Lua plugin name %q is not a safe path component: %v — using fallback", p.name, err)
-		safeName = "unsafe-plugin-blocked"
+		return "", fmt.Errorf("%w: plugin name %q: %v", ErrUnsafeInstallPath, p.name, err)
 	}
-
-	safeVersion := version
 	if _, err := util.SafeName(version); err != nil {
-		log.Printf("[plugin] CRITICAL: version %q is not a safe path component: %v — using fallback", version, err)
-		safeVersion = "unsafe-version-blocked"
+		return "", fmt.Errorf("%w: version %q: %v", ErrUnsafeInstallPath, version, err)
 	}
 
-	result := filepath.Join(installRoot, safeName, safeVersion)
+	result := filepath.Join(installRoot, p.name, version)
 
 	if err := util.ValidateSubPath(installRoot, result); err != nil {
-		log.Printf("[plugin] CRITICAL: InstallDir %q escapes install root %q — using safe fallback", result, installRoot)
-		return filepath.Join(installRoot, "unsafe-path-blocked")
+		return "", fmt.Errorf("%w: %q escapes %q: %v", ErrUnsafeInstallPath, result, installRoot, err)
 	}
 
-	return result
+	return result, nil
 }
 
 func (p *luaBasePlugin) EnvVars(installPath string) map[string]string {

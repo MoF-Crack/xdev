@@ -52,7 +52,10 @@ func newEnvCmd() *cobra.Command {
 			if !ok {
 				return unsupportedToolErr(name)
 			}
-			installPath := p.InstallDir(Cfg().Core.InstallDir, ver)
+			installPath, err := p.InstallDir(Cfg().Core.InstallDir, ver)
+			if err != nil {
+				return err
+			}
 			vars := p.EnvVars(installPath)
 			// Security (C-1 fix): this output is designed to be eval'd, so it
 			// must go through envpkg.HookOutput, which validates env-var names
@@ -106,7 +109,10 @@ Examples:
 					if ver == "" {
 						ver = p.DefaultVersion()
 					}
-					installPath := p.InstallDir(Cfg().Core.InstallDir, ver)
+					installPath, err := p.InstallDir(Cfg().Core.InstallDir, ver)
+					if err != nil {
+						return err
+					}
 					for k, v := range p.EnvVars(installPath) {
 						envVars[k] = v
 					}
@@ -156,7 +162,13 @@ func collectActiveEnvVars() map[string]string {
 		if !ok {
 			continue
 		}
-		installPath := t.InstallDir(Cfg().Core.InstallDir, activeVer)
+		installPath, err := t.InstallDir(Cfg().Core.InstallDir, activeVer)
+		if err != nil {
+			// 活跃版本名理论上已通过激活校验；这里只做防御性跳过，
+			// 避免一条坏记录让整个 env 输出失败。
+			fmt.Fprintf(os.Stderr, "xdev: warning: skip %s@%s: %v\n", t.Name(), activeVer, err)
+			continue
+		}
 		for k, v := range t.EnvVars(installPath) {
 			result[k] = v
 		}

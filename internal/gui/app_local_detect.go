@@ -379,7 +379,10 @@ func (a *App) MigrateLocalTool(toolName, localPath string) error {
 		ver = a.detectToolVersion(toolName, localPath)
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+	if dirErr != nil {
+		return dirErr
+	}
 
 	// Check if already managed
 	if _, err := os.Stat(installPath); err == nil {

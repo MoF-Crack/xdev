@@ -52,8 +52,8 @@ func (p *depPlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 	}, nil
 }
 
-func (p *depPlugin) InstallDir(root, version string) string {
-	return filepath.Join(root, p.name, version)
+func (p *depPlugin) InstallDir(root, version string) (string, error) {
+	return filepath.Join(root, p.name, version), nil
 }
 
 // newDepTestInstaller creates an Installer with the given plugins registered.
@@ -88,7 +88,10 @@ func makeInstalledDir(t *testing.T, ins *Installer, toolName, version string) {
 	if !ok {
 		t.Fatalf("tool %q not in registry", toolName)
 	}
-	path := p.InstallDir(ins.cfg.Core.InstallDir, version)
+	path, err := p.InstallDir(ins.cfg.Core.InstallDir, version)
+	if err != nil {
+		t.Fatalf("InstallDir(%s@%s): %v", toolName, version, err)
+	}
 	binDir := filepath.Join(path, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", binDir, err)

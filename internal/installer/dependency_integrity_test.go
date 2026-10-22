@@ -28,12 +28,15 @@ func TestInstall_DepDirExistsButEmptyFails(t *testing.T) {
 
 	// The dependency directory EXISTS but is empty (a truncated extraction
 	// leaves exactly this shape).
-	emptyPath := java.InstallDir(ins.cfg.Core.InstallDir, java.DefaultVersion())
+	emptyPath, err := java.InstallDir(ins.cfg.Core.InstallDir, java.DefaultVersion())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(emptyPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := ins.InstallWithProgress(context.Background(), flutter, "1.0.0", nil, InstallOptions{NoActivate: true})
+	_, err = ins.InstallWithProgress(context.Background(), flutter, "1.0.0", nil, InstallOptions{NoActivate: true})
 	if err == nil {
 		t.Fatal("install proceeded although the required dependency is an empty directory")
 	}
@@ -49,7 +52,10 @@ func TestInstall_DepDirExistsButNoBinaryFails(t *testing.T) {
 	java := &depPlugin{name: "java"}
 	ins := newDepTestInstaller(t, flutter, java)
 
-	depPath := java.InstallDir(ins.cfg.Core.InstallDir, java.DefaultVersion())
+	depPath, err := java.InstallDir(ins.cfg.Core.InstallDir, java.DefaultVersion())
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Non-empty, but no "java" binary anywhere the integrity check looks.
 	if err := os.MkdirAll(filepath.Join(depPath, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -58,7 +64,7 @@ func TestInstall_DepDirExistsButNoBinaryFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := ins.InstallWithProgress(context.Background(), flutter, "1.0.0", nil, InstallOptions{NoActivate: true})
+	_, err = ins.InstallWithProgress(context.Background(), flutter, "1.0.0", nil, InstallOptions{NoActivate: true})
 	if err == nil {
 		t.Fatal("install proceeded although the dependency has no declared binary")
 	}

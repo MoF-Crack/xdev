@@ -308,7 +308,18 @@ func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) [
 		// Check if already installed. Unlike the old plain directory check,
 		// an existing-but-incomplete install is NOT treated as installed —
 		// same decision as InstallWithProgress (Spec 021 D8).
-		installPath := p.InstallDir(i.cfg.Core.InstallDir, ver)
+		// 20261021 审计 P1-5（阶段 2）：InstallDir 校验失败必须中止该项，
+		// 不能把伪路径带进后续 Stat/安装流程。
+		installPath, dirErr := p.InstallDir(i.cfg.Core.InstallDir, ver)
+		if dirErr != nil {
+			results[idx] = BatchInstallResult{
+				Tool:    item.ToolName,
+				Version: ver,
+				Status:  "failed",
+				Error:   dirErr,
+			}
+			continue
+		}
 		if fi, err := os.Stat(installPath); err == nil && fi.IsDir() {
 			integrity := VerifyInstallIntegrity(p, installPath)
 			if integrity.OK {
@@ -387,7 +398,10 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			if !ok {
 				return nil, fmt.Errorf("required plugin %q is not supported; cannot install %q", depName, p.Name())
 			}
-			depPath := depPlugin.InstallDir(i.cfg.Core.InstallDir, depPlugin.DefaultVersion())
+			depPath, dirErr := depPlugin.InstallDir(i.cfg.Core.InstallDir, depPlugin.DefaultVersion())
+			if dirErr != nil {
+				return nil, dirErr
+			}
 			// F-27: a mere os.Stat + IsDir accepted an EMPTY (or binary-less)
 			// dependency directory — exactly what a truncated extraction
 			// leaves behind — so the dependent tool installed against a
@@ -427,7 +441,10 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	}
 	log.Printf("[install] Archive: url=%s format=%s os=%s arch=%s", arch.URL, arch.Format, arch.OS, arch.Arch)
 
-	installPath := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	installPath, err := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	if err != nil {
+		return nil, err
+	}
 	log.Printf("[install] Install path: %s", installPath)
 
 	// Capture archive metadata once for lockfile pinning. We record the
@@ -2006,7 +2023,12 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 		for _, req := range other.RequiredPlugin() {
 			if req == p.Name() {
 				// Check if the dependent tool is actually installed
-				depPath := other.InstallDir(i.cfg.Core.InstallDir, other.DefaultVersion())
+				depPath, dirErr := other.InstallDir(i.cfg.Core.InstallDir, other.DefaultVersion())
+				if dirErr != nil {
+					// 依赖工具的路径不合法：视为未安装（不能阻止卸载）。
+					log.Printf("[install] WARNING: cannot resolve install dir for dependent tool %q: %v", other.Name(), dirErr)
+					continue
+				}
 				if fi, err := os.Stat(depPath); err == nil && fi.IsDir() {
 					return fmt.Errorf("cannot uninstall %q: required by %q; uninstall %q first", p.Name(), other.Name(), other.Name())
 				}
@@ -2014,7 +2036,10 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 		}
 	}
 
-	target := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	target, err := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	if err != nil {
+		return err
+	}
 	log.Printf("[install] Uninstalling: %s@%s from %s", p.Name(), ver, target)
 
 	// 第十一轮审计（Round 10 报告待办 5 / P3-7）：**必须在删除目标之前**读活跃版本。
@@ -2047,7 +2072,10 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 
 		// Try to re-point to another installed version
 		if otherVer := i.findOtherVersion(p); otherVer != "" {
-			otherPath := p.InstallDir(i.cfg.Core.InstallDir, otherVer)
+			otherPath, dirErr := p.InstallDir(i.cfg.Core.InstallDir, otherVer)
+			if dirErr != nil {
+				return dirErr
+			}
 			log.Printf("[install] Re-pointing %s to %s@%s", p.Name(), p.Name(), otherVer)
 			// Ticket 03 (audit-fixes / P0-05): Release the uninstall lock
 			// before re-acquiring inside Activate — Activate takes the

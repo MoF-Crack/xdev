@@ -293,7 +293,10 @@ func TestInstallNPMPackage_ActivatesAndShims(t *testing.T) {
 	ins.SetExecRunner(mr)
 
 	p := newNPMTestPlugin("dsh", "0.1.2-rc.1", false)
-	installPath := p.InstallDir(cfg.Core.InstallDir, "0.1.2-rc.1")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "0.1.2-rc.1")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	res, err := ins.InstallNPMPackage(context.Background(), p, p.archiv, "0.1.2-rc.1", installPath)
 	if err != nil {
 		t.Fatalf("InstallNPMPackage: %v", err)
