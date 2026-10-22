@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -218,6 +219,40 @@ func newDoctorCmd() *cobra.Command {
 			check("manifest catalog", len(tools) > 0,
 				fmt.Sprintf("%d tool(s) from %s", len(tools), catalogSource))
 
+			// 6c. 20261021 审计 P3-16：磁盘 manifest 解析失败不再只写日志。
+			// LoadCatalog 会跳过坏文件并回退到 embedded（所以工具通常仍可用），
+			// 但用户看不到“哪个文件坏了、为什么”。
+			manifestIssues := scanManifestIssues(cfg.Core.ManifestDir)
+			if _, statErr := os.Stat(cfg.Core.ManifestDir); statErr != nil {
+				fmt.Println("• manifest files: not initialized")
+			} else if len(manifestIssues) == 0 {
+				check("manifest files", true, "all parse")
+			} else {
+				detail := make([]string, 0, len(manifestIssues))
+				for _, is := range manifestIssues {
+					detail = append(detail, fmt.Sprintf("%s: %s", is.File, squashError(is.Err.Error())))
+				}
+				check("manifest files", false,
+					fmt.Sprintf("%d unparseable — %s (embedded fallback may still serve them; run `xdev doctor --fix`)",
+						len(manifestIssues), strings.Join(detail, "; ")))
+			}
+
+			// 6d. 伪版本目录。仅识别 **xdev 自己产生** 的名字（unsafe-* 与已知的
+			// 版本解析残骸）；gopath / export_templates 是用户数据（本机分别约
+			// 1.7 GB / 2.0 GB），绝不能被当垃圾移动。
+			junkDirs := findJunkVersionDirs(cfg)
+			if len(junkDirs) == 0 {
+				check("install junk dirs", true, "none")
+			} else {
+				names := make([]string, 0, len(junkDirs))
+				for _, d := range junkDirs {
+					names = append(names, d.Tool+"/"+d.Name+" ("+d.Reason+")")
+				}
+				check("install junk dirs", false,
+					fmt.Sprintf("%d found — %s; run `xdev doctor --fix` to quarantine (moved to <home>/.trash, not deleted)",
+						len(junkDirs), strings.Join(names, ", ")))
+			}
+
 			// 6a. 不可安装条目（票 18 / P2-29）：manifest 里可以有「有版本、没有
 			// url/format」的占位条目（实测 mingw 曾整条如此）——`xdev available`
 			// 会照常展示，直到用户点安装才失败。这里显式点名，且**不算检查失败**：
@@ -289,6 +324,37 @@ func newDoctorCmd() *cobra.Command {
 			// （见 planDoctorFix 的逐项说明）。修复前这里是无条件执行，
 			// `--no-path-fix` 被完全忽略，实测会写宿主 PATH。
 			if flagFix {
+				// 本地修复（不写注册表，因此不受 --no-path-fix 影响）。
+				fmt.Println("\n--- Fixing local issues ---")
+				if len(manifestIssues) == 0 {
+					fmt.Println("• manifest files: nothing to reseed")
+				} else {
+					for _, is := range manifestIssues {
+						data, ok := manifest.EmbeddedManifest(is.Tool)
+						if !ok {
+							fmt.Printf("• %s: no embedded counterpart — left untouched\n", is.File)
+							continue
+						}
+						backup, err := reseedManifest(is.Path, data)
+						if err != nil {
+							fmt.Printf("✘ %s: reseed failed: %v\n", is.File, err)
+							continue
+						}
+						fmt.Printf("✔ %s reseeded from embedded (old file -> %s)\n", is.File, backup)
+					}
+				}
+				if len(junkDirs) == 0 {
+					fmt.Println("• install junk dirs: nothing to quarantine")
+				} else {
+					moved, failed := quarantineJunkVersionDirs(cfg, junkDirs)
+					for _, m := range moved {
+						fmt.Printf("✔ quarantined %s\n", m)
+					}
+					for _, f := range failed {
+						fmt.Printf("✘ %s\n", f)
+					}
+				}
+
 				fmt.Println("\n--- Fixing PATH issues ---")
 
 				if !fixPlan.CleanUserPath {
@@ -702,4 +768,157 @@ func loadSniffUpdates(cfg *config.Config) []struct {
 		}
 	}
 	return updates
+}
+
+// --- 20261021 审计：manifest 诊断与伪版本目录清理 ---
+
+// manifestIssue 是一个解析失败、但仍可能被 embedded 兜底覆盖的磁盘 manifest。
+type manifestIssue struct {
+	File string // 文件名（cursor.yaml）
+	Tool string // 去掉 .yaml 的工具名（cursor）
+	Path string
+	Err  error
+}
+
+// scanManifestIssues 逐个解析 manifests/*.yaml，返回失败项（按文件名排序）。
+// 目录不存在/不可读时返回 nil（未初始化 home 不算错误）。
+func scanManifestIssues(dir string) []manifestIssue {
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []manifestIssue
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".yaml") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if perr := manifest.ParseFile(path); perr != nil {
+			out = append(out, manifestIssue{
+				File: e.Name(),
+				Tool: strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())),
+				Path: path,
+				Err:  perr,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].File < out[j].File })
+	return out
+}
+
+// reseedManifest 把损坏文件备份为 .corrupt-<ts>，再用 data 重写。
+// 写失败时尝试恢复备份，避免留下“既没旧的也没新的”的空档。
+func reseedManifest(path string, data []byte) (backup string, err error) {
+	backup = fmt.Sprintf("%s.corrupt-%s", path, time.Now().Format("20060102-150405"))
+	if err := os.Rename(path, backup); err != nil {
+		return "", err
+	}
+	if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
+		_ = os.Rename(backup, path)
+		return "", err
+	}
+	return backup, nil
+}
+
+// squashError 把多行 YAML 错误压成一行，并去掉泛化的
+// "yaml: unmarshal errors:" 前缀——只保留真正有定位价值的
+// `line N: mapping key ... already defined`。
+func squashError(s string) string {
+	s = strings.TrimPrefix(s, "yaml: unmarshal errors:")
+	s = strings.ReplaceAll(s, "\r", "")
+	parts := strings.Split(s, "\n")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+// junkVersionDir 是一个**确定由 xdev 产生**、可安全隔离的伪版本目录。
+type junkVersionDir struct {
+	Tool   string
+	Name   string
+	Path   string
+	Reason string
+}
+
+// junkVersionDirReason 是严格的白名单（denylist by name）。
+//
+// 绝不能把 `LooksLikeVersionDirName == false` 直接当垃圾：`gopath` 与
+// `export_templates` 也是“不像版本”的目录，但它们是用户数据（本机分别约
+// 1.7 GB / 2.0 GB）。这里只处理 xdev 自己写出的哨兵名/已知解析残骸。
+func junkVersionDirReason(name string) (string, bool) {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasPrefix(lower, "unsafe-"):
+		return "xdev unsafe-path sentinel", true
+	case lower == "lld_is_a_generic_driver._":
+		return "broken version-parsing artifact", true
+	}
+	return "", false
+}
+
+// findJunkVersionDirs 扫描 install/<tool>/<name>，只返回真实目录（不跟随
+// junction/symlink，避免把安装树当垃圾移动）。
+func findJunkVersionDirs(cfg *config.Config) []junkVersionDir {
+	tools, err := os.ReadDir(cfg.Core.InstallDir)
+	if err != nil {
+		return nil
+	}
+	var out []junkVersionDir
+	for _, tool := range tools {
+		if !tool.IsDir() {
+			continue
+		}
+		toolDir := filepath.Join(cfg.Core.InstallDir, tool.Name())
+		entries, err := os.ReadDir(toolDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			reason, ok := junkVersionDirReason(e.Name())
+			if !ok {
+				continue
+			}
+			full := filepath.Join(toolDir, e.Name())
+			fi, lerr := os.Lstat(full)
+			if lerr != nil || !fi.IsDir() ||
+				fi.Mode()&os.ModeSymlink != 0 || fi.Mode()&os.ModeIrregular != 0 {
+				continue
+			}
+			out = append(out, junkVersionDir{Tool: tool.Name(), Name: e.Name(), Path: full, Reason: reason})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tool != out[j].Tool {
+			return out[i].Tool < out[j].Tool
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// quarantineJunkVersionDirs 把伪版本目录 rename 到 <home>/.trash/<ts>/<tool>/，
+// **不删除**（可恢复），并返回逐项结果。
+func quarantineJunkVersionDirs(cfg *config.Config, junk []junkVersionDir) (moved, failed []string) {
+	root := filepath.Join(cfg.Core.XMDevDir, ".trash", time.Now().Format("20060102-150405"))
+	for _, d := range junk {
+		dstDir := filepath.Join(root, d.Tool)
+		if err := os.MkdirAll(dstDir, 0o755); err != nil {
+			failed = append(failed, fmt.Sprintf("%s/%s: %v", d.Tool, d.Name, err))
+			continue
+		}
+		dst := filepath.Join(dstDir, d.Name)
+		if err := os.Rename(d.Path, dst); err != nil {
+			failed = append(failed, fmt.Sprintf("%s/%s: %v", d.Tool, d.Name, err))
+			continue
+		}
+		moved = append(moved, fmt.Sprintf("%s/%s -> %s", d.Tool, d.Name, dst))
+	}
+	return moved, failed
 }

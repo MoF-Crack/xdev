@@ -53,3 +53,18 @@ func HasEmbeddedManifest(toolName string) bool {
 	_, err := fs.ReadFile(embeddedFS, toolName+".yaml")
 	return err == nil
 }
+
+// EmbeddedManifest returns the built-in YAML bytes for toolName.
+//
+// 20261021 审计：doctor --fix 用它把损坏的磁盘 manifest 重新播种为
+// 发布时内置的版本（旧文件先备份为 .corrupt-<ts>，绝不直接删除）。
+func EmbeddedManifest(toolName string) ([]byte, bool) {
+	if embeddedFS == nil || toolName == "" {
+		return nil, false
+	}
+	data, err := fs.ReadFile(embeddedFS, toolName+".yaml")
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
