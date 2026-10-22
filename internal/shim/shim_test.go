@@ -385,6 +385,11 @@ func TestMaybeExec_ShimName(t *testing.T) {
 	// is true, meaning the shim path was taken.
 	home := t.TempDir()
 	t.Setenv("XMDEV_HOME", home)
+	// PATH 必须隔离：macOS CI 的 setup-node 把真实 node 放进 PATH，
+	// 未命中 shim 后 passthrough 会 unix.Exec("node", os.Args)，
+	// 用 -test.paniconexit0 等参数替换掉测试进程（20261022 CI）。
+	// 空目录保证 passthrough 查不到、返回 (true, error)。
+	t.Setenv("PATH", t.TempDir())
 	config.ResetHomeDirForTest()
 	InvalidateShimIndex()
 
