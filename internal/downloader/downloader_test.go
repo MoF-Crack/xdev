@@ -231,11 +231,20 @@ func TestIsAllZeroHex(t *testing.T) {
 	}{
 		{"", false}, // empty is not a placeholder
 		{"0000000000000000000000000000000000000000000000000000000000000000", true},
+		// Ticket 39 (P2-12): "0x"-prefixed 64 zeros stays a valid placeholder
+		// (TrimPrefix leaves exactly 64 zeros, matching the signing side).
 		{"0x0000000000000000000000000000000000000000000000000000000000000000", true},
 		{"0000000000000000000000000000000000000000000000000000000000000001", false},
 		{"f5cea43414cc33024bbe5867f208d1c9c915d6a38e92abeee07ed9e5563662297", false},
 		{"abc", false},
-		{"0", true},
+		// Ticket 39 (P2-12) — the red line: a single "0" is NOT the canonical
+		// placeholder. The old implementation treated ANY all-zero string as a
+		// placeholder, so a truncated/malformed hash silently skipped
+		// verification instead of failing loudly.
+		{"0", false},
+		{"00", false},
+		// A truncated zero string is likewise not a placeholder.
+		{"00000000000000000000000000000000000000000000000000000000000000", false},
 	}
 	for _, c := range cases {
 		if got := util.IsAllZeroHash(c.in); got != c.want {
@@ -335,10 +344,23 @@ func TestVerifyManifestSignature_PlaceholderSHAIsNotTampering(t *testing.T) {
 
 func TestVerifySHAInMap_DoesNotMatchZeroPlaceholder(t *testing.T) {
 	zero := strings.Repeat("0", 64)
-	if verifySHAInMap(`{"0.7.6":{"windows/amd64":"abc123"}}`, zero) {
+	// Ticket 13: exact-key semantics — the version slot is mandatory.
+	if verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "0.7.6", "windows/amd64", zero) {
 		t.Fatal("all-zero placeholder must not match a signed real hash")
 	}
-	if !verifySHAInMap(`{"0.7.6":{"windows/amd64":"abc123"}}`, "abc123") {
+	if !verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "0.7.6", "windows/amd64", "abc123") {
 		t.Fatal("real hash should be found in the signed map")
+	}
+	// Same-version cross-os/arch fallback still works (old-signature layout).
+	if !verifySHAInMapForVersion(`{"0.7.6":{"linux/amd64":"abc123"}}`, "0.7.6", "windows/amd64", "abc123") {
+		t.Fatal("same-version fallback should accept a hash signed under another os/arch key")
+	}
+	// Cross-version matches are rejected (ticket 13 / G2 red line).
+	if verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "3.0.0", "windows/amd64", "abc123") {
+		t.Fatal("a hash signed for another version must NOT authorise this version")
+	}
+	// Missing version context fails closed.
+	if verifySHAInMapForVersion(`{"0.7.6":{"windows/amd64":"abc123"}}`, "", "windows/amd64", "abc123") {
+		t.Fatal("no version context must fail closed")
 	}
 }

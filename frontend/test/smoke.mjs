@@ -17,6 +17,7 @@ const toolCatalogPage = read('src/pages/ToolCatalogPage.vue');
 const navigation = read('src/navigation/navigation.js');
 const setupWizard = read('src/SetupWizard.vue');
 const commandPalette = read('src/components/CommandPalette.vue');
+const toolDetailDrawer = read('src/components/ToolDetailDrawer.vue');
 const theme = read('src/styles/theme.css');
 function sourceFilesIn(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -44,15 +45,35 @@ expect(navigation.includes("key: 'settings-group'"), 'registry should include a 
 const knownNavKeys = [...navigation.matchAll(/key:\s*'([^']+)'/g)].map(m => m[1]);
 expect(!knownNavKeys.some(k => k === 'custom-tools' || k === 'plugins'), 'navigation registry should not contain custom-tools or plugins');
 expect(appShell.includes("window.addEventListener('keydown'"), 'AppShell should register global keyboard shortcuts');
-expect(appContent.includes('await WindowIsMaximised()'), 'maximize should immediately refresh Wails window state');
-expect(appContent.includes('.catch('), 'Wails maximize polling should handle rejected state checks');
+expect(appContent.includes('useWindowChrome()'), 'AppContent should wire window chrome through the composable');
+// R9：断言「行为存在」而不是「代码在某个固定文件」。
+//
+// 这两条原本按 AppContent 的位置做字符串匹配，dc6edf3 把窗口状态逻辑抽到
+// composables/useWindowChrome.js 后就永久误报（R8-04 已踩过一次）。但直接改成
+// 「在 src/** 里搜 `.catch(`」会**大幅削弱**断言（该串到处都是）。
+//
+// 正确做法：先按**行为**定位属主文件（唯一含 `await WindowIsMaximised()` 的那个），
+// 再在该文件内断言。这样代码在文件之间搬家不再误报，而「逻辑被删掉」仍会被抓住。
+const windowStateOwner = sourceFiles.find(file => file.includes('await WindowIsMaximised()'));
+expect(!!windowStateOwner, 'some source file should immediately refresh the Wails window state on maximize (await WindowIsMaximised())');
+if (windowStateOwner) {
+  expect(/WindowIsMaximised\(\)[\s\S]{0,600}?\.catch\(/.test(windowStateOwner), 'the file that polls Wails window state should handle rejected state checks');
+}
 expect(!setupWizard.includes('#7D56F4'), 'SetupWizard should not use the old purple accent');
 expect(!setupWizard.includes('#252540'), 'SetupWizard should not use the old purple card background');
 expect(!setupWizard.includes('#1a1a2e'), 'SetupWizard should not use the old purple page background');
 expect(!appContent.includes('<style'), 'AppContent should not retain page-specific styles');
-for (const marker of ['languageOptions', 'pathModeOptions', 'switchToXdev', 'local-path', 'version-row', 'fav-tool-card', 'sider-header', 'title-btn']) {
+for (const marker of ['languageOptions', 'pathModeOptions', 'local-path', 'version-row', 'fav-tool-card', 'sider-header', 'title-btn']) {
   expect(!appContent.includes(marker), `AppContent should not retain dead ${marker} code`);
 }
+// R8-04 附带修复：`switchToXdev` 从上面的死代码标记表移出。它写于 a6dae13（当时
+// 确实没有调用方），但 1418bb3（v0.3.2「PM instance switch」）让 ToolDetailDrawer
+// 开始 `emit('switch-xdev', ...)`，AppContent 也接上了 `@switch-xdev` → 该函数已是
+// **活代码**，再断言「不得存在」就是反向误报。改为正向断言这条链路仍在（强度不低于
+// 原来的否定断言：要求 emit 与 handler 两端都存在）。
+expect(toolDetailDrawer.includes("emit('switch-xdev'"), 'ToolDetailDrawer should emit switch-xdev for managed PM instances');
+expect(appContent.includes('@switch-xdev="switchToXdev"'), 'AppContent should handle switch-xdev from the drawer');
+expect(appContent.includes('async function switchToXdev('), 'switchToXdev handler should exist (live code since 1418bb3)');
 expect(!sourceFiles.some(file => /transition\s*:\s*all\b/i.test(file)), 'source should not use transition: all');
 expect(!sourceFiles.some(file => /(?:#00e5ff|rgba\(0\s*,\s*229\s*,\s*255)/i.test(file)), 'source should not use the legacy cyan accent');
 

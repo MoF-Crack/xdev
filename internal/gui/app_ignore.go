@@ -32,9 +32,9 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // IgnoredToolInfo represents a tool that the user has chosen to ignore.
 type IgnoredToolInfo struct {
 	Name      string `json:"name"`
-	Kind      string `json:"kind"`               // "update" | "local-scan"
-	Path      string `json:"path,omitempty"`     // optional, only for local-scan
-	IgnoredAt string `json:"ignoredAt"`          // RFC3339 timestamp
+	Kind      string `json:"kind"`           // "update" | "local-scan"
+	Path      string `json:"path,omitempty"` // optional, only for local-scan
+	IgnoredAt string `json:"ignoredAt"`      // RFC3339 timestamp
 }
 
 // ignoredStore is the on-disk storage format for ignored tools.
@@ -164,6 +164,7 @@ func (a *App) UnignoreTool(name, kind, path string) error {
 //   - kind=update: match by name only
 //   - kind=local-scan: match by name + path; if the stored entry has an empty
 //     path it matches all paths for that tool name
+//
 // Holds a read lock on ignoredMu.
 func (a *App) isIgnored(name, kind, path string) bool {
 	a.ignoredMu.RLock()

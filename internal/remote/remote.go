@@ -28,6 +28,29 @@ import (
 // ample headroom. Var (not const) for testability.
 var githubBodyLimit = 16 << 20 // 16 MiB
 
+// jsonBodyLimit caps how much of a JSON version-discovery response is decoded
+// (票 16 / P2-15). A malicious or broken remote could otherwise stream an
+// unbounded body, which the decoder would buffer in memory (OOM / hang).
+const jsonBodyLimit = 16 << 20 // 16 MiB
+
+// htmlBodyLimit 是 HTML 版本索引页的读取上限。
+//
+// F-19：修复前 discoverHTML 用裸 io.ReadAll(io.LimitReader(...))——LimitReader
+// 到限即返回 io.EOF，ReadAll 视为**成功**，于是页面在 2 MiB 处被静默截断，
+// 落在截断点之后的版本无声丢失（用户看到「没有新版本」且无任何线索）。改用
+// 同包 readLimitedBody（GitHub 路径已在用）做显式截断检测。
+// Var（非 const）以便测试调小上限构造超限页面。
+var htmlBodyLimit = 2 << 20 // 2 MiB
+
+// maxGitHubPages 是 GitHub 分页的硬迭代上限。
+//
+// F-15：修复前循环既无 visited 集合也无迭代计数，上游（或被劫持的响应）给出
+// 同主机自环的 Link 头时无限翻页——烧光未认证的 60 req/h 限额，allReleases
+// 无界增长直至 OOM。visited 集合抓不住「每页 URL 都不同」的无限序列，故再
+// 加一道硬上限兜底。100 页 × 100 条/页 = 10000 个 release，远超任何真实仓库
+// 的版本数量（也是 perPageValues 上限 100 时的自然界）。
+const maxGitHubPages = 100
+
 // perPageValues defines the per_page values to try when the response body is
 // truncated. Starting with 100 (GitHub API maximum), falling back to 50, then 30.
 var perPageValues = []int{100, 50, 30}
@@ -102,31 +125,85 @@ var httpClient = &http.Client{
 	CheckRedirect: util.SecureRedirectCheck(10),
 }
 
-// init is intentionally empty — effectiveGitHubToken reads env each time,
-// so there is no need to eagerly capture the env token at package init.
-func init() {}
+// init 只做一件事：给单例 transport 装上**只读**的代理判定分发器。
+// 其余初始化刻意留空——effectiveGitHubToken 每次现读环境变量，无需在包
+// 初始化时捕获 token。
+func init() {
+	httpTransport.Proxy = func(req *http.Request) (*url.URL, error) {
+		httpTransportMu.Lock()
+		fn := currentProxyFn
+		httpTransportMu.Unlock()
+		return fn(req)
+	}
+}
 
 // configuredProxyURL stores the last proxy URL passed to ConfigureHTTPClient,
 // used in error messages when proxy connection fails.
 var configuredProxyURL string
+
+// httpTransport is the process-wide transport reused by every
+// ConfigureHTTPClient call (P2-30 / N-08).
+//
+// 修复前每次调用都新建一个 *http.Transport 再挂到 httpClient.Transport：
+// 被替换掉的旧 transport 的空闲连接池（socket + 后台读 goroutine）没有任何
+// 人调用 CloseIdleConnections，只能等 GC 终结器回收。GUI 每次改代理/重载配置
+// 都会调用本函数，于是连接与句柄随调用次数一路累积。改为单例后，无论调用
+// 多少次，进程里只有这一个 transport。
+//
+// 字段在 init 里装好之后**永不改写**：代理口径的切换走 currentProxyFn，
+// 这样请求路径（RoundTrip 会读 transport 字段）与配置路径之间不产生数据
+// 竞争——直接原地改写 transport.Proxy 会与并发请求构成竞争。
+var httpTransport = &http.Transport{}
+
+// httpTransportMu 保护 currentProxyFn 的读写（配置侧写、请求侧读）。
+var httpTransportMu sync.Mutex
+
+// currentProxyFn 是当前生效的代理判定，默认 http.ProxyFromEnvironment。
+// 通过 httpTransportMu 读写（见 httpTransport 注释）。
+var currentProxyFn = http.ProxyFromEnvironment
+
+// proxyUserinfoPattern 匹配 URL 的 userinfo 段（`//user:pass@`），用于日志脱敏。
+var proxyUserinfoPattern = regexp.MustCompile(`//[^/@\s]*@`)
+
+// redactProxyCredentials 把日志文案里的 `user:pass@` 替换为 `<redacted>@`。
+//
+// 这里刻意不用 util.SanitizeURL：它在 url.Parse 失败时原样返回输入，而
+// 「URL 畸形到解析失败」恰恰是最需要脱敏的场景（错误文本里带着原始 URL）。
+// 与 internal/cli/config.go 的同名函数同款实现——跨包复用会引入 cli→remote
+// 方向的反向依赖，故在 remote 包内就地保留一份（P2-16 后半）。
+func redactProxyCredentials(msg string) string {
+	return proxyUserinfoPattern.ReplaceAllString(msg, "//<redacted>@")
+}
 
 // ConfigureHTTPClient sets up the HTTP client's proxy transport.
 // When proxyURL is non-empty, it is used as the HTTP proxy for all
 // requests (the remote package only makes HTTPS requests to GitHub
 // APIs); when empty, http.ProxyFromEnvironment is used instead.
 // Call this at startup after loading configuration.
+//
+// P2-30（N-08）：不再每次新建 transport（见 httpTransport 注释）；每次
+// 重新配置后调用 CloseIdleConnections——代理口径变了以后，池里残留的空闲
+// 连接可能仍指向旧代理/旧直连目标，复用它们会绕过新配置。在途请求不受影响
+// （它们持有的连接仍归自己，这与 net/http 的语义一致）。
 func ConfigureHTTPClient(proxyURL string) {
 	configuredProxyURL = proxyURL
-	transport := &http.Transport{}
-	if proxyURL != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err == nil {
-			transport.Proxy = http.ProxyURL(parsed)
-		}
+	httpTransportMu.Lock()
+	if proxyURL == "" {
+		currentProxyFn = http.ProxyFromEnvironment
+	} else if parsed, err := url.Parse(proxyURL); err != nil {
+		// P2-16（后半）：解析失败必须告警——修复前这里静默忽略，用户以为
+		// 代理已生效，实际每个请求都在直连（配置错误被吞掉，只表现为"变慢/
+		// 连不上"）。语义不变：与"新建裸 transport"等价，Proxy 为 nil = 直连。
+		// url.Parse 的错误文本会原样回显含凭据的 URL，故先脱敏再进日志。
+		log.Printf("[remote] WARNING: invalid proxy URL, falling back to direct connection: %s",
+			redactProxyCredentials(err.Error()))
+		currentProxyFn = func(*http.Request) (*url.URL, error) { return nil, nil }
 	} else {
-		transport.Proxy = http.ProxyFromEnvironment
+		currentProxyFn = http.ProxyURL(parsed)
 	}
-	httpClient.Transport = transport
+	httpTransportMu.Unlock()
+	httpTransport.CloseIdleConnections()
+	httpClient.Transport = httpTransport
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +217,11 @@ type cacheEntry struct {
 	body      []byte
 	etag      string
 	expiresAt time.Time
+	// nextURL 是该页响应 Link 头里的 rel="next" 目标（无下一页则为空）。
+	// P2-08 / C-11：304 响应不携带 Link 头，所以分页游标必须随缓存一起
+	// 保存——否则命中缓存的每一次翻页都会在第一页之后断掉，第二页及更后
+	// 的版本永远发现不到。
+	nextURL string
 }
 
 var (
@@ -171,13 +253,16 @@ func cacheGet(key string) (*cacheEntry, bool) {
 }
 
 // cachePut stores an entry in the cache with the standard TTL.
-func cachePut(key string, body []byte, etag string) {
+// nextURL 是该页的下一页链接（Link 头 rel="next"，无下一页传 ""），
+// 供 304 命中时恢复分页游标（P2-08 / C-11）。
+func cachePut(key string, body []byte, etag string, nextURL string) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	cache[key] = &cacheEntry{
 		body:      body,
 		etag:      etag,
 		expiresAt: time.Now().Add(cacheTTL),
+		nextURL:   nextURL,
 	}
 }
 
@@ -265,6 +350,69 @@ func parseNextURL(linkHeader string) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Pagination loop detection (P3-9)
+// ---------------------------------------------------------------------------
+
+// paginationKey 把分页 URL 规范化成环检测用的键：
+// scheme + host + path + **排序后**的查询参数（含重复键按值排序）。
+//
+// P3-9：修复前 visited 直接以原始 URL 字符串为键，上游只要把查询串参数顺序
+// 换一换（`?per_page=100&page=2` vs `?page=2&per_page=100`）再附一个无关参数，
+// 每次 hop 都是「新 URL」→ 环检测 0 次命中，只能靠 maxGitHubPages 硬上限终止，
+// 一次嗅探就烧掉 100 次请求（未认证限额 60/h）。规范化后这些变体折叠成同一个键。
+//
+// 无法解析的 URL 原样返回：宁可漏判（还有硬上限兜底）也不要让键碰撞把两个
+// 真正不同的页合并。
+func paginationKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(u.Scheme)
+	b.WriteString("://")
+	b.WriteString(u.Host)
+	b.WriteString(u.Path)
+	for i, k := range keys {
+		vals := append([]string(nil), q[k]...)
+		sort.Strings(vals)
+		for _, v := range vals {
+			if i == 0 && b.Len() > 0 {
+				b.WriteByte('?')
+			} else {
+				b.WriteByte('&')
+			}
+			b.WriteString(k)
+			b.WriteByte('=')
+			b.WriteString(v)
+		}
+	}
+	return b.String()
+}
+
+// paginationPageNumber 返回 URL 的 page 查询参数（缺省为 0 = 未指定）。
+//
+// P3-9 的第二道守卫：即便某个上游用完全不同的查询串拼出同一页，
+// page 参数也必须**单调递增** —— 环检测之外再兜一层。
+func paginationPageNumber(raw string) int {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(u.Query().Get("page"))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// ---------------------------------------------------------------------------
 // Proxy error helpers
 // ---------------------------------------------------------------------------
 
@@ -276,14 +424,18 @@ func isProxyError(errMsg string) bool {
 	return util.IsProxyError(errors.New(errMsg))
 }
 
+// urlInTextPattern 匹配任意 URL（含被引号/括号包裹的情形）。
+//
+// F-18：net/http 的错误文本把 URL 包在双引号里
+// （`Get "https://host/path?token=X": dial tcp …`），按 strings.Fields 切词再
+// 判 HasPrefix(field, "https://") 判假 → 整段 URL（含查询串凭据）原样保留。
+// 这里对整段文本做正则替换，不再依赖字段边界。
+var urlInTextPattern = regexp.MustCompile(`https?://[^\s"'<>()\[\],;]+`)
+
 // sanitizedReason 去除错误消息中的 URL 凭据/查询参数并清理控制字符（F-15），
 // 用于把底层错误安全地回显给用户。
 func sanitizedReason(reason string) string {
-	for _, field := range strings.Fields(reason) {
-		if strings.HasPrefix(field, "https://") {
-			reason = strings.ReplaceAll(reason, field, util.SanitizeURL(strings.TrimRight(field, ",;:)")))
-		}
-	}
+	reason = urlInTextPattern.ReplaceAllStringFunc(reason, util.SanitizeURL)
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 {
 			return ' '
@@ -303,18 +455,46 @@ func hasProxyConfigured() bool {
 // connections to a local test server.
 var testHookDirectTransport http.RoundTripper
 
-// retryDirect clones the request and sends it using a default transport
-// (no proxy). Used as a fallback when the proxy connection fails.
-func retryDirect(ctx context.Context, originalReq *http.Request) (*http.Response, error) {
-	directTransport := testHookDirectTransport
-	if directTransport == nil {
+// directTransport 是 retryDirect 用的包级单例直连 transport（P2-11）。
+//
+// 修复前每次代理回退都新建 &http.Transport{}：每个被丢弃的 transport 都
+// 带着自己的空闲连接池（socket + 后台读 goroutine），而 retryDirect 从不
+// 关闭它们——代理不稳定时会话里会反复回退，连接/句柄一路累积到 GC 才回收。
+// 单例后无论回退多少次都只有一个直连池（同时保留 keep-alive 收益；这也是
+// 没有选"N 次响应后 CloseIdleConnections"方案的原因：那样每次回退都拆掉
+// 连接池，直连路径退化为每请求一次 TCP+TLS 握手）。
+var (
+	directTransportOnce sync.Once
+	directTransport     http.RoundTripper
+)
+
+// directTransportForRetry 返回直连（显式无代理）transport。
+//
+// testHookDirectTransport 优先——remote_test.go 的
+// TestDiscoverVersions_GitHub_ProxyFallback / _ProxyFallbackBothFail 靠它把
+// "直连"引到 httptest 服务器；P2-11 明确要求保留该检查，漏掉这两个测试即红。
+func directTransportForRetry() http.RoundTripper {
+	if hook := testHookDirectTransport; hook != nil {
+		return hook
+	}
+	directTransportOnce.Do(func() {
 		directTransport = &http.Transport{
 			Proxy: nil, // explicitly no proxy
 		}
-	}
+	})
+	return directTransport
+}
+
+// retryDirect clones the request and sends it using a default transport
+// (no proxy). Used as a fallback when the proxy connection fails.
+//
+// 每次调用仍新建 *http.Client：client 自身不持有连接池（池在 transport
+// 上，见 directTransport），因此这不是泄漏点，也保证 Timeout/CheckRedirect
+// 每次取当前值。
+func retryDirect(ctx context.Context, originalReq *http.Request) (*http.Response, error) {
 	directClient := &http.Client{
 		Timeout:       30 * time.Second,
-		Transport:     directTransport,
+		Transport:     directTransportForRetry(),
 		CheckRedirect: httpClient.CheckRedirect,
 	}
 	// Clone the request body (it should be nil for GET/HEAD, but handle
@@ -350,7 +530,7 @@ func doWithProxyFallback(ctx context.Context, req *http.Request) (*http.Response
 	hasProxy := hasProxyConfigured()
 
 	if hasProxy {
-		log.Printf("[remote] ⚠️ Request failed, retrying with direct connection: %v", err)
+		log.Printf("[remote] ⚠️ Request failed, retrying with direct connection: %s", sanitizedReason(err.Error()))
 		directResp, directErr := retryDirect(ctx, req)
 		if directErr == nil {
 			return directResp, nil
@@ -688,8 +868,31 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 	}
 
 	// Follow paginated responses.
+	//
+	// F-15：两道守卫同时存在——
+	//   - visited：抓同主机自环 / A→B→A 环（Link 头指回已取过的页）；
+	//   - maxGitHubPages：兜底抓「每页 URL 都不同」的无限序列（visited 抓不住）。
+	// 任一命中都 break（保留已取到的版本）而不是报错：已取页面的数据是好的，
+	// 环只是上游的异常。
+	//
+	// P3-9：visited 的键改用**规范化**形式（scheme+host+path + 排序后的查询
+	// 参数），并单独对 page 参数做单调性检查。修复前按原始字符串判等 ——
+	// 每次 hop 只把查询串参数顺序换一换（`?per_page=100&page=2&mark=N`，
+	// 逻辑上永远是同一页）就能完全绕过环检测，只能靠 maxGitHubPages 硬上限
+	// 终止：100 次请求，未认证 GitHub 限额 60/h → 一次嗅探就耗尽配额（H9）。
 	currentURL := apiURL
+	visited := map[string]bool{paginationKey(currentURL): true}
+	lastPage := paginationPageNumber(currentURL)
+	pages := 0
+	// revalidations 限制「304 且缓存蒸发」的自愈重试次数（P2-8：最多 1 次）。
+	revalidations := 0
 	for {
+		pages++
+		if pages > maxGitHubPages {
+			log.Printf("[remote] WARNING: GitHub pagination exceeded the hard cap of %d pages — stopping (F-15)", maxGitHubPages)
+			break
+		}
+
 		// --- ETag / cache lookup ---
 		var ifNoneMatch string
 		if cached, ok := cacheGet(currentURL); ok {
@@ -710,7 +913,10 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 
 		resp, err := doWithProxyFallback(ctx, req)
 		if err != nil {
-			return nil, fmt.Errorf("github remote: fetch %s: %w", currentURL, err)
+			// P1-4：ownerRepo 是 manifest 可控的，它被拼进 apiURL 后可能带上
+			// 凭据/查询串；网络错误文本里还会内嵌整段 URL。两处都要脱敏。
+			return nil, fmt.Errorf("github remote: fetch %s: %w",
+				util.SanitizeURL(currentURL), errors.New(sanitizedReason(err.Error())))
 		}
 
 		// Rate-limit check (before consuming the body).
@@ -724,18 +930,52 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			resp.Body.Close()
 			cached, ok := cacheGet(currentURL)
 			if !ok {
-				// Cache evaporated between the lookup and now; retry without ETag.
-				continue
+				// P2-8（F-16 回归）：缓存蒸发时**重试一次**而不是硬报错。
+				//
+				// F-16 的修复注释断言「continue 重入循环时 ifNoneMatch 仍从同一个
+				// 缺失的缓存取 → 发出的请求与上一次逐字节相同」——这个断言不成立：
+				// ifNoneMatch 是循环体**内**的局部变量，continue 会重新执行
+				// cacheGet，缓存已被删除 → ifNoneMatch = ""，第二次是**不带
+				// If-None-Match 的普通 GET**，服务端回 200，发现流程正常完成。
+				// 修复把这条自愈路径换成了硬错误（H5），用户看到的是无法恢复的
+				// 失败而不是透明重试。
+				//
+				// 现在恢复重试并加**一次**计数器：既保留自愈，又满足 F-16 的
+				// 初衷（防止服务端无条件回 304 时无限重发同一个请求）。
+				if revalidations < 1 {
+					revalidations++
+					log.Printf("[remote] WARNING: 304 Not Modified for %s but the cached response is gone (expired or cleared) — retrying once without If-None-Match",
+						util.SanitizeURL(currentURL))
+					continue
+				}
+				return nil, fmt.Errorf("github remote: server returned 304 Not Modified for %s but no cached response is available (cache expired or was cleared) — cannot revalidate",
+					util.SanitizeURL(currentURL))
 			}
 			var pageReleases []struct {
 				TagName string `json:"tag_name"`
 			}
 			if err := json.Unmarshal(cached.body, &pageReleases); err != nil {
-				return nil, fmt.Errorf("github remote: decode cached JSON from %s: %w", currentURL, err)
+				return nil, fmt.Errorf("github remote: decode cached JSON from %s: %w", util.SanitizeURL(currentURL), err)
 			}
 			allReleases = append(allReleases, pageReleases...)
-			// No pagination change on 304 – the Link header is not present.
-			break
+			// P2-08 / C-11：304 响应**没有** Link 头（RFC 9110：304 只回
+			// 缓存相关头），所以下一页游标只能来自缓存条目——由产生该条目的
+			// 那次 200 响应写入（写入前已过 M-1 同主机校验，见下）。
+			// 修复前这里直接 break：命中缓存的第二次调用永远停在第一页，
+			// 第二页及更后页的版本发现不到（表现为"sniff 结果变少"）。
+			nextURL := cached.nextURL
+			if nextURL == "" {
+				break // 该页本就没有下一页
+			}
+			// F-15：环检测——游标指回已取过的页就停，别无限翻页。
+			// P3-9：按规范化键判等（参数顺序/无关参数不再能绕过）。
+			if visited[paginationKey(nextURL)] {
+				log.Printf("[remote] WARNING: GitHub pagination loop detected at %s (page already fetched) — stopping (F-15)", util.SanitizeURL(nextURL))
+				break
+			}
+			visited[paginationKey(nextURL)] = true
+			currentURL = nextURL
+			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
@@ -747,12 +987,27 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 		bodyBytes, err := readLimitedBody(resp.Body, githubBodyLimit)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("github remote: read body from %s: %w", currentURL, err)
+			return nil, fmt.Errorf("github remote: read body from %s: %w", util.SanitizeURL(currentURL), err)
 		}
 
-		// Store in cache with ETag.
+		// Store in cache with ETag, together with this page's next-page cursor
+		// (P2-08 / C-11: a 304 carries no Link header, so the cursor must be
+		// cached alongside the body).
+		//
+		// Security (M-1 fix): the Link header is attacker-influenceable
+		// (compromised upstream, MITM, or a configured proxy) and the next
+		// request still carries the Bearer token — never follow a pagination
+		// URL that leaves the host the loop started on (api.github.com in
+		// production, the test server in tests). Validating here is the
+		// single gate: only same-host cursors are ever cached, hence only
+		// same-host cursors can be replayed on a 304 hit.
 		etag := resp.Header.Get("ETag")
-		cachePut(currentURL, bodyBytes, etag)
+		nextURL, hasNext := parseNextURL(resp.Header.Get("Link"))
+		if hasNext && !sameHostURL(apiURL, nextURL) {
+			log.Printf("[remote] WARNING: ignoring cross-host pagination URL in Link header: %s", util.SanitizeURL(nextURL))
+			hasNext, nextURL = false, ""
+		}
+		cachePut(currentURL, bodyBytes, etag, nextURL)
 
 		var pageReleases []struct {
 			TagName string `json:"tag_name"`
@@ -762,7 +1017,7 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			if len(preview) > 200 {
 				preview = preview[:200]
 			}
-			return nil, fmt.Errorf("github remote: decode JSON from %s (body preview: %q): %w", currentURL, preview, err)
+			return nil, fmt.Errorf("github remote: decode JSON from %s (body preview: %q): %w", util.SanitizeURL(currentURL), preview, err)
 		}
 		allReleases = append(allReleases, pageReleases...)
 
@@ -771,20 +1026,26 @@ func fetchGitHubPages(ctx context.Context, ownerRepo string, re *regexp.Regexp, 
 			break
 		}
 
-		// Check for next page.
-		linkHeader := resp.Header.Get("Link")
-		nextURL, hasNext := parseNextURL(linkHeader)
+		// Check for next page (cursor parsed and host-validated above).
 		if !hasNext {
 			break
 		}
-		// Security (M-1 fix): the Link header is attacker-influenceable
-		// (compromised upstream, MITM, or a configured proxy). The next
-		// request still carries the Bearer token — never follow a
-		// pagination URL that leaves the host the loop started on
-		// (api.github.com in production, the test server in tests).
-		if !sameHostURL(apiURL, nextURL) {
-			log.Printf("[remote] WARNING: ignoring cross-host pagination URL in Link header: %s", util.SanitizeURL(nextURL))
+		// F-15：环检测——同一主机内 Link 头指回已取过的页（自环或 A→B→A）
+		// 时停止翻页，避免无界请求与 allReleases 无界增长。
+		// P3-9：按规范化键判等 + page 参数单调性检查（双重守卫）。
+		nextKey := paginationKey(nextURL)
+		nextPage := paginationPageNumber(nextURL)
+		if visited[nextKey] {
+			log.Printf("[remote] WARNING: GitHub pagination loop detected at %s (page already fetched) — stopping (F-15)", util.SanitizeURL(nextURL))
 			break
+		}
+		if lastPage > 0 && nextPage > 0 && nextPage <= lastPage {
+			log.Printf("[remote] WARNING: GitHub pagination page number did not advance (%d → %d) at %s — stopping (P3-9)", lastPage, nextPage, util.SanitizeURL(nextURL))
+			break
+		}
+		visited[nextKey] = true
+		if nextPage > 0 {
+			lastPage = nextPage
 		}
 		currentURL = nextURL
 	}
@@ -870,8 +1131,15 @@ func discoverJSON(ctx context.Context, r manifest.RemoteSource) ([]string, error
 	}
 	// Security (N-6): enforce HTTPS and block private/reserved IPs to
 	// prevent SSRF via malicious third-party manifest RemoteSource URLs.
+	//
+	// P1-4：修复前这里用 %q 把 r.URL **原样**拼进用户可见错误 —— userinfo 与
+	// ?token=SECRET 全部泄漏（会进 GUI 错误弹窗、CLI stderr，并可能被复制进
+	// issue/日志）。F-18 的 sanitizedReason 只作用于 doWithProxyFallback 返回的
+	// 网络错误，这两条主路径完全没有脱敏。现在统一走 util.SanitizeURL +
+	// sanitizedReason 二次脱敏（后者同时覆盖 url.Parse 错误文本里内嵌的原始 URL）。
 	if err := util.IsSafeExternalURL(r.URL); err != nil {
-		return nil, fmt.Errorf("json remote: unsafe URL %q: %w", r.URL, err)
+		return nil, fmt.Errorf("json remote: unsafe URL %q: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
@@ -881,7 +1149,8 @@ func discoverJSON(ctx context.Context, r manifest.RemoteSource) ([]string, error
 
 	resp, err := doWithProxyFallback(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("json remote: fetch %s: %w", r.URL, err)
+		return nil, fmt.Errorf("json remote: fetch %s: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 	defer resp.Body.Close()
 
@@ -891,8 +1160,10 @@ func discoverJSON(ctx context.Context, r manifest.RemoteSource) ([]string, error
 	}
 
 	// Decode into generic structure for path traversal.
+	// 票 16（P2-15）：限额读取 —— 超过 jsonBodyLimit 的响应在解码阶段即以
+	// unexpected EOF 报错，而不是先无界缓冲整个 body 再解析。
 	var root interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, jsonBodyLimit)).Decode(&root); err != nil {
 		return nil, fmt.Errorf("json remote: decode JSON: %w", err)
 	}
 
@@ -964,8 +1235,12 @@ func discoverHTML(ctx context.Context, r manifest.RemoteSource) ([]string, error
 	}
 	// Security (N-6): enforce HTTPS and block private/reserved IPs to
 	// prevent SSRF via malicious third-party manifest RemoteSource URLs.
+	//
+	// P1-4：同 discoverJSON —— `unsafe URL %q` 与 `fetch %s` 都不得原样回显
+	// 带凭据的 r.URL（userinfo / 查询串）。
 	if err := util.IsSafeExternalURL(r.URL); err != nil {
-		return nil, fmt.Errorf("html remote: unsafe URL %q: %w", r.URL, err)
+		return nil, fmt.Errorf("html remote: unsafe URL %q: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.URL, nil)
@@ -975,7 +1250,8 @@ func discoverHTML(ctx context.Context, r manifest.RemoteSource) ([]string, error
 
 	resp, err := doWithProxyFallback(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("html remote: fetch %s: %w", r.URL, err)
+		return nil, fmt.Errorf("html remote: fetch %s: %w",
+			util.SanitizeURL(r.URL), errors.New(sanitizedReason(err.Error())))
 	}
 	defer resp.Body.Close()
 
@@ -984,9 +1260,20 @@ func discoverHTML(ctx context.Context, r manifest.RemoteSource) ([]string, error
 		return nil, fmt.Errorf("html remote: returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB limit
+	// F-19：修复前是裸 io.ReadAll(io.LimitReader(resp.Body, 2<<20))——LimitReader
+	// 到限即返回 io.EOF，ReadAll 视为成功，页面被静默截断、落在截断点之后的
+	// 版本无声丢失。改用同包 readLimitedBody（GitHub 路径已在用）做显式检测：
+	// 读满上限即判定截断并报错，让用户看到可诊断的失败而不是「没有新版本」。
+	//
+	// 注意 readLimitedBody 对**空 body** 也报错：HTML 索引页为空同样是异常
+	// （没有可解析的版本来源），报错比静默返回空列表更有用。
+	body, err := readLimitedBody(resp.Body, htmlBodyLimit)
 	if err != nil {
-		return nil, fmt.Errorf("html remote: read body: %w", err)
+		if strings.Contains(err.Error(), "truncated") {
+			return nil, fmt.Errorf("html remote: %s exceeded the %d-byte limit for %s — the version list may be incomplete; raise the limit or use a more specific index page: %w",
+				sanitizedReason(err.Error()), htmlBodyLimit, util.SanitizeURL(r.URL), err)
+		}
+		return nil, fmt.Errorf("html remote: read body from %s: %w", util.SanitizeURL(r.URL), err)
 	}
 
 	re, err := regexp.Compile(r.Pattern)

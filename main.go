@@ -13,6 +13,7 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,12 +70,57 @@ func main() {
 
 	root := cli.NewRootCommand(toolName, toolDesc)
 
-	if err := root.Execute(); err != nil {
-		cli.ShutdownSniffScheduler()
-		fmt.Fprintln(os.Stderr, "error:", err)
+	execErr := root.Execute()
+	// 票 34（P1-30 / E-11）：等待条件必须在 Shutdown 之前判定——Shutdown
+	// 会把 sniff-cache 的 last_sniff_at 刷成 now，令 interval 策略的 TTL
+	// 判定失真（从「到期」翻成「新鲜」）。谓词语义见 cli.HasStartupSniff。
+	startupSniffPending := cli.HasStartupSniff()
+	// 第十一轮审计（Round 10 报告待办 6）：收尾刷盘失败必须**可见**（此前静默）。
+	//
+	// 刻意**不影响退出码**：票 33（P1-29 / E-10）确立的契约是「退出码原样反映子进程
+	// 真实退出码」，一次收尾缓存刷盘失败不该覆盖它 —— 那会让 CI 脚本把「工具跑成功
+	// 但缓存没刷上」误判成命令失败。因此只写 stderr 提示，退出码仍由下面的
+	// execErr / exitCodeForError 决定。
+	if shutdownErr := cli.ShutdownSniffScheduler(); shutdownErr != nil {
+		fmt.Fprintf(os.Stderr, "xdev: warning: %v\n", shutdownErr)
+	}
+
+	if execErr != nil {
+		// 票 33（P1-29 / E-10）：子进程退出码原样传播——isolate exec /
+		// shim 转发把子进程退出码包在 *shim.ExitCodeError 里，此前这里
+		// 无条件 os.Exit(1)，调用方（CI 脚本、"xdev isolate exec -- go test"）
+		// 永远看不到真实退出码。errors.As 兼容被 %w 包装的错误链，
+		// 与本文件上方 shim 分发路径（:52-59）的先例同构。
+		if code, ok := exitCodeForError(execErr); ok {
+			os.Exit(code)
+		}
+		fmt.Fprintln(os.Stderr, "error:", execErr)
 		os.Exit(1)
 	}
 
-	cli.ShutdownSniffScheduler()
-	time.Sleep(100 * time.Millisecond)
+	// 票 34（P1-30 / E-11）：固定 100ms 等待改为「本次（交互入口）确实
+	// 触发了后台嗅探」才等待——一次性子命令（list/install/config/...）
+	// 与 cd-hook 路径（hook/env）不再付出这 100ms。
+	if startupSniffPending {
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// exitCodeForError maps a command error to the process exit code that main
+// must use (票 33 / P1-29 / E-10).  *shim.ExitCodeError (isolate exec, shim
+// dispatch) carries the child process exit code and must be propagated
+// verbatim through a wrapped error chain; everything else is a generic
+// failure (exit 1, caller prints the error).  The bool reports whether the
+// error carried an explicit child exit code.
+func exitCodeForError(err error) (int, bool) {
+	var ece *shim.ExitCodeError
+	if !errors.As(err, &ece) {
+		return 1, false
+	}
+	code := ece.Code
+	if code == 0 {
+		// 矛盾输入（有错误却报 0）：退化为通用失败，绝不静默成功。
+		code = 1
+	}
+	return code, true
 }

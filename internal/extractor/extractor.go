@@ -71,6 +71,13 @@ const maxTotalExtractSize int64 = 10 << 30 // 10 GiB total across all files
 // strip is the number of leading path components to discard (used to
 // skip the top-level directory inside most upstream tarballs).
 func Extract(src, dst, format string, strip int) error {
+	// F-20: strip comes straight from the manifest and was previously
+	// unvalidated end to end. A negative value reached parts[strip:] and
+	// panicked with "slice bounds out of range [-1:]", crashing the whole
+	// install. Reject it here (defence in depth — stripPath also clamps).
+	if strip < 0 {
+		return fmt.Errorf("invalid strip value %d: must be >= 0", strip)
+	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -256,6 +263,22 @@ func extractZip(src, dst string, strip int) error {
 		if !ok {
 			continue
 		}
+		// Ticket 38 (P2-02): reject archive-relative absolute/UNC names at
+		// the rel level — isSafePath now tolerates an UNC destination, so
+		// this is where a "\\server\share" ENTRY is stopped.
+		if filepath.IsAbs(rel) || strings.HasPrefix(rel, `\\`) {
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("zip slip: entry %q has an absolute/UNC name", f.Name)
+		}
+		// P3-6: per-COMPONENT validation. Only checking the final component
+		// let `bin./evil.txt` silently fold into `bin/` (two distinct
+		// directories merged) and `sub/NUL/x.txt` fail later with an opaque
+		// OS error. The error names both the entry and the offending
+		// component so the archive can actually be fixed.
+		if bad := badComponent(rel); bad != "" {
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("zip slip: entry %q contains an invalid path component %q (Windows reserved name, or trailing dot/space that would fold it onto another name)", f.Name, bad)
+		}
 		out := filepath.Join(dst, rel)
 		if !isSafePath(dst, out) {
 			_ = os.RemoveAll(dst)
@@ -290,7 +313,10 @@ func unzipFile(f *zip.File, dst string) (int64, error) {
 		return 0, err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
+	// Ticket 26 (A-08): use Mode().Perm() — the raw Mode() carries the
+	// setuid/setgid/sticky and type bits, and passing them to OpenFile let a
+	// hostile archive drop a setuid-root binary into the install tree.
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode().Perm())
 	if err != nil {
 		return 0, err
 	}
@@ -368,6 +394,8 @@ func extract7z(src, dst string) error {
 
 			// Now extract — all paths have been pre-validated
 			c := exec.Command(cmd, "x", src, "-o"+dst, "-y")
+			// Ticket 38 (P2-26): hide the console window (no-op off Windows).
+			util.HideWindow(c)
 			c.Stdout = os.Stderr
 			c.Stderr = os.Stderr
 			if err := c.Run(); err != nil {
@@ -393,6 +421,8 @@ func validate7zArchive(cmd, src, dst string) error {
 	// Use "7z l -slt" to list archive contents in a machine-readable format.
 	// Each entry is separated by blank lines, with "Path = <value>" lines.
 	c := exec.Command(cmd, "l", "-slt", src)
+	// Ticket 38 (P2-26): hide the console window (no-op off Windows).
+	util.HideWindow(c)
 	output, err := c.Output()
 	if err != nil {
 		return fmt.Errorf("list archive contents: %w", err)
@@ -476,6 +506,8 @@ func validateExtraction(dst string) error {
 func extractViaCommand(cmdName string, args []string, src, dst string, strip int) error {
 	cmdArgs := append(args, src)
 	cmd := exec.Command(cmdName, cmdArgs...)
+	// Ticket 38 (P2-26): hide the console window (no-op off Windows).
+	util.HideWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("%s pipe: %w", cmdName, err)
@@ -513,6 +545,17 @@ func extractTarFromReader(r io.Reader, dst string, strip int) error {
 		rel, ok := stripPath(hdr.Name, strip)
 		if !ok {
 			continue
+		}
+		// Ticket 38 (P2-02): same rel-level absolute/UNC rejection as the zip
+		// path (see extractZip).
+		if filepath.IsAbs(rel) || strings.HasPrefix(rel, `\\`) {
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("tar slip: entry %q has an absolute/UNC name", hdr.Name)
+		}
+		// P3-6: per-COMPONENT validation — see extractZip for the rationale.
+		if bad := badComponent(rel); bad != "" {
+			_ = os.RemoveAll(dst)
+			return fmt.Errorf("tar slip: entry %q contains an invalid path component %q (Windows reserved name, or trailing dot/space that would fold it onto another name)", hdr.Name, bad)
 		}
 		out := filepath.Join(dst, rel)
 		if !isSafePath(dst, out) {
@@ -573,6 +616,43 @@ func extractTarFromReader(r io.Reader, dst string, strip int) error {
 			if err := os.Symlink(linkTarget, out); err != nil {
 				return err
 			}
+		case tar.TypeLink:
+			// Ticket 38 (P2-01): hard links had NO case here, so they were
+			// silently dropped — archives that deduplicate files with links
+			// (common in Go/Python distributions) came out incomplete.
+			//
+			// hdr.Linkname is an ARCHIVE path (relative to the archive root)
+			// and must be stripped exactly like hdr.Name — NOT resolved
+			// against the entry's directory the way a symlink target is
+			// (that is the POSIX distinction between the two types).
+			linkRel, linkOK := stripPath(hdr.Linkname, strip)
+			if !linkOK {
+				log.Printf("[extractor] WARNING: hard link %q target %q lies outside the stripped prefix — skipping", hdr.Name, hdr.Linkname)
+				continue
+			}
+			linkTargetPath := filepath.Join(dst, linkRel)
+			if !isSafePath(dst, linkTargetPath) {
+				return fmt.Errorf("tar slip: hard link %q target %q escapes destination %q", hdr.Name, hdr.Linkname, dst)
+			}
+			// tar writes members in order, so the target normally exists
+			// already; a missing target is skipped with a warning rather
+			// than failing the whole extraction.
+			if _, statErr := os.Stat(util.ToLongPath(linkTargetPath)); statErr != nil {
+				log.Printf("[extractor] WARNING: hard link %q target %q not present — skipping link", hdr.Name, linkRel)
+				continue
+			}
+			if err := os.MkdirAll(util.ToLongPath(filepath.Dir(out)), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(util.ToLongPath(out))
+			if linkErr := os.Link(util.ToLongPath(linkTargetPath), util.ToLongPath(out)); linkErr != nil {
+				// Cross-device links, filesystems without link support or
+				// Windows ACLs can all refuse — copy instead of losing data.
+				log.Printf("[extractor] WARNING: hard link %q -> %q failed (%v) — copying instead", hdr.Name, linkRel, linkErr)
+				if copyErr := util.CopyFile(util.ToLongPath(linkTargetPath), util.ToLongPath(out)); copyErr != nil {
+					return fmt.Errorf("hard link %q: link failed (%v) and copy fallback failed: %w", hdr.Name, linkErr, copyErr)
+				}
+			}
 		}
 	}
 	return nil
@@ -626,6 +706,96 @@ func checkNoSymlinkAncestor(dst, out string) error {
 	return nil
 }
 
+// windowsReservedDeviceNames lists the Windows reserved device names that
+// cannot be used as a path component. Kept in one place because both the
+// per-component validation (badComponent) and the destination check use it.
+//
+// **只匹配完整分量，不剥离扩展名** —— 本机实测（Windows 10，Go os.WriteFile +
+// PowerShell [System.IO.File]）：
+//
+//	分量        写文件        读回        目录项
+//	CON        OK            "X"        CON      ← 普通文件，可正常读写
+//	NUL        OK            ""         （无）    ← 写进空设备，数据丢失
+//	con.txt    OK            "X"        con.txt  ← 普通文件
+//	nul.txt    OK            "X"        nul.txt  ← 普通文件
+//	con.txt.bak OK           "X"        con.txt.bak
+//	NUL（目录） OK            —          （无）    ← 目录被静默丢弃
+//
+// 即：**只有完整分量恰好等于保留名时才有害**；带扩展名的 `con.txt` / `nul.txt`
+// 是**合法且真实存在**的文件（与 Win32 文档「CON.txt 是保留名」的说法在 Go 的
+// 调用路径下不符 —— 以本机实测为准）。因此旧实现里「剥掉第一个 `.` 之前的部分
+// 再比对」是**误报源**，会把 `con.txt.bak`、`real.txt/con.txt` 这类正常条目
+// 判成非法并连带 `RemoveAll(dst)` 删掉整个目标目录。
+var windowsReservedDeviceNames = []string{"CON", "PRN", "AUX", "NUL",
+	"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+	"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"}
+
+// isWindowsReservedDeviceName 报告 comp 是否是 Windows 保留设备名。
+// 大小写不敏感，且**必须整体相等**（`con.txt` 不是保留名 —— 见上表）。
+func isWindowsReservedDeviceName(comp string) bool {
+	upper := strings.ToUpper(comp)
+	for _, reserved := range windowsReservedDeviceNames {
+		if upper == reserved {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTrailingDotOrSpace 报告 comp 是否以点或空格结尾（Windows 会静默剥离，
+// 使两个不同名字折叠成同一个 —— 实测 `bin.` 与 `bin` 折叠为一个目录项）。
+//
+// 注意：`..` / `.` 是相对引用而非"名字"，由调用方先行跳过。
+func hasTrailingDotOrSpace(comp string) bool {
+	return strings.TrimRight(comp, ". ") != comp
+}
+
+// badComponent validates EVERY path component (not just the final one) and
+// returns the first component that Windows would mangle, or "" when the path
+// is clean.
+//
+// 第十轮审计 P3-6（P3）：旧实现只校验 `filepath.Base(absOut)`（最终分量），
+// 于是**中间**分量的 Windows 折叠语义完全没被检查：
+//
+//   - 条目 `bin./evil.txt` + `bin/legit.txt`：`bin.` 在 Windows 上去掉尾点
+//     就是 `bin`，两个本应不同的目录被静默折叠成一个，evil.txt 落进 bin/；
+//   - 条目 `sub/NUL/x.txt`：写到 `sub` 之后才抛出晦涩的 OS 错误
+//     （"The system cannot find the path specified"），无法定位到条目。
+//
+// 这两条规则（尾随点/空格折叠、保留设备名）都是 **Windows 文件系统语义**，
+// 因此与 isSafePath 中既有的同名检查一致，在非 Windows 上直接放行 ——
+// Unix 上 `bin.` / `NUL` 是合法且互不冲突的名字，不该拒绝合法归档。
+//
+// 返回具体分量而不是 bool，是为了让调用方能给出**可操作**的错误
+// （含条目名 + 非法分量）。
+func badComponent(p string) string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	// 归档条目用 "/" 分隔，但 isSafePath 收到的是 filepath.Join 之后的本机
+	// 路径（Windows 上是 "\"）；两种分隔符都拆。
+	norm := strings.ReplaceAll(p, `\`, "/")
+	for _, comp := range strings.Split(norm, "/") {
+		// 空分量（绝对路径/重复分隔符）与相对引用（"." / ".."）不是"名字"，
+		// 逃逸判定由 rel 层判据单独负责。
+		if comp == "" || comp == "." || comp == ".." {
+			continue
+		}
+		// 1) Windows 保留设备名：**整体相等**才算（`con.txt` 是合法真实文件，
+		//    见 windowsReservedDeviceNames 的实测表）。
+		if isWindowsReservedDeviceName(comp) {
+			return comp
+		}
+		// 2) 尾随点/空格：Windows 静默剥离，使两个不同名字折叠成同一个
+		//    （实测 `bin.` 与 `bin` 折叠为一个目录项）。全点/全空格分量
+		//    （"..."）同样折叠为空名，一并拒绝。
+		if hasTrailingDotOrSpace(comp) {
+			return comp
+		}
+	}
+	return ""
+}
+
 // isSafePath checks that the resolved output path stays within the
 // destination directory.  This prevents Zip Slip / Tar Slip attacks
 // where a malicious archive contains paths like "../../etc/passwd".
@@ -639,10 +809,21 @@ func isSafePath(dst, out string) bool {
 	if err != nil {
 		return false
 	}
+	// rel is needed both by the Windows component checks and by the
+	// escape check below; compute it once.
+	rel, relErr := filepath.Rel(absDst, absOut)
+	// P3-6：分量校验必须用**原始** out 计算的 rel，不能用 absOut 的 ——
+	// filepath.Abs 走 GetFullPathName，**已经**把 `bin.` 折叠成 `bin`
+	// （本机实测：`Rel(abs)` = "bin\evil.txt"，证据在检查前就被销毁）。
+	rawRel, rawErr := filepath.Rel(filepath.Clean(dst), filepath.Clean(out))
 	// Security (M-8): Reject Windows special paths
 	if runtime.GOOS == "windows" {
-		// Reject UNC paths (\\?\, \\.\, \\server\share)
-		if strings.HasPrefix(absOut, `\\`) {
+		// Reject UNC paths (\\?\, \\.\, \\server\share) — but only when the
+		// DESTINATION is not itself UNC: with an UNC install root every
+		// entry would otherwise be rejected as "zip slip" (ticket 38 /
+		// P2-02). Archive-relative names starting with \\ are still blocked
+		// by the rel-level check in the extractors.
+		if strings.HasPrefix(absOut, `\\`) && !strings.HasPrefix(absDst, `\\`) {
 			return false
 		}
 		// Reject cross-volume paths
@@ -654,30 +835,27 @@ func isSafePath(dst, out string) bool {
 		if volLen > 0 && strings.Contains(absOut[volLen:], ":") {
 			return false
 		}
-		// Reject Windows reserved device names
-		base := filepath.Base(absOut)
-		upperBase := strings.ToUpper(base)
-		if dotIdx := strings.Index(upperBase, "."); dotIdx > 0 {
-			upperBase = upperBase[:dotIdx]
-		}
-		for _, reserved := range []string{"CON", "PRN", "AUX", "NUL",
-			"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-			"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"} {
-			if upperBase == reserved {
-				return false
-			}
-		}
-		// Reject trailing dots or spaces
-		trimmed := strings.TrimRight(base, ". ")
-		if trimmed != base && trimmed != "" {
+		// Reject Windows reserved device names and trailing dots/spaces in
+		// ANY component — not just the final one (P3-6). Checking only
+		// filepath.Base let `bin./evil.txt` silently fold into `bin/` and
+		// `sub/NUL/x.txt` fail later with an opaque OS error.
+		//
+		// 必须用 rawRel（见上）：absOut 里的 `bin.` 已被 filepath.Abs 折叠掉。
+		if rawErr == nil && badComponent(rawRel) != "" {
 			return false
 		}
 	}
 	// Also check via filepath.Rel that the path does not escape.
 	// This catches cases where Clean resolves .. but the relative
 	// path still escapes (e.g. on case-insensitive filesystems).
-	if rel, err := filepath.Rel(absDst, absOut); err == nil {
-		if strings.HasPrefix(rel, "..") {
+	//
+	// P3-5: the test must be "the path IS the parent" or "starts with
+	// <parent><separator>". A bare strings.HasPrefix(rel, "..") also matched
+	// LEGAL names that merely start with two dots (..foo.txt, ..cache/x.txt),
+	// so a legitimate archive entry was rejected as zip-slip and the
+	// extractors then removed the ENTIRE destination directory.
+	if relErr == nil {
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return false
 		}
 	}
@@ -708,6 +886,11 @@ func getNlink(info os.FileInfo) uint64 {
 // stripping, otherwise ("", false) meaning the entry should be
 // skipped.
 func stripPath(p string, strip int) (string, bool) {
+	// F-20: clamp a negative strip. The value is manifest-controlled; the
+	// pre-fix code only guarded the upper bound, so parts[-1:] panicked.
+	if strip < 0 {
+		strip = 0
+	}
 	p = filepath.Clean(p)
 	if p == "." || p == "/" {
 		return "", false

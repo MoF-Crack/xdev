@@ -10,7 +10,6 @@ import (
 
 	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/manifest"
-	"github.com/xmdemt/xdev/internal/util"
 )
 
 func newRefreshCmd() *cobra.Command {
@@ -86,16 +85,37 @@ func refreshOne(cmd *cobra.Command, toolName string) error {
 		return nil
 	}
 
-	// Update the latest field if a newer version was found.
-	if len(versions) > 0 {
-		t2.Latest = versions[0]
-		// Write updated manifest (only Latest field change).
+	// Update the latest field **only when it advances**.
+	//
+	// F-29（P1）：修复前是无条件 `t2.Latest = versions[0]`，而
+	// t2.Versions() 返回的是 manifest.VersionList 的**磁盘顺序**
+	// （LoadToolManifests 只按文件名排序工具、不按版本新旧排序，
+	// 见 internal/manifest/index.go:91）——磁盘上版本列表若不是降序
+	// （手工编辑、合并遗留、外部工具写入），这一行就会把 latest
+	// **静默降级**成列表里的第一个（往往是旧版本），进而让
+	// `xdev install <tool>`（默认版本 = latest）装回旧版本。
+	//
+	// 现在：newestVersion 走 manifest.SortVersionsByRelease 的**全序**
+	// （semver 主键 → 发布日期次键 → 原串末键，票 27 的实现）。
+	//
+	// 第八轮审计 R8-2：写回门**必须复用同一个全序**。旧实现用
+	// `util.CompareSemver(candidate, current) > 0` 做门，与 newestVersion 是两套
+	// 排序：数字段相同、发布日期不同时（真实语料 clion/goland/webstorm 的
+	// `2026.2` vs `2026.2.0.1`），全序判「更新」而 CompareSemver 判「相等」，
+	// latest **永远推不上去**且无任何提示。现在两者都用
+	// manifest.VersionReleaseNewer，从根上消除分裂。
+	if candidate := newestVersion(t2.VersionList); shouldUpdateLatest(t2.VersionList, candidate, t2.Latest) {
+		previous := t2.Latest
+		t2.Latest = candidate
+		// 第七轮审计 F-29：写回必须走**文本级外科写**，不能整文件 MarshalTool 重排
+		// ——后者会抹掉用户手写 manifest 里的全部注释（与票 17 已确立的
+		// 「文本级外科写」原则冲突，见 UpdateArchiveSHA256InFile 的整段论证）。
 		manifestDir := cfg.Core.ManifestDir
 		outPath := filepath.Join(manifestDir, toolName+".yaml")
-		if data, err := manifest.MarshalTool(t2); err == nil {
-			if err := util.AtomicWriteFile(outPath, data, 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠ warning: failed to update Latest field: %v\n", err)
-			}
+		if changed, err := manifest.UpdateLatestInFile(outPath, candidate); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠ warning: failed to update Latest field: %v\n", err)
+		} else if changed {
+			fmt.Printf("  latest: %s -> %s\n", previous, candidate)
 		}
 	}
 
@@ -110,6 +130,59 @@ func refreshOne(cmd *cobra.Command, toolName string) error {
 		fmt.Printf("  ... and %d more\n", len(versions)-10)
 	}
 	return nil
+}
+
+// newestVersion 返回 versions 里「最新」的那个版本串（空列表返回 ""）。
+//
+// F-29（P1）：判据是 manifest.SortVersionsByRelease 的**全序**（票 27：
+// semver 主键 → 发布日期次键 → 原串末键），而不是磁盘顺序——旧 refresh 用
+// `versions[0]` 取最高版本，在磁盘列表非降序时会把 latest 静默降级。
+//
+// 在副本上排序，不改动调用方的切片（refresh 随后还要用它打印预览）。
+func newestVersion(versions []manifest.Version) string {
+	if len(versions) == 0 {
+		return ""
+	}
+	sorted := make([]manifest.Version, len(versions))
+	copy(sorted, versions)
+	manifest.SortVersionsByRelease(sorted)
+	return sorted[0].Version
+}
+
+// shouldUpdateLatest 报告 candidate 是否应当**替换**当前的 latest 值。
+//
+// F-29（P1）：只在严格更高时才写回。两个作用：
+//  1. 杜绝静默降级（候选低于现值时保持现值）；
+//  2. 候选与现值相同时也不写回——顺便保住 manifest 的注释：
+//     写回走的是文本级外科写，少写一次就少一次无谓的文件改动。
+//
+// 第八轮审计 R8-2：比较必须用 `manifest.VersionReleaseNewer` —— 与
+// `newestVersion` 挑选候选时**完全相同**的全序（semver → 发布日期 → 原串）。
+// 旧实现用 `util.CompareSemver`（只比三段数字，忽略日期次键），造成两套排序分裂：
+// `2026.2` vs `2026.2.0.1` 这类「数字段相同、发布日期不同」的升级会被永久挡掉
+// （真实语料 clion/goland/webstorm 命中）。
+func shouldUpdateLatest(versions []manifest.Version, candidate, current string) bool {
+	if candidate == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	if candidate == current {
+		return false
+	}
+	return manifest.VersionReleaseNewer(releaseOf(versions, candidate), releaseOf(versions, current))
+}
+
+// releaseOf 按版本串查出对应条目（含 Release 日期）；查不到时返回只带 Version 的
+// 条目（该侧视为「无日期」，与全序里缺日期的语义一致）。
+func releaseOf(versions []manifest.Version, v string) manifest.Version {
+	for _, item := range versions {
+		if item.Version == v {
+			return item
+		}
+	}
+	return manifest.Version{Version: v}
 }
 
 func refreshAll(cmd *cobra.Command) error {

@@ -3,7 +3,7 @@ const defaultApp = {
   GetLastSelection: async () => ({}),
   IsInitialized: async () => false,
   ListCustomTools: async () => [],
-  PreviewCustomToolVersions: async () => ['v1.0.0'],
+  PreviewCustomToolVersions: async () => ({ success: true, message: '', versions: ['v1.0.0'] }),
   AddCustomTool: async () => ({ success: true, message: 'added', versions: ['v1.0.0'] }),
   RemoveCustomTool: async () => {},
 };
@@ -22,19 +22,50 @@ export function installWailsMocks(appOverrides = {}, runtimeOverrides = {}) {
   };
   // Spec 037: parallel sessions register multiple listeners per event —
   // defaultRuntime's single-slot EventsOn would drop all but the last.
+  //
+  // Ticket 12 (audit-fixes / G-01): the mock also counts live/total
+  // subscriptions so specs can assert that batch sessions unsubscribe
+  // (the leak guard B-1). window.runtime.__subscriptions() returns the
+  // counters; EventsOff and the returned unsubscribe function both
+  // decrement the live count.
   const unitListeners = {};
+  let activeSubscriptions = 0;
+  let totalSubscriptions = 0;
   window.runtime = {
     ...defaultRuntime,
-    EventsOn: (name, callback) => { (unitListeners[name] ||= new Set()).add(callback); return () => unitListeners[name]?.delete(callback); },
-    EventsOff: (name) => { delete unitListeners[name]; },
+    EventsOn: (name, callback) => {
+      (unitListeners[name] ||= new Set()).add(callback);
+      activeSubscriptions++;
+      totalSubscriptions++;
+      return () => {
+        if (unitListeners[name]?.delete(callback)) activeSubscriptions--;
+      };
+    },
+    EventsOff: (name) => {
+      const set = unitListeners[name];
+      if (set) {
+        activeSubscriptions -= set.size;
+        delete unitListeners[name];
+      }
+    },
+    __subscriptions: () => ({ active: activeSubscriptions, total: totalSubscriptions }),
+    // R8-01: per-event-name live listener counts, so specs can assert *which*
+    // events are registered without guessing from the aggregate counter.
+    __subscriptionNames: () => Object.fromEntries(
+      Object.entries(unitListeners).map(([name, set]) => [name, set.size]),
+    ),
     ...runtimeOverrides,
   };
+  // Emit helper for specs: deliver an event to every live listener of the
+  // name (mirrors the real Wails runtime fan-out).
+  window.__wailsEmit = (name, data) => unitListeners[name]?.forEach((fn) => fn(data));
   return { app: window.go.gui.App, runtime: window.runtime };
 }
 
 export function cleanupWailsMocks() {
   delete window.go;
   delete window.runtime;
+  delete window.__wailsEmit;
 }
 
 export function createWailsBrowserMocks() {
@@ -167,7 +198,8 @@ export function createInitializedWailsBrowserMocks() {
     DestroyRemoteInstance: async (...args) => { window.__wailsCalls.DestroyRemoteInstance.push(args); },
     GetAboutInfo: async () => ({ appName: 'XDev', version: '1.0.0', buildDate: 'today', goVersion: '1.24', wailsVersion: '2.9', platform: 'windows', arch: 'amd64', repoURL: 'https://example.test/repo', license: 'MIT' }),
     ListCustomTools: async () => [],
-    PreviewCustomToolVersions: async (...args) => { window.__wailsCalls.PreviewCustomToolVersions.push(args); return ['v1.0.0', 'v2.0.0']; },
+    // F-2：Go 契约已改为 {success, message, versions}（失败可携带原因直达 UI）。
+    PreviewCustomToolVersions: async (...args) => { window.__wailsCalls.PreviewCustomToolVersions.push(args); return { success: true, message: '', versions: ['v1.0.0', 'v2.0.0'] }; },
     AddCustomTool: async (...args) => { window.__wailsCalls.AddCustomTool.push(args); return { success: true, message: 'added', versions: ['v1.0.0'] }; },
     RemoveCustomTool: async (...args) => { window.__wailsCalls.RemoveCustomTool.push(args); },
     CheckToolDependencies: async (name) => (name === 'node' ? [{ tool: 'npm', requiredVersion: '>=9.0.0', currentVersion: '10.9.0', satisfied: true, reason: '', installPath: '' }] : []),

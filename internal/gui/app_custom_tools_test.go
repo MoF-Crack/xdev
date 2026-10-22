@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -311,7 +311,11 @@ func TestPreviewCustomToolVersions_HTML(t *testing.T) {
 	}))
 	defer server.Close()
 
-	versions := app.PreviewCustomToolVersions(server.URL, "html", `(\d+\.\d+\.\d+)`)
+	result := app.PreviewCustomToolVersions(server.URL, "html", `(\d+\.\d+\.\d+)`)
+	if !result.Success {
+		t.Fatalf("PreviewCustomToolVersions failed: %s", result.Message)
+	}
+	versions := result.Versions
 	if len(versions) == 0 {
 		t.Fatal("expected versions from PreviewCustomToolVersions")
 	}
@@ -327,14 +331,18 @@ func TestPreviewCustomToolVersions_HTML(t *testing.T) {
 	}
 }
 
-// TestPreviewCustomToolVersions_EmptySource verifies nil return for empty URL.
+// TestPreviewCustomToolVersions_EmptySource verifies a failure result for
+// an empty URL (F-2: failures must be observable, not silent empty lists).
 func TestPreviewCustomToolVersions_EmptySource(t *testing.T) {
 	tmpDir := t.TempDir()
 	app := newTestAppWithDirs(t, tmpDir)
 
-	versions := app.PreviewCustomToolVersions("", "html", `(\d+\.\d+)`)
-	if versions != nil {
-		t.Errorf("expected nil for empty URL, got %v", versions)
+	result := app.PreviewCustomToolVersions("", "html", `(\d+\.\d+)`)
+	if result == nil || result.Success || result.Versions != nil {
+		t.Errorf("expected failure result for empty URL, got %+v", result)
+	}
+	if result != nil && result.Message == "" {
+		t.Error("failure result must carry a reason in Message")
 	}
 }
 

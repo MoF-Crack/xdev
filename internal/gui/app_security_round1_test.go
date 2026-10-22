@@ -15,16 +15,21 @@ func TestPreviewCustomToolVersions_RejectsUnsafeURL(t *testing.T) {
 		"gopher://internal",
 		"ftp://example.com/list",
 	} {
-		if got := app.PreviewCustomToolVersions(raw, "html", `(\d+\.\d+)`); got != nil {
-			t.Errorf("PreviewCustomToolVersions(%q) = %v, want nil", raw, got)
+		got := app.PreviewCustomToolVersions(raw, "html", `(\d+\.\d+)`)
+		if got == nil || got.Success || got.Versions != nil {
+			t.Errorf("PreviewCustomToolVersions(%q) = %+v, want failure result", raw, got)
+		}
+		if got != nil && got.Message == "" {
+			t.Errorf("unsafe URL rejection must carry a reason, got empty Message for %q", raw)
 		}
 	}
 }
 
 func TestPreviewCustomToolVersions_RejectsGitHubURLForm(t *testing.T) {
 	app := newTestAppWithDirs(t, t.TempDir())
-	if got := app.PreviewCustomToolVersions("https://evil.example/x", "github", ""); got != nil {
-		t.Errorf("github preview with full URL should be rejected, got %v", got)
+	got := app.PreviewCustomToolVersions("https://evil.example/x", "github", "")
+	if got == nil || got.Success || got.Versions != nil {
+		t.Errorf("github preview with full URL should be rejected, got %+v", got)
 	}
 }
 

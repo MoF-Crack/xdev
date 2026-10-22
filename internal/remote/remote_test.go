@@ -142,7 +142,8 @@ func TestCachePutAndGet(t *testing.T) {
 	body := []byte(`[{"tag_name":"v1.0.0"}]`)
 	etag := `"abc123"`
 
-	cachePut(key, body, etag)
+	// P2-08: the 4th argument is the cached next-page cursor ("" = last page).
+	cachePut(key, body, etag, "")
 
 	entry, ok := cacheGet(key)
 	if !ok {
@@ -654,6 +655,7 @@ func TestDiscoverVersions_GitHub_PaginationCrossHostRejected(t *testing.T) {
 		t.Fatalf("expected exactly 1 version (page 2 must not be fetched), got %d: %v", len(versions), versions)
 	}
 }
+
 // ---------------------------------------------------------------------------
 // DiscoverVersions — GitHub with rate limit exhausted
 // ---------------------------------------------------------------------------
@@ -948,8 +950,8 @@ func TestDiscoverVersions_GitHub_FloorEarlyStop(t *testing.T) {
 		if idx+1 < len(pages) {
 			page := idx + 2
 			// Real GitHub Link headers stay on api.github.com (the
-		// redirectTransport maps that host to this test server).
-		w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, page))
+			// redirectTransport maps that host to this test server).
+			w.Header().Set("Link", fmt.Sprintf(`<https://api.github.com/repos/x/y/releases?page=%d&per_page=100>; rel="next"`, page))
 		}
 		body, _ := json.Marshal(pages[idx])
 		w.Write(body)
@@ -1012,8 +1014,8 @@ func TestDiscoverVersions_GitHub_NoFloorPaginatesAll(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if idx == 0 {
 			// Real GitHub Link headers stay on api.github.com (the
-		// redirectTransport maps that host to this test server).
-		w.Header().Set("Link", `<https://api.github.com/repos/x/y/releases?page=2>; rel="next"`)
+			// redirectTransport maps that host to this test server).
+			w.Header().Set("Link", `<https://api.github.com/repos/x/y/releases?page=2>; rel="next"`)
 		}
 		body, _ := json.Marshal(pages[idx])
 		w.Write(body)
@@ -1946,6 +1948,63 @@ func TestDiscoverVersions_NPM_EmptyPackage(t *testing.T) {
 	_, err := DiscoverVersions(context.Background(), manifest.RemoteSource{Type: "npm"})
 	if err == nil || !strings.Contains(err.Error(), "package is required") {
 		t.Fatalf("want package-required error, got %v", err)
+	}
+}
+
+// Spec 039（dsh 预发布版本流）：dist-tags.latest 本身是 rc；pattern 接受
+// rc/alpha 预发布（否则零版本可发现）；降序排序含预发布语义
+// （0.1.2-rc.1 > 0.1.2-alpha.5 > 0.1.1-rc.2），latest 置顶。
+func TestDiscoverVersions_NPM_PrereleasePatternAndOrder(t *testing.T) {
+	registry := map[string]interface{}{
+		"name": "@deepseek-ai/dsh",
+		"dist-tags": map[string]string{
+			"latest": "0.1.2-rc.1",
+			"alpha":  "0.1.5-alpha.1",
+			"next":   "0.1.2-rc.1",
+		},
+		"versions": map[string]interface{}{
+			"0.1.0-rc.7":    map[string]interface{}{"version": "0.1.0-rc.7"},
+			"0.1.1-rc.2":    map[string]interface{}{"version": "0.1.1-rc.2"},
+			"0.1.2-alpha.5": map[string]interface{}{"version": "0.1.2-alpha.5"},
+			"0.1.2-rc.1":    map[string]interface{}{"version": "0.1.2-rc.1"},
+			"0.1.5-alpha.1": map[string]interface{}{"version": "0.1.5-alpha.1"},
+			"0.1.3-alpha.2": map[string]interface{}{"version": "0.1.3-alpha.2"},
+		},
+	}
+	body, _ := json.Marshal(registry)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	httpClient = npmTestClient(server.URL)
+	defer func() { httpClient = origClient }()
+
+	// dsh.yaml 的 pattern：接受稳定版 + alpha/beta/rc 预发布。
+	versions, err := DiscoverVersions(context.Background(), manifest.RemoteSource{
+		Type:    "npm",
+		Package: "@deepseek-ai/dsh",
+		Pattern: `^(\d+\.\d+\.\d+)(-(alpha|beta|rc)\.\d+)?$`,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverVersions npm prerelease: %v", err)
+	}
+	want := []string{
+		"0.1.2-rc.1",    // dist-tags.latest 置顶（versions 中的同名键去重）
+		"0.1.5-alpha.1", // 0.1.5 > 0.1.3 > 0.1.2
+		"0.1.3-alpha.2",
+		"0.1.2-alpha.5", // 同核心：rc（已置顶）> alpha
+		"0.1.1-rc.2",
+		"0.1.0-rc.7",
+	}
+	if len(versions) != len(want) {
+		t.Fatalf("got %d versions %v, want %d", len(versions), versions, len(want))
+	}
+	for i, v := range want {
+		if versions[i] != v {
+			t.Errorf("versions[%d] = %q, want %q (full: %v)", i, versions[i], v, versions)
+		}
 	}
 }
 

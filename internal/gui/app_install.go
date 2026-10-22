@@ -102,10 +102,15 @@ func (a *App) install(spec InstallSpec) error {
 
 // installWithOptions is the shared install implementation.
 //
-// confirmed skips the unverified-version confirmation dialog; force
-// removes any existing install directory (complete or incomplete) before
-// downloading. formFilter, when non-empty, selects a form-specific
-// archive and does not silently fall back to a different form.
+// confirmed skips the unverified-version confirmation dialog. force records a
+// repair/force intent: the existing install directory (complete or incomplete)
+// is removed **only after the archive has been downloaded and its SHA-256
+// verified** — never before. That ordering mirrors internal/installer's A-07
+// fix (ticket 26) and is guarded here by F-05 (Round 7): the old
+// "remove first, then fetch" behaviour destroyed a working install whenever
+// the subsequent download failed (offline / 404 / mirror outage / user cancel).
+// formFilter, when non-empty, selects a form-specific archive and does not
+// silently fall back to a different form.
 func (a *App) installWithOptions(toolName, version string, confirmed, force bool, formFilter string) error {
 	p, err := a.mustGetPlugin(toolName)
 	if err != nil {
@@ -153,8 +158,11 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 	if formFilter != "" {
 		// 形态筛选路径：必须命中 Form==filter 或 Form=="" 的 archive。
 		// 找不到时直接报错，禁止静默回退到另一种形态的默认包。
-		if g, ok := p.(*plugin.Generic); ok && g.M != nil {
-			if v, found := g.M.FindVersion(ver); found {
+		// Ticket 24: read the manifest through the plugin accessor
+		// (g.Manifest() takes the Generic RWMutex) instead of touching the
+		// M field directly.
+		if g, ok := p.(*plugin.Generic); ok && g.Manifest() != nil {
+			if v, found := g.Manifest().FindVersion(ver); found {
 				if a2, ok2 := v.ArchiveForCurrentWithForm(plugin.HostOS(), plugin.HostArch(), formFilter); ok2 {
 					arch = a2
 				}
@@ -170,7 +178,21 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		}
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	installPath, err := p.InstallDir(cfg.Core.InstallDir, ver)
+	if err != nil {
+		return err
+	}
+
+	// 第七轮审计 F-05（P1）：force/repair 重装**不得在下载之前删除**已有安装。
+	// CLI 侧（票 26 / A-07，internal/installer/installer.go）已把该顺序反转为
+	// 「先下载 + 校验哈希，成功后才 RemoveAll」，并有守卫
+	// TestForceInstall_DownloadFailKeepsOld。GUI 走的是自己另写的一套编排
+	// （BuildDownloadOptions → StartDownload → ExtractAndActivate），没有复用
+	// InstallWithProgress，因此**完全没有继承** A-07 的语义：旧代码在这里就
+	// os.RemoveAll(installPath)，一旦随后下载失败（离线 / 404 / 镜像全挂 /
+	// 哈希不符 / 用户取消），原本完好可用的安装就被摧毁，current/<tool> 变悬空。
+	// 现在只记录意图，真正的删除推迟到下载成功之后（见下方 StatusCompleted 分支）。
+	forceReinstall := false
 
 	// Already-installed fast path + incomplete-install handling.
 	if fi, err := os.Stat(installPath); err == nil && fi.IsDir() {
@@ -182,13 +204,19 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 				logWarn("[install] activation of existing install failed: %v", err)
 				return fmt.Errorf("activation failed for existing install: %w", err)
 			}
-			wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-				TaskID:  taskID,
-				Tool:    toolName,
-				Version: version,
-				Phase:   "Completed",
-				Percent: 100,
-			})
+			// Ticket 29/30 follow-up: guard the emit with a nil-ctx check —
+			// Wails' getEvents log.Fatalf's on a nil context, which in tests
+			// (no Wails runtime) killed the whole process silently (exit 1,
+			// no FAIL line). app.go already guards its own emits this way.
+			if a.ctx != nil {
+				wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
+					TaskID:  taskID,
+					Tool:    toolName,
+					Version: version,
+					Phase:   "Completed",
+					Percent: 100,
+				})
+			}
 			a.invalidateDashboardCache()
 			a.refreshAndSaveLocalCache()
 			return nil
@@ -206,12 +234,17 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 				Missing: integrity.Missing,
 			}
 		}
-		// User confirmed repair (or force was requested): remove the
-		// existing directory and reinstall from scratch.
-		logInfo("[install] removing existing %s install dir %s for reinstall", toolName, installPath)
-		if err := os.RemoveAll(installPath); err != nil {
-			return fmt.Errorf("failed to remove existing install dir: %w", err)
-		}
+		// User confirmed repair (or force was requested): record the intent.
+		// The actual removal now happens only after the download succeeded and
+		// its SHA-256 was verified (F-05), mirroring installer's A-07 fix.
+		forceReinstall = true
+	}
+
+	// Spec 039: npm-kind installs never go through the download manager —
+	// npm resolves and fetches the dependency tree itself (registry integrity
+	// verified by npm). Event contract matches the download pipeline.
+	if installer.ResolveKind(arch) == manifest.InstallKindNPM {
+		return a.installNPMPackage(taskID, p, arch, ver, installPath)
 	}
 
 	// Proxy warning: if the archive explicitly requires a proxy but none
@@ -221,8 +254,23 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		logWarn("[install] WARNING: %s@%s requires a proxy but none is configured", toolName, ver)
 	}
 
-	// 构造下载选项 — use shared installer.BuildDownloadOptions
-	url, fallbackURLs, dest, urlShaMap := ins.BuildDownloadOptions(toolName, ver, arch)
+	// 构造下载选项 — 用 BuildDownloadOptionsE（**无共享状态**版本）。
+	//
+	// 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 是 **fail-closed**（缓存路径
+	// 不安全），但原因此前完全丢失 —— 用户只会看到 downloader 报的
+	// `"empty destination"`，无法定位是工具名/版本号/format 哪个组件非法。
+	//
+	// 第十二轮审计：改为从**返回值**取诊断错误，不再读 `LastDownloadOptionsError()`
+	// 那个实例字段 —— 后者在两个 goroutine 同时调用时会互相覆盖，让 A 调用方读到
+	// B 的错误（错误的诊断信息比没有诊断更糟：它把排查引向无关的工具/版本）。
+	url, fallbackURLs, dest, urlShaMap, buildErr := ins.BuildDownloadOptionsE(toolName, ver, arch)
+	if buildErr != nil {
+		return fmt.Errorf("cannot start download: %w", buildErr)
+	}
+	if dest == "" {
+		// 理论上不可达（dest=="" 只由上面那条路径产生），但仍明确失败而非继续。
+		return fmt.Errorf("cannot start download: no cache destination for %s@%s (format %q)", toolName, ver, arch.Format)
+	}
 
 	// 加载 manifest 签名（内置/第三方/嵌入式，与 CLI 一致，Spec 021 D6）。
 	// 真实根密钥嵌入时，缺签名的 GUI 下载会被 downloader 拒绝。
@@ -238,8 +286,17 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		ManifestSignature:    manifestSig,
 		IsThirdParty:         isThirdParty,
 		AllowPlaceholderTOFU: arch.SHA256 == "" || util.IsAllZeroHash(arch.SHA256),
-		ProxyURL:             cfg.GetProxyURL("https"),
-		FallbackURLs:         fallbackURLs,
+		// Ticket 13 (P0-02): same signed-map slot + unsigned-version
+		// derivation as the CLI pipeline — derived through the SHARED
+		// installer.DeriveUnsignedVersion so the two pipelines can never
+		// disagree (the older GUI-only versionUnverified helper missed
+		// Discovered and carried an npm special case).
+		ToolName:        toolName,
+		Version:         ver,
+		OSArch:          arch.OS + "/" + arch.Arch,
+		UnsignedVersion: installer.DeriveUnsignedVersion(p.Manifest(), ver),
+		ProxyURL:        cfg.GetProxyURL("https"),
+		FallbackURLs:    fallbackURLs,
 		OnProgress: func(downloaded, total int64, elapsed time.Duration) {
 			// Content-Length 缺失时 total<=0，避免进度条变成 NaN。
 			pct := -1.0
@@ -339,7 +396,50 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 					}
 				}
 
-				installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+				installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+				if dirErr != nil {
+					wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+						"taskId":  taskID,
+						"tool":    toolName,
+						"version": version,
+						"error":   dirErr.Error(),
+					})
+					a.dlMgr.RemoveTask(taskID)
+					return
+				}
+
+				// 第七轮审计 F-05：force/repair 的删除推迟到这里 —— 下载已完成
+				// 且哈希校验通过（downloader 在 StatusCompleted 前已校验
+				// ExpectedSHA），此时删除旧安装才是安全的：即便随后解压失败，
+				// 也不会出现「下载失败却把好安装删了」的数据丢失。
+				// 与 installer 的 A-07 语义对齐（见 installer.go 的 forceReinstall）。
+				if forceReinstall {
+					logInfo("[install] force reinstall: removing previous install dir %s (archive verified)", installPath)
+					removeLock, removeLockErr := util.AcquireToolLock(cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
+					if removeLockErr != nil {
+						wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+							"taskId":  taskID,
+							"tool":    toolName,
+							"version": version,
+							"error":   fmt.Sprintf("reinstall removal lock %s: %v", p.Name(), removeLockErr),
+						})
+						a.dlMgr.RemoveTask(taskID)
+						return
+					}
+					removeErr := os.RemoveAll(installPath)
+					removeLock.Release()
+					if removeErr != nil {
+						wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
+							"taskId":  taskID,
+							"tool":    toolName,
+							"version": version,
+							"error":   fmt.Sprintf("failed to remove existing install dir: %v", removeErr),
+						})
+						a.dlMgr.RemoveTask(taskID)
+						return
+					}
+				}
+
 				err := ins.ExtractAndActivate(p, arch, ver, installPath)
 				if err != nil && !installer.IsActivationError(err) {
 					// Real failure (extraction/download) — report as error.
@@ -453,12 +553,45 @@ func versionUnverified(t *manifest.Tool, version string) bool {
 		return false
 	}
 	v, found := t.FindVersion(version)
-	return found && v.Unverified
+	if !found {
+		return false
+	}
+	// Spec 039: npm-kind 安装不下载归档条目（依赖树与完整性由 npm 负责），
+	// 「归档 URL 未验证」确认弹窗不适用。按该版本的归档判定；版本缺
+	// archives（auto_archive_fill 关闭）时回退按工具任一归档判定。
+	if versionArchivesNPMManaged(t, v) {
+		return false
+	}
+	return v.Unverified
+}
+
+// versionArchivesNPMManaged reports whether the given version's archives
+// declare an npm-managed install (install_kind: npm); versions without
+// archives fall back to the tool's other versions.
+func versionArchivesNPMManaged(t *manifest.Tool, v *manifest.Version) bool {
+	for _, a := range v.Archives {
+		if a.EffectiveKind() == manifest.InstallKindNPM {
+			return true
+		}
+	}
+	if len(v.Archives) > 0 {
+		return false
+	}
+	for _, other := range t.VersionList {
+		for _, a := range other.Archives {
+			if a.EffectiveKind() == manifest.InstallKindNPM {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *App) lookupToolManifest(toolName string) *manifest.Tool {
-	if a.cat != nil {
-		if t, ok := a.cat.Tool(toolName); ok {
+	// Ticket 24: read the catalog through getCat() so the snapshot is taken
+	// under catMu (reloadCatalog may swap the pointer concurrently).
+	if cat := a.getCat(); cat != nil {
+		if t, ok := cat.Tool(toolName); ok {
 			return t
 		}
 	}
@@ -502,8 +635,20 @@ func (a *App) UseVersion(toolName, version string) error {
 		return err
 	}
 	cfg := a.getCfg()
+	installPath, err := p.InstallDir(cfg.Core.InstallDir, version)
+	if err != nil {
+		return err
+	}
+	// B-06（票 29 / P1-19）：存在性门 —— 未安装的版本必须在动任何东西之前
+	// 就明确报「未安装」。旧代码把不存在的 installPath 直接交给
+	// Activate：Activate 先建 current/<tool> 链接（失败路径还会尝试 symlink/
+	// 拷贝兜底），于是错误信息来自链接层（"symlink … failed"）甚至留下悬挂
+	// 链接，把「切换到一个没装的版本」误报成文件系统故障。
+	// 措辞与 SwitchToXdevVersion 的存在性门保持一致。
+	if fi, statErr := os.Stat(installPath); statErr != nil || !fi.IsDir() {
+		return fmt.Errorf("version %s of %s is not installed", version, toolName)
+	}
 	ins := a.newInstaller(cfg)
-	installPath := p.InstallDir(cfg.Core.InstallDir, version)
 	if err := ins.Activate(p, installPath, version); err != nil {
 		return err
 	}

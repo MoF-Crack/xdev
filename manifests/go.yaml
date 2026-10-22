@@ -1,4 +1,4 @@
-﻿name: go
+name: go
 display_name: Go
 description: The Go programming language toolchain.
 homepage: https://go.dev/
@@ -8,8 +8,11 @@ shims:
     - gofmt
     - godoc
 env_vars:
-    # GOROOT：官方要求（安装根，非默认位置时需要）。
-    GOROOT: '{{install}}'
+    # GOROOT：v2 起不再设置（审计 X-07 / 票 01）。Go 1.26 的 findGOROOT 从
+    # go.exe 向上两级自推导 + isGOROOT 校验（pkg/tool 探测），shim 分发的
+    # go\bin\go.exe 自推导结果正确；而本 manifest 的归档 strip:0（顶层 go/
+    # 目录保留）使 {{install}} 恰比真实 GOROOT 高一层——写它会得到一个没有
+    # src/ 的假根，导致 `go build` 报 "package fmt is not in std"。
     # GOPATH：官方默认 ~/go（用户工作区，安装器不设置）。
     # xdev 将其指向 <install_root>\gopath 作为托管工作区
     # （{{install}}\..\gopath 解析为 install 根下的 gopath），

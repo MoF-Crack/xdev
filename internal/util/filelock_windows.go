@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	kernel32           = syscall.NewLazyDLL("kernel32.dll")
-	procLockFileEx     = kernel32.NewProc("LockFileEx")
-	procUnlockFile     = kernel32.NewProc("UnlockFile")
+	kernel32       = syscall.NewLazyDLL("kernel32.dll")
+	procLockFileEx = kernel32.NewProc("LockFileEx")
+	procUnlockFile = kernel32.NewProc("UnlockFile")
 )
 
 const (

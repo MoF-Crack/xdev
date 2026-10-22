@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/util"
@@ -60,22 +61,31 @@ func MaybeExec(selfName string) (bool, error) {
 	// The main binary may be named "xdev", "xdev.exe", or carry a
 	// version suffix like "xdev-1.0.0" / "xdev-1.0.0.exe".  All of
 	// these should run the CLI rather than being treated as a shim
-	// alias.
-	base := strings.TrimSuffix(selfName, exeSuffix())
+	// alias.  Windows command resolution (NTFS / PATHEXT /
+	// CreateProcess) is case-insensitive, and callers such as
+	// Python's shutil.which hand back argv[0] with UPPERCASE PATHEXT
+	// extensions ("npm.EXE") — the alias must be normalized into the
+	// same case domain as the shim index before it is used (缺陷票
+	// shim-alias-case-bug：大小写敏感的 TrimSuffix 剥不掉 ".EXE"，
+	// "shim alias \"npm.EXE\" not installed" 遮蔽系统真实工具).
+	base := normalizeShimAlias(trimExeSuffix(selfName))
 	if base == "xdev" || strings.HasPrefix(base, "xdev-") || base == "xdev-gui" || strings.HasPrefix(base, "xdev-gui-") {
 		return false, nil
 	}
 	// Wails internal commands should not be intercepted by the shim
 	// dispatcher.  When Wails builds the project, it invokes the
 	// binary with os.Args[0] set to "wailsbindings" to generate
-	// frontend bindings.
-	if selfName == "wailsbindings" || selfName == "wailsbindings.exe" {
+	// frontend bindings.  trimExeSuffix + fold covers any casing
+	// ("wailsbindings", "wailsbindings.exe", "WailsBindings.Exe").
+	if base == "wailsbindings" {
 		return false, nil
 	}
 	// Windows shims are copied twice: once as "node" and once as
 	// "node.exe".  When invoked as "node.exe" the runtime sees the
 	// full name; we strip the suffix so Lookup finds the alias.
-	alias := strings.TrimSuffix(selfName, exeSuffix())
+	// trimExeSuffix handles any casing of the suffix and
+	// normalizeShimAlias folds the alias into the index's case domain.
+	alias := base
 	target, _, args, err := Lookup(alias, os.Args[1:])
 	if err != nil {
 		// PATH 透传（Spec 038）：shim 存在但工具未由 xdev 管理时，不能
@@ -114,6 +124,9 @@ func MaybeExec(selfName string) (bool, error) {
 // The returned toolName identifies which tool directory the target
 // belongs to (e.g. "node" for both "node" and "npm" aliases).
 func Lookup(alias string, args []string) (string, string, []string, error) {
+	// 大小写域归一（缺陷票 shim-alias-case-bug）：索引键与查找输入必须
+	// 同域比较。Windows 命令解析本就大小写不敏感；Unix 保留精确大小写。
+	alias = normalizeShimAlias(alias)
 	xmdeHome := config.ResolveHomeDir()
 
 	cur := filepath.Join(xmdeHome, "current", alias)
@@ -238,6 +251,12 @@ func diskShimIndexPath(xmdeHome string) string {
 
 // writeDiskShimIndex serialises the current reverse index to disk.
 // Best-effort: missing cache dir or write failure is logged, not fatal.
+//
+// C-04（审计 P1-15）：写盘改用 util.AtomicWriteFile（临时文件 + rename）。
+// 磁盘索引是并发 shim 进程直接读取的共享文件，裸 os.WriteFile 在写入
+// 过程中被另一个 shim 读到会拿到半截索引（缺行 → 该别名解析失败）；
+// 崩溃时更会留下截断文件。rename 在同一目录内是原子的，读者要么看到
+// 旧内容、要么看到新内容。
 func writeDiskShimIndex(xmdeHome string) {
 	shimIndexMu.RLock()
 	idx := shimIndex
@@ -270,7 +289,7 @@ func writeDiskShimIndex(xmdeHome string) {
 		sb.WriteString(e.path)
 		sb.WriteByte('\n')
 	}
-	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+	if err := util.AtomicWriteFile(path, []byte(sb.String()), 0o644); err != nil {
 		log.Printf("[shim] write disk index %s: %v", path, err)
 	}
 }
@@ -295,7 +314,10 @@ func loadDiskShimIndex(xmdeHome string) map[string]shimEntry {
 		if len(parts) != 3 {
 			continue
 		}
-		idx[parts[0]] = shimEntry{toolName: parts[1], path: parts[2]}
+		// 读取侧同域折叠（缺陷票 shim-alias-case-bug）：旧版索引可能保留
+		// 磁盘文件名大小写（构建端折叠前的落盘产物），与折叠后的查找输入
+		// 无法命中；normalizeShimAlias 对 Unix 是恒等，不影响精确大小写语义。
+		idx[normalizeShimAlias(parts[0])] = shimEntry{toolName: parts[1], path: parts[2]}
 	}
 	return idx
 }
@@ -309,6 +331,40 @@ func buildShimIndex(xmdeHome string) {
 	shimIndexMu.Unlock()
 }
 
+// staleResidueMarkers are the infixes xdev itself appends when it parks a
+// `current/<tool>` entry under a bypass name instead of removing it:
+//
+//   - ".stale-" — removeLinkEntry renames a legacy real directory to
+//     `<path>.stale-<base36 nanos>` before deleting it (Round 8 P1-3);
+//   - ".tmp-"   — Activate reserves its replacement link via
+//     os.CreateTemp(currentDir, "<tool>.tmp-*") (F-22 / P1-24).
+//
+// Both are SUFFIX forms on the tool name (`tool.stale-xyz`, `tool.tmp-123`),
+// not leading-dot prefixes — matching only a leading "." would therefore miss
+// every real residue.
+//
+// 第十轮审计 P3-8（P3）：这些旁路条目过去会被 `ReadDir(current)` 的目录
+// 扫描当成**一个工具**（审计实测 `[tool tool.stale-demo]`），残留目录里的
+// 可执行文件随之进入 shim 反向索引 —— `Lookup` 于是可能把命令分发到一条
+// 本不该存在的路径。扫描侧一律过滤掉它们。
+// 20261021 审计：标记清单已移到 `internal/util`（`util.IsResidueName`），
+// 因为 `util.LooksLikeVersionDirName` 需要同一份判据，而 shim 已 import util，
+// 反向依赖会成环。这里的导出函数保留为委托，所有现有调用点不变。
+//
+// IsStaleResidueName reports whether a `current/` entry name is one of
+// xdev's own bypass/temporary names rather than a real tool directory.
+// Case-insensitive because Windows resolves these names case-insensitively.
+//
+// Exported so every `current/` scanner shares ONE definition of "not a tool":
+// the shim reverse index (buildShimIndexMap) and the GUI PATH-mode migration
+// (gui.SetPathMode) both enumerate current/* and must agree.
+func IsStaleResidueName(name string) bool {
+	return util.IsResidueName(name)
+}
+
+// isStaleResidueName is the in-package alias used by the scanners below.
+func isStaleResidueName(name string) bool { return IsStaleResidueName(name) }
+
 // buildShimIndexMap is the pure scan that produces the reverse index
 // without touching the package-level shimIndex.
 func buildShimIndexMap(xmdeHome string) map[string]shimEntry {
@@ -319,6 +375,10 @@ func buildShimIndexMap(xmdeHome string) map[string]shimEntry {
 	}
 	idx := make(map[string]shimEntry)
 	for _, e := range entries {
+		// P3-8: skip xdev's own .stale-*/.tmp-* residue — it is not a tool.
+		if isStaleResidueName(e.Name()) {
+			continue
+		}
 		full := filepath.Join(currentDir, e.Name())
 		info, err := os.Stat(full)
 		if err != nil || !info.IsDir() {
@@ -383,6 +443,11 @@ func addExecutables(idx map[string]shimEntry, dir, toolName string) {
 		if alias == "" {
 			continue
 		}
+		// 同域折叠（缺陷票 shim-alias-case-bug）：与 Lookup 输入用同一条
+		// normalizeShimAlias 归一化，消除"构建端保留磁盘文件名大小写、
+		// 查找端折叠"的键域不一致（大写 NPM.CMD 注册为 "NPM" 而
+		// Lookup("npm") 查不到）。
+		alias = normalizeShimAlias(alias)
 		fullPath := filepath.Join(dir, name)
 		// Only record the first match for each alias.
 		if _, exists := idx[alias]; !exists {
@@ -395,8 +460,29 @@ func scanFor(xmdeHome, alias string) (string, string, bool) {
 	// Spec 032: prefer the on-disk reverse index so short shim
 	// processes do not re-walk current/*. The in-process sync.Once
 	// build is the fallback for long-lived CLI/GUI processes.
+	//
+	// C-04（审计 P1-15）：磁盘索引只是 InvalidateShimIndex 时刻的快照。
+	// 工具被卸载/换版本后索引里的路径会变成死路径，而 shim 分发到不存在的
+	// 文件时报的是"找不到文件"而不是 xdev 自己的安装提示——排障极难。
+	// 因此命中后必须先验证目标仍存在。
 	if entry, ok := lookupDiskShimIndex(xmdeHome, alias); ok {
-		return entry.path, entry.toolName, true
+		if _, statErr := os.Stat(entry.path); statErr == nil {
+			return entry.path, entry.toolName, true
+		}
+		// 陈旧索引：以 buildShimIndexMap 的**现扫**结果为准。刻意不回落到
+		// 下面的 sync.Once 内存索引——内存索引可能正是这条陈旧路径的来源
+		// （回环：内存里的旧条目把死路径反复还给自己），只有真正重扫
+		// current/* 才能得到权威答案。buildShimIndexMap 是纯函数、只读
+		// 目录、不取任何包级锁，仅在"索引陈旧"这一条路径上执行；正常命中
+		// 不产生额外开销，也不存在递归/死锁。
+		if fresh := buildShimIndexMap(xmdeHome); fresh != nil {
+			if e, ok := fresh[alias]; ok {
+				return e.path, e.toolName, true
+			}
+		}
+		// 现扫也没有该别名：明确"未命中"。绝不返回死路径——由 Lookup
+		// 报"not installed"，再由 MaybeExec 走 PATH 透传（Spec 038）。
+		return "", "", false
 	}
 	shimIndexOnce.Do(func() {
 		buildShimIndex(xmdeHome)
@@ -439,6 +525,38 @@ func exeSuffix() string {
 	return ""
 }
 
+// trimExeSuffix strips the platform executable suffix case-insensitively.
+//
+// 缺陷票 shim-alias-case-bug：Python 的 shutil.which 在 Windows 按 PATHEXT
+// （默认全大写 .EXE）构造候选文件名，NTFS 大小写不敏感地命中磁盘上的小写
+// 文件并把大写路径作为 argv[0] 传给子进程；大小写敏感的
+// strings.TrimSuffix(selfName, ".exe") 剥不掉 ".EXE"，别名带着扩展名进入
+// Lookup → "shim alias \"npm.EXE\" not installed"（exit 1，遮蔽系统真实
+// 工具）。扩展名剥离必须与 addExecutables 索引构建端的 ToLower 判定同域。
+func trimExeSuffix(name string) string {
+	ext := exeSuffix()
+	if ext == "" {
+		return name
+	}
+	if len(name) >= len(ext) && strings.EqualFold(name[len(name)-len(ext):], ext) {
+		return name[:len(name)-len(ext)]
+	}
+	return name
+}
+
+// normalizeShimAlias folds a shim alias into the case domain shared by
+// the index builder (addExecutables) and the lookup path (Lookup /
+// scanFor / loadDiskShimIndex).  Windows command resolution
+// (NTFS / CreateProcess / PATHEXT) is case-insensitive, so every alias
+// must compare in one folded domain; Unix tool names are case-sensitive
+// and keep their exact spelling.
+func normalizeShimAlias(alias string) string {
+	if os.PathSeparator == '\\' {
+		return strings.ToLower(alias)
+	}
+	return alias
+}
+
 // InstallShim creates a shim entry in shimDir pointing at selfPath.
 //
 // The behaviour depends on the OS:
@@ -479,7 +597,38 @@ func InstallShim(shimDir, name, selfPath string) error {
 		}
 		return nil
 	}
-	return os.Symlink(selfPath, filepath.Join(shimDir, name))
+	return installShimUnix(selfPath, filepath.Join(shimDir, name))
+}
+
+// installShimUnix 在 Unix 上创建/替换 shim 符号链接。
+//
+// 20261022 CI（Ubuntu/macOS）实测：并发 ExtractAndActivate 的第二个调用
+// 直接 os.Symlink → EEXIST，把“并发激活同一个版本”变成失败。Windows 的
+// installShimWindows 早已处理 SameFile/stale 替换，Unix 分支缺失。
+//
+// 语义：
+//   - 已是同目标符号链接 → no-op（幂等）；
+//   - 符号链接指向别处 → 原子替换（temp + rename）；
+//   - 普通文件/目录 → 拒绝覆盖（不能把用户文件当 shim 吞掉）。
+func installShimUnix(selfPath, dst string) error {
+	if fi, err := os.Lstat(dst); err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("shim path %q exists and is not a symlink (refusing to overwrite)", dst)
+		}
+		if cur, rerr := os.Readlink(dst); rerr == nil && cur == selfPath {
+			return nil
+		}
+	}
+
+	tmp := fmt.Sprintf("%s.tmp-%d", dst, time.Now().UnixNano())
+	if err := os.Symlink(selfPath, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // installShimWindows places a Windows shim at dst.
@@ -524,9 +673,10 @@ func PathPrepend(path, shimDir string) string {
 	out := []string{shimDir}
 	for _, p := range parts {
 		if p == shimDir {
-			// already in there, skip
-			out = out[:0]
-			out = append(out, shimDir)
+			// Already in there (the shimDir we just prepended, or a
+			// duplicate later in PATH) — skip it.  Do NOT reset out:
+			// entries accumulated before this duplicate must survive
+			// (F-54).
 			continue
 		}
 		out = append(out, p)

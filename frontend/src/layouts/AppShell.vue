@@ -46,7 +46,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.app-shell { height: 100vh; overflow: hidden; background: var(--xdev-bg-app); background-image: radial-gradient(circle at 100% 0, var(--xdev-accent-soft), transparent 34rem); }
+.app-shell { height: 100vh; overflow: hidden; background: var(--xdev-bg-app); }
 .app-shell__body { height: calc(100vh - 34px); display: flex; min-width: 0; }
 .app-shell__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .app-shell__content { flex: 1; min-width: 0; overflow: auto; padding: var(--xdev-page-top-space) var(--xdev-content-padding) 56px; scrollbar-gutter: stable; }

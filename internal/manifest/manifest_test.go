@@ -706,6 +706,15 @@ func TestEffectiveKind_Script(t *testing.T) {
 	}
 }
 
+// Spec 039: npm-kind archives delegate the install to the npm CLI
+// (no archive download). Explicit declaration only.
+func TestEffectiveKind_NPM(t *testing.T) {
+	a := Archive{InstallKind: InstallKindNPM}
+	if got := a.EffectiveKind(); got != InstallKindNPM {
+		t.Errorf("npm: EffectiveKind() = %q, want %q", got, InstallKindNPM)
+	}
+}
+
 // TestEffectiveKind_UnknownFallsBackToArchive enforces the trust model:
 // an unrecognised kind must never silently become executable/script
 // (those run untrusted code). The safe default is always "archive"
@@ -1235,13 +1244,113 @@ func TestSortVersionsByRelease_NewestFirst(t *testing.T) {
 	}
 }
 
-func TestSortVersionsByRelease_DatedNewestBeatsOlderSemver(t *testing.T) {
+// V1 (ticket 27 / P1-10 — REVERSED assertion): the comparator used to sort
+// by release date FIRST, so a dated-older semver could beat a newer one.
+// The new total order makes semver the primary key; the date is only a
+// tie-break. This test previously asserted the opposite (and was flipped
+// deliberately as part of the ticket).
+func TestSortVersionsByRelease_SemverPrimaryThenDate(t *testing.T) {
 	versions := []Version{
 		{Version: "2.0.0", Release: "2025-01-01"},
 		{Version: "1.9.0", Release: "2026-08-01"},
 	}
 	SortVersionsByRelease(versions)
-	if versions[0].Version != "1.9.0" {
-		t.Errorf("got %q first, want dated-newer 1.9.0", versions[0].Version)
+	if versions[0].Version != "2.0.0" {
+		t.Errorf("got %q first, want semver-newest 2.0.0 (date must not outrank semver)", versions[0].Version)
 	}
+}
+
+// V2: the old comparator was non-transitive on this input
+// (A(1.0.0,2024-06) > B(2.0.0,2024-01) by date, B > C(1.5.0, no date) by
+// semver, C > A by semver — a cycle). The tuple order is a total order.
+func TestVersionReleaseNewer_TransitiveNoCycle(t *testing.T) {
+	a := Version{Version: "1.0.0", Release: "2024-06-01"}
+	b := Version{Version: "2.0.0", Release: "2024-01-01"}
+	c := Version{Version: "1.5.0"}
+
+	// Pairwise: semver decides every one of these.
+	if !versionReleaseNewer(b, a) {
+		t.Error("2.0.0 must rank above 1.0.0 regardless of dates")
+	}
+	if !versionReleaseNewer(b, c) {
+		t.Error("2.0.0 must rank above 1.5.0")
+	}
+	if !versionReleaseNewer(c, a) {
+		t.Error("1.5.0 must rank above 1.0.0")
+	}
+	// Transitivity: b > c > a implies b > a (no cycle).
+	if !(versionReleaseNewer(b, c) && versionReleaseNewer(c, a) && versionReleaseNewer(b, a)) {
+		t.Fatal("comparator is not transitive — sort order would depend on input order")
+	}
+
+	versions := []Version{a, b, c}
+	SortVersionsByRelease(versions)
+	want := []string{"2.0.0", "1.5.0", "1.0.0"}
+	for i, w := range want {
+		if versions[i].Version != w {
+			t.Errorf("sorted[%d] = %q, want %q (full: %v)", i, versions[i].Version, w, versionStrings(versions))
+		}
+	}
+}
+
+// V3: with equal semver, the dated entry sorts first and an absent date
+// (zero time) sorts last.
+func TestVersionReleaseNewer_MissingDateSortsAfter(t *testing.T) {
+	dated := Version{Version: "1.2.3", Release: "2024-05-05"}
+	undated := Version{Version: "1.2.3"}
+
+	if !versionReleaseNewer(dated, undated) {
+		t.Error("dated entry must sort before an undated entry with the same semver")
+	}
+	if versionReleaseNewer(undated, dated) {
+		t.Error("undated entry must not sort before a dated entry with the same semver")
+	}
+
+	// Two dated entries with equal semver: the newer date wins.
+	newer := Version{Version: "1.2.3", Release: "2025-01-01"}
+	older := Version{Version: "1.2.3", Release: "2024-01-01"}
+	if !versionReleaseNewer(newer, older) {
+		t.Error("equal semver must fall back to the release date")
+	}
+}
+
+// V4: real manifest data — lua (5.5.0 vs 5.4.8) and java ("26" vs "25") —
+// must sort the newest semver to the top.
+func TestSortVersionsByRelease_RealDataOrder(t *testing.T) {
+	luaDir, ok := repoManifestDir()
+	if !ok {
+		t.Skip("repo manifests dir not found")
+	}
+	for _, tc := range []struct {
+		file    string
+		wantTop string
+	}{
+		{"lua.yaml", "5.5.0"},
+		{"java.yaml", "26"},
+	} {
+		data, err := os.ReadFile(filepath.Join(luaDir, tc.file))
+		if err != nil {
+			t.Skipf("read %s: %v", tc.file, err)
+		}
+		var tool Tool
+		if err := yaml.Unmarshal(data, &tool); err != nil {
+			t.Fatalf("parse %s: %v", tc.file, err)
+		}
+		if len(tool.VersionList) == 0 {
+			t.Skipf("%s has no versions", tc.file)
+		}
+		versions := append([]Version(nil), tool.VersionList...)
+		SortVersionsByRelease(versions)
+		if versions[0].Version != tc.wantTop {
+			t.Errorf("%s sorted top = %q, want %q (order: %v)", tc.file, versions[0].Version, tc.wantTop, versionStrings(versions))
+		}
+	}
+}
+
+func versionStrings(versions []Version) []string {
+	out := make([]string, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, v.Version)
+	}
+	return out
 }

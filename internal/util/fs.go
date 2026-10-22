@@ -5,12 +5,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // bufPool provides reusable 1MB buffers for concurrent file copies.
@@ -22,6 +23,11 @@ var bufPool = sync.Pool{
 }
 
 // CopyFile copies a single file from src to dst using a pooled 1MB buffer.
+//
+// Ticket 38 (P2-32): permission bits come from the SOURCE file (forcing
+// 0755 turned copied data/config files executable), and an existing
+// destination keeps its own mode (a copy must not re-permission a file the
+// user or another component already owns).
 func CopyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -29,7 +35,15 @@ func CopyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	mode := os.FileMode(0o755)
+	if fi, statErr := in.Stat(); statErr == nil {
+		mode = fi.Mode().Perm()
+	}
+	if fi, statErr := os.Stat(dst); statErr == nil {
+		mode = fi.Mode().Perm()
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
@@ -47,19 +61,39 @@ func CopyFile(src, dst string) error {
 // Symlinks/junctions are resolved to their targets and copied as real
 // files/directories (needed for Scoop apps/*/current junctions).
 func CopyDir(src, dst string) error {
-	return copyDir(src, dst, nil)
+	return copyDir(src, dst, nil, nil)
 }
 
 // CopyDirProgress recursively copies a directory tree and reports progress.
 // onProgress is called with (copiedFiles, totalFiles) after each file is
 // copied; a nil onProgress skips progress reporting.
 func CopyDirProgress(src, dst string, onProgress func(copied, total int)) error {
-	return copyDir(src, dst, onProgress)
+	return copyDir(src, dst, onProgress, nil)
+}
+
+// CopyDirReport recursively copies a directory tree and additionally
+// reports how many files were copied and how many link entries were
+// skipped (broken or unresolvable links — ticket 09 / N-01: every skip
+// must be observable because callers may RemoveAll the source right
+// after a "successful" copy).
+func CopyDirReport(src, dst string, onProgress func(copied, total int)) (files, skipped int, err error) {
+	var stats copyStats
+	if err := copyDir(src, dst, onProgress, &stats); err != nil {
+		return stats.files, stats.skipped, err
+	}
+	return stats.files, stats.skipped, nil
+}
+
+// copyStats accumulates per-copy statistics for CopyDirReport.
+type copyStats struct {
+	files   int
+	skipped int
 }
 
 // copyDir is the single implementation behind CopyDir and CopyDirProgress.
 // When onProgress is non-nil it is invoked after every copied file.
-func copyDir(src, dst string, onProgress func(copied, total int)) error {
+// stats, when non-nil, receives the copied-file and skipped-link counts.
+func copyDir(src, dst string, onProgress func(copied, total int), stats *copyStats) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
@@ -83,24 +117,64 @@ func copyDir(src, dst string, onProgress func(copied, total int)) error {
 		}
 		target := filepath.Join(dst, rel)
 
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Junction / symlink：解析到实体后再拷，避免 scoop apps/*/current
-			// 这类目录 junction 被整棵跳过。
-			real, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return nil
+		// Ticket 09 (audit-fixes / P0-04 + N-01): symlink AND Windows
+		// junction entries (junctions surface as ModeIrregular, not
+		// ModeSymlink) are resolved to their real targets and copied as
+		// real content — needed for Scoop apps/*/current junctions.
+		if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			resolved, rerr := filepath.EvalSymlinks(path)
+			if rerr != nil || resolved == path {
+				// EvalSymlinks returns a trailing junction unchanged
+				// (verified empirically on Go 1.26/Windows) and fails on
+				// cyclic/dangling links — fall back to os.Readlink,
+				// which understands junctions.
+				if target, lerr := os.Readlink(path); lerr == nil && target != path {
+					if abs, aerr := filepath.Abs(target); aerr == nil {
+						resolved = abs
+					} else {
+						resolved = target
+					}
+					rerr = nil
+				} else {
+					// Unresolvable link entry (self-referential, cyclic,
+					// or a non-link ModeIrregular file): visible skip
+					// rather than a silent drop (N-01) — callers may
+					// RemoveAll the source right after a "successful"
+					// copy, so every loss must be observable.
+					log.Printf("[copydir] WARN: unresolvable link entry %s: %v", path, rerr)
+					if stats != nil {
+						stats.skipped++
+					}
+					return nil
+				}
 			}
-			fi, err := os.Stat(real)
-			if err != nil {
+			fi, serr := os.Stat(resolved)
+			if serr != nil {
+				// Broken link entry — same visibility rule as above
+				// (N-01): warn and count instead of silently skipping.
+				log.Printf("[copydir] WARN: broken link entry %s -> %s: %v", path, resolved, serr)
+				if stats != nil {
+					stats.skipped++
+				}
 				return nil
 			}
 			if fi.IsDir() {
-				if err := copyDir(real, target, onProgress); err != nil {
+				if samePath(resolved, path) {
+					// Self-recursion guard (semantic ambiguity — the
+					// resolved target IS the link entry itself).
+					return nil
+				}
+				if err := copyDir(resolved, target, onProgress, stats); err != nil {
 					return err
 				}
-				return filepath.SkipDir
+				// Ticket 09 (P0-04): NOT filepath.SkipDir — returning
+				// SkipDir from a non-directory entry makes filepath.Walk
+				// skip the REMAINING SIBLINGS of the parent directory,
+				// silently losing everything sorted after the link
+				// (unrecoverable when the caller removes the source).
+				return nil
 			}
-			tasks = append(tasks, copyTask{src: real, dst: target})
+			tasks = append(tasks, copyTask{src: resolved, dst: target})
 			return nil
 		}
 		if info.IsDir() {
@@ -144,18 +218,32 @@ func copyDir(src, dst string, onProgress func(copied, total int)) error {
 				}
 				errMu.Unlock()
 			}
+			copiedMu.Lock()
+			copied++
+			c := copied
+			copiedMu.Unlock()
 			if onProgress != nil {
-				copiedMu.Lock()
-				copied++
-				c := copied
-				copiedMu.Unlock()
 				onProgress(c, total)
 			}
 		}(task)
 	}
 	wg.Wait()
 
+	if stats != nil {
+		stats.files += copied
+	}
 	return firstErr
+}
+
+// samePath reports whether two paths refer to the same entry
+// (case-insensitive on Windows, exact elsewhere). EvalSymlinks may return
+// a normalized string that differs from the input while referring to the
+// same entry, so a plain == comparison is not reliable.
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // FileSHA256 computes the SHA-256 hash of a file and returns it as a
@@ -173,63 +261,210 @@ func FileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// IsAllZeroHash returns true if s consists entirely of '0' characters
-// (optionally prefixed with "0x"). This is used to detect placeholder
-// SHA-256 values in manifests that should be skipped.
+// IsAllZeroHash reports whether s is the canonical all-zero SHA-256
+// placeholder: exactly 64 hexadecimal zeros, optionally prefixed with
+// "0x"/"0X". Used to detect placeholder hashes in manifests that should be
+// skipped (and TOFU-pinned) rather than verified.
+//
+// Ticket 39 (P2-12): the previous version accepted ANY all-zero string —
+// including a single "0" or a truncated value — so a malformed hash was
+// silently treated as "placeholder, skip verification". Requiring the
+// canonical 64-digit width (what the signing side emits) makes a truncated
+// value fail loudly instead.
 func IsAllZeroHash(s string) bool {
 	s = strings.TrimPrefix(s, "0x")
 	s = strings.TrimPrefix(s, "0X")
-	if len(s) == 0 {
-		return false
-	}
-	for _, c := range s {
-		if c != '0' {
-			return false
-		}
-	}
-	return true
+	return len(s) == 64 && strings.Trim(s, "0") == ""
 }
 
 // CreateJunction creates a Windows junction (directory symlink) from
 // link to target. On non-Windows platforms it creates a symlink.
-// On Windows it uses `cmd /c mklink /J` (reliable). A native
-// DeviceIoControl implementation was prototyped (Spec 032) but
-// reverted because the hand-built REPARSE_DATA_BUFFER was fragile
-// across path lengths; mklink remains the supported path.
+//
+// 第九轮审计 P1-1（P1，安全）：实现已移到平台专属文件。
+// 旧实现在这里直接 `exec.Command("cmd", "/c", "mklink", "/J", link, target)`，
+// 而 cmd.exe 会**二次解析**命令行 —— 含 `&` 的 tool name / version / 安装根目录
+// 会把 mklink 参数切成多条命令，导致 **manifest 可控的任意命令执行**。
+// Windows 实现（junction_windows.go）改为自行构造命令行并对每个路径加双引号，
+// 同时拒绝无法安全表达的字符；非 Windows 实现走 os.Symlink（不经 shell）。
 func CreateJunction(link, target string) error {
-	if runtime.GOOS != "windows" {
-		return os.Symlink(target, link)
-	}
-	cmd := exec.Command("cmd", "/c", "mklink", "/J", link, target)
-	HideWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("create junction %s -> %s: %v: %s", link, target, err, out)
-	}
-	return nil
+	return createJunction(link, target)
 }
 
 // AtomicWriteFile atomically writes data to a file by first writing to a
 // temporary file in the same directory, then renaming. This ensures that a
 // crash during write leaves the original file intact (no partial writes).
+//
+// 第十轮审计 P2-1（P2）：唯名临时文件把「崩溃残留」从**有界 1** 变成**每次中断 1**，
+// 而全仓没有回收者。审计实测：50 次中断写 → 50 个孤儿；**成功写入也不回收**；硬杀后
+// 留下 `state.cache.tmp-3564375558`。
+//
+// 这是 `os.CreateTemp` 方案的固有代价（固定名时最多 1 个孤儿），但「无界」不可接受 ——
+// 缓存目录会随每次崩溃线性增长。这里在**每次成功发布之后**顺带做一次**有界、按年龄**
+// 的清扫（见 sweepStaleTempFiles）：只删「同一个 base 前缀、且 mtime 早于 cutoff」的
+// 兄弟临时文件。
+//
+// **为什么按年龄而不是无条件删**：并发写者各自持有自己的临时文件，无条件删会把
+// **别人正在写**的临时文件抽走（Windows 上删除会失败、Unix 上写进已解除链接的 inode）。
+// 年龄门槛（默认 1 小时）远大于任何一次原子写的耗时（毫秒级），因此不会误伤在途写者。
+//
+// 清扫是 best-effort：失败只记日志，绝不影响本次写入的结果。
+//
+// 第九轮审计 A-10（P1-24 本体迁移）：临时文件必须**唯名**。
+//
+// 旧实现用固定 `<path>.tmp`。本函数是**所有调用点的共享底层** ——
+// internal/config（home 缓存）、internal/manifest（文本级 manifest 改写）、
+// internal/discovery（sniff 缓存）、internal/isolator（隔离状态）等全部经它落盘。
+// 两个并发写者共享同一个中间文件时会：
+//   - **跨写者内容污染**：写者 A 写 tmp("AAAAAAAA")、写者 B 写 tmp("BBBBBBBB")、
+//     A 执行 rename → 目标文件内容是 "BBBBBBBB"（A 发布了 B 的字节）；
+//   - **大量并发失败**：16 写者 × 40 轮实测 610 次
+//     `rename ... The process cannot access the file because it is being used by
+//     another process` / `The system cannot find the file specified`
+//     （一个写者已把 tmp rename 走，另一个的 rename 便找不到源）。
+//
+// 仓库守卫 internal/config/atomicwrite_convergence_test.go 早已把本文件登记进
+// fixedTmpExceptions（注释：「P1-24 本体 AtomicWriteFile，待迁移 CreateTemp」）——
+// 本次完成该迁移。改用 os.CreateTemp 后每个写者持有自己的临时文件，rename 成为
+// 「自己的临时文件 → 目标」的原子发布，不再互相截断或污染。
+//
+// 命名沿用仓库既有约定 `<base>.tmp-*`（与 internal/config 的 writeHomeCache、
+// internal/update/policy.go 的 writeJSONAtomic 一致），使守卫的固定名正则
+// （`+ ".tmp"`）不会误报。
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	f, err := os.CreateTemp(dir, base+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp file in %s: %w", dir, err)
+	}
+	tmpPath := f.Name()
+
+	// 任何失败路径都必须清掉临时文件。
+	cleanup := func() {
+		f.Close()
+		os.Remove(tmpPath)
+	}
+
+	if _, err := f.Write(data); err != nil {
+		cleanup()
 		return fmt.Errorf("write tmp %s: %w", tmpPath, err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	// 先落盘再发布：崩溃时不会发布空/半截文件。
+	if err := f.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync tmp %s: %w", tmpPath, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close tmp %s: %w", tmpPath, err)
+	}
+	// CreateTemp 固定 0600；显式套用调用方要求的权限位。
+	//（Windows 上仅只读位有效，但不要因此丢掉 perm 语义。）
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("chmod tmp %s: %w", tmpPath, err)
+	}
+	// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一
+	// 目标会偶发 ERROR_ACCESS_DENIED（已知行为，不是调用方的错）——直接冒泡会把
+	// 一次正常的并发写当成失败。与仓库既有收敛实现（internal/config 的
+	// writeFileCreateTemp → renameWithRetry，票 31）保持一致，做一次有界重试。
+	if err := renameWithRetry(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename %s -> %s: %w", tmpPath, path, err)
 	}
+	// P2-1：发布成功后顺带回收**陈旧**的兄弟临时文件（best-effort）。
+	sweepStaleTempFiles(dir, base)
 	return nil
+}
+
+// staleTempAge 是判定 `<base>.tmp-*` 为「崩溃残留」而非「在途写者」的年龄门槛。
+//
+// 远大于任何一次原子写的耗时（毫秒级），因此不会误删正在被别的写者持有的临时文件。
+// 变量而非常量，便于测试注入较短的窗口。
+var staleTempAge = time.Hour
+
+// sweepStaleTempFiles 回收 dir 下「同一个 base 前缀、且 mtime 早于 cutoff」的
+// 临时文件（`<base>.tmp-*`）。
+//
+// 第十轮审计 P2-1（P2）：`os.CreateTemp` 方案的唯名临时文件在**进程被硬杀**时无法
+// 自我清理（正常失败路径都会 `os.Remove`），于是残留从固定名时代的「有界 1」变成
+// 「每次中断 1 且永不回收」。审计实测 50 次中断写 → 50 个孤儿。
+//
+// 判定依据是 **mtime 年龄**而非「是否存在」——并发写者各自持有自己的临时文件，
+// 无条件删会把在途写者抽走。清扫只删明确过期的（默认 1 小时）。
+//
+// 返回删除数量（供测试断言）；失败一律吞掉（best-effort，绝不影响本次写入）。
+func sweepStaleTempFiles(dir, base string) int {
+	prefix := base + ".tmp-"
+	cutoff := time.Now().Add(-staleTempAge)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		fi, ierr := e.Info()
+		if ierr != nil || fi.ModTime().After(cutoff) {
+			continue // 在途写者（或无法判定）—— 不动
+		}
+		if rerr := os.Remove(filepath.Join(dir, e.Name())); rerr == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
+// renameWithRetry 以有界重试窗口执行 rename。
+//
+// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一目标
+// 时会偶发 ERROR_ACCESS_DENIED：直接冒泡会把这个正常的并发写当失败。重试窗口
+// ~55ms，超时后原样返回错误。
+//
+// 与 internal/config 的同名实现语义一致（那边是包内私有函数，本包不能引用，
+// 故在此保留一份等价实现；两边都由各自的并发守卫钉住）。
+func renameWithRetry(oldPath, newPath string) error {
+	const attempts = 10
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(oldPath, newPath); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return err
 }
 
 // ActiveVersion reads the current/<tool> symlink to determine the active
 // version of a tool. Returns ("", false) when no active version exists.
+//
+// 第十一轮审计（Round 10 报告待办 5 / P3-7）：**必须确认目标真的存在**。
+// 旧实现只做 `os.Readlink` 就直接返回 `(base, true)`，于是**悬空**链接也会被
+// 报成「已激活」。
+//
+// 触发路径（F-23 场景）：解压失败后 `RemoveAll(install/<tool>/<ver>)` 删掉了目标，
+// 但 `current/<tool>` 链接还在 → 链接悬空。实测（修复前）：
+//
+//	ActiveVersion = "1.0.0" ok=true   而   target_exists=false
+//
+// 危害面：`xdev current`、`IsUpgradeAvailable`（经 `currentVersion`）、GUI 的
+// `GetActiveVersion`、`doctor`、`profile` 全都看到**幻影**激活版本 —— 用户以为
+// 工具可用（PATH 里也有它的 bin），实际二进制不存在；升级判断还会因此认为
+// 「已装 1.0.0」而**不提示**重新安装。
+//
+// 这里用 `os.Stat`（**跟随**链接）而不是 `os.Lstat`：要确认的是**目标**存在，
+// 而不是链接本身存在（链接本身由 Readlink 已证明存在）。
 func ActiveVersion(xmdeDir, toolName string) (string, bool) {
 	link := filepath.Join(xmdeDir, "current", toolName)
 	target, err := os.Readlink(link)
 	if err != nil {
+		return "", false
+	}
+	// P3-7：目标必须真实存在，否则链接悬空 —— 不得报「已激活」。
+	if _, err := os.Stat(link); err != nil {
 		return "", false
 	}
 	return filepath.Base(target), true
@@ -237,10 +472,18 @@ func ActiveVersion(xmdeDir, toolName string) (string, bool) {
 
 // ActiveInstallPath returns the install path of the currently active version
 // of a tool by reading the current/<tool> symlink, or "" if no version is active.
+//
+// 第十一轮审计（Round 10 报告待办 5 / P3-7）：与 ActiveVersion 同源 ——
+// 悬空链接必须返回 ""，否则调用方（doctor / GUI）会拿到一条**不存在**的路径，
+// 进而把「工具已装好」的错误结论呈现给用户。
 func ActiveInstallPath(xmdeDir, toolName string) string {
 	link := filepath.Join(xmdeDir, "current", toolName)
 	target, err := os.Readlink(link)
 	if err != nil {
+		return ""
+	}
+	// P3-7：目标必须真实存在（os.Stat 跟随链接）。
+	if _, err := os.Stat(link); err != nil {
 		return ""
 	}
 	return target

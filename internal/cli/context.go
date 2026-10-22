@@ -122,8 +122,23 @@ func initContext(xmdeDir string, verbose, noColor, noPathFix bool) {
 // Called from main.go after root.Execute() returns, so the
 // startup-strategy background goroutine can persist partial results
 // before process exit (SC-002).
-func ShutdownSniffScheduler() {
-	if sniffScheduler != nil {
-		sniffScheduler.Shutdown()
+//
+// 第十一轮审计（Round 10 报告待办 6）：**不再吞掉 Shutdown 的错误**。
+//
+// Round 10 把 `Scheduler.Shutdown()` 的签名改成了 `error`（P2-1：读/写失败一律上报，
+// 不再 `_ =` 吞掉），但这里的调用方仍然忽略返回值 —— 于是「Shutdown 刷缓存失败」
+// 在 CLI 侧依然是**静默**的，用户看不到任何提示。这与 Round 10 修掉的
+// `saveState` 吞错、以及本轮修掉的 `SniffAll` 吞错是同一形态的第三次出现。
+//
+// 这里返回 error 而不是在包内 log：调用方是 `main.go`，只有它知道该以什么方式
+// 呈现（写 stderr / 影响退出码）。`main.go` 的现有契约是「退出码反映子进程真实
+// 退出码」（票 33），因此**不得**因为一次收尾刷盘失败就改写退出码 —— 见那边的用法。
+func ShutdownSniffScheduler() error {
+	if sniffScheduler == nil {
+		return nil
 	}
+	if err := sniffScheduler.Shutdown(); err != nil {
+		return fmt.Errorf("shutdown sniff scheduler: %w", err)
+	}
+	return nil
 }

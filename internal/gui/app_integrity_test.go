@@ -32,7 +32,9 @@ func (g *guiFakePlugin) DefaultVersion() string                { return "1.0.0" 
 func (g *guiFakePlugin) ArchiveFor(string) (*manifest.Archive, error) {
 	return nil, nil
 }
-func (g *guiFakePlugin) InstallDir(root, v string) string { return filepath.Join(root, g.name, v) }
+func (g *guiFakePlugin) InstallDir(root, v string) (string, error) {
+	return filepath.Join(root, g.name, v), nil
+}
 func (g *guiFakePlugin) Shims() []string                  { return g.shims }
 func (g *guiFakePlugin) EnvVars(string) map[string]string { return nil }
 func (g *guiFakePlugin) PostInstall(context.Context, string) error {

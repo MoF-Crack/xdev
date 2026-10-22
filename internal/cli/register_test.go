@@ -1,8 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/manifest"
@@ -164,10 +169,10 @@ func TestRegisterAllRealCatalog(t *testing.T) {
 	// 集成回归：用仓库真实 manifests/ 目录注册，现有工具全部在、
 	// java 用专用插件、index.yaml 被跳过。
 	//
-	// 环境隔离（B2-A5-01）：把 XMDEV_HOME 指向空临时目录，避免扫描到
-	// 用户真实 ~/.xdev/plugins 下的 Lua/vfox 插件——否则精确断言会因
-	// 环境差异而失败。
-	t.Setenv("XMDEV_HOME", t.TempDir())
+	// 环境隔离（B2-A5-01，票 04 改注入式）：注入临时 home（等价
+	// --xmdevenv-dir <tmp>），避免扫描到用户真实插件目录下的
+	// Lua/vfox 插件——否则精确断言会因环境差异而失败。
+	injectHome(t, t.TempDir())
 
 	catalog := loadTestCatalog(t, filepath.Join("..", "..", "manifests"))
 	r := plugin.NewRegistry()
@@ -212,5 +217,162 @@ func TestRegisterAllRealCatalog(t *testing.T) {
 
 	if _, ok := r.Get("index"); ok {
 		t.Error("index must NOT be registered — it is a catalog index file, not a tool")
+	}
+}
+
+// ---- Ticket 04 (audit-fixes / P0-06) guards ----
+
+// minimalLuaPlugin returns a minimal valid xdev-format Lua plugin body
+// declaring the given plugin name.
+func minimalLuaPlugin(name string) string {
+	return `PLUGIN = {
+    name = "` + name + `",
+    display_name = "` + name + `",
+    category = "system",
+    shims = {},
+}
+
+function available()
+    return {}
+end
+
+function archive(version, os, arch)
+    return {
+        url = "https://example.com/` + name + `/not-a-real-download.zip",
+        format = "zip",
+        strip = 1,
+    }
+end
+`
+}
+
+// P1 / E-02: without XMDEV_HOME env and with a custom home (the
+// `--xmdevenv-dir <tmp>` injection), what the plugin commands write
+// (pluginDir()) must be exactly what RegisterAll scans (pluginsDir()).
+// Before the single-source fix, install wrote to <home>/plugins while
+// registration scanned $XMDEV_HOME/~/.xdev/plugins — installed plugins
+// were never loaded in default deployments.
+func TestRegisterAll_UsesCfgDirWithoutEnv(t *testing.T) {
+	// Explicitly neutralize any inherited XMDEV_HOME — the whole point is
+	// that the plugin path no longer depends on this variable.
+	t.Setenv("XMDEV_HOME", "")
+	home := t.TempDir()
+	injectHome(t, home)
+
+	// Drive the real cobra command so the write side (pluginDir()) is
+	// exercised exactly as `xdev plugin create` / `xdev plugin install`
+	// would (both write through pluginDir()).
+	cmd := newPluginCmd()
+	cmd.SetArgs([]string{"create", "e2eplug"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SilenceUsage = true
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("xdev plugin create e2eplug: %v", err)
+	}
+
+	// The plugin must land in <home>/plugins …
+	want := filepath.Join(home, "plugins", "e2eplug.lua")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("plugin file not created at %s: %v", want, err)
+	}
+	// … and RegisterAll must see it through the same single source.
+	dir := t.TempDir()
+	copyManifest(t, dir, "go.yaml", "go.yaml")
+	catalog := loadTestCatalog(t, dir)
+	r := plugin.NewRegistry()
+	RegisterAll(r, catalog)
+	if _, ok := r.Get("e2eplug"); !ok {
+		t.Fatal("plugin written by the plugin commands is not visible to RegisterAll — pluginsDir/pluginDir dual-source regression")
+	}
+}
+
+// P2: when the canonical dir does not exist but the legacy dir
+// ($XMDEV_HOME/plugins or ~/.xdev/plugins) is non-empty, a migration hint
+// must be logged — and registration still uses ONLY the canonical dir
+// (never a silent double scan).
+func TestPluginsDir_MigrationHintForLegacyDir(t *testing.T) {
+	// Canonical dir: a temp home whose plugins/ does NOT exist.
+	canonicalHome := t.TempDir()
+	injectHome(t, canonicalHome)
+
+	// Legacy dir: redirect USERPROFILE/HOME to a temp home with a
+	// non-empty .xdev/plugins.
+	legacyHome := t.TempDir()
+	legacyPlugins := filepath.Join(legacyHome, ".xdev", "plugins")
+	if err := os.MkdirAll(legacyPlugins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyPlugins, "old.lua"), []byte("-- legacy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", legacyHome)
+	} else {
+		t.Setenv("HOME", legacyHome)
+	}
+	t.Setenv("XMDEV_HOME", "")
+
+	// Capture log output for the hint assertion.
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	hintLegacyPluginsDir()
+
+	if !strings.Contains(logBuf.String(), legacyPlugins) {
+		t.Errorf("migration hint missing or does not mention the legacy dir %s; log: %q", legacyPlugins, logBuf.String())
+	}
+
+	// Registration still reads only the canonical dir: the legacy file is
+	// not a loadable plugin anyway, but the scan must not even list it.
+	dir := t.TempDir()
+	copyManifest(t, dir, "go.yaml", "go.yaml")
+	catalog := loadTestCatalog(t, dir)
+	r := plugin.NewRegistry()
+	RegisterAll(r, catalog)
+	if _, ok := r.Get("old"); ok {
+		t.Error("registration must use the canonical dir only — legacy dir leaked into the registry")
+	}
+}
+
+// P3: consecutive runs with different homes must not stick — the injected
+// home of a previous test must never leak into the next registration.
+func TestRegisterAll_HomeIsolationBetweenRuns(t *testing.T) {
+	dir := t.TempDir()
+	copyManifest(t, dir, "go.yaml", "go.yaml")
+	catalog := loadTestCatalog(t, dir)
+
+	// Run 1: home A holds plugin isoa.
+	homeA := t.TempDir()
+	injectHome(t, homeA)
+	if err := os.MkdirAll(filepath.Join(homeA, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeA, "plugins", "isoa.lua"), []byte(minimalLuaPlugin("isoa")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rA := plugin.NewRegistry()
+	RegisterAll(rA, catalog)
+	if _, ok := rA.Get("isoa"); !ok {
+		t.Fatal("plugin in home A not visible to RegisterAll")
+	}
+
+	// Run 2: home B holds a different plugin — home A's plugin must not leak.
+	homeB := t.TempDir()
+	injectHome(t, homeB)
+	if err := os.MkdirAll(filepath.Join(homeB, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeB, "plugins", "isob.lua"), []byte(minimalLuaPlugin("isob")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rB := plugin.NewRegistry()
+	RegisterAll(rB, catalog)
+	if _, ok := rB.Get("isob"); !ok {
+		t.Fatal("plugin in home B not visible to RegisterAll — home B run broken by leftover state")
+	}
+	if _, ok := rB.Get("isoa"); ok {
+		t.Fatal("home A plugin leaked into home B run — global context stickiness regression (P3)")
 	}
 }

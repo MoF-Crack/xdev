@@ -1,11 +1,14 @@
 package signer
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -236,6 +239,66 @@ func TestRootPublicKey_Placeholder(t *testing.T) {
 	}
 	if HasRootKey() {
 		t.Error("HasRootKey should return false for placeholder key")
+	}
+}
+
+// TestRootPublicKey_CorruptValueLogsAndReturnsNil (F-48): a corrupt
+// embedded key (bad base64, or decodable but not 32 bytes) must still
+// return nil — the documented "verification disabled" semantics — and
+// must log an ERROR-level warning instead of failing silently.
+func TestRootPublicKey_CorruptValueLogsAndReturnsNil(t *testing.T) {
+	cases := []struct {
+		name string
+		b64  string
+	}{
+		{"invalid base64", "!!!not-base64!!!"},
+		{"wrong length", base64.StdEncoding.EncodeToString([]byte("too-short"))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			SetRootPublicKeyForTesting(tc.b64)
+			defer SetRootPublicKeyForTesting("")
+
+			var buf bytes.Buffer
+			prevWriter := log.Writer()
+			prevFlags := log.Flags()
+			log.SetOutput(&buf)
+			log.SetFlags(0)
+			defer func() {
+				log.SetOutput(prevWriter)
+				log.SetFlags(prevFlags)
+			}()
+
+			if got := RootPublicKey(); got != nil {
+				t.Errorf("RootPublicKey() = %v, want nil for corrupt key", got)
+			}
+			if HasRootKey() {
+				t.Error("HasRootKey() = true, want false for corrupt key")
+			}
+			out := buf.String()
+			if !strings.Contains(out, "ERROR") {
+				t.Errorf("corrupt root key produced no ERROR log; got %q", out)
+			}
+		})
+	}
+}
+
+// TestRootPublicKey_ValidKeyReturnsKey guards the happy path against a
+// regression where the new corrupt-key logging swallows valid keys.
+func TestRootPublicKey_ValidKeyReturnsKey(t *testing.T) {
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	SetRootPublicKeyForTesting(base64.StdEncoding.EncodeToString(raw))
+	defer SetRootPublicKeyForTesting("")
+
+	got := RootPublicKey()
+	if len(got) != 32 {
+		t.Fatalf("RootPublicKey() length = %d, want 32", len(got))
+	}
+	if !bytes.Equal(got, raw) {
+		t.Error("RootPublicKey() returned different bytes than injected")
 	}
 }
 

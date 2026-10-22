@@ -1,11 +1,10 @@
 # XDev Build Script（单二进制模型）
-# Usage: .\build.ps1 [-SkipFrontend] [-SkipBuild] [-SkipAudit]
+# Usage: .\build.ps1 [-SkipBuild] [-SkipAudit]
 #
 # 一个可执行文件（xdev）按调用形态多态执行：无参数 → GUI；tui → TUI；
 # 其他参数 → CLI。CLI/GUI 不再分别编译（Spec 030 双二进制已合并）。
 
 param(
-    [switch]$SkipFrontend = $false,
     [switch]$SkipBuild = $false,
     [switch]$SkipAudit = $false
 )
@@ -22,7 +21,11 @@ if ($versionLine -match '"([^"]+)"') {
     exit 1
 }
 
-$buildDate = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+# F-13: stamp BuildDate in real UTC. The previous `Get-Date -Format
+# "yyyy-MM-ddTHH:mm:ssZ"` formatted local time but appended a literal "Z",
+# so builds carried a local-time value falsely labelled as UTC. Convert first,
+# then format, so the trailing Z is honest.
+$buildDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $ldflags = "-s -w -X github.com/xmdemt/xdev/internal/version.BuildDate=$buildDate"
 
 # Security (C-5): Inject the Ed25519 public key for manifest signature
@@ -79,6 +82,18 @@ if (-not $SkipBuild) {
         Copy-Item $plain $output -Force
         Write-Host "  -> $output" -ForegroundColor Green
         Write-Host "  -> $plain (copy)" -ForegroundColor Green
+    }
+
+    # 20261021 审计 P2-11：构建产物必须可自证版本，避免“代码是新的、跑的是旧的”。
+    if (Test-Path $output) {
+        $reported = (& $output version 2>&1 | Select-Object -First 1)
+        if ($reported -notmatch [regex]::Escape("xdev $version")) {
+            Write-Host "ERROR: built binary reports '$reported', expected 'xdev $version'" -ForegroundColor Red
+            exit 1
+        }
+        $sha = (Get-FileHash $output -Algorithm SHA256).Hash
+        Write-Host "  version: $reported"
+        Write-Host "  sha256 : $sha"
     }
 } else {
     Write-Host "[1/1] Skipping build (-SkipBuild)" -ForegroundColor Gray

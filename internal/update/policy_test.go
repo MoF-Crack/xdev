@@ -14,9 +14,9 @@ var testNow = time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 
 func testCore(mode string, selfUpdate bool) *config.CoreConfig {
 	return &config.CoreConfig{
-		SelfUpdate:       selfUpdate,
-		SelfUpdateMode:   mode,
-		SelfUpdateStale:  true,
+		SelfUpdate:      selfUpdate,
+		SelfUpdateMode:  mode,
+		SelfUpdateStale: true,
 	}
 }
 

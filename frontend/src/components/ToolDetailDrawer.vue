@@ -29,7 +29,7 @@
             <n-tag v-if="tool.localVersion" type="warning">{{ tool.localVersion }}</n-tag>
             <CopyableValue v-if="tool.localPath" :value="tool.localPath" :copy-label="t('btn.copy')" :success-label="t('detail.copied')" :failure-label="t('detail.copy_failed')" />
             <n-space>
-              <n-button v-if="tool.localPath && !tool.installed" data-action="migrate" size="tiny" @click="$emit('migrate', tool.name, tool.localPath)">{{ t('detail.migrate_to_xdev') }}</n-button>
+              <n-button v-if="tool.localPath && !tool.installed" data-action="migrate" size="tiny" :disabled="migrationBusy" @click="$emit('migrate', tool.name, tool.localPath)">{{ t('detail.migrate_to_xdev') }}</n-button>
               <n-button v-if="tool.localPath && tool.installed" data-action="switch-local" size="tiny" @click="$emit('switch-local', tool.name)">{{ t('detail.switch_to_local') }}</n-button>
             </n-space>
           </section>
@@ -41,7 +41,7 @@
               <CopyableValue :value="inst.path" :copy-label="t('btn.copy')" :success-label="t('detail.copied')" :failure-label="t('detail.copy_failed')" />
               <n-space size="small">
                 <n-button v-if="canSwitchInstance(inst)" data-action="switch-instance" size="tiny" :disabled="pmBusy" @click="emitSwitchInstance(inst)">{{ switchLabel(inst) }}</n-button>
-                <n-button v-if="!inst.managed" data-action="migrate-pm" size="tiny" @click="$emit('migrate-pm', tool.name)">{{ t('pm.migrate') }}</n-button>
+                <n-button v-if="!inst.managed" data-action="migrate-pm" size="tiny" :disabled="pmBusy" @click="$emit('migrate-pm', tool.name)">{{ t('pm.migrate') }}</n-button>
               </n-space>
             </div>
           </section>
@@ -51,7 +51,13 @@
               <div v-for="dep in deps" :key="dep.tool + (dep.platform || '') + (dep.installPath || '')" class="dep-row" :data-dep="dep.tool">
                 <n-tag :type="dep.satisfied ? 'success' : 'warning'" size="small">{{ dep.satisfied ? t('detail.deps_satisfied') : t('detail.deps_missing') }}</n-tag>
                 <span class="dep-name">{{ dep.tool }}<template v-if="dep.requiredVersion">{{ t('detail.deps_required', { version: dep.requiredVersion }) }}</template><template v-if="dep.currentVersion">{{ t('detail.deps_current', { version: dep.currentVersion }) }}</template></span>
-                <span v-if="dep.reason" class="dep-reason">{{ t('detail.deps_reason_' + dep.reasonCode, dep.reasonParams || {}) }}</span>
+                <!-- 第七轮审计 F-42：判据必须是 reasonCode，不能是 reason。
+                     Go 侧 checkDependency（internal/gui/app_dependencies.go）从不给
+                     st.Reason 赋值（该字段是「保留空串」的兼容字段），只填
+                     ReasonCode / ReasonParams，因此 v-if="dep.reason" 恒为假 →
+                     整条原因行**永不渲染**，用户看不到「PATH 中未找到 node」这类
+                     可操作信息。 -->
+                <span v-if="dep.reasonCode" class="dep-reason">{{ t('detail.deps_reason_' + dep.reasonCode, dep.reasonParams || {}) }}</span>
                 <span v-if="dep.installPath" class="dep-install">{{ t('detail.deps_install_path', { path: dep.installPath }) }}</span>
               </div>
             </div>
@@ -93,6 +99,9 @@ const props = defineProps({
   operatingTool: { type: String, default: '' },
   returnFocusTo: Object,
   deps: { type: Array, default: () => [] },
+  // R8-02（第八轮审计，P1）：迁移进行中标志，透传自 AppContent 的
+  // migratingSingle/migratingAll —— 抽屉里的「迁移到 xdev」按钮此前不受任何约束。
+  migrationBusy: Boolean,
   t: { type: Function, required: true },
 });
 const emit = defineEmits(['update:show', 'toggle-favorite', 'migrate', 'switch-local', 'switch-xdev', 'use-version', 'uninstall-version', 'install', 'repair', 'show-more', 'launch', 'copy-command', 'migrate-pm', 'install-package-manager', 'update-package-manager']);
@@ -137,7 +146,7 @@ watch(() => props.show, async (show, was) => {
 </script>
 <style scoped>
 .detail-section { padding: var(--xdev-space-3); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); }
-h3 { margin: 0 0 var(--xdev-space-3); font-size: var(--xdev-font-size-md); }
+h3 { margin: 0 0 var(--xdev-space-3); color: var(--xdev-text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
 .deps-list { display: grid; gap: var(--xdev-space-2); }
 .dep-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--xdev-space-2); align-items: center; }
 .dep-reason, .dep-install { grid-column: 1 / -1; color: var(--xdev-text-muted); font-size: var(--xdev-font-size-xs); }

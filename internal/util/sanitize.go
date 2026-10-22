@@ -62,24 +62,58 @@ func SafeName(s string) (string, error) {
 		}
 	}
 
-	// Reject Windows reserved device names
+	// Reject Windows reserved device names.
+	//
+	// 第十一轮审计（Round 10 报告待办 9）：**必须整体相等**，不能剥离扩展名。
+	// 旧实现剥掉第一个 `.` 之前的部分再比对，于是 `con.txt` / `nul.txt` /
+	// `aux.x.y` / `con.txt.bak` / `lpt9.txt` 这些**完全合法**的名字被误拒。
+	//
+	// 本机实测（`os.WriteFile` + `os.ReadDir` 目录枚举，Windows 10）：
+	//
+	//	分量          读回     真实目录项
+	//	CON           "X"     true     ← 普通文件
+	//	con           "X"     **false** ← 落进控制台设备
+	//	NUL           ""      false    ← 落进空设备，数据丢失
+	//	con.txt       "X"     true     ← 普通文件
+	//	con.txt.bak   "X"     true     ← 普通文件
+	//	lpt9.txt      "X"     true     ← 普通文件
+	//
+	// 即 `con` 与 `con.txt` 的差别**不是扩展名**，而是前者恰好等于设备名。
+	// 该结论与 Round 10 在 `internal/extractor` 侧的实测校准一致（那边同样把
+	// 「剥离扩展名」的误报改成了整体相等）。
 	upper := strings.ToUpper(s)
-	// Strip trailing extension to check base name (e.g. "CON.txt" is also reserved)
-	base := upper
-	if dotIdx := strings.Index(upper, "."); dotIdx > 0 {
-		base = upper[:dotIdx]
-	}
 	for _, reserved := range windowsReservedNames {
-		if base == reserved {
+		if upper == reserved {
 			return "", fmt.Errorf("name %q is a reserved device name", s)
 		}
 	}
 
-	// Reject trailing dots or spaces (Windows strips these silently,
-	// which can cause two different names to collide on disk)
-	trimmed := strings.TrimRight(s, ". ")
-	if trimmed != s && trimmed != "" {
-		// Allow if the entire name is dots/spaces (caught by "." check above)
+	// Reject names made ENTIRELY of dots and/or spaces.
+	//
+	// 第十一轮审计（Round 10 报告待办 9）：旧实现写成
+	//
+	//	trimmed := strings.TrimRight(s, ". ")
+	//	if trimmed != s && trimmed != "" { reject }
+	//
+	// 那个 `trimmed != ""` 让**全点/全空格**名字（`"..."`、`"   "`、`". ."`）
+	// 恰好经 TrimRight 变成空串而被**放行**。旧注释声称「entire name is
+	// dots/spaces (caught by "." check above)」，但上面的检查只拦精确的
+	// `"."` 与 `".."`，`"..."` 不在其中 —— 该假设不成立。
+	//
+	// 危害：Windows 会把纯点/空格名静默折叠成**空名**或与其它名字合并
+	// （Round 10 已实测 `bin.` 与 `bin` 折叠为同一目录项）。`SafeName` 是工具名、
+	// 版本号、归档 format 与插件名的共享入口（约 23 个调用点）。
+	//
+	// 注意判据是「TrimRight 后为空」⇔「整个名字都由点/空格组成」，因此
+	// `..foo`、`...x`、`.hidden` 这类**以点开头但并非纯点**的名字仍被放行
+	// （Round 10 已确立它们是合法的）。
+	if strings.TrimRight(s, ". ") == "" {
+		return "", fmt.Errorf("name %q must not consist only of dots and/or spaces (Windows folds it to an empty or colliding name)", s)
+	}
+
+	// Reject a trailing dot or space on an otherwise valid name (Windows strips
+	// these silently, which can cause two different names to collide on disk).
+	if trimmed := strings.TrimRight(s, ". "); trimmed != s {
 		return "", fmt.Errorf("name %q must not end with dots or spaces (Windows compatibility)", s)
 	}
 
@@ -160,7 +194,14 @@ func ValidateSubPath(parent, child string) error {
 	// Walk the child up until a real prefix exists, then stitch the
 	// remaining components onto the resolved prefix.
 	absParent = evalExistingPrefix(absParent)
-	absChild = evalExistingPrefix(absChild)
+	// 只解析 child 的**目录**，不跟随最后一段。
+	//
+	// 20261022 CI（macOS）实测：Activate 校验 current/<tool> 时，该路径本身
+	// 已是指向 install/<tool>/<ver> 的符号链接。旧实现 EvalSymlinks 把整条
+	// child 解析到安装树，于是每个合法激活都被判成 “escapes current dir”。
+	// Windows 的 junction 没有暴露这一点，Linux/macOS 的 symlink 会。
+	// 语义应当是：**链接路径本身**必须在 parent 内，而不是链接目标。
+	absChild = filepath.Join(evalExistingPrefix(filepath.Dir(absChild)), filepath.Base(absChild))
 
 	// Check via Rel that child does not escape parent
 	rel, err := filepath.Rel(absParent, absChild)

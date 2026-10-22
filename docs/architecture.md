@@ -7,7 +7,7 @@
 
 # XDev 架构文档
 
-> 版本: 0.3.2 | 最后更新: 2026-08-21
+> 版本: 0.4.0 | 最后更新: 2026-10-21
 
 ## 1. 项目概览
 
@@ -17,13 +17,13 @@ XDev 是一个跨平台开发环境版本管理器，用 Go 1.25 编写。它提
 - **TUI** — 基于 Bubble Tea 的终端用户界面
 - **GUI** — 基于 Wails v2 + Vue 3 的桌面图形界面
 
-核心设计理念：**CLI 二进制多入口**（Shim Dispatch）—— `xdev` 同时充当 CLI/TUI 和所有托管工具的 shim。GUI 是独立的 `xdev-gui`（`-tags gui`），默认 `go build` 不链接 Wails（Spec 030 / ADR-0002）。
+核心设计理念：**单二进制多入口**（Shim Dispatch）—— `xdev` 同时充当 CLI/TUI/GUI 和所有托管工具的 shim。GUI 需要 Wails 的 `desktop,production` 构建标签（`wails build` 自动带上；手工 `go build` 必须显式传入，否则 GUI 启动会弹“without the correct build tags”）；`bindings` 标签仅用于生成 Wails 绑定（见 ADR-0006；ADR-0002 的 Wails 选型仍然有效）。
 
 ## 2. 目录结构
 
 ```
 xmdevenvmt/
-├── main.go / main_gui.go / main_bindings.go  # 入口（Spec 030：CLI/GUI/bindings 三变体，构建见 build.ps1）
+├── main.go / main_gui.go / main_bindings.go  # 单二进制入口（默认 !bindings：CLI/TUI/GUI/shim；bindings 仅生成 Wails 绑定，ADR-0006）
 ├── internal/                 # 内部包（不可外部导入）
 │   ├── cli/                  # CLI 命令定义 (Cobra)
 │   ├── config/               # 配置加载/保存/迁移
@@ -109,16 +109,19 @@ xmdevenvmt/
 main.go:init()
   └── manifest.InitEmbedded(manifestFS)  // 嵌入清单 YAML
 
-main.go:main()                         // tag !bindings && !gui
-  └── cli.NewRootCommand()
-      ├── shim.MaybeExec(basename)        // Shim 调度 (优先!)
-      │   ├── 是 xdev/xdev-gui → 返回, 继续 CLI
-      │   └── 是工具别名 → Lookup + run (Unix: unix.Exec)
-      ├── cobra.OnInitialize → initContext()
-      │   └── config.Load(xmdeDir)       // 加载配置；嗅探 OnStartup 异步
-      └── 注册 30+ 子命令
-          ├── 无子命令 → 启动 TUI
-          └── xdev gui → exec 同目录 xdev-gui
+main.go:main()                         // tag !bindings
+  ├── 无参数
+  │   ├── shim.MaybeExec(basename)     // Shim 调度 (优先!)
+  │   │   ├── 是 xdev/xdev-* → 返回 false, 继续 GUI
+  │   │   └── 是工具别名 → Lookup + run (Unix: unix.Exec)
+  │   └── runGUI()                     // 进程内启动 GUI（ADR-0006）
+  └── 有参数
+      └── cli.NewRootCommand()
+          ├── cobra.OnInitialize → initContext()
+          │   └── config.Load(xmdeDir) // 加载配置；嗅探 OnStartup 异步
+          ├── xdev tui → TUI
+          ├── xdev gui → cli.SetGUILauncher → runGUI()
+          └── 其余 → CLI 子命令
 ```
 
 ### GUI 启动
@@ -387,9 +390,9 @@ manifest.LoadCatalogCached()
 ./build.sh
 
 # Windows PowerShell
-.\build.ps1              # 完整构建
-.\build.ps1 -SkipGUI    # 仅 CLI
-.\build.ps1 -SkipFrontend  # 跳过前端编译
+.\build.ps1                 # 完整构建
+.\build.ps1 -SkipBuild      # 跳过编译（仅做审计）
+.\build.ps1 -SkipAudit      # 跳过下载源审计
 ```
 
 ### 11.2 Ldflags
@@ -401,8 +404,8 @@ manifest.LoadCatalogCached()
 
 ### 11.3 输出
 
-- `build/bin/xdev.exe` — CLI/TUI/shim（默认 `go build`，不含 Wails；Spec 030）
-- `build/bin/xdev-gui.exe` — GUI（`wails build -tags gui`，嵌入前端资源）
+- `build/bin/xdev.exe` — 单二进制（CLI/TUI/GUI/shim；默认 `go build`，嵌入前端资源；ADR-0006）
+- `build/bin/xdev-<version>.exe` — 同一产物的版本化副本
 
 ## 12. GUI 架构
 

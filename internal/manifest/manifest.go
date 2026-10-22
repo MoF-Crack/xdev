@@ -50,6 +50,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -88,6 +89,10 @@ type Tool struct {
 	FormFactor []string `yaml:"form_factor,omitempty"`
 	// GUIBinary GUI 主二进制（相对 install 根），form_factor 含 gui 时使用。
 	GUIBinary string `yaml:"gui_binary,omitempty"`
+	// Installable 是**派生**标记（不来自 YAML）：本平台上是否至少有一个可安装
+	// 版本（见 Version.Installable）。LoadCatalog 会为每个工具计算它，供
+	// GUI/CLI/doctor 把「看着有版本、其实装不了」的工具显式标出来（票 18 / P2-29）。
+	Installable bool `yaml:"-"`
 }
 
 // Dependency 描述一个工具的可选依赖约束。
@@ -225,6 +230,12 @@ type Version struct {
 //     run with InstallArgs; it is expected to install itself.
 //   - "script":    the downloaded file is a shell script (e.g. sh.rustup.rs).
 //     After SHA-256 verification it is executed via "sh".
+//   - "npm":       the archive entry is metadata only — no file is
+//     downloaded. The tool is an npm package (e.g. @deepseek-ai/dsh)
+//     installed by running the npm CLI against the version directory:
+//     npm resolves the dependency tree, verifies registry integrity,
+//     and generates its launcher shims (dsh.cmd / bin/dsh). Requires
+//     Node.js + npm (checked before install, Spec 039).
 //
 // Unknown values always fall back to "archive" so that a typo or a future
 // kind string can never accidentally cause code execution (trust model:
@@ -233,6 +244,7 @@ const (
 	InstallKindArchive    = "archive"
 	InstallKindExecutable = "executable"
 	InstallKindScript     = "script"
+	InstallKindNPM        = "npm"
 )
 
 // Archive is one downloadable file (the manifest can list several
@@ -258,14 +270,84 @@ type Archive struct {
 	Form string `yaml:"form,omitempty"`
 }
 
+// Installable reports whether this archive can actually be installed.
+//
+// 票 18 / P2-29：manifest 里可以存在「有 os/arch 但没有 url/format」的占位条目
+// （历史遗留、或嗅探模板尚未补全）。这类条目过去会被 `xdev available` 照常展示，
+// 直到用户点安装才失败——实测 mingw 的三个版本全部如此。安装侧要求：
+//
+//   - npm 型（install_kind: npm）：条目本身只是元数据，由 npm CLI 安装，
+//     因此不需要 url/format；
+//   - archive / executable / script：必须有 url 与 format。
+func (a Archive) Installable() bool {
+	if a.EffectiveKind() == InstallKindNPM {
+		return true
+	}
+	return strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.Format) != ""
+}
+
+// Installable reports whether this version can be installed on the given
+// platform (os/arch matching follows the manifest convention: "any" matches).
+func (v Version) Installable(goos, goarch string) bool {
+	for _, a := range v.Archives {
+		if a.OS != goos && a.OS != "any" {
+			continue
+		}
+		if a.Arch != goarch && a.Arch != "any" {
+			continue
+		}
+		if a.Installable() {
+			return true
+		}
+	}
+	return false
+}
+
+// HasInstallableVersion reports whether at least one version is installable on
+// the given platform. LoadCatalog marks such tools via Tool.Installable so the
+// GUI/CLI/doctor can flag entries that look available but cannot be installed.
+func (t *Tool) HasInstallableVersion(goos, goarch string) bool {
+	if t == nil {
+		return false
+	}
+	for _, v := range t.VersionList {
+		if v.Installable(goos, goarch) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCompleteArchive reports whether ANY version carries a structurally
+// complete archive (url + format, or npm kind) on ANY declared platform.
+//
+// 与 HasInstallableVersion 的区别：后者问「本平台能否安装」（供 UI/doctor 提示），
+// 本方法问「这个工具是不是纯占位」（供 manifests 守卫）——守卫必须与宿主平台无关，
+// 否则 Windows-only 工具在 Linux CI 上会被误判。实测（2026-09-13）52 个工具里只有
+// mingw 曾整体缺失 url/format（票 18 / P2-29）。
+func (t *Tool) HasCompleteArchive() bool {
+	if t == nil {
+		return false
+	}
+	for _, v := range t.VersionList {
+		for _, a := range v.Archives {
+			if a.Installable() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // EffectiveKind returns the resolved install kind, defaulting to
 // InstallKindArchive when the field is empty or holds an unrecognised
-// value. Only "executable" and "script" are returned as-is; everything
-// else collapses to the safe "archive" default so that execution of
-// downloaded code always requires an explicit manifest declaration.
+// value. Only "executable", "script", and "npm" are returned as-is;
+// everything else collapses to the safe "archive" default so that
+// execution of downloaded code (or delegation to a package manager)
+// always requires an explicit manifest declaration.
 func (a Archive) EffectiveKind() string {
 	switch a.InstallKind {
-	case InstallKindExecutable, InstallKindScript:
+	case InstallKindExecutable, InstallKindScript, InstallKindNPM:
 		return a.InstallKind
 	default:
 		return InstallKindArchive
@@ -364,10 +446,15 @@ func LoadCatalog(dir string) (*Catalog, error) {
 }
 
 // loadMergedCatalog loads embedded manifests as the base, then overlays
-// on-disk manifests from dir.  For tools in both sources, the on-disk
-// VersionList is merged (embedded is base, disk versions appended if not
-// already present).  Other fields (DisplayName, Shims, etc.) come from
-// embedded, with disk as override.
+// on-disk manifests from dir. For tools in both sources the merge is
+// EMBEDDED-FIRST: the embedded VersionList is the base and only disk
+// versions not already present are appended; all other fields
+// (DisplayName, Shims, EnvVars, archives of existing versions, ...) come
+// from the embedded copy. A disk edit of a built-in field therefore has
+// NO effect — the practical attack/change surface of an on-disk override
+// is a NEW version entry (audit-fixes ticket 13 note; corrected here
+// because the previous wording claimed "disk as override", the opposite
+// of the implementation).
 func loadMergedCatalog(dir string) (*Catalog, error) {
 	// Step 1: Load embedded catalog as the base.
 	embedded, err := loadFromEmbedded()
@@ -401,10 +488,18 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 					path := filepath.Join(dir, name)
 					data, readErr := os.ReadFile(path)
 					if readErr != nil {
+						// D-06（审计 P1-11）：容错语义保留（坏的单条跳过，
+						// 不影响整体加载），但必须可见——静默跳过时坏
+						// manifest 完全查不出原因（用户只看到工具"不见了"）。
+						// log 包自带互斥，可安全用于这里的并行 goroutine。
+						log.Printf("[manifest] WARNING: skip unreadable %s: %v", name, readErr)
 						return nil // 单文件读失败跳过（与原 continue 一致）
 					}
 					var t Tool
 					if err := yaml.Unmarshal(data, &t); err != nil {
+						// D-06（审计 P1-11）：同上，解析失败也只跳过该条 +
+						// 告警，不回退为整体加载失败。
+						log.Printf("[manifest] WARNING: skip unparseable %s: %v", name, err)
 						return nil // 单文件解析失败跳过（与原 continue 一致）
 					}
 					if t.Name == "" {
@@ -465,6 +560,7 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 		}
 	}
 
+	embedded.markInstallability()
 	return embedded, nil
 }
 
@@ -551,7 +647,27 @@ func loadFromDir(dir string) (*Catalog, error) {
 			c.tools[results[i].Name] = results[i]
 		}
 	}
+	c.markInstallability()
 	return c, nil
+}
+
+// markInstallability 计算**派生**标记 Tool.Installable：当前平台上是否至少有一个
+// 可安装版本（票 18 / P2-29）。
+//
+// 三个加载出口都必须调用——磁盘加载、内嵌加载、内嵌+磁盘合并：合并在 base 上追加
+// 磁盘版本，因此合并结果必须重新计算，否则「磁盘补上了 url/format」的工具仍被标记为
+// 不可安装（反之亦然）。
+func (c *Catalog) markInstallability() {
+	if c == nil {
+		return
+	}
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	for _, t := range c.tools {
+		if t == nil {
+			continue
+		}
+		t.Installable = t.HasInstallableVersion(goos, goarch)
+	}
 }
 
 // Tool returns a tool by name.
@@ -595,27 +711,58 @@ func (t *Tool) Versions() []string {
 	return out
 }
 
-// SortVersionsByRelease orders versions newest-first by release date,
-// falling back to semver when dates are missing or equal. Used after
-// sniff-merge so available-version lists are not YAML-append order.
+// SortVersionsByRelease orders versions newest-first using the total order
+// implemented by versionReleaseNewer. Used after sniff-merge so
+// available-version lists are not YAML-append order.
 func SortVersionsByRelease(versions []Version) {
 	sort.SliceStable(versions, func(i, j int) bool {
 		return versionReleaseNewer(versions[i], versions[j])
 	})
 }
 
+// versionReleaseNewer is the comparator behind SortVersionsByRelease
+// (audit-fixes ticket 27 / P1-10).
+//
+// Keys, in order:
+//  1. semver (SemVer 2.0.0, pre-release aware) — the PRIMARY key;
+//  2. release date — a tie-break only, with a missing date counting as the
+//     zero time so a dated entry sorts before an undated one;
+//  3. the raw version string — final deterministic tie-break.
+//
+// The pre-fix comparator put the DATE first. That relation is NOT
+// transitive on real manifest data: with A(1.0.0, 2024-06), B(2.0.0,
+// 2024-01) and C(1.5.0, no date) it yields A>B (date), B>C (semver), C>A
+// (semver) — a cycle. Sort order then depended on input order, and the
+// list top (used for `latest` and UpdatePackageManager) could resolve to an
+// OLDER version merely because its release string was newer. Ordering by
+// the (semver, date, string) tuple is a total order by construction.
 func versionReleaseNewer(a, b Version) bool {
-	ta, oka := parseReleaseDate(a.Release)
-	tb, okb := parseReleaseDate(b.Release)
-	// 仅当两端都有日期且不相等时按发布时间；嗅探版本常缺日期，
-	// 不能把带日期的旧内置版本排到无日期的新版本前面。
-	if oka && okb && !ta.Equal(tb) {
-		return ta.After(tb)
-	}
 	if c := util.CompareSemver(a.Version, b.Version); c != 0 {
 		return c > 0
 	}
+	ta, oka := parseReleaseDate(a.Release)
+	tb, okb := parseReleaseDate(b.Release)
+	if oka != okb {
+		// Equal semver, only one side carries a date: the dated entry
+		// sorts first (an absent date is the zero time).
+		return oka
+	}
+	if oka && okb && !ta.Equal(tb) {
+		return ta.After(tb)
+	}
 	return a.Version > b.Version
+}
+
+// VersionReleaseNewer 报告 a 是否应当排在 b 之前，使用与 SortVersionsByRelease
+// **完全相同**的全序（semver → 发布日期 → 原串）。
+//
+// 第八轮审计 R8-2：`xdev refresh` 原先用 `newestVersion`（本全序）挑出候选，
+// 却用 `util.CompareSemver` 做写回门 —— 两套排序不一致。数字段相同、发布日期
+// 不同时（真实语料：clion/goland/webstorm 的 `2026.2` vs `2026.2.0.1`），全序判
+// 「更新」而 CompareSemver 判「相等」，于是 latest **永远推不上去**，且没有任何
+// 提示。导出本函数让写回门复用同一判据，从根上消除两套排序的分裂。
+func VersionReleaseNewer(a, b Version) bool {
+	return versionReleaseNewer(a, b)
 }
 
 func parseReleaseDate(s string) (time.Time, bool) {
@@ -769,7 +916,20 @@ func MarshalTool(t *Tool) ([]byte, error) {
 var manifestMu sync.Mutex
 
 // UpdateArchiveSHA256 updates the sha256 field of a specific archive entry
-// in the on-disk manifest YAML. Uses atomic write (temp file + rename).
+// in the on-disk manifest YAML.
+//
+// Concurrency (audit-fixes ticket 23 / D-03): the read-modify-write cycle
+// is protected by TWO locks — the in-process manifestMu (goroutines inside
+// one binary) and a cross-process file lock on <tool>.yaml.lock (this
+// process vs another xdev process, e.g. the sniff scheduler appending a
+// newly discovered version). Both this function and the scheduler's
+// mergeIntoManifest take them in the same order (manifestMu → file lock),
+// so there is no lock-order inversion.
+//
+// Every write in this function (including the initial baseline copy) is
+// atomic (temp file + rename) — the function previously claimed atomicity
+// while writing the baseline with a bare os.WriteFile.
+//
 // Tool name is validated against existing catalog — rejects unknown tools
 // to prevent path traversal.
 //
@@ -796,6 +956,17 @@ func UpdateArchiveSHA256(manifestDir, toolName, version, osName, arch, sha256 st
 	manifestMu.Lock()
 	defer manifestMu.Unlock()
 
+	// Ticket 23 (D-03): cross-process lock — the in-process mutex alone let
+	// another xdev process (sniff scheduler / a second installer) lose this
+	// hash update. Stale-safe: OS byte-range locks are released by the
+	// kernel when a holder dies.
+	lockPath := manifestPath + ".lock"
+	fileLock, lockErr := util.AcquireFileLock(lockPath, 30*time.Second)
+	if lockErr != nil {
+		return fmt.Errorf("manifest lock %s: %w", lockPath, lockErr)
+	}
+	defer fileLock.Release()
+
 	// --- Read or create from embedded ---
 	var tool Tool
 	data, err := os.ReadFile(manifestPath)
@@ -811,11 +982,12 @@ func UpdateArchiveSHA256(manifestDir, toolName, version, osName, arch, sha256 st
 		if embErr != nil {
 			return fmt.Errorf("manifest %s not found on disk or embedded", manifestPath)
 		}
-		// Create on-disk copy from embedded.
+		// Create on-disk copy from embedded — atomic (ticket 23: was a bare
+		// os.WriteFile that could leave a truncated manifest on a crash).
 		if err := os.MkdirAll(manifestDir, 0o755); err != nil {
 			return fmt.Errorf("create manifest dir: %w", err)
 		}
-		if err := os.WriteFile(manifestPath, embData, 0o644); err != nil {
+		if err := util.AtomicWriteFile(manifestPath, embData, 0o644); err != nil {
 			return fmt.Errorf("write initial manifest %s: %w", manifestPath, err)
 		}
 		data = embData
@@ -1186,6 +1358,7 @@ func loadFromEmbedded() (*Catalog, error) {
 			c.tools[results[i].Name] = results[i]
 		}
 	}
+	c.markInstallability()
 	return c, nil
 }
 

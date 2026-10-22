@@ -3,7 +3,6 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -62,8 +61,38 @@ func (p *luaBasePlugin) ResolveVersion(spec string) (string, error) {
 		return "", err
 	}
 
-	latest := versions[len(versions)-1]
+	// 票 20 / F-05: "latest" used to be resolved to versions[len-1] (the
+	// table tail), which silently picked the OLDEST version for plugins
+	// that list versions newest-first (the common vfox layout). Leaving
+	// the hint empty makes resolver.Resolve apply its KindLatest →
+	// highest(available) semantics, which orders the list itself.
+	//
+	// Deterministic fallback: the resolver's highest() can only order
+	// semver-parsable entries. When nothing in the list parses (e.g.
+	// {"r29","r28"}) keep the old table-tail behaviour rather than depend
+	// on an unspecified order for unparsable entries. The plugin's order
+	// is never mutated.
+	latest := ""
+	if !hasParsableSemver(versions) {
+		latest = versions[len(versions)-1]
+	}
 	return resolver.Resolve(parsed, versions, latest, "")
+}
+
+// hasParsableSemver reports whether at least one entry is a version the
+// resolver can order. resolver.Parse is the exported entry point that
+// mirrors the resolver's internal parseSemver: a plain semver string
+// (with optional "v" prefix or pre-release) parses as KindExact, while
+// non-semver plugin versions such as "r29" fail to parse. The
+// "latest"/"lts" keywords also parse but are not versions, so only
+// KindExact counts.
+func hasParsableSemver(versions []string) bool {
+	for _, v := range versions {
+		if parsed, err := resolver.Parse(v); err == nil && parsed.Kind == resolver.KindExact {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *luaBasePlugin) ArchiveFor(version string) (*manifest.Archive, error) {
@@ -89,27 +118,23 @@ func (p *luaBasePlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 // Security: p.name and version are validated with util.SafeName and
 // the final path is checked with util.ValidateSubPath to prevent
 // path traversal attacks (C-2).
-func (p *luaBasePlugin) InstallDir(installRoot, version string) string {
-	safeName := p.name
+//
+// 20261021 审计 P1-5（阶段 2）：校验失败返回 ErrUnsafeInstallPath。
+func (p *luaBasePlugin) InstallDir(installRoot, version string) (string, error) {
 	if _, err := util.SafeName(p.name); err != nil {
-		log.Printf("[plugin] CRITICAL: Lua plugin name %q is not a safe path component: %v — using fallback", p.name, err)
-		safeName = "unsafe-plugin-blocked"
+		return "", fmt.Errorf("%w: plugin name %q: %v", ErrUnsafeInstallPath, p.name, err)
 	}
-
-	safeVersion := version
 	if _, err := util.SafeName(version); err != nil {
-		log.Printf("[plugin] CRITICAL: version %q is not a safe path component: %v — using fallback", version, err)
-		safeVersion = "unsafe-version-blocked"
+		return "", fmt.Errorf("%w: version %q: %v", ErrUnsafeInstallPath, version, err)
 	}
 
-	result := filepath.Join(installRoot, safeName, safeVersion)
+	result := filepath.Join(installRoot, p.name, version)
 
 	if err := util.ValidateSubPath(installRoot, result); err != nil {
-		log.Printf("[plugin] CRITICAL: InstallDir %q escapes install root %q — using safe fallback", result, installRoot)
-		return filepath.Join(installRoot, "unsafe-path-blocked")
+		return "", fmt.Errorf("%w: %q escapes %q: %v", ErrUnsafeInstallPath, result, installRoot, err)
 	}
 
-	return result
+	return result, nil
 }
 
 func (p *luaBasePlugin) EnvVars(installPath string) map[string]string {

@@ -174,9 +174,9 @@ func probeURL(ctx context.Context, url string) (int64, error) {
 
 // probeResult is the outcome of probing a single mirror URL.
 type probeResult struct {
-	URL      string
+	URL       string
 	LatencyMs int64
-	Err      error
+	Err       error
 }
 
 // SelectBestMirror concurrently probes all candidate mirror URLs and returns

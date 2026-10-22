@@ -16,23 +16,23 @@ import (
 
 // depPlugin is a plugin.Plugin with configurable RequiredPlugin and archive.
 type depPlugin struct {
-	name      string
-	requires  []string
-	archive   *manifest.Archive
+	name     string
+	requires []string
+	archive  *manifest.Archive
 }
 
-func (p *depPlugin) Name() string                         { return p.name }
-func (p *depPlugin) DisplayName() string                  { return p.name }
-func (p *depPlugin) Description() string                  { return "test tool " + p.name }
-func (p *depPlugin) Homepage() string                     { return "" }
-func (p *depPlugin) Category() string                     { return "language" }
-func (p *depPlugin) Manifest() *manifest.Tool             { return nil }
-func (p *depPlugin) Shims() []string                      { return []string{p.name} }
-func (p *depPlugin) DefaultVersion() string               { return "1.0.0" }
-func (p *depPlugin) RequiredPlugin() []string             { return p.requires }
-func (p *depPlugin) EnvVars(string) map[string]string     { return nil }
+func (p *depPlugin) Name() string                              { return p.name }
+func (p *depPlugin) DisplayName() string                       { return p.name }
+func (p *depPlugin) Description() string                       { return "test tool " + p.name }
+func (p *depPlugin) Homepage() string                          { return "" }
+func (p *depPlugin) Category() string                          { return "language" }
+func (p *depPlugin) Manifest() *manifest.Tool                  { return nil }
+func (p *depPlugin) Shims() []string                           { return []string{p.name} }
+func (p *depPlugin) DefaultVersion() string                    { return "1.0.0" }
+func (p *depPlugin) RequiredPlugin() []string                  { return p.requires }
+func (p *depPlugin) EnvVars(string) map[string]string          { return nil }
 func (p *depPlugin) PostInstall(context.Context, string) error { return nil }
-func (p *depPlugin) Deactivate(string) error              { return nil }
+func (p *depPlugin) Deactivate(string) error                   { return nil }
 
 func (p *depPlugin) ResolveVersion(spec string) (string, error) {
 	if spec == "" {
@@ -52,8 +52,8 @@ func (p *depPlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 	}, nil
 }
 
-func (p *depPlugin) InstallDir(root, version string) string {
-	return filepath.Join(root, p.name, version)
+func (p *depPlugin) InstallDir(root, version string) (string, error) {
+	return filepath.Join(root, p.name, version), nil
 }
 
 // newDepTestInstaller creates an Installer with the given plugins registered.
@@ -77,15 +77,40 @@ func newDepTestInstaller(t *testing.T, plugins ...*depPlugin) *Installer {
 }
 
 // makeInstalledDir creates a fake installation directory so dependency checks pass.
+//
+// F-27 note: the dependency gate now uses VerifyInstallIntegrity (not a bare
+// os.Stat + IsDir), so a merely EXISTING directory is no longer "installed".
+// The helper therefore lays down the tool's declared shim binary, which is
+// what a real, complete install tree contains.
 func makeInstalledDir(t *testing.T, ins *Installer, toolName, version string) {
 	t.Helper()
 	p, ok := ins.reg.Get(toolName)
 	if !ok {
 		t.Fatalf("tool %q not in registry", toolName)
 	}
-	path := p.InstallDir(ins.cfg.Core.InstallDir, version)
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", path, err)
+	path, err := p.InstallDir(ins.cfg.Core.InstallDir, version)
+	if err != nil {
+		t.Fatalf("InstallDir(%s@%s): %v", toolName, version, err)
+	}
+	binDir := filepath.Join(path, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", binDir, err)
+	}
+	// Install every declared shim so VerifyInstallIntegrity succeeds.
+	for _, shimName := range p.Shims() {
+		binName := shimName
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+		if err := os.WriteFile(filepath.Join(binDir, binName), []byte("stub-binary"), 0o755); err != nil {
+			t.Fatalf("write stub binary %s: %v", binName, err)
+		}
+	}
+	// Guarantee a non-empty tree even for a plugin that declares no shims.
+	if len(p.Shims()) == 0 {
+		if err := os.WriteFile(filepath.Join(path, "placeholder.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write placeholder: %v", err)
+		}
 	}
 }
 

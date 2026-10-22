@@ -29,14 +29,20 @@ jobs:
             goos: linux
             goarch: amd64
             ext: ""
+            cgo_ldflags: ""
           - os: windows-latest
             goos: windows
             goarch: amd64
             ext: ".exe"
+            cgo_ldflags: ""
           - os: macos-latest
             goos: darwin
             goarch: arm64
             ext: ""
+            # Wails v2.12 的 darwin cgo LDFLAGS 未包含
+            # UniformTypeIdentifiers；macOS 26 SDK 下必须显式补上，
+            # 否则链接报 _OBJC_CLASS_$_UTType undefined。
+            cgo_ldflags: "-framework UniformTypeIdentifiers"
 
     runs-on: ${{ matrix.os }}
 
@@ -77,6 +83,22 @@ jobs:
           npm ci
           npm run build
 
+      # 第七轮审计 F-44：CI 此前只做 `vite build`，**从不运行前端测试**——
+      # 236 个 vitest 用例（含 i18n 键奇偶、订阅泄漏、重入、竞态守卫）全红也能合入，
+      # 整套前端守卫退化为「本机自律」。此处补上单元测试门禁。
+      #
+      # 第八轮审计 R8-04：F-44 只补了 `npx vitest run`，但 `frontend/package.json` 的
+      # `"test": "node test/smoke.mjs"` 是**第二套**源码级契约守卫（AppContent 必须渲染
+      # CommandPalette/AppShell、抽取后的页面顺序、`v-if="false"` 死分支、导航分组、
+      # locale 键奇偶…）。`vite.config.js` 的 `test.include = ['test/**/*.{test,spec}.js']`
+      # **不匹配** `smoke.mjs`，且全仓此前没有任何地方调用 `npm test` —— 这套守卫
+      # 在 CI 里从不执行。两条命令在同一 working-directory 下依次运行。
+      - name: Frontend unit tests
+        working-directory: frontend
+        run: |
+          npx vitest run
+          npm test
+
       - name: Download dependencies
         run: go mod download
 
@@ -90,14 +112,39 @@ jobs:
       - name: Lint
         run: go vet ./...
 
+      # 20261021 审计 P1-1：`go build` 不编译测试文件，Windows-only 符号
+      # 被无 tag 的 _test.go 引用时只有在 Linux/macOS 跑 `go test` 才会暴露。
+      # 交叉 GOOS 的 `go vet` 会编译测试文件，是最便宜的防线。
+      - name: Cross-platform test compilation (non-Windows)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/ci/check-cross-compile.sh
+
+      # Wails 的 Linux 后端需要 GTK3 + WebKit2GTK 开发库（cgo）。
+      # ubuntu-latest（24.04）只提供 webkit2gtk-4.1，因此构建标签需带
+      # webkit2_41；4.0 在该镜像上不可用。
+      - name: Install Linux GUI build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Build CLI
-        run: go build -ldflags="-s -w" -o xdev${{ matrix.ext }} .
+        env:
+          CGO_LDFLAGS: ${{ matrix.cgo_ldflags }}
+        run: go build -tags desktop,production,webkit2_41 -ldflags="-s -w" -o xdev${{ matrix.ext }} .
 
       # Spec 005 FR-004: host state snapshot is enabled by package TestMain
       # (internal/testkit/hostsnapshot). Do not set XDEV_HOST_SNAPSHOT=0 here.
       - name: Test
         # -v removed: verbose output inflates log storage with no gate value
         run: go test ./... -count=1
+
+      # 第七轮审计 F-44：仓库多轮工作（票 10/19/44/46）核心即锁与 PATH RMW 竞态，
+      # 但 `-race` 在任何工作流中都不存在（本机因 MinGW 8.1.0 与 Go 1.26 race
+      # 运行时不兼容而无法执行）。Linux runner 无该限制，是唯一能补上竞态门禁的地方。
+      - name: Test with race detector (linux only)
+        if: matrix.goos == 'linux'
+        run: go test -race ./internal/... -count=1
 
       - name: Upload artifact
         continue-on-error: true
@@ -158,10 +205,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # secrets cannot be referenced in step-level `if:`; expose them as job env
-    # and gate optional signing on the env values instead.
+    # 第七轮审计 F-38（密钥作用域）：**不得**把 XDEV_SIGNING_PRIVATE_KEY 放在
+    # 作业级 env —— 作业级 env 对该作业的**所有步骤**可见，于是本作业的
+    # `npm ci`（执行 lockfile 中全部依赖的 preinstall/install/postinstall 脚本）
+    # 与 `gem install fpm`（执行 rubygems 拉取的 Ruby 代码）都能读到根签名私钥。
+    # 攻击者只需投毒**一个**依赖即可为任意 manifest 签发合法签名，而所有已发布
+    # 客户端都内嵌对应公钥 → 整条更新链的信任根失守。
+    # 私钥只在真正需要它的步骤上做**步骤级** env 注入（见下方 Verify / Sign 两步）；
+    # 公钥非机密，可保留作业级（下游 Build 步骤要用它注入 -ldflags）。
     env:
-      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
       XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
 
     steps:
@@ -218,7 +270,14 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install Linux GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Verify signing secrets (hard gate)
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
           # Spec 003 FR-001/FR-002: Release must fail if signing keys are missing
           if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
@@ -232,11 +291,17 @@ jobs:
           echo "Signing secrets verified"
 
       - name: Sign manifests
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
+          # F-38 纵深：umask + trap 保证私钥落地文件不被同作业后续步骤读取，
+          # 且无论成功失败都被清除（与 sign-manifests.yml 同源做法）。
+          umask 077
+          trap 'rm -f keys/priv.key' EXIT
           mkdir -p keys
-          echo "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
+          printf '%s' "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
           chmod 600 keys/priv.key
-          go build -o xdev .
+          go build -tags desktop,production,webkit2_41 -o xdev .
           ./xdev sign-manifests --manifests-dir manifests --priv-key keys/priv.key
 
       - name: Build all platforms
@@ -252,7 +317,7 @@ jobs:
 
           # linux-amd64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-amd64-v${VER}.tar.gz"; then
-            GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
+            GOOS=linux   GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
             tar -czf "dist/xdev-linux-amd64-v${VER}.tar.gz" xdev
             rm -f xdev
           else
@@ -261,7 +326,7 @@ jobs:
 
           # linux-arm64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-arm64-v${VER}.tar.gz"; then
-            GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
+            GOOS=linux   GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
             tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
             rm -f xdev
           else
@@ -270,7 +335,7 @@ jobs:
 
           # windows-amd64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-windows-amd64-v${VER}.zip"; then
-            GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev.exe .
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev.exe .
             (cd "$(dirname xdev.exe)" && 7z a -tzip "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe) || \
               zip -j "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe
             rm -f xdev.exe
@@ -278,23 +343,8 @@ jobs:
             echo "SKIP: xdev-windows-amd64-v${VER}.zip already exists"
           fi
 
-          # darwin-amd64
-          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-amd64-v${VER}.tar.gz"; then
-            GOOS=darwin   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev .
-            tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev
-            rm -f xdev
-          else
-            echo "SKIP: xdev-darwin-amd64-v${VER}.tar.gz already exists"
-          fi
-
-          # darwin-arm64
-          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-arm64-v${VER}.tar.gz"; then
-            GOOS=darwin   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev .
-            tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev
-            rm -f xdev
-          else
-            echo "SKIP: xdev-darwin-arm64-v${VER}.tar.gz already exists"
-          fi
+          # darwin 资产由 release-macos 原生 job 构建（Wails 需要 cgo，
+          # ubuntu 上无法交叉编译）；此处不再交叉构建 darwin。
 
       - name: Build Linux .deb and .rpm packages
         env:
@@ -323,6 +373,8 @@ jobs:
           sudo apt-get install -y -qq ruby ruby-dev rpm
           sudo gem install fpm --no-document
 
+          LDFLAGS="-s -w -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
+
           for GOARCH in amd64 arm64; do
             eval "DEB_ARCH=\$ARCH_DEB_${GOARCH}"
             eval "RPM_ARCH=\$ARCH_RPM_${GOARCH}"
@@ -334,7 +386,7 @@ jobs:
               continue
             fi
 
-            GOOS=linux GOARCH="$GOARCH" go build -ldflags="-s -w" -o "xdev-${GOARCH}" .
+            GOOS=linux GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
 
             PKGROOT="$(mktemp -d)"
             mkdir -p "$PKGROOT/usr/bin"
@@ -371,7 +423,8 @@ jobs:
         run: |
           VER="${TAG#v}"
           # 单二进制模型：一个产物同时提供 GUI/TUI/CLI（0.4.0 起产物名统一为 xdev-*）
-          GOARCH=amd64 go build -ldflags="-s -w" -o xdev .
+          LDFLAGS="-s -w -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
+          GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
@@ -408,8 +461,20 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          # Download appimagetool (use continuous build, more reliable on CI)
-          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+          # F-10: pin appimagetool to an immutable release tag and verify the
+          # artifact hash before executing it. The old URL pointed at the
+          # mutable "continuous" release of AppImage/AppImageKit, so an upstream
+          # republish silently changed one of our build inputs (supply-chain
+          # risk: the tool is executed with the packaging directory in scope).
+          # SHA-256 measured 2026-09-12 with:
+          #   sha256sum appimagetool-x86_64.AppImage
+          # and cross-checked against the GitHub release asset digest (API).
+          APPIMAGETOOL_TAG="1.9.1"
+          APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+          wget -O appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_TAG}/appimagetool-x86_64.AppImage"
+          # Fails the step (bash -e) if the artifact does not match the pin.
+          echo "${APPIMAGETOOL_SHA256}  appimagetool" | sha256sum -c -
           chmod +x appimagetool
 
           # --appimage-extract-and-run avoids FUSE requirement on CI runners
@@ -462,8 +527,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     timeout-minutes: 30
+    # 第七轮审计 F-38：私钥不进作业级 env（本作业只做非空校验，从不用它签名）。
     env:
-      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
       XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
 
     steps:
@@ -513,6 +578,10 @@ jobs:
           npm run build
 
       - name: Verify signing secrets (hard gate)
+        env:
+          # F-38：本作业不使用私钥签名，仅做存在性硬门禁——因此私钥只在此步骤可见，
+          # 不会泄漏给同作业的 `npm ci` / `gem install` 等依赖安装步骤。
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
           # Spec 003 FR-001/FR-002: Release must fail if signing keys are missing
           if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
@@ -528,6 +597,8 @@ jobs:
       - name: Build macOS DMG
         env:
           TAG: ${{ github.ref_name }}
+          # Wails v2.12 的 cgo LDFLAGS 缺少该框架；macOS 26 SDK 链接必需。
+          CGO_LDFLAGS: "-framework UniformTypeIdentifiers"
         run: |
           VER="${TAG#v}"
           mkdir -p dist
@@ -547,8 +618,8 @@ jobs:
           fi
 
           # Build CLI for both architectures
-          GOARCH=amd64 go build -ldflags="$LDFLAGS" -o xdev-amd64 .
-          GOARCH=arm64 go build -ldflags="$LDFLAGS" -o xdev-arm64 .
+          GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-amd64 .
+          GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-arm64 .
 
           # Create DMG (arm64 universal-ready)
           STAGING="xdev-dmg-staging"
@@ -557,6 +628,10 @@ jobs:
           chmod +x "$STAGING/xdev"
           hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
           rm -rf "$STAGING"
+
+          # 保留原有的 tar.gz 资产名（此前由 ubuntu 交叉构建；现在改原生构建）。
+          tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev-amd64
+          tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev-arm64
 
           rm -f xdev-amd64 xdev-arm64
 
@@ -588,8 +663,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    # 第七轮审计 F-38：私钥不进作业级 env（本作业只做非空校验，从不用它签名）。
     env:
-      XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
       XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
 
     steps:
@@ -637,7 +712,15 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install Linux GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Verify signing secrets (hard gate)
+        env:
+          # F-38：本作业不使用私钥签名，仅做存在性硬门禁——私钥只在此步骤可见。
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
         run: |
           if [ -z "$XDEV_SIGNING_PRIVATE_KEY" ]; then
             echo "::error::Missing required secret: XDEV_SIGNING_PRIVATE_KEY"
@@ -657,7 +740,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          go build -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o xdev .
+          go build -tags desktop,production,webkit2_41 -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY" -o xdev .
 
           APPDIR="XDev.AppDir"
           rm -rf "$APPDIR"
@@ -690,7 +773,17 @@ jobs:
           APPRUN
           chmod +x "$APPDIR/AppRun"
 
-          wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+          # F-10: same pinning as the amd64 job. This job runs on a native
+          # arm64 runner (ubuntu-24.04-arm), so it needs the aarch64 artifact,
+          # whose SHA-256 was measured separately (2026-09-12) with:
+          #   sha256sum appimagetool-aarch64.AppImage
+          # and cross-checked against the GitHub release asset digest (API).
+          APPIMAGETOOL_TAG="1.9.1"
+          APPIMAGETOOL_SHA256="f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"
+          wget -O appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_TAG}/appimagetool-aarch64.AppImage"
+          # Fails the step (bash -e) if the artifact does not match the pin.
+          echo "${APPIMAGETOOL_SHA256}  appimagetool" | sha256sum -c -
           chmod +x appimagetool
 
           ARCH=arm64 ./appimagetool --appimage-extract-and-run "$APPDIR" "dist/xdev-${VER}-aarch64.AppImage"

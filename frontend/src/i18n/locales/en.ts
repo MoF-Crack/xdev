@@ -60,6 +60,11 @@ export default {
   'status.version': 'version: {version}',
   'status.unknown': 'Unknown',
 
+  // AI / assistant status
+  'ai.command': 'Command',
+  'ai.available': 'Available',
+  'ai.unavailable': 'Unavailable',
+
   // Category names
   'category.language': 'Language',
   'category.build': 'Build',
@@ -103,12 +108,18 @@ export default {
   'settings.self_update': 'Self Update',
   'settings.diagnostics': 'Diagnostics',
   'settings.theme': 'Theme',
-  'theme.dark': 'Dark',
-  'theme.light': 'Light',
+  'theme.dark': 'Graphite',
+  'theme.midnight': 'Midnight',
+  'theme.nord': 'Nord',
+  'theme.ember': 'Ember',
+  'theme.light': 'Daylight',
   'theme.eye_care': 'Eye care',
+  'theme.family_dark': 'Dark',
+  'theme.family_light': 'Light',
   'settings.load_failed': 'Failed to load settings',
   'settings.mirror_saved': 'Mirror configuration saved',
   'settings.diagnostics_failed': 'Diagnostics failed',
+  'settings.check_update': 'Check for Updates',
   'btn.save_failed': 'Save failed',
   'install.failed': 'Install failed: {error}',
   'install.success': '{tool}@{version} installed successfully',
@@ -180,6 +191,7 @@ export default {
   'detail.no_versions_installed': 'No versions installed',
   'detail.show_more': 'Show more ({count} remaining)',
   'detail.active': 'ACTIVE',
+  'detail.prerelease': 'Pre-release',
   'detail.versions_count': '{count} versions',
   'detail.custom_version_placeholder': 'e.g. 3.11.5',
   'detail.incomplete': 'Incomplete',
@@ -199,8 +211,12 @@ export default {
   'detail.deps_required': ' ≥ {version}',
   'detail.deps_reason_not_found': '{tool} not found in PATH',
   'detail.deps_reason_version_low': 'Installed {installed}, requires {required}',
-  'detail.deps_reason_platform': 'Current platform not supported',
+  'detail.deps_reason_platform': 'Current platform not supported ({needed}; current: {current})',
   'detail.deps_reason_unknown_tool': 'Unknown tool',
+  // F-42: reasonCode "version_unknown" (Go side sets it when the dependency
+  // exists but its version string cannot be parsed/compared). Without this
+  // key the drawer rendered the raw key name.
+  'detail.deps_reason_version_unknown': 'Version could not be determined',
   'detail.launch': 'Launch',
   'detail.launched': 'Launched {name}',
   'detail.launch_failed': 'Launch failed',
@@ -235,6 +251,9 @@ export default {
   'installing_extracting': 'Extracting...',
   'installing_installing': 'Installing (running installer, may take several minutes)...',
   'installing_completed': 'Completed',
+  'installing_cancelled': 'Cancelled',
+  'installing_paused': 'Paused',
+  'installing_error': 'Failed',
   'install.background': 'Run in background',
   'install.copy_error': 'Copy Error',
   'install.copied': 'Copied',
@@ -486,6 +505,8 @@ export default {
   'favorites.show_all_versions': 'View all {count} versions',
   'favorites.no_available_version': 'No available versions',
   'favorites.install_failed': 'Install failed',
+  'favorites.details': 'Details',
+  'favorites.query_failed': 'Failed to load favorites',
 
   // Settings - auto mode
   'settings.path_mode_auto': 'Auto Mode (automatically select best mode)',
@@ -587,6 +608,12 @@ export default {
   'updates.service_status_not_installed': 'Not installed',
   'updates.sniff_completed': 'Sniff completed',
   'updates.sniff_failed': 'Sniff failed',
+  'updates.sniffed_tool': 'Sniffed {tool}',
+  'updates.sniff_strategy_save_failed': 'Failed to save sniff strategy',
+  'updates.service_installed': 'Sniff service installed',
+  'updates.service_install_failed': 'Failed to install sniff service',
+  'updates.service_uninstalled': 'Sniff service uninstalled',
+  'updates.service_uninstall_failed': 'Failed to uninstall sniff service',
   'updates.last_sniff': 'Last sniff',
   'updates.next_run': 'Next run',
   'scan.results_title': 'Local Scan Results',
@@ -611,6 +638,10 @@ export default {
   'install.tofu_warning_title': 'Version Verification Notice',
   'install.tofu_warning_content': '{tool} {version} has not been pre-verified. The download has completed and its checksum has been recorded. Future installations of this version will verify against this checksum.',
   'install.tofu_warning_confirm': 'Continue',
+
+  // 第七轮审计 F-41: install succeeded but activation failed — the version is on
+  // disk, yet `current` was not switched. Backend emits xdev:activation-warning.
+  'install.activation_warning': '{tool} {version} was installed but could not be activated, so it is not the active version yet. Reason: {message}. Run `xdev doctor --fix` or activate it manually from the version list.',
 
   // Install mutex (Spec 036 N2)
   'install.busy': 'An installation is already in progress',
@@ -637,6 +668,7 @@ export default {
   'custom_tools.env_var': 'Env Var Name',
   'custom_tools.preview': 'Preview Versions',
   'custom_tools.preview_results': 'Found versions',
+  'custom_tools.preview_failed': 'Failed to preview versions',
   'custom_tools.remove': 'Remove',
   'custom_tools.added': 'Custom tool added',
   'custom_tools.add_failed': 'Failed to add custom tool',

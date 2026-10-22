@@ -1,0 +1,291 @@
+# 签名数据线（票 17 的 A 方案）：手动触发的 fill-sha256 + sign-manifests。
+#
+# 设计依据（A 方案风险评估，见 .scratch/audit-fixes/issues/17-fill-sha256-resign.md）：
+#   R1 私钥不可读回 → 私钥只在本作业内以 0600 落地、用完即删；不落盘、不进 artifact。
+#   R2 公钥/签名顺序耦合 → 本作业一次性产出「签名 + index + 可选的 keys/pub.key 对齐」，
+#      使二者永不分开提交。
+#   R3 CI 写权限 → sign job 固定 contents: read（**零写权限**）；写权限只出现在 publish job，
+#      且该 job 仅在 mode=branch 时运行（permissions **不支持** ${{ }} 表达式，故拆两个 job；
+#      这一点由 actionlint 实测确认："invalid as permission of scope"）。
+#   R5 fill 失败仍 exit 0（旧行为）→ 现在默认失败即非零；本作业再把报告摘要写进 summary。
+#   R6 哈希即信任锚 → fill 现已做内容魔数校验；本作业把"哈希变化的既有 URL"写进 summary。
+#   R7 Actions 分钟数 → 归档缓存 + inputs.tools 增量填充。
+#   R8 ref 竞争 → 记录 base SHA 并在提交前复核未移动。
+#
+# 命令路径说明：fill-sha256 / sign-manifests 是**顶层命令**（`xdev fill-sha256`、
+# `xdev sign-manifests`），不属于 `xdev manifest` 子命令组——本文件初稿曾误写为
+# `xdev manifest fill-sha256`，已用真实二进制复核并纠正。
+name: Sign manifests
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to sign (branch, tag or SHA)"
+        required: false
+        default: main
+      mode:
+        description: "artifact = 只上传产物（零写权限）；branch = 推 signing/* 分支并开 PR"
+        type: choice
+        options: [artifact, branch]
+        default: artifact
+      align_pubkey:
+        description: "把 keys/pub.key 对齐为 XDEV_SIGNING_PUBLIC_KEY（信任根收敛，A 方案第 ② 步）"
+        type: boolean
+        default: false
+      allow_partial:
+        description: "允许部分归档填充失败仍继续（默认否：失败即中止）"
+        type: boolean
+        default: false
+      tools:
+        description: "仅填充这些工具（逗号分隔，留空=全部）；用于增量重试"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sign-manifests-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    # 人工批准门：在仓库 Settings → Environments 配置 signing 环境与 reviewer 后生效；
+    # 未配置时 GitHub 会自动创建同名环境且无保护规则，作业照常运行（不阻塞）。
+    environment: signing
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.base.outputs.sha }}
+    steps:
+      # 第六轮审计 F4（信任边界）：本作业持有 Ed25519 私钥，**绝不能执行
+      # inputs.ref 里的代码**——任意 ref（含 fork 的 refs/pull/N/head）的 Go 源码
+      # 若被构建并在密钥所在进程里运行，等于把根签名密钥交给 ref 作者。
+      # 布局：ref 只进 `ref/` 子目录作为**数据**（manifests/、keys/pub.key）；
+      # 代码一律取 github.sha（workflow_dispatch 时=默认分支 HEAD，即维护者可信面）。
+      #
+      # 第七轮审计 F-37（顺序至关重要）：`actions/checkout` 的
+      # prepareExistingDirectory() 在「repositoryPath/.git 不存在」时会
+      # `remove = true`，随后删除该目录下的**每一个条目**
+      # （git-directory-helper.ts:117-124）。不带 `path` 的那次 checkout 其
+      # repositoryPath = $GITHUB_WORKSPACE，而根目录在第一次只建了 ref/.git
+      # 时并没有 .git —— 于是「先 ref、后可信代码」的顺序会把 ref/ 整个删掉，
+      # 导致 Record base SHA 步骤失败（签名作业必然中止），并让
+      # hashFiles('ref/manifests/*.yaml') 恒空、缓存键退化为常量
+      # `fill-sha256-`（F6b 的「精确键命中、禁止跨运行投毒」保护随之失效）。
+      # 因此：**先**做可信代码 checkout（此时工作区为空，即使触发 remove 也无害），
+      # **再**把 ref 数据检出到 ref/ 子目录。
+      - name: Checkout trusted code (workflow SHA)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout signing ref (data only)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          path: ref
+
+      - name: Record base SHA
+        id: base
+        working-directory: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # 第六轮审计 F6b：删除 restore-keys 前缀回退——恶意 ref 运行可以用
+      # 攻击者字节占据 fill-sha256-<hash> 缓存，之后的 main 运行经前缀回退
+      # 命中并把这些字节哈希进 main 的 manifest（再用真密钥签名）。
+      # 只允许精确键命中：键由 manifest 内容哈希派生，ref 数据不同即 miss。
+      - name: Cache archives for fill-sha256
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/xdev-fill-sha256
+          key: fill-sha256-${{ hashFiles('ref/manifests/*.yaml') }}
+
+      - name: Verify signing secrets (hard gate)
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
+          XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+        run: |
+          [ -n "$XDEV_SIGNING_PRIVATE_KEY" ] || { echo "::error::Missing secret XDEV_SIGNING_PRIVATE_KEY"; exit 1; }
+          [ -n "$XDEV_SIGNING_PUBLIC_KEY" ]  || { echo "::error::Missing secret XDEV_SIGNING_PUBLIC_KEY"; exit 1; }
+
+      # R1/R2：打印"仓库公钥 vs CI 公钥"的真相，并按 align_pubkey 决定是否对齐。
+      - name: Report / align trust root
+        env:
+          XDEV_SIGNING_PUBLIC_KEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+          ALIGN_PUBKEY: ${{ inputs.align_pubkey }}
+        run: |
+          repo_key=$(tr -d '\r\n' < ref/keys/pub.key)
+          echo "repo keys/pub.key  = $repo_key"
+          echo "CI public key      = $XDEV_SIGNING_PUBLIC_KEY"
+          if [ "$repo_key" = "$XDEV_SIGNING_PUBLIC_KEY" ]; then
+            echo "::notice::信任根已一致（本地构建与发布产物共用同一把根密钥）"
+          elif [ "$ALIGN_PUBKEY" = "true" ]; then
+            printf '%s\n' "$XDEV_SIGNING_PUBLIC_KEY" > ref/keys/pub.key
+            echo "::warning::已把 keys/pub.key 对齐为 CI 公钥（本次变更请一并复核）"
+          else
+            echo "::warning::仓库 keys/pub.key 与 CI 公钥不一致；本地 keyed 构建将无法验证本作业产出的 .sig（如需对齐请重新触发并勾选 align_pubkey）"
+          fi
+
+      - name: Build xdev (trusted code only)
+        run: go build -o xdev .
+
+      - name: fill-sha256 (validated downloads + JSON report)
+        env:
+          ALLOW_PARTIAL: ${{ inputs.allow_partial }}
+          TOOLS: ${{ inputs.tools }}
+        run: |
+          args=(--manifests-dir ref/manifests --cache-dir "$HOME/.cache/xdev-fill-sha256" --report fill-report.json --retries 2)
+          [ -n "$TOOLS" ] && args+=(--tool "$TOOLS")
+          [ "$ALLOW_PARTIAL" = "true" ] && args+=(--allow-partial)
+          ./xdev fill-sha256 "${args[@]}"
+
+      # 汇总 + 人工复核面。这里**不做**"空哈希=0"的硬门禁：npm 型条目（如 dsh）按设计保留
+      # 空哈希（不下载归档，靠 npm 完整性校验），某几个非标准下载端点也可能需要会话。
+      # 这类缺口由 fill 的退出码（失败即非零）+ 覆盖守卫 + 人工复核共同把关。
+      - name: Summarize fill report
+        run: |
+          {
+            echo "### fill-sha256 报告"
+            echo '```'
+            python3 - <<'PY'
+          import json
+          d = json.load(open('fill-report.json'))
+          print(f"filled={d['filled']} skipped={d['skipped']} failed={d['failed']}")
+          for e in d['entries']:
+              if e['status'] == 'failed':
+                  print(f"FAILED {e['tool']}@{e['version']} {e.get('os_arch','')}: {e.get('error','')}")
+          PY
+            echo '```'
+            echo "### 仍为空的 sha256（每工具计数；npm 型条目属设计如此）"
+            echo '```'
+            for f in ref/manifests/*.yaml; do
+              n=$(grep -cE 'sha256:[[:space:]]*""' "$f" || true)
+              if [ "$n" -gt 0 ]; then echo "$(basename "$f"): $n"; fi
+            done
+            echo '```'
+            echo "### 哈希发生变化的既有 URL（必须人工确认后合并）"
+            echo '```diff'
+            git -C ref diff -U0 -- 'manifests/*.yaml' | grep -E '^[+-][[:space:]]+(url|sha256):' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Sign manifests (private key never leaves this step)
+        env:
+          XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
+        run: |
+          umask 077
+          trap 'rm -f keys/priv.key' EXIT
+          printf '%s\n' "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
+          chmod 600 keys/priv.key
+          ./xdev sign-manifests --manifests-dir ref/manifests --priv-key keys/priv.key
+
+      - name: Regenerate index.yaml
+        run: ./xdev manifest index --manifests-dir ref/manifests
+
+      # 产出物自检：用**发布公钥**验证刚产出的签名（R2/R5 的机器判据）。
+      # 守卫测试针对仓库根 manifests/ 目录——把 ref 的产出复制回根目录供其校验
+      # （守卫读取的是磁盘状态；复制只是为守卫准备输入，不改变信任边界）。
+      - name: Sync signed outputs for guard verification
+        run: |
+          mkdir -p manifests
+          cp -f ref/manifests/*.yaml manifests/
+          cp -f ref/manifests/*.yaml.sig manifests/
+          mkdir -p keys
+          cp -f ref/keys/pub.key keys/pub.key
+
+      - name: Verify produced signatures
+        env:
+          XDEV_MANIFEST_VERIFY_PUBKEY: ${{ secrets.XDEV_SIGNING_PUBLIC_KEY }}
+        run: |
+          go test . -short -count=1 -run 'TestManifestSignatureCoverage|TestEmbeddedSignatures|TestManifests_EveryTool|TestIndexYaml|TestManifestsTree'
+
+      # F8：ref 经 env 注入，绝不 ${{ }} 内插进 run: 脚本（分支名可含双引号/$()）。
+      - name: Check branch did not move (R8)
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+        run: |
+          now=$(git -C ref rev-parse HEAD)
+          [ "$now" = "${{ steps.base.outputs.sha }}" ] || { echo "::error::$REF_INPUT moved during the run (${{ steps.base.outputs.sha }} → $now); please re-run"; exit 1; }
+
+      - name: Upload signed manifests
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-manifests-${{ steps.base.outputs.sha }}
+          path: |
+            ref/manifests/*.yaml
+            ref/manifests/*.yaml.sig
+            fill-report.json
+            ref/keys/pub.key
+          retention-days: 14
+
+      - name: Note artifact location
+        env:
+          REF_INPUT: ${{ inputs.ref }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "产物：signed-manifests-${{ steps.base.outputs.sha }}（$REF_INPUT @ ${{ steps.base.outputs.sha }}）"
+            if [ "$MODE" = "artifact" ]; then
+              echo "模式=artifact：未对仓库做任何写入。下载该 artifact 后由人工提交（或改用 mode=branch 自动开 PR）。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 写权限只存在于这个 job，且仅在 mode=branch 时运行（permissions 不支持表达式）。
+  publish:
+    needs: sign
+    if: ${{ inputs.mode == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Download signed manifests
+        uses: actions/download-artifact@v7
+        with:
+          name: signed-manifests-${{ needs.sign.outputs.sha }}
+          path: signed
+
+      - name: Push signing branch and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cp -f signed/ref/manifests/*.yaml     manifests/ || true
+          cp -f signed/ref/manifests/*.yaml.sig manifests/ || true
+          [ -f signed/ref/keys/pub.key ] && cp -f signed/ref/keys/pub.key keys/pub.key || true
+
+          git config user.name  "xdev signing bot"
+          git config user.email "signing@users.noreply.github.com"
+          branch="signing/manifests-$(date -u +%Y%m%dT%H%M%SZ)"
+          git checkout -b "$branch"
+          # 显式列文件，不用 `git add manifests`：manifest 旁会留下 0 字节的
+          # <tool>.yaml.lock（AcquireFileLock 的产物），虽然 .gitignore 已忽略 *.yaml.lock，
+          # 这里再收窄一次暂存范围，避免把任何运行时副产物带进提交。
+          git add 'manifests/*.yaml' 'manifests/*.yaml.sig' keys/pub.key
+          if git diff --cached --quiet; then
+            echo "::notice::无变更（哈希与签名均为最新）"
+            exit 0
+          fi
+          git commit -m "chore(signing): refill hashes + re-sign manifests (runner build)"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "签名数据线：重填哈希 + 重签 manifest（票 17）" \
+            --body "由 Sign manifests 作业产出。合并前请复核 job summary 中的 fill 报告与「哈希变化的既有 URL」清单；artifact 内附 fill-report.json。"

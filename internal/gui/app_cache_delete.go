@@ -92,7 +92,19 @@ func (a *App) CleanCacheCategory(category string) error {
 			continue // 不删除目录
 		}
 		name := entry.Name()
-		if category != "all" && cacheEntryCategory(name) != category {
+		if category == "all" {
+			// 第七轮审计 F-06：`all` 只删**真缓存**（归档 / .sha256 / .part）。
+			// 用户状态与派生索引（favorites.json、ignored_tools.json、
+			// custom_tools.json、keystore.dat、shim-index.v1、sniff-cache.json、
+			// tool_scan_cache.json、*.lock）必须显式点名分类才删——否则一次
+			// 「清理所有缓存」会静默清空收藏、忽略列表、自定义工具与密钥库。
+			if isCacheMetadata(name) {
+				continue
+			}
+			if c := cacheEntryCategory(name); c != "archives" && c != "shaFiles" && c != "partFiles" {
+				continue
+			}
+		} else if cacheEntryCategory(name) != category {
 			continue
 		}
 		if err := os.Remove(filepath.Join(cfg.Core.CacheDir, name)); err == nil {

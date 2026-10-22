@@ -62,6 +62,12 @@ build/baseline-*
 # Signing keys (public key may be committed; private key never)
 keys/priv.key
 
+# Manifest cross-process lock files (票 23 / 本批复核实测：AcquireFileLock 会在 manifest 旁
+# 留下 0 字节的 <tool>.yaml.lock，且不会自动删除。它们是运行时锁产物、不是内容——
+# 不忽略的话 `xdev fill-sha256`/嗅探在本地会留下未跟踪噪音，签名作业的 `git add manifests`
+# 更会把 40+ 个锁文件提交进仓库)。
+*.yaml.lock
+
 # Handoff document (session handover state, generated per-machine; see AGENTS.md)
 HANDOFF.md
 
@@ -72,8 +78,19 @@ test-results/
 # DSH internal session metadata (not part of the repo)
 .omo/
 
+# BugX audit runtime state + dsh host adaptation (machine-local; .bugx/ is never
+# committed per .bugx/README.md; .dsh/ host entry is hash-verified in .bugx/hosts.json
+# and re-created by `bugx install` on demand)
+.bugx/
+.dsh/
+
 
 # Local validation logs (transient)
 build/*validate*
 build/gov-*
 build/local-*
+
+# BugX audit evidence + pre-reset HANDOFF history (machine-local).
+# Durable copies live in docs/audits/2026/ so a `git clean -fdx` cannot destroy them.
+.scratch/bugx-round*/
+.scratch/handoff-history/

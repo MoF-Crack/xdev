@@ -46,8 +46,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -94,9 +94,9 @@ type Model struct {
 	catIdx     int
 
 	// Tools panel
-	allTools     []plugin.Plugin
+	allTools      []plugin.Plugin
 	filteredTools []plugin.Plugin
-	toolIdx      int
+	toolIdx       int
 
 	// Detail panel
 	installedVersions []string
@@ -111,6 +111,17 @@ type Model struct {
 
 	// Install state
 	installState *InstallState
+
+	// currentOpID 是「当前进行中的操作」的 ID（install 或 uninstall）。
+	//
+	// 票 40（P2-19 / E-15）：installState 在卸载时为 nil、在取消/完成后也会
+	// 被清空，因此不能靠它判断「这条结果消息属不属于当前操作」——旧实现
+	// 只在 installState != nil 时比对 ID，installState==nil 时任何结果消息
+	// 都被接受：取消后迟到的安装失败消息会弹出误导性错误横幅，迟到的
+	// 安装成功消息甚至能静默恢复刚被清空的批量更新队列（N-14）。
+	// currentOpID 与 installState 生命周期解耦：开始操作时置位，结果消息
+	// 匹配后清 0，不匹配即整体丢弃。
+	currentOpID int64
 
 	// Updates view（嗅探结果一键更新）
 	updatesView bool
@@ -235,41 +246,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMainKey(msg)
 
 	case InstallProgressMsg:
-			if m.installState != nil && m.installState.ID == msg.ID {
-				m.installState.Phase = msg.Phase
-				// Spec 035 F5: negative percent means indeterminate — keep the
-				// last known value (defense in depth; progressState.store
-				// already guards the main path).
-				if msg.Percent >= 0 {
-					m.installState.Percent = msg.Percent
+		if m.installState != nil && m.installState.ID == msg.ID {
+			m.installState.Phase = msg.Phase
+			// Spec 035 F5: negative percent means indeterminate — keep the
+			// last known value (defense in depth; progressState.store
+			// already guards the main path).
+			if msg.Percent >= 0 {
+				m.installState.Percent = msg.Percent
+			}
+			m.installState.Speed = msg.Speed
+			m.installState.ETA = msg.ETA
+			// Continue ticking until install completes
+			return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+				if m.installState == nil {
+					return nil
 				}
-				m.installState.Speed = msg.Speed
-				m.installState.ETA = msg.ETA
-				// Continue ticking until install completes
-				return m, tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
-					if m.installState == nil {
-						return nil
-					}
-					return InstallProgressMsg{
-						ID:      m.installState.ID,
-						Tool:    msg.Tool,
-						Version: msg.Version,
-						Phase:   m.installState.Phase,
-						Percent: m.installState.Percent,
-						Speed:   m.installState.Speed,
-						ETA:     m.installState.ETA,
-					}
-				})
-			}
-			// Stale progress message (ID mismatch) — discard
-			return m, nil
+				return InstallProgressMsg{
+					ID:      m.installState.ID,
+					Tool:    msg.Tool,
+					Version: msg.Version,
+					Phase:   m.installState.Phase,
+					Percent: m.installState.Percent,
+					Speed:   m.installState.Speed,
+					ETA:     m.installState.ETA,
+				}
+			})
+		}
+		// Stale progress message (ID mismatch) — discard
+		return m, nil
 
-		case InstallResultMsg:
-			if m.installState != nil && m.installState.ID != msg.ID {
-				// Stale result — discard
-				return m, nil
-			}
-			m.installState = nil
+	case InstallResultMsg:
+		// 票 40（P2-19 / E-15）：陈旧判定上移到最前，且不再以
+		// installState != nil 为前提——成功（下面的续跑/刷新）与错误
+		// 两条分支都必须先过这一关：迟到消息既不能改 errMsg，也不能
+		// 推动更新队列（N-14：installState==nil 时迟到的成功消息会让
+		// 「全部更新」静默续跑）。
+		if msg.ID != m.currentOpID {
+			// Stale/foreign result — discard entirely（不动当前操作状态）
+			return m, nil
+		}
+		m.currentOpID = 0
+		m.installState = nil
 		if msg.Err != nil {
 			// Spec 035 F3: a failed install must also clear the batch update
 			// queue — otherwise the next successful plain install would
@@ -289,7 +306,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Refresh data
 		return m, m.refreshData()
 
+	case UninstallResultMsg:
+		// 票 40（P2-19 / E-15）：卸载结果用独立消息类型（防与安装结果
+		// 跨空间撞号），陈旧判定口径与安装完全一致。
+		if msg.ID != m.currentOpID {
+			return m, nil
+		}
+		m.currentOpID = 0
+		if msg.Err != nil {
+			m.errMsg = msg.Err.Error()
+			return m, nil
+		}
+		return m, m.refreshData()
+
 	case RemoteVersionsMsg:
+		// F-57: RemoteVersionsMsg 携带产出时的工具名。异步拉取期间用户
+		// 可能已经切到别的工具，迟到的回复若直接写入 m.remoteVersions
+		// 就会把「上一个工具的版本列表」显示成当前工具的——列表错位。
+		// 只接受与当前选中工具匹配的回复，其余整体丢弃。
+		if msg.Tool != m.currentToolName() {
+			return m, nil
+		}
 		m.remoteVersions = msg.Versions
 		return m, nil
 
@@ -506,6 +543,10 @@ func (m Model) handleInstallOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.installState.Cancel()
 		}
 		m.installState = nil
+		// 票 40（P2-19 / E-15）：取消同时作废 currentOpID——被取消的操作
+		// 仍可能有结果消息在路上，作废后它们一律走「陈旧消息」分支被丢弃，
+		// 不会弹出误导性错误横幅、也不会重新推动已被清空的更新队列。
+		m.currentOpID = 0
 		// Spec 035 F3: cancelling the current install aborts the whole
 		// batch — a leftover queue would silently resume on the next
 		// successful plain install.
@@ -607,18 +648,53 @@ func (m Model) refreshData() tea.Cmd {
 	}
 }
 
+// currentToolName returns the name of the tool currently selected in the
+// tools panel, or "" when the list is empty.
+//
+// F-57: RemoteVersionsMsg handlers use it to discard replies that belong
+// to a tool the user has already navigated away from.
+func (m Model) currentToolName() string {
+	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
+		return ""
+	}
+	return m.filteredTools[m.toolIdx].Name()
+}
+
 func (m Model) fetchRemoteVersions() tea.Cmd {
 	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
 		return nil
 	}
 	p := m.filteredTools[m.toolIdx]
 	return func() tea.Msg {
-		versions := p.Manifest().Versions()
-		return RemoteVersionsMsg{Tool: p.Name(), Versions: versions}
+		// 第七轮审计 F-28（TUI 侧同型缺陷）：Lua/vfox 插件的 Manifest() 恒返回
+		// nil（internal/plugin/lua_plugin.go），旧代码直接 p.Manifest().Versions()
+		// 会对 nil 解引用 panic —— 任何装了 Lua 插件的机器选中该工具按 r 刷新
+		// 远程版本即崩溃。与 CLI 侧 listTool 的修复同语义：manifest 为 nil 时
+		// 不崩溃，改为回落到 ResolveVersion("latest") 给出的单个可安装版本。
+		mf := p.Manifest()
+		if mf == nil {
+			versions := []string{}
+			if v, err := p.ResolveVersion("latest"); err == nil && v != "" {
+				versions = append(versions, v)
+			}
+			return RemoteVersionsMsg{Tool: p.Name(), Versions: versions}
+		}
+		return RemoteVersionsMsg{Tool: p.Name(), Versions: mf.Versions()}
 	}
 }
 
 // --- Action handlers ---
+
+// beginOp 为一次新的安装/卸载操作分配唯一 ID 并置位 currentOpID。
+//
+// 票 40（P2-19 / E-15）：install 与 uninstall 都从这里取 ID，结果消息
+// 携带同一 ID 回来，Update 据此判定「这条结果属于当前操作」。ID 只增
+// 不设 0（0 是「当前没有操作」的哨兵值），因此卸载不再出现旧实现的
+// ID=0 依赖漏洞。
+func (m *Model) beginOp() int64 {
+	m.currentOpID = time.Now().UnixNano()
+	return m.currentOpID
+}
 
 func (m Model) startInstall() (tea.Model, tea.Cmd) {
 	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
@@ -632,13 +708,13 @@ func (m Model) startInstall() (tea.Model, tea.Cmd) {
 	}
 	// Set installState so the progress overlay is displayed
 	ctx, cancel := context.WithCancel(context.Background())
-		m.installState = &InstallState{
-			ID:      time.Now().UnixNano(),
-			Tool:    p.Name(),
-			Version: ver,
-			Phase:   PhaseDownloading,
-			Cancel:  cancel,
-		}
+	m.installState = &InstallState{
+		ID:      m.beginOp(),
+		Tool:    p.Name(),
+		Version: ver,
+		Phase:   PhaseDownloading,
+		Cancel:  cancel,
+	}
 	return m, m.doInstall(ctx, p, ver)
 }
 
@@ -652,7 +728,11 @@ func (m Model) activateVersion() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ver := versions[m.versionIdx]
-	installPath := p.InstallDir(m.config.Core.InstallDir, ver)
+	installPath, dirErr := p.InstallDir(m.config.Core.InstallDir, ver)
+	if dirErr != nil {
+		m.errMsg = fmt.Sprintf("%s@%s: %v", p.Name(), ver, dirErr)
+		return m, nil
+	}
 	if _, err := os.Stat(installPath); err != nil {
 		m.errMsg = fmt.Sprintf("%s@%s not installed", p.Name(), ver)
 		return m, nil
@@ -690,6 +770,10 @@ func (m Model) handleUninstallConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		p := m.filteredTools[m.toolIdx]
 		ver := versions[m.versionIdx]
+		// 票 40（P2-19 / E-15）：卸载同样分配操作 ID（旧实现借用
+		// installState.ID，installState==nil 时为 0，只能依赖安装侧判定
+		// 的漏洞才能被接受）。
+		m.beginOp()
 		return m, m.doUninstall(p, ver)
 	case KeyEsc, "n", "N":
 		m.uninstallConfirm = false

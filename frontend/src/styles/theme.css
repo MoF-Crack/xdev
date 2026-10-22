@@ -1,34 +1,184 @@
+/*
+ * XDev design tokens — Spec 040 "instrument panel" redesign.
+ *
+ * One block per theme; :root carries the default (graphite dark) plus the
+ * foundation tokens. Every theme defines the full semantic contract — the
+ * list is guarded by frontend/test/theme.test.js. Values are mirrored in
+ * src/theme/themes.js (registry) and src/theme/naive-theme.js (Naive UI
+ * overrides); consistency is guarded by the same test file.
+ *
+ * Design rules of the palette system:
+ *  - dark-family themes (graphite/midnight/nord/ember) use a *light*
+ *    accent fill with a *dark* on-accent ink, so filled controls pass AA
+ *    contrast in every theme instead of forcing white text everywhere;
+ *  - light-family themes (daylight/eye-care) use a deep accent fill with
+ *    white ink, and their hover state darkens (not brightens) to keep it.
+ */
+
 :root {
   color-scheme: dark;
-  --xdev-bg-app: #0d1117; --xdev-bg-panel: #161b22; --xdev-bg-card: #1c2128; --xdev-bg-elevated: #22272e; --xdev-bg-muted: #21262d;
-  --xdev-accent: #58a6ff; --xdev-accent-hover: #79b8ff; --xdev-accent-pressed: #388bfd; --xdev-accent-soft: rgba(88, 166, 255, 0.12);
-  --xdev-success: #3fb950; --xdev-success-soft: rgba(63, 185, 80, 0.12); --xdev-warning: #d29922; --xdev-warning-soft: rgba(210, 153, 34, 0.12); --xdev-warning-bg: rgba(210, 153, 34, 0.15); --xdev-warning-border: rgba(210, 153, 34, 0.5); --xdev-warning-text: #e3b341; --xdev-error: #ff7b72; --xdev-error-soft: rgba(248, 81, 73, 0.12); --xdev-info: #58a6ff; --xdev-info-soft: rgba(88, 166, 255, 0.12);
-  --xdev-text-primary: #e6edf3; --xdev-text-secondary: #8b949e; --xdev-text-muted: #8d96a0; --xdev-text-dim: #484f58; --xdev-text-on-accent: #ffffff;
-  --xdev-border-subtle: rgba(110, 118, 129, 0.2); --xdev-border-strong: rgba(110, 118, 129, 0.4); --xdev-focus-ring: 0 0 0 3px rgba(88, 166, 255, 0.32); --xdev-overlay: rgba(0, 0, 0, 0.56);
+  /* surfaces — graphite */
+  --xdev-bg-app: #0e1116; --xdev-bg-panel: #14181f; --xdev-bg-card: #191e27; --xdev-bg-elevated: #1f2531; --xdev-bg-muted: #232a37;
+  --xdev-bg-hover: rgba(160, 180, 220, 0.06);
+  /* accent — cobalt */
+  --xdev-accent: #5c9cff; --xdev-accent-hover: #7fb4ff; --xdev-accent-pressed: #4791f2; --xdev-accent-soft: rgba(92, 156, 255, 0.13);
+  /* status */
+  --xdev-success: #3fb950; --xdev-success-soft: rgba(63, 185, 80, 0.13);
+  --xdev-warning: #d9a445; --xdev-warning-soft: rgba(217, 164, 69, 0.13); --xdev-warning-bg: rgba(217, 164, 69, 0.15); --xdev-warning-border: rgba(217, 164, 69, 0.5); --xdev-warning-text: #e3b341;
+  --xdev-error: #f26d5f; --xdev-error-soft: rgba(242, 109, 95, 0.13);
+  --xdev-info: #5c9cff; --xdev-info-soft: rgba(92, 156, 255, 0.13);
+  /* text */
+  --xdev-text-primary: #e8ecf3; --xdev-text-secondary: #9aa5b8; --xdev-text-muted: #7f8a9e; --xdev-text-dim: #545e6e; --xdev-text-on-accent: #0b1220;
+  /* lines & effects */
+  --xdev-border-subtle: rgba(140, 155, 180, 0.16); --xdev-border-strong: rgba(140, 155, 180, 0.32); --xdev-focus-ring: 0 0 0 3px rgba(92, 156, 255, 0.35); --xdev-overlay: rgba(4, 7, 12, 0.6);
+  /* foundation */
   --xdev-space-1: 4px; --xdev-space-2: 8px; --xdev-space-3: 12px; --xdev-space-4: 16px; --xdev-space-5: 20px; --xdev-space-6: 24px; --xdev-space-8: 32px;
   --xdev-content-max-width: 1180px; --xdev-reading-max-width: 920px; --xdev-table-max-width: 1440px; --xdev-content-padding: clamp(20px, 3vw, 48px); --xdev-section-gap: 24px; --xdev-page-top-space: 28px;
-  --xdev-radius-sm: 4px; --xdev-radius-md: 8px; --xdev-radius-lg: 12px; --xdev-radius-pill: 999px;
-  --xdev-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24); --xdev-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28), 0 0 28px rgba(88, 166, 255, 0.035); --xdev-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.36), 0 0 42px rgba(88, 166, 255, 0.045); --xdev-shadow-soft: var(--xdev-shadow-md);
-  --xdev-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; --xdev-font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
-  --xdev-font-size-xs: 12px; --xdev-font-size-sm: 13px; --xdev-font-size-md: 14px; --xdev-font-size-lg: 16px; --xdev-motion-fast: 120ms; --xdev-motion-normal: 180ms; --xdev-motion-slow: 280ms; --xdev-ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --xdev-preview-light-accent: #2563eb; --xdev-preview-light-bg: #eef1f5; --xdev-preview-dark-accent: #58a6ff; --xdev-preview-dark-bg: #0d1117; --xdev-preview-eye-care-accent: #5b8c5a; --xdev-preview-eye-care-bg: #f5f1e8;
+  --xdev-radius-sm: 4px; --xdev-radius-md: 6px; --xdev-radius-lg: 10px; --xdev-radius-pill: 999px;
+  --xdev-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3); --xdev-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.34); --xdev-shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.44); --xdev-shadow-soft: var(--xdev-shadow-md);
+  --xdev-font-ui: Inter, "Segoe UI Variable Text", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  --xdev-font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", Menlo, monospace;
+  --xdev-font-size-xs: 12px; --xdev-font-size-sm: 13px; --xdev-font-size-md: 14px; --xdev-font-size-lg: 16px;
+  --xdev-motion-fast: 120ms; --xdev-motion-normal: 180ms; --xdev-motion-slow: 280ms; --xdev-ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
-[data-theme="dark"] { color-scheme: dark; --xdev-bg-app: #0d1117; --xdev-bg-panel: #161b22; --xdev-bg-card: #1c2128; --xdev-bg-elevated: #22272e; --xdev-bg-muted: #21262d; --xdev-accent: #58a6ff; --xdev-accent-hover: #79b8ff; --xdev-accent-pressed: #388bfd; --xdev-accent-soft: rgba(88, 166, 255, 0.12); --xdev-success: #3fb950; --xdev-success-soft: rgba(63, 185, 80, 0.12); --xdev-warning: #d29922; --xdev-warning-soft: rgba(210, 153, 34, 0.12); --xdev-error: #ff7b72; --xdev-error-soft: rgba(248, 81, 73, 0.12); --xdev-info: #58a6ff; --xdev-info-soft: rgba(88, 166, 255, 0.12); --xdev-text-primary: #e6edf3; --xdev-text-secondary: #8b949e; --xdev-text-muted: #8d96a0; --xdev-text-dim: #484f58; --xdev-text-on-accent: #ffffff; --xdev-border-subtle: rgba(110, 118, 129, 0.2); --xdev-border-strong: rgba(110, 118, 129, 0.4); --xdev-focus-ring: 0 0 0 3px rgba(88, 166, 255, 0.32); --xdev-overlay: rgba(0, 0, 0, 0.56); --xdev-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24); --xdev-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.28); --xdev-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.36); }
-[data-theme="light"] { color-scheme: light; --xdev-bg-app: #eef1f5; --xdev-bg-panel: #f4f6f9; --xdev-bg-card: #ffffff; --xdev-bg-elevated: #e8ecf1; --xdev-bg-muted: #dde2ea; --xdev-accent: #2563eb; --xdev-accent-hover: #3b82f6; --xdev-accent-pressed: #1d4ed8; --xdev-accent-soft: rgba(37, 99, 235, 0.08); --xdev-success: #16a34a; --xdev-success-soft: rgba(22, 163, 74, 0.1); --xdev-warning: #d97706; --xdev-warning-soft: rgba(217, 119, 6, 0.1); --xdev-error: #dc2626; --xdev-error-soft: rgba(220, 38, 38, 0.1); --xdev-info: #2563eb; --xdev-info-soft: rgba(37, 99, 235, 0.1); --xdev-text-primary: #1e293b; --xdev-text-secondary: #475569; --xdev-text-muted: #5b6b85; --xdev-text-dim: #94a3b8; --xdev-text-on-accent: #ffffff; --xdev-border-subtle: rgba(15, 23, 42, 0.1); --xdev-border-strong: rgba(15, 23, 42, 0.2); --xdev-focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.2); --xdev-overlay: rgba(15, 23, 42, 0.38); --xdev-shadow-sm: 0 2px 8px rgba(31, 41, 55, 0.06); --xdev-shadow-md: 0 12px 30px rgba(31, 41, 55, 0.09); --xdev-shadow-lg: 0 20px 48px rgba(31, 41, 55, 0.12); }
-[data-theme="eye-care"] { color-scheme: light; --xdev-bg-app: #f5f1e8; --xdev-bg-panel: #faf7f0; --xdev-bg-card: #fdfbf5; --xdev-bg-elevated: #f0ebe0; --xdev-bg-muted: #ebe5d6; --xdev-accent: #5b8c5a; --xdev-accent-hover: #6fa06e; --xdev-accent-pressed: #4a7849; --xdev-accent-soft: rgba(91, 140, 90, 0.12); --xdev-success: #5b8c5a; --xdev-success-soft: rgba(91, 140, 90, 0.12); --xdev-warning: #b8860b; --xdev-warning-soft: rgba(184, 134, 11, 0.12); --xdev-error: #c45a3a; --xdev-error-soft: rgba(196, 90, 58, 0.12); --xdev-info: #5b8c9a; --xdev-info-soft: rgba(91, 140, 154, 0.12); --xdev-text-primary: #3d3528; --xdev-text-secondary: #6b5d4f; --xdev-text-muted: #8a7d6f; --xdev-text-dim: #a89b8d; --xdev-text-on-accent: #ffffff; --xdev-border-subtle: rgba(61, 53, 40, 0.12); --xdev-border-strong: rgba(61, 53, 40, 0.24); --xdev-focus-ring: 0 0 0 3px rgba(91, 140, 90, 0.24); --xdev-shadow-sm: 0 1px 2px rgba(61, 53, 40, 0.1); --xdev-shadow-md: 0 8px 24px rgba(61, 53, 40, 0.12); --xdev-shadow-lg: 0 18px 48px rgba(61, 53, 40, 0.18); }
-* { box-sizing: border-box; } html { background: var(--xdev-bg-app); color: var(--xdev-text-primary); } body { margin: 0; background: var(--xdev-bg-app); color: var(--xdev-text-primary); font-family: var(--xdev-font-ui); } .xdev-mono { font-family: var(--xdev-font-mono); } :focus-visible { outline: none; box-shadow: var(--xdev-focus-ring); }
-button { text-align: center; }
-.xdev-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--xdev-space-2); min-height: 34px; padding: 0 var(--xdev-space-3); border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-md); background: transparent; color: var(--xdev-text-primary); cursor: pointer; font: inherit; }
-.xdev-btn:hover { background: var(--xdev-accent-soft); }
-.xdev-btn--primary { border-color: var(--xdev-accent); color: var(--xdev-accent); font-weight: 600; }
-.xdev-btn--primary:hover { background: var(--xdev-accent-soft); }
-.xdev-btn--secondary { color: var(--xdev-text-secondary); }
-.xdev-btn--sm { min-height: 28px; padding: 0 var(--xdev-space-2); font-size: var(--xdev-font-size-sm); }
-.xdev-btn--danger { border-color: var(--xdev-error); color: var(--xdev-error); }
-.xdev-btn--danger:hover { background: var(--xdev-error-soft); }
-.xdev-btn:disabled { cursor: wait; opacity: 1; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; } }
 
-[data-theme="light"] { --xdev-shadow-sm: 0 2px 8px rgba(31, 41, 55, 0.06); --xdev-shadow-md: 0 12px 30px rgba(31, 41, 55, 0.09); --xdev-shadow-lg: 0 20px 48px rgba(31, 41, 55, 0.12); --xdev-overlay: rgba(15, 23, 42, 0.38); }
-[data-theme="dark"] { --xdev-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34); --xdev-shadow-md: 0 10px 30px rgba(0, 0, 0, 0.34), 0 0 28px rgba(88, 166, 255, 0.04); --xdev-shadow-lg: 0 20px 54px rgba(0, 0, 0, 0.46), 0 0 44px rgba(88, 166, 255, 0.05); }
-[data-theme="eye-care"] { --xdev-shadow-sm: 0 2px 8px rgba(91, 71, 48, 0.08); --xdev-shadow-md: 0 12px 28px rgba(91, 71, 48, 0.12); --xdev-shadow-lg: 0 20px 48px rgba(91, 71, 48, 0.16); --xdev-overlay: rgba(61, 53, 40, 0.36); }
+/* graphite dark — the default instrument surface */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --xdev-bg-app: #0e1116; --xdev-bg-panel: #14181f; --xdev-bg-card: #191e27; --xdev-bg-elevated: #1f2531; --xdev-bg-muted: #232a37;
+  --xdev-bg-hover: rgba(160, 180, 220, 0.06);
+  --xdev-accent: #5c9cff; --xdev-accent-hover: #7fb4ff; --xdev-accent-pressed: #4791f2; --xdev-accent-soft: rgba(92, 156, 255, 0.13);
+  --xdev-success: #3fb950; --xdev-success-soft: rgba(63, 185, 80, 0.13);
+  --xdev-warning: #d9a445; --xdev-warning-soft: rgba(217, 164, 69, 0.13); --xdev-warning-bg: rgba(217, 164, 69, 0.15); --xdev-warning-border: rgba(217, 164, 69, 0.5); --xdev-warning-text: #e3b341;
+  --xdev-error: #f26d5f; --xdev-error-soft: rgba(242, 109, 95, 0.13);
+  --xdev-info: #5c9cff; --xdev-info-soft: rgba(92, 156, 255, 0.13);
+  --xdev-text-primary: #e8ecf3; --xdev-text-secondary: #9aa5b8; --xdev-text-muted: #7f8a9e; --xdev-text-dim: #545e6e; --xdev-text-on-accent: #0b1220;
+  --xdev-border-subtle: rgba(140, 155, 180, 0.16); --xdev-border-strong: rgba(140, 155, 180, 0.32); --xdev-focus-ring: 0 0 0 3px rgba(92, 156, 255, 0.35); --xdev-overlay: rgba(4, 7, 12, 0.6);
+  --xdev-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3); --xdev-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.34); --xdev-shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.44);
+}
+
+/* midnight — deep navy, glacier accent */
+[data-theme="midnight"] {
+  color-scheme: dark;
+  --xdev-bg-app: #0a0e1a; --xdev-bg-panel: #0e1526; --xdev-bg-card: #121b31; --xdev-bg-elevated: #17223c; --xdev-bg-muted: #1a2745;
+  --xdev-bg-hover: rgba(150, 180, 230, 0.07);
+  --xdev-accent: #63c7e6; --xdev-accent-hover: #86d5ef; --xdev-accent-pressed: #4fb9d9; --xdev-accent-soft: rgba(99, 199, 230, 0.13);
+  --xdev-success: #4cc38a; --xdev-success-soft: rgba(76, 195, 138, 0.13);
+  --xdev-warning: #e0b34c; --xdev-warning-soft: rgba(224, 179, 76, 0.13); --xdev-warning-bg: rgba(224, 179, 76, 0.15); --xdev-warning-border: rgba(224, 179, 76, 0.5); --xdev-warning-text: #ecc45e;
+  --xdev-error: #ef6d79; --xdev-error-soft: rgba(239, 109, 121, 0.13);
+  --xdev-info: #63c7e6; --xdev-info-soft: rgba(99, 199, 230, 0.13);
+  --xdev-text-primary: #e6edf7; --xdev-text-secondary: #9aa8c7; --xdev-text-muted: #7e8cae; --xdev-text-dim: #535f7d; --xdev-text-on-accent: #04222e;
+  --xdev-border-subtle: rgba(140, 160, 205, 0.16); --xdev-border-strong: rgba(140, 160, 205, 0.32); --xdev-focus-ring: 0 0 0 3px rgba(99, 199, 230, 0.35); --xdev-overlay: rgba(2, 5, 12, 0.62);
+  --xdev-shadow-sm: 0 1px 2px rgba(2, 6, 16, 0.4); --xdev-shadow-md: 0 8px 24px rgba(2, 6, 16, 0.5); --xdev-shadow-lg: 0 18px 44px rgba(2, 6, 16, 0.6);
+}
+
+/* nord — the Polar Night developer palette (canonical Nord colors) */
+[data-theme="nord"] {
+  color-scheme: dark;
+  --xdev-bg-app: #2e3440; --xdev-bg-panel: #333b4a; --xdev-bg-card: #3b4252; --xdev-bg-elevated: #434c5e; --xdev-bg-muted: #47505f;
+  --xdev-bg-hover: rgba(236, 239, 244, 0.06);
+  --xdev-accent: #88c0d0; --xdev-accent-hover: #a3d2df; --xdev-accent-pressed: #71a9bd; --xdev-accent-soft: rgba(136, 192, 208, 0.15);
+  --xdev-success: #a3be8c; --xdev-success-soft: rgba(163, 190, 140, 0.16);
+  --xdev-warning: #ebcb8b; --xdev-warning-soft: rgba(235, 203, 139, 0.15); --xdev-warning-bg: rgba(235, 203, 139, 0.16); --xdev-warning-border: rgba(235, 203, 139, 0.5); --xdev-warning-text: #ebcb8b;
+  --xdev-error: #bf616a; --xdev-error-soft: rgba(191, 97, 106, 0.16);
+  --xdev-info: #81a1c1; --xdev-info-soft: rgba(129, 161, 193, 0.16);
+  --xdev-text-primary: #eceff4; --xdev-text-secondary: #d8dee9; --xdev-text-muted: #b9c3d2; --xdev-text-dim: #77839a; --xdev-text-on-accent: #1f2530;
+  --xdev-border-subtle: rgba(216, 222, 233, 0.14); --xdev-border-strong: rgba(216, 222, 233, 0.28); --xdev-focus-ring: 0 0 0 3px rgba(136, 192, 208, 0.4); --xdev-overlay: rgba(24, 30, 42, 0.55);
+  --xdev-shadow-sm: 0 1px 2px rgba(15, 20, 30, 0.3); --xdev-shadow-md: 0 8px 24px rgba(15, 20, 30, 0.4); --xdev-shadow-lg: 0 18px 44px rgba(15, 20, 30, 0.5);
+}
+
+/* ember — warm dark, amber instrument light */
+[data-theme="ember"] {
+  color-scheme: dark;
+  --xdev-bg-app: #15110c; --xdev-bg-panel: #1a1510; --xdev-bg-card: #201a13; --xdev-bg-elevated: #261f16; --xdev-bg-muted: #2a2218;
+  --xdev-bg-hover: rgba(235, 215, 180, 0.06);
+  --xdev-accent: #e6a552; --xdev-accent-hover: #f0bc74; --xdev-accent-pressed: #d18e3a; --xdev-accent-soft: rgba(230, 165, 82, 0.14);
+  --xdev-success: #96b06a; --xdev-success-soft: rgba(150, 176, 106, 0.14);
+  --xdev-warning: #dec452; --xdev-warning-soft: rgba(222, 196, 82, 0.13); --xdev-warning-bg: rgba(222, 196, 82, 0.15); --xdev-warning-border: rgba(222, 196, 82, 0.5); --xdev-warning-text: #e6cd6e;
+  --xdev-error: #e0755c; --xdev-error-soft: rgba(224, 117, 92, 0.14);
+  --xdev-info: #c8a06b; --xdev-info-soft: rgba(200, 160, 107, 0.14);
+  --xdev-text-primary: #f0e9dd; --xdev-text-secondary: #c0b4a1; --xdev-text-muted: #a4957f; --xdev-text-dim: #6f6455; --xdev-text-on-accent: #1d1405;
+  --xdev-border-subtle: rgba(220, 200, 170, 0.14); --xdev-border-strong: rgba(220, 200, 170, 0.28); --xdev-focus-ring: 0 0 0 3px rgba(230, 165, 82, 0.35); --xdev-overlay: rgba(12, 8, 3, 0.6);
+  --xdev-shadow-sm: 0 1px 2px rgba(8, 6, 3, 0.35); --xdev-shadow-md: 0 8px 24px rgba(8, 6, 3, 0.45); --xdev-shadow-lg: 0 18px 44px rgba(8, 6, 3, 0.55);
+}
+
+/* daylight — cool white, deep cobalt (hover darkens to keep white ink AA) */
+[data-theme="light"] {
+  color-scheme: light;
+  --xdev-bg-app: #f2f4f8; --xdev-bg-panel: #f7f9fb; --xdev-bg-card: #ffffff; --xdev-bg-elevated: #eaedf3; --xdev-bg-muted: #e4e8ef;
+  --xdev-bg-hover: rgba(28, 37, 52, 0.05);
+  --xdev-accent: #2f6fed; --xdev-accent-hover: #1f5bd8; --xdev-accent-pressed: #1747b6; --xdev-accent-soft: rgba(47, 111, 237, 0.09);
+  --xdev-success: #2e9e5b; --xdev-success-soft: rgba(46, 158, 91, 0.1);
+  --xdev-warning: #b97f24; --xdev-warning-soft: rgba(185, 127, 36, 0.1); --xdev-warning-bg: rgba(185, 127, 36, 0.12); --xdev-warning-border: rgba(185, 127, 36, 0.45); --xdev-warning-text: #8a5c14;
+  --xdev-error: #d64545; --xdev-error-soft: rgba(214, 69, 69, 0.09);
+  --xdev-info: #2f6fed; --xdev-info-soft: rgba(47, 111, 237, 0.09);
+  --xdev-text-primary: #1c2534; --xdev-text-secondary: #4a5870; --xdev-text-muted: #5d6b84; --xdev-text-dim: #93a0b4; --xdev-text-on-accent: #ffffff;
+  --xdev-border-subtle: rgba(28, 37, 52, 0.1); --xdev-border-strong: rgba(28, 37, 52, 0.2); --xdev-focus-ring: 0 0 0 3px rgba(47, 111, 237, 0.22); --xdev-overlay: rgba(15, 23, 42, 0.4);
+  --xdev-shadow-sm: 0 1px 2px rgba(28, 37, 52, 0.06); --xdev-shadow-md: 0 10px 28px rgba(28, 37, 52, 0.1); --xdev-shadow-lg: 0 20px 44px rgba(28, 37, 52, 0.13);
+}
+
+/* eye-care — warm paper, sage ink */
+[data-theme="eye-care"] {
+  color-scheme: light;
+  --xdev-bg-app: #f4f1e8; --xdev-bg-panel: #faf8f0; --xdev-bg-card: #fdfbf4; --xdev-bg-elevated: #efeadc; --xdev-bg-muted: #e9e3d2;
+  --xdev-bg-hover: rgba(58, 49, 38, 0.05);
+  --xdev-accent: #4e7d4e; --xdev-accent-hover: #447044; --xdev-accent-pressed: #3a613a; --xdev-accent-soft: rgba(78, 125, 78, 0.12);
+  --xdev-success: #4e7d4e; --xdev-success-soft: rgba(78, 125, 78, 0.12);
+  --xdev-warning: #b8860b; --xdev-warning-soft: rgba(184, 134, 11, 0.12); --xdev-warning-bg: rgba(184, 134, 11, 0.14); --xdev-warning-border: rgba(184, 134, 11, 0.45); --xdev-warning-text: #8a6508;
+  --xdev-error: #b65438; --xdev-error-soft: rgba(182, 84, 56, 0.12);
+  --xdev-info: #52808c; --xdev-info-soft: rgba(82, 128, 140, 0.12);
+  --xdev-text-primary: #3a3126; --xdev-text-secondary: #655a4b; --xdev-text-muted: #857a68; --xdev-text-dim: #a99c89; --xdev-text-on-accent: #ffffff;
+  --xdev-border-subtle: rgba(58, 49, 38, 0.12); --xdev-border-strong: rgba(58, 49, 38, 0.24); --xdev-focus-ring: 0 0 0 3px rgba(78, 125, 78, 0.25); --xdev-overlay: rgba(58, 49, 38, 0.38);
+  --xdev-shadow-sm: 0 1px 2px rgba(61, 53, 40, 0.1); --xdev-shadow-md: 0 10px 26px rgba(61, 53, 40, 0.12); --xdev-shadow-lg: 0 18px 44px rgba(61, 53, 40, 0.16);
+}
+
+/* ---- base ---- */
+* { box-sizing: border-box; }
+html { background: var(--xdev-bg-app); color: var(--xdev-text-primary); }
+body { margin: 0; background: var(--xdev-bg-app); color: var(--xdev-text-primary); font-family: var(--xdev-font-ui); }
+button { text-align: center; }
+:focus-visible { outline: none; box-shadow: var(--xdev-focus-ring); }
+
+.xdev-mono { font-family: var(--xdev-font-mono); }
+
+/* Silkscreen micro-label: the instrument-panel signature for metric
+   labels, sidebar groups and table headers. */
+.xdev-eyebrow {
+  color: var(--xdev-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ---- controls ---- */
+.xdev-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--xdev-space-2);
+  min-height: 32px; padding: 0 var(--xdev-space-3);
+  border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md);
+  background: var(--xdev-bg-elevated); color: var(--xdev-text-primary);
+  cursor: pointer; font: inherit; font-weight: 500;
+  transition: background var(--xdev-motion-fast) var(--xdev-ease-standard),
+    border-color var(--xdev-motion-fast) var(--xdev-ease-standard),
+    color var(--xdev-motion-fast) var(--xdev-ease-standard);
+}
+.xdev-btn:hover { border-color: var(--xdev-border-strong); background: var(--xdev-bg-hover); }
+.xdev-btn:active { background: color-mix(in srgb, var(--xdev-text-primary) 8%, transparent); }
+.xdev-btn--primary { border-color: transparent; background: var(--xdev-accent); color: var(--xdev-text-on-accent); font-weight: 600; }
+.xdev-btn--primary:hover { border-color: transparent; background: var(--xdev-accent-hover); }
+.xdev-btn--primary:active { background: var(--xdev-accent-pressed); }
+.xdev-btn--secondary { background: transparent; border-color: var(--xdev-border-strong); color: var(--xdev-text-secondary); }
+.xdev-btn--secondary:hover { color: var(--xdev-text-primary); border-color: var(--xdev-border-strong); }
+.xdev-btn--sm { min-height: 28px; padding: 0 var(--xdev-space-2); font-size: var(--xdev-font-size-sm); }
+.xdev-btn--danger { background: transparent; border-color: color-mix(in srgb, var(--xdev-error) 45%, transparent); color: var(--xdev-error); }
+.xdev-btn--danger:hover { background: var(--xdev-error-soft); border-color: var(--xdev-error); }
+.xdev-btn:disabled { cursor: wait; opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

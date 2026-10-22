@@ -3,28 +3,76 @@ display_name: MinGW-w64
 description: Minimalist GNU toolchain for Windows cross-compilation. Provides gcc, g++, and binutils targeting Windows.
 homepage: https://www.mingw-w64.org/
 category: build
+# 票 18 / P2-29：本 manifest 原先只有 os/arch（无 url/format/sha256），因此
+# **完全不可安装**——`xdev install mingw` 只能失败，`xdev available` 却照常展示。
+# 现已补全（remote 指向 niXman/mingw-builds-binaries，产物为 .7z）：
+#
+#   - 归档顶层目录为 `mingw64/`（实测 7z l），因此 strip: 1；
+#   - 哈希来源：16.1.0 / 16.2.0 与 GitHub Releases API 的 asset digest 交叉验证一致
+#     （两条独立来源同值）；12.2.0 / 11.2.0 由下载产物本地计算（该两个 release 上传
+#     早于 GitHub 记录 digest，API 无 digest 字段）；
+#   - 变体选择：x86_64 + posix 线程 + SEH 异常 + ucrt 运行时（11.2.0 该版本上游没有
+#     ucrt 变体，故为默认 msvcrt 运行时）——与 shims 声明的 x86_64-w64-mingw32-* 一致；
+#   - 运行时依赖（A-03 评估结论）：解压 .7z 需要系统 `7z`/`7za`（internal/extractor），
+#     但该依赖**不是本次新增**——仓库内 ruby.yaml 已用 format: 7z，而所有 format: exe
+#     （NSIS/Inno：clion/cursor/goland/jetbrains-*/llvm/pycharm/rubymine/rust/webstorm/zed）
+#     同样经 7z 解压。故 A-03 属既有欠账，本次只登记、不扩大。
+#   - strip 现状（实测 2026-09-13）：internal/extractor 只在 zip/tar 路径实现 strip，
+#     7z 路径（extract7z）不接收 strip 参数，因此这里的 strip: 1 目前是**声明意图**、
+#     实际不生效——归档按原样落为 <install>/mingw64/bin/...。工具仍可正常使用：解析器
+#     会向下搜索嵌套 bin（实测 shim `x86_64-w64-mingw32-gcc.exe --version` 直接输出
+#     16.2.0）。与 ruby.yaml（format: 7z + strip: 1）保持同一口径；若后续实现 7z 的
+#     strip，本条目会自然变为 <install>/bin/...，对解析器同样有效。
+#   - shims 修正（实测）：原清单含 x86_64-w64-mingw32-{ld,ar,strip}，但本上游**从未**
+#     提供这三个带前缀的二进制（16.2.0 与本机既有 8.1.0 都只有裸 ar/ld/strip + 前缀
+#     gcc/g++/c++/gcc-ar/gcc-nm/gcc-ranlib/gfortran）——这三个 shim 自建立起就是坏的
+#     （实测报 "shim alias ... not installed"）。现改为实际存在的等价物：gcc/g++/c++
+#     三个驱动 + 归档工具 gcc-ar/gcc-ranlib。裸名 ar/ld/strip 不做 shim：那会在用户
+#     PATH 上遮蔽系统同名工具（shim 遮蔽是审计已知问题），交叉工具链不该抢这些名字。
 shims:
     - x86_64-w64-mingw32-gcc
     - x86_64-w64-mingw32-g++
-    - x86_64-w64-mingw32-ld
-    - x86_64-w64-mingw32-ar
-    - x86_64-w64-mingw32-strip
+    - x86_64-w64-mingw32-c++
+    - x86_64-w64-mingw32-gcc-ar
+    - x86_64-w64-mingw32-gcc-ranlib
 env_vars:
     MINGW_HOME: '{{install}}'
 versions:
-    - version: 16.1.0
+    - version: 16.2.0
       stable: true
-      release: "2026-07-29"
+      release: "2026-08-14"
       archives:
         - os: windows
           arch: amd64
+          format: 7z
+          url: https://github.com/niXman/mingw-builds-binaries/releases/download/16.2.0-rt_v14-rev1/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1.7z
+          sha256: 26788998d615856a915e1eeacb0854fce87bc608fa9a0c16f96bcbfdcf3415c0
+          size: 107890935
+          strip: 1
+          requires_proxy: true
+    - version: 16.1.0
+      stable: true
+      release: "2026-05-23"
+      archives:
+        - os: windows
+          arch: amd64
+          format: 7z
+          url: https://github.com/niXman/mingw-builds-binaries/releases/download/16.1.0-rt_v14-rev1/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1.7z
+          sha256: 820bed24f181b96cfc3b0542113e11b4208a36810d2e5272fe715bcb99687284
+          size: 107056212
+          strip: 1
           requires_proxy: true
     - version: 12.2.0
       stable: true
-      release: "2022-09-22"
+      release: "2022-12-11"
       archives:
         - os: windows
           arch: amd64
+          format: 7z
+          url: https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-posix-seh-ucrt-rt_v10-rev2.7z
+          sha256: dc1f299e8450c96f59f4b8f7c1290ebb78ee00ddb71f9ed4ca0efaf5462f8c4e
+          size: 71301998
+          strip: 1
           requires_proxy: true
     - version: 11.2.0
       stable: true
@@ -32,12 +80,17 @@ versions:
       archives:
         - os: windows
           arch: amd64
+          format: 7z
+          url: https://github.com/niXman/mingw-builds-binaries/releases/download/11.2.0-rt_v9-rev1/x86_64-11.2.0-release-posix-seh-rt_v9-rev1.7z
+          sha256: 2c943b1a9231ce09f227b0c8fc6cabc61da3581f4ef2f7682f9393f5a1d70ae8
+          size: 62408601
+          strip: 1
           requires_proxy: true
 remote:
     type: github
     url: "niXman/mingw-builds-binaries"
     path: ""
     pattern: (\d+\.\d+\.\d+)$
-latest: 16.1.0
+latest: 16.2.0
 lts: ""
 install_root: ""

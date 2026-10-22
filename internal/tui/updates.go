@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -90,7 +89,9 @@ func (m Model) startToolUpdate(u toolUpdate) (Model, tea.Cmd) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.installState = &InstallState{
-		ID:      time.Now().UnixNano(),
+		// 票 40（P2-19 / E-15）：批量更新中的每一次安装也走 beginOp，
+		// 使「全部更新」链上的每一步都能与结果消息按 currentOpID 对上。
+		ID:      m.beginOp(),
 		Tool:    p.Name(),
 		Version: u.Latest,
 		Phase:   PhaseDownloading,

@@ -4,136 +4,180 @@
 # every individual manifest file.
 
 version: 1
-generated: "2026-06-05"
+generated: "2026-09-13"
 
 categories:
   - name: language
     display_name: Programming Languages
     tools:
-      - name: python
-        display_name: Python
-        manifest: python.yaml
-      - name: node
-        display_name: Node.js
-        manifest: node.yaml
-      - name: go
-        display_name: Go
-        manifest: go.yaml
-      - name: java
-        display_name: Oracle JDK
-        manifest: java.yaml
-      - name: rust
-        display_name: Rust (rustup)
-        manifest: rust.yaml
-      - name: dotnet
-        display_name: .NET SDK
-        manifest: dotnet.yaml
-      - name: php
-        display_name: PHP
-        manifest: php.yaml
-      - name: ruby
-        display_name: Ruby
-        manifest: ruby.yaml
-      - name: lua
-        display_name: Lua
-        manifest: lua.yaml
-      - name: perl
-        display_name: Perl
-        manifest: perl.yaml
-      - name: dart
-        display_name: Dart
-        manifest: dart.yaml
-      - name: kotlin
-        display_name: Kotlin
-        manifest: kotlin.yaml
       - name: bun
         display_name: Bun
         manifest: bun.yaml
+      - name: cangjie
+        display_name: Cangjie
+        manifest: cangjie.yaml
+      - name: dart
+        display_name: Dart SDK
+        manifest: dart.yaml
       - name: deno
         display_name: Deno
         manifest: deno.yaml
-      - name: zig
-        display_name: Zig
-        manifest: zig.yaml
-      - name: julia
-        display_name: Julia
-        manifest: julia.yaml
-      - name: haskell
-        display_name: Haskell (GHC)
-        manifest: haskell.yaml
-      - name: scala
-        display_name: Scala
-        manifest: scala.yaml
+      - name: dotnet
+        display_name: .NET SDK
+        manifest: dotnet.yaml
       - name: erlang
         display_name: Erlang/OTP
         manifest: erlang.yaml
+      - name: go
+        display_name: Go
+        manifest: go.yaml
+      - name: haskell
+        display_name: Haskell (GHC)
+        manifest: haskell.yaml
+      - name: java
+        display_name: Java (Oracle JDK)
+        manifest: java.yaml
+      - name: julia
+        display_name: Julia
+        manifest: julia.yaml
+      - name: kotlin
+        display_name: Kotlin
+        manifest: kotlin.yaml
+      - name: lua
+        display_name: Lua
+        manifest: lua.yaml
+      - name: node
+        display_name: Node.js
+        manifest: node.yaml
+      - name: perl
+        display_name: Perl
+        manifest: perl.yaml
+      - name: php
+        display_name: PHP
+        manifest: php.yaml
+      - name: python
+        display_name: Python (CPython)
+        manifest: python.yaml
+      - name: ruby
+        display_name: Ruby
+        manifest: ruby.yaml
+      - name: rust
+        display_name: Rust (rustup)
+        manifest: rust.yaml
+      - name: scala
+        display_name: Scala
+        manifest: scala.yaml
       - name: typescript
         display_name: TypeScript
         manifest: typescript.yaml
-
+      - name: zig
+        display_name: Zig
+        manifest: zig.yaml
   - name: mobile
     display_name: Mobile Development
     tools:
-      - name: flutter
-        display_name: Flutter
-        manifest: flutter.yaml
-      - name: android-platform-tools
-        display_name: Android Platform Tools
-        manifest: android-platform-tools.yaml
       - name: android-build-tools
         display_name: Android Build Tools
         manifest: android-build-tools.yaml
-      - name: android-platform
-        display_name: Android Platform
-        manifest: android-platform.yaml
-      - name: android-ndk
-        display_name: Android NDK
-        manifest: android-ndk.yaml
       - name: android-cmdline-tools
-        display_name: Android Command Line Tools
+        display_name: Android SDK Command-line Tools
         manifest: android-cmdline-tools.yaml
       - name: android-emulator
         display_name: Android Emulator
         manifest: android-emulator.yaml
-
+      - name: android-ndk
+        display_name: Android NDK
+        manifest: android-ndk.yaml
+      - name: android-platform
+        display_name: Android Platform (android.jar)
+        manifest: android-platform.yaml
+      - name: android-platform-tools
+        display_name: Android Platform Tools
+        manifest: android-platform-tools.yaml
+      - name: flutter
+        display_name: Flutter SDK
+        manifest: flutter.yaml
   - name: build
     display_name: Build Tools
     tools:
-      - name: maven
-        display_name: Apache Maven
-        manifest: maven.yaml
-      - name: gradle
-        display_name: Gradle
-        manifest: gradle.yaml
       - name: cmake
         display_name: CMake
         manifest: cmake.yaml
-      - name: ninja
-        display_name: Ninja
-        manifest: ninja.yaml
-      - name: make
-        display_name: GNU Make
-        manifest: make.yaml
       - name: git
         display_name: Git
         manifest: git.yaml
+      - name: gradle
+        display_name: Gradle
+        manifest: gradle.yaml
       - name: llvm
         display_name: LLVM/Clang
         manifest: llvm.yaml
+      - name: make
+        display_name: GNU Make
+        manifest: make.yaml
+      - name: maven
+        display_name: Apache Maven
+        manifest: maven.yaml
       - name: mingw
         display_name: MinGW-w64
         manifest: mingw.yaml
+      - name: ninja
+        display_name: Ninja Build
+        manifest: ninja.yaml
       - name: sbt
         display_name: sbt (Scala Build Tool)
         manifest: sbt.yaml
-
   - name: package-manager
     display_name: Package Managers
     tools:
       - name: uv
         display_name: UV
         manifest: uv.yaml
-
+  - name: development_tools
+    display_name: Development Tools
+    tools:
+      - name: claude-code
+        display_name: Claude Code
+        manifest: claude-code.yaml
+      - name: clion
+        display_name: CLion
+        manifest: clion.yaml
+      - name: codex
+        display_name: Codex (OpenAI)
+        manifest: codex.yaml
+      - name: copilot-cli
+        display_name: GitHub Copilot CLI
+        manifest: copilot-cli.yaml
+      - name: cursor
+        display_name: Cursor
+        manifest: cursor.yaml
+      - name: dsh
+        display_name: DeepSeek Harness
+        manifest: dsh.yaml
+      - name: goland
+        display_name: GoLand
+        manifest: goland.yaml
+      - name: jetbrains-idea-community
+        display_name: JetBrains IntelliJ IDEA Community
+        manifest: jetbrains-idea-community.yaml
+      - name: opencode
+        display_name: OpenCode
+        manifest: opencode.yaml
+      - name: pycharm-community
+        display_name: PyCharm Community
+        manifest: pycharm-community.yaml
+      - name: rubymine
+        display_name: RubyMine
+        manifest: rubymine.yaml
+      - name: vscode
+        display_name: Visual Studio Code
+        manifest: vscode.yaml
+      - name: webstorm
+        display_name: WebStorm
+        manifest: webstorm.yaml
+      - name: zed
+        display_name: Zed
+        manifest: zed.yaml
   - name: system
     display_name: System Tools
     tools: []

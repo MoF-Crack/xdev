@@ -100,12 +100,11 @@ func newRemoteListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List remote environments",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			instances, err := orchestrator.ListContainers(cmd.Context())
-			if err != nil {
-				// Docker might not be available; show empty list
-				fmt.Println("No remote environments found.")
-				return nil
-			}
+			// C-08: list the merged view (live docker containers + the
+			// persisted <home>/instances store, legacy markers included) so
+			// the CLI shows the same instances the GUI does. Docker being
+			// unavailable is logged by the store, not an error here.
+			instances := orchestrator.ListInstances(cmd.Context(), Cfg().Core.XMDevDir)
 			if len(instances) == 0 {
 				fmt.Println("No remote environments found.")
 				return nil
@@ -114,6 +113,11 @@ func newRemoteListCmd() *cobra.Command {
 			fmt.Fprintln(w, "ID\tSTATUS\tNAME")
 			for _, inst := range instances {
 				name := inst.Metadata["name"]
+				if name == "" {
+					// Persisted (SSH) instances carry an adapter instead of a
+					// docker name — show that rather than an empty column.
+					name = inst.Metadata["adapter"]
+				}
 				fmt.Fprintf(w, "%s\t%s\t%s\n", shortID(inst.ID), inst.Status, name)
 			}
 			w.Flush()
@@ -189,10 +193,32 @@ func createAdapter() (orchestrator.Adapter, error) {
 	}
 }
 
-// shortID returns the first 12 characters of a container ID.
+// shortID shortens a docker container ID to the familiar 12 characters. Any
+// other id (SSH instances: ssh-<user>-<host>-<port>) is shown in full: the
+// 12-char rule would cut the host name off and make two hosts
+// indistinguishable — and C-08 requires `remote list` to show the same
+// persisted instances the GUI shows.
 func shortID(id string) string {
+	if !isHexContainerID(id) {
+		return id
+	}
 	if len(id) > 12 {
 		return id[:12]
 	}
 	return id
+}
+
+// isHexContainerID reports whether id looks like a docker container id
+// (hex, at least the 12 characters docker's short form uses).
+func isHexContainerID(id string) bool {
+	if len(id) < 12 {
+		return false
+	}
+	for _, r := range id {
+		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }

@@ -3,17 +3,23 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { getNaiveThemeConfig } from '../src/theme/naive-theme.js';
+import { DEFAULT_THEME, THEMES, THEME_VALUES } from '../src/theme/themes.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), 'utf8');
 const themeCss = read('src/styles/theme.css');
+const naiveTheme = read('src/theme/naive-theme.js');
 
+// Semantic tokens: every [data-theme] block (and :root) must define each of
+// these. Guarded so a new token cannot silently fall back to another
+// theme's value.
 const semanticTokens = [
-  'bg-app', 'bg-panel', 'bg-card', 'bg-elevated', 'bg-muted',
+  'bg-app', 'bg-panel', 'bg-card', 'bg-elevated', 'bg-muted', 'bg-hover',
   'accent', 'accent-hover', 'accent-pressed', 'accent-soft',
-  'success', 'success-soft', 'warning', 'warning-soft', 'error', 'error-soft', 'info', 'info-soft',
+  'success', 'success-soft', 'warning', 'warning-soft', 'warning-bg', 'warning-border', 'warning-text',
+  'error', 'error-soft', 'info', 'info-soft',
   'text-primary', 'text-secondary', 'text-muted', 'text-dim', 'text-on-accent',
-  'border-subtle', 'border-strong', 'focus-ring',
+  'border-subtle', 'border-strong', 'focus-ring', 'overlay',
   'shadow-sm', 'shadow-md', 'shadow-lg',
 ];
 
@@ -28,32 +34,77 @@ function declarations(block) {
   return new Set([...block.matchAll(/--xdev-([\w-]+)\s*:/g)].map((match) => match[1]));
 }
 
-describe('theme system', () => {
-  it('defines the complete semantic contract for dark and light themes', () => {
-    const rootBlock = themeCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '';
-    const lightBlock = themeCss.match(/\[data-theme=["']light["']\]\s*\{([\s\S]*?)\}/)?.[1] ?? '';
-    const eyeCareBlock = themeCss.match(/\[data-theme=["']eye-care["']\]\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+function themeBlock(name) {
+  if (name === DEFAULT_THEME) {
+    return themeCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  }
+  const block = themeCss.match(new RegExp(`\\[data-theme=["']${name}["']\\]\\s*\\{([\\s\\S]*?)\\}`))?.[1] ?? '';
+  // the default theme is mirrored in an explicit [data-theme] block too
+  if (!block && name === 'dark') {
+    return themeCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '';
+  }
+  return block;
+}
 
-    const darkDeclarations = declarations(rootBlock);
-    const lightDeclarations = declarations(lightBlock);
-    expect([...semanticTokens, ...foundationTokens].filter((token) => !darkDeclarations.has(token))).toEqual([]);
-    expect(semanticTokens.filter((token) => !lightDeclarations.has(token))).toEqual([]);
-    expect(semanticTokens.filter((token) => !declarations(eyeCareBlock).has(token))).toEqual([]);
-    expect(rootBlock).toContain('--xdev-accent: #58a6ff');
-    expect(lightBlock).toContain('--xdev-accent: #2563eb');
+function cssVar(name, theme) {
+  const match = themeBlock(theme).match(new RegExp(`--xdev-${name}:\\s*([^;]+);`));
+  return match ? match[1].trim() : undefined;
+}
+
+describe('theme system', () => {
+  it('defines the complete semantic contract for every registered theme', () => {
+    expect(THEME_VALUES.length).toBeGreaterThanOrEqual(6);
+    for (const name of THEME_VALUES) {
+      const missing = semanticTokens.filter((token) => !declarations(themeBlock(name)).has(token));
+      expect(missing, `theme "${name}" is missing: ${missing.join(', ')}`).toEqual([]);
+    }
+    const rootDeclarations = declarations(themeCss.match(/:root\s*\{([\s\S]*?)\}/)?.[1] ?? '');
+    expect([...semanticTokens, ...foundationTokens].filter((token) => !rootDeclarations.has(token))).toEqual([]);
+  });
+
+  it('anchors the flagship palette values', () => {
+    expect(cssVar('accent', 'dark')).toBe('#5c9cff');
+    expect(cssVar('accent', 'light')).toBe('#2f6fed');
+    expect(cssVar('accent', 'midnight')).toBe('#63c7e6');
+    expect(cssVar('accent', 'nord')).toBe('#88c0d0');
+    expect(cssVar('accent', 'ember')).toBe('#e6a552');
+    expect(cssVar('accent', 'eye-care')).toBe('#4e7d4e');
   });
 
   it('exposes Naive UI overrides through one theme-based interface', () => {
     const dark = getNaiveThemeConfig('dark').overrides;
     const light = getNaiveThemeConfig('light').overrides;
-    const eyeCare = getNaiveThemeConfig('eye-care').overrides;
 
-    expect(dark.common.primaryColor).toBe('#58a6ff');
-    expect(light.common.primaryColor).toBe('#2563eb');
-    expect(eyeCare.common.primaryColor).toBe('#5b8c5a');
-    expect(dark.common.bodyColor).toBe('#0d1117');
-    expect(light.common.bodyColor).toBe('#eef1f5');
+    expect(dark.common.primaryColor).toBe('#5c9cff');
+    expect(light.common.primaryColor).toBe('#2f6fed');
+    expect(getNaiveThemeConfig('midnight').overrides.common.primaryColor).toBe('#63c7e6');
+    expect(getNaiveThemeConfig('nord').overrides.common.primaryColor).toBe('#88c0d0');
+    expect(getNaiveThemeConfig('ember').overrides.common.primaryColor).toBe('#e6a552');
+    expect(getNaiveThemeConfig('eye-care').overrides.common.primaryColor).toBe('#4e7d4e');
+    expect(dark.common.bodyColor).toBe('#0e1116');
+    expect(light.common.bodyColor).toBe('#f2f4f8');
     expect(getNaiveThemeConfig('unknown').overrides).toBe(dark);
+  });
+
+  it('keeps filled primary controls readable: on-accent ink matches the palette family', () => {
+    for (const theme of THEMES) {
+      const onAccent = getNaiveThemeConfig(theme.value).overrides.Button.textColorPrimary;
+      expect(onAccent, `${theme.value} naive onAccent`).toBe(theme.swatch.onAccent);
+      expect(onAccent, `${theme.value} onAccent must be a deliberate ink choice`).toMatch(/^#/);
+    }
+  });
+
+  it('keeps the registry, the CSS tokens and the Naive palettes in sync', () => {
+    for (const theme of THEMES) {
+      const block = themeBlock(theme.value);
+      expect(block, `theme.css block for "${theme.value}"`).not.toBe('');
+      expect(cssVar('bg-app', theme.value)).toBe(theme.swatch.bg);
+      expect(cssVar('accent', theme.value)).toBe(theme.swatch.accent);
+      expect(cssVar('text-on-accent', theme.value)).toBe(theme.swatch.onAccent);
+      // every registered theme has a Naive palette entry (keys are plain
+      // JS identifiers where possible, quoted when they contain hyphens)
+      expect(naiveTheme).toMatch(new RegExp(`['"]?${theme.value}['"]?\\s*:\\s*\\{`));
+    }
   });
 
   it('removes the legacy neon palette from application styles', () => {

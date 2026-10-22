@@ -44,12 +44,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,6 +120,46 @@ type Options struct {
 	// sniff-discovered versions whose archive URL was synthesised after
 	// the manifest was signed — the first download records a sidecar pin.
 	AllowPlaceholderTOFU bool
+
+	// ToolName is the tool being installed. It is compared against the
+	// signature payload's tool field so a valid signature for tool A can
+	// never authorise tool B (ticket 13 / N-02 cross-tool confusion).
+	ToolName string
+
+	// Version and OSArch identify the exact slot in the signed SHA-256
+	// map (`m[version][os/arch]`) for this archive. Both pipelines set
+	// them; a missing Version means no signed coverage can be proven
+	// (verification fails closed).
+	Version string
+	OSArch  string
+
+	// UnsignedVersion marks a manifest version that is legitimately NOT
+	// covered by the signed hash map: sniff-discovered (Discovered) or
+	// explicitly unverified versions, versions absent from a custom
+	// manifest, and Lua/vfox plugins (nil manifest).
+	//
+	// When true, three gates are skipped — the L-10 all-zero/missing-hash
+	// refusal, the signed-map membership check, and the per-URL coverage
+	// filter — so the TOFU sidecar/manifest write-back path keeps working.
+	//
+	// Derivation MUST NOT include a hash condition (ticket 13): a
+	// "hash is empty" term would flip the verdict after TOFU write-back
+	// (hash becomes real) and re-installing the same version would be
+	// misreported as hash tampering.
+	UnsignedVersion bool
+}
+
+// Fallbacks 返回该下载的全部候选 URL（主 URL + 回退 URL）。
+//
+// F-12：.part 按 URL 分代，因此「清理这次下载可能留下的临时文件」必须覆盖
+// 每一个候选 URL 的代，否则回退 URL 写入的 .part 会变成孤儿。
+func (o Options) Fallbacks() []string {
+	out := make([]string, 0, len(o.FallbackURLs)+1)
+	if o.URL != "" {
+		out = append(out, o.URL)
+	}
+	out = append(out, o.FallbackURLs...)
+	return out
 }
 
 // Download fetches opts.URL to opts.Dest.
@@ -186,14 +229,42 @@ func Download(ctx context.Context, opts Options) error {
 	for _, fb := range opts.FallbackURLs {
 		fbParsed, err := url.Parse(fb)
 		if err != nil || fbParsed.Scheme != "https" {
-			log.Printf("[download] WARNING: skipping non-HTTPS fallback URL: %s", fb)
+			log.Printf("[download] WARNING: skipping non-HTTPS fallback URL: %s", sanitizedURL(fb))
 			continue
 		}
 		urls = append(urls, fb)
 	}
 
+	// Ticket 13 (P0-02): per-URL signature coverage filter. Every candidate
+	// URL's EFFECTIVE hash (URLShaMap[url] when present, else ExpectedSHA)
+	// must be present in the signed map for THIS version. A mirror added
+	// after signing — or an attacker-controlled mirror with its own
+	// mirror_sha256 — is dropped before a single byte is fetched; the
+	// official URL stays as the last candidate.
+	//
+	// Skipped entirely for legitimately unsigned versions (TOFU-discovered
+	// or custom tools): after a TOFU write-back the hash is real but still
+	// absent from the signed map, and filtering would evict every
+	// candidate and break re-installation (ticket 13 / G6).
+	//
+	// Also gated on HasRootKey(): with no embedded root key the whole
+	// signature chain is inert, and the pre-batch behaviour (no filtering)
+	// must be preserved exactly — that is the release-form regression
+	// anchor for this batch (ticket 13 / G5).
+	if signer.HasRootKey() && len(opts.ManifestSignature) > 0 && !opts.UnsignedVersion &&
+		opts.ExpectedSHA != "" && !util.IsAllZeroHash(opts.ExpectedSHA) {
+		urls = filterSignatureCoveredURLs(opts, urls)
+		if len(urls) == 0 {
+			return fmt.Errorf("no download URL is covered by the manifest signature for %s@%s — refusing (mirror hash not in signed map)", opts.ToolName, opts.Version)
+		}
+		if urls[0] != opts.URL {
+			log.Printf("[download] WARNING: primary URL is not signature-covered — falling through to %s", sanitizedURL(urls[0]))
+		}
+	}
+
 	ok, failures, proxyFailed := tryURLList(ctx, opts, urls, true)
 	if ok {
+		cleanupAfterSuccess(opts)
 		return nil
 	}
 
@@ -210,14 +281,22 @@ func Download(ctx context.Context, opts Options) error {
 		directOpts.ProxyURL = ""
 		directOpts.Client = newHTTPClient(opts, true)
 		if ok, directFailures, _ := tryURLList(ctx, directOpts, urls, false); ok {
+			// 第十轮审计 P2-6（P2）：直连重试是**第二个成功出口**，此前它
+			// 直接 `return nil`，完全跳过了上面那段残留清理 —— 于是
+			// 「配了代理且代理不可用」这一常见组合下，失败候选的 .part /
+			// .part.lock 仍然永久残留（审计实测残留 .part + 2 个 .part.lock）。
+			// 两个成功出口现在共用同一个 helper。
+			cleanupAfterSuccess(opts)
 			return nil
 		} else {
 			// Actionable hint only when proxy-connection errors were
 			// actually observed (dead/misconfigured proxy), not when the
 			// proxy worked and the target simply 404'd.
 			if opts.ProxyURL != "" && proxyFailed {
+				// F-17：代理 URL 的 userinfo 是合法配置（认证代理），
+				// 绝不能出现在用户可见的错误里。
 				return fmt.Errorf("download failed: proxy %s unreachable (%s); direct also failed (%s); start the proxy service or disable proxy.enabled",
-					opts.ProxyURL, strings.Join(failures, "; "), strings.Join(directFailures, "; "))
+					redactProxyCredentials(opts.ProxyURL), strings.Join(failures, "; "), strings.Join(directFailures, "; "))
 			}
 			failures = append(failures, directFailures...)
 		}
@@ -300,6 +379,43 @@ func sanitizedURL(raw string) string {
 	return parsed.String()
 }
 
+// proxyUserinfoPattern 匹配 URL 的 userinfo 段（`//user:pass@`），用于脱敏。
+var proxyUserinfoPattern = regexp.MustCompile(`//[^/@\s]*@`)
+
+// redactProxyCredentials 把文案里的 `user:pass@` 替换为 `<redacted>@`。
+//
+// F-17：与 internal/remote 的 redactProxyCredentials 同款实现（票 40 / P2-16
+// 后半只修了 remote 包，downloader 包遗漏）。刻意不复用 util.SanitizeURL：它在
+// url.Parse 失败时原样返回输入，而「URL 畸形到解析失败」恰恰是最需要脱敏的
+// 场景（url.Parse 的错误文本会带上含凭据的原始 URL）。也不为共享而改
+// internal/util——该文件属其他 agent 的所有权。
+func redactProxyCredentials(msg string) string {
+	return proxyUserinfoPattern.ReplaceAllString(msg, "//<redacted>@")
+}
+
+// urlInTextPattern 匹配任意 URL（含被引号/括号包裹的情形）。
+//
+// F-18：net/http 的错误文本把 URL 包在双引号里
+// （`Get "https://host/path?token=X": dial tcp …`），修复前按 strings.Fields
+// 切词再判 HasPrefix(field, "https://") 判假 → 整段 URL（含查询串凭据）原样
+// 保留。这里对整段文本做正则替换，不再依赖字段边界。
+var urlInTextPattern = regexp.MustCompile(`https?://[^\s"'<>()\[\],;]+`)
+
+// sanitizedReason 去除错误消息中的 URL 凭据/查询参数并清理控制字符，
+// 用于把底层错误安全地回显给用户。
+func sanitizedReason(err error) string {
+	reason := urlInTextPattern.ReplaceAllStringFunc(err.Error(), sanitizedURL)
+	if len(reason) > 200 {
+		reason = reason[:200]
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 {
+			return ' '
+		}
+		return r
+	}, reason)
+}
+
 // notifyStatus invokes opts.OnStatus (if set) with a formatted message.
 func notifyStatus(opts Options, format string, args ...any) {
 	if opts.OnStatus == nil {
@@ -318,22 +434,355 @@ func shortHost(raw string) string {
 	return parsed.Host
 }
 
-func sanitizedReason(err error) string {
-	reason := err.Error()
-	for _, field := range strings.Fields(reason) {
-		if strings.HasPrefix(field, "https://") {
-			reason = strings.ReplaceAll(reason, field, sanitizedURL(strings.TrimRight(field, ",;:)")))
+// ---------------------------------------------------------------------------
+// .part path generation (F-12)
+// ---------------------------------------------------------------------------
+
+// partGeneration 是「按 URL 分代」的 .part 命名所用的短哈希长度
+// （sha256(url) 的十六进制前 16 字符 = 64 bit，碰撞风险可忽略）。
+const partGenerationLen = 16
+
+// partPathFor 返回某个候选 URL 的 .part 路径：<dest>.<sha256(url)[:16]>.part。
+//
+// F-12（P0）：修复前 .part 只由 opts.Dest 决定，而 fromBytes 取该文件大小后
+// **无条件**作为 Range 起点发给当前候选 URL。tryURLList 在主 URL 失败后继续用
+// 同一 dest 尝试回退 URL → 主 URL 写了一半的字节被当成回退 URL 的前缀，落盘
+// AAAA…BBBB 混合归档；无哈希(TOFU)通路上该文件被 rename 并写入 sidecar pin
+// 永久固化。
+//
+// 按 URL 分代后，跨 URL 的残留落在不同文件里，天然不可能被当成前缀；同一 URL
+// 的崩溃残留仍按原名续传（断点续传能力保留）。
+//
+// 注意：凡是要拼接 .part 的地方都必须走本函数或 partPathsFor，否则会留下
+// 孤儿 .part 或删错文件（见 manager.go 的 Pause/Cancel 清理与辅助函数）。
+func partPathFor(dest, rawURL string) string {
+	sum := sha256.Sum256([]byte(rawURL))
+	return dest + "." + hex.EncodeToString(sum[:])[:partGenerationLen] + ".part"
+}
+
+// partPathsFor 返回一个下载（主 URL + 回退 URL + 历史命名）可能涉及的
+// 全部 .part 路径，供清理逻辑（Pause/Cancel/退出清理）一次性删除。
+//
+// 末位刻意包含未分代的 <dest>.part：修复前的版本或更早的 xdev 留下的残留
+// 必须仍能被清理，否则会在缓存目录里永久占位。
+func partPathsFor(dest string, urls ...string) []string {
+	paths := make([]string, 0, len(urls)+1)
+	seen := make(map[string]bool, len(urls)+1)
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	for _, u := range urls {
+		if u == "" {
+			continue
+		}
+		add(partPathFor(dest, u))
+	}
+	add(dest + ".part")
+	return paths
+}
+
+// removePartLockIfUnheld 尽力删除一个 .part.lock，但**只在能证明它没被别的
+// 下载进程持有时**才删。
+//
+// 为什么不能无条件删：LockFileEx/flock 的排他锁是「按文件」的。如果另一个
+// xdev 进程正持有 L，我们却把 L 从目录里删掉，它锁住的就变成一个已解除链接的
+// inode；下一个进程会新建同名 L 并成功加锁 → 两个进程同时写同一个 .part
+// （正是 P1-01 的互斥语义要防的事）。因此先用 0 超时试探性获取：拿得到说明
+// 无人持有，释放后即可安全删除；拿不到说明有活跃下载，保持原样。
+func removePartLockIfUnheld(lockPath string) error {
+	if _, err := os.Stat(lockPath); err != nil {
+		return nil // 不存在（或不可读）：无可清理
+	}
+	fl, err := util.AcquireFileLock(lockPath, 0)
+	if err != nil {
+		return nil // 被活跃下载持有 —— 绝不删除
+	}
+	_ = fl.Release()
+	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// removePartResidueIfUnheld 删除一份 .part 残留及其 .part.lock，但同样**只在
+// 能证明该 .part 没有被活跃下载持有时**才动手。
+//
+// 这一点对「成功收尾时清理失败候选的代」尤其重要：同一 dest 下，主 URL 与
+// 回退 URL 各有独立的分代与锁，两个下载可以同时在跑（互斥锁是按分代的）。
+// 无条件删会把**别人在途的 .part** 从目录里抽走（Windows 上删除会失败、
+// Unix 上写进已解除链接的 inode），所以先试探锁：拿不到就原样保留。
+func removePartResidueIfUnheld(partPath string) error {
+	if _, err := os.Stat(partPath); err != nil {
+		// 没有 .part：仍清掉可能残留的孤儿锁与孤儿校验器（P2-6）。
+		_ = os.Remove(partPathValidatorSuffix(partPath))
+		return removePartLockIfUnheld(partPath + ".lock")
+	}
+	fl, err := util.AcquireFileLock(partPath+".lock", 0)
+	if err != nil {
+		return nil // 有活跃下载持有 —— 不动它的 .part
+	}
+	_ = fl.Release()
+
+	var firstErr error
+	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
+		firstErr = err
+	}
+	// P2-6：内容身份旁路文件与 .part 同生共死。
+	_ = os.Remove(partValidatorFor(partPath))
+	if err := os.Remove(partPath + ".lock"); err != nil && !os.IsNotExist(err) && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// partPathValidatorSuffix 返回某份 .part 的校验器旁路路径。
+// 抽成函数只是为了让 removePartResidueIfUnheld 的「无 .part」分支读起来不绕。
+func partPathValidatorSuffix(partPath string) string { return partValidatorFor(partPath) }
+
+// removePartialFiles 删除给定 dest/URL 组合的全部 .part 残留与 .part.lock
+// （best-effort，不存在的路径不算错误；被活跃下载持有的分代保持原样）。
+// 返回首个错误，供调用方记日志。
+//
+// P2-5：调用方是「本次下载成功收尾」——必须把**失败候选 URL** 留下的代与
+// 锁一起清掉，否则 dest 已生成但目录里永久残留 <other-url>.part / .part.lock。
+func removePartialFiles(dest string, urls ...string) error {
+	var firstErr error
+	for _, p := range partPathsFor(dest, urls...) {
+		if err := removePartResidueIfUnheld(p); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	if len(reason) > 200 {
-		reason = reason[:200]
+	return firstErr
+}
+
+// ---------------------------------------------------------------------------
+// Range / Content-Range helpers (F-12b, F-13)
+// ---------------------------------------------------------------------------
+
+// contentRangePattern 匹配 RFC 9110 的 Content-Range：
+// `bytes <start>-<end>/<total>`，也接受 unsatisfied 形式的 `bytes */<total>`。
+var contentRangePattern = regexp.MustCompile(`^bytes\s+(?:(\d+)-(\d+)|\*)/(\d+|\*)$`)
+
+// parseContentRange 解析 Content-Range，返回 (start, total, ok)。
+// start 为 -1 表示 unsatisfied 形式（`bytes */total`）；total 为 -1 表示 `*`。
+// 任何不符合 RFC 形状的值都返回 ok=false（调用方 fail closed）。
+func parseContentRange(value string) (start, total int64, ok bool) {
+	m := contentRangePattern.FindStringSubmatch(strings.TrimSpace(value))
+	if m == nil {
+		return 0, 0, false
 	}
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == '\t' || r < 0x20 {
-			return ' '
+	total = -1
+	if m[3] != "*" {
+		n, err := strconv.ParseInt(m[3], 10, 64)
+		if err != nil {
+			return 0, 0, false
 		}
-		return r
-	}, reason)
+		total = n
+	}
+	if m[1] == "" {
+		return -1, total, true // `bytes */total`：请求区间不满足
+	}
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return n, total, true
+}
+
+// completePartResidue 报告「这个 416 是否意味着本地 .part 已等于完整文件」。
+//
+// 判定刻意保守（fail closed）：
+//   - 服务端未给 Content-Range：无从证明，返回 false（删 .part 让下次重来）；
+//   - Content-Range 是 `bytes */<total>`：total 必须与本地长度一致；
+//   - Content-Range 是普通 `bytes <start>-<end>/<total>`：必须满足
+//     start == 本地长度且 end+1 == total（即请求的起点正好是文件末尾）。
+//
+// 不满足时返回 false，调用方删除 .part —— 宁可从零重下，也不接受一个来历
+// 不明的「完整」文件（它可能只是本地截断的残缺品）。
+//
+// P1-2：**裸 416 不再是完整性的证据**。修复前这里有一条
+// `if resp.ContentLength == 0 { return true }` 的退路，而 RFC 9110 允许 416
+// 不带 Content-Range，Go 服务端写 WriteHeader(416) 且无 body 时 ContentLength
+// 恰好就是 0 → 任意本地 .part（包括只有真实文件一半的截断残片）都被当作
+// 「已完整」提升为正式归档，并在无哈希(TOFU)通路上被 pin 永久固化。
+// 现在只有服务端明确给出 `bytes */total`（或 `bytes A-B/total`）且 total 与
+// 本地长度一致时才走提升路径；否则删 .part，宁可让用户从零重下。
+func completePartResidue(resp *http.Response, fromBytes int64) bool {
+	start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+	if !ok {
+		return false
+	}
+	if total < 0 {
+		return false // `bytes */ *` 或 `bytes 0-99/*`：无法证明完整性
+	}
+	if total != fromBytes {
+		return false
+	}
+	// unsatisfied 形式（start == -1）只要 total 对上即可。
+	return start <= 0 || start == fromBytes
+}
+
+// partValidator 记录一份 `.part` 所对应的**内容身份**，用于 P2-6（同一 URL 内容
+// 变更后不得把旧前缀当续传前缀拼接）。
+//
+// 取值来源：响应头 ETag / Last-Modified。二者都可能缺失；缺失时 ifRange() 返回 ""
+// ，本地校验也退化为「无从证明」（此时保持既有行为：只按 Content-Range 偏移校验）。
+type partValidator struct {
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"last_modified,omitempty"`
+	// Unreliable 标记「该 URL 的校验器不稳定」，用于化解 P2-6 与「轮换 ETag」的冲突。
+	//
+	// 第十轮审计 P2-2（P2，Round 9 P2-6 修复引入的可用性回归）：部分 CDN / 对象存储 /
+	// 网关的 ETag **不是内容哈希**，同一份内容每次响应都换一个值。此时 P2-6 的本地校验
+	// 会把「续传」变成「永远从零开始」：每次响应中断后，下一次续传拿到新 ETag → 判定
+	// 「内容已变」→ 删 `.part` → 从头下 → 再次中断 …… 审计实测 MaxRetries=8 全部失败、
+	// dest 长度 0（对照：固定 ETag 时 7 次请求成功）。
+	//
+	// 这是**根本性的语义张力**：既想用 ETag 检测「内容变更」，又想跨响应累积字节，
+	// 而一个每次都变的 ETag 无法同时满足两者。
+	//
+	// 化解方式：**首次**不匹配时仍然按 P2-6 处理（删前缀 —— 那是真正危险的场景：
+	// 旧内容前缀拼到新内容上会被 TOFU 永久固化），但在新一代 `.meta` 里打上
+	// Unreliable；此后该 URL 的续传**不再因校验器不一致而丢弃前缀**，累积恢复正常。
+	// 这样 P2-6 的核心保护（首次发现内容变更即丢弃）保留，而「校验器不稳定」的
+	// 服务端不会让下载永远无法完成。
+	Unreliable bool `json:"unreliable,omitempty"`
+}
+
+// ifRange 返回适合放进 If-Range 的值。RFC 9110：ETag（强校验器）优先，
+// 否则用 Last-Modified（HTTP-date）。弱 ETag（W/"…"）不能用于 If-Range。
+func (v partValidator) ifRange() string {
+	if v.ETag != "" && !strings.HasPrefix(v.ETag, "W/") {
+		return v.ETag
+	}
+	return v.LastModified
+}
+
+// usable 报告是否有可用于一致性比较的校验器。
+func (v partValidator) usable() bool { return v.ETag != "" || v.LastModified != "" }
+
+// matchesResponse 比较响应携带的校验器与本地记录。任一维度不同即不匹配。
+//
+// 只比较**双方都存在**的维度（服务端不必同时回 ETag 与 Last-Modified）：
+//   - ETag 双方都有且不同 → 不匹配；
+//   - Last-Modified 双方都有且不同 → 不匹配；
+//   - 只有一方存在 → 该维度不参与判定（不可证伪，不做猜测）。
+//
+// 第九轮审计 P2-3（P2）：ETag 比较必须用 **RFC 9110 弱比较**（忽略 `W/` 前缀），
+// 而不是逐字节强比较。服务端在同一份内容上把 ETag 从强形式切成弱形式（或反向）
+// 是合法且常见的（网关/CDN 行为），强比较会误判「内容已变」→ 误删可续传的前缀
+// （实测：`.meta` 记 `"v1"`、服务端回 `W/"v1"` → 误报 content changed）。
+// 这里判断的是「**内容身份**是否相同」，与 If-Range 要求的强校验器是两件事：
+// If-Range 由 ifRange() 单独处理（那里正确地排除了弱 ETag）。
+func (v partValidator) matchesResponse(resp *http.Response) bool {
+	gotETag := strings.TrimSpace(resp.Header.Get("ETag"))
+	gotLM := strings.TrimSpace(resp.Header.Get("Last-Modified"))
+	if v.ETag != "" && gotETag != "" && !etagWeakEqual(v.ETag, gotETag) {
+		return false
+	}
+	if v.LastModified != "" && gotLM != "" && v.LastModified != gotLM {
+		return false
+	}
+	return true
+}
+
+// etagWeakEqual 按 RFC 9110 §8.8.3.2 的**弱比较**判定两个 ETag 是否同一身份：
+// 去掉可选的 `W/` 前缀后比较不透明标签。
+func etagWeakEqual(a, b string) bool {
+	return stripETagWeakPrefix(a) == stripETagWeakPrefix(b)
+}
+
+// stripETagWeakPrefix 去掉 ETag 的弱标记前缀 `W/`。
+func stripETagWeakPrefix(etag string) string {
+	etag = strings.TrimSpace(etag)
+	if strings.HasPrefix(etag, "W/") {
+		return etag[2:]
+	}
+	return etag
+}
+
+// fromResponse 从响应头构造校验器。
+func validatorFromResponse(resp *http.Response) partValidator {
+	return partValidator{
+		ETag:         strings.TrimSpace(resp.Header.Get("ETag")),
+		LastModified: strings.TrimSpace(resp.Header.Get("Last-Modified")),
+	}
+}
+
+// partValidatorFor 返回某代 `.part` 的校验器旁路文件路径。
+func partValidatorFor(partPath string) string { return partPath + ".meta" }
+
+// discardPart 丢弃某一代 `.part` 及其全部旁路文件。
+//
+// 第十轮审计 P2-5（P2）：`.meta`（内容身份校验器）此前只在 `finalizeDownload` 与
+// `removePartResidueIfUnheld` 两处被删除，而**所有其它**「删 `.part`」的地方都是裸
+// `os.Remove(partPath)` —— 于是失败路径、Cancel、退出清理、两个清理 API 全都会留下
+// 孤儿 `.meta`。审计实测：「GUI 清缓存」（`CleanupAllPartialsInDir`）之后目录里仍残留
+// `*.part.meta`，与 Round 9 commit 里声称的「同生共死」不符。
+//
+// 孤儿 `.meta` 的危害不只是卫生：下一次同代下载若响应**不带**校验器，旧 `.meta` 不会
+// 被覆盖；若那次下载中断，续传会带着**上一代内容的 ETag** 发 If-Range → 产生难以解释的
+// "content changed" 报错。
+//
+// 因此把「丢弃一代」收敛成这一个 helper，所有删除点都走它，避免下次再漏。
+func discardPart(partPath string) {
+	_ = os.Remove(partPath)
+	_ = os.Remove(partValidatorFor(partPath))
+}
+
+// readPartValidator 读取旁路校验器。缺失或损坏都返回 ok=false —— 校验器是
+// **尽力而为**的证据，缺失时退化为既有行为（不能因此拒绝续传）。
+func readPartValidator(path string) (partValidator, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return partValidator{}, false
+	}
+	var v partValidator
+	if err := json.Unmarshal(data, &v); err != nil {
+		log.Printf("[download] WARNING: partial-file validator %s is unreadable (%v) — continuing without content-identity check", path, err)
+		return partValidator{}, false
+	}
+	if !v.usable() {
+		return partValidator{}, false
+	}
+	return v, true
+}
+
+// writePartValidator 持久化校验器。失败只告警（不阻断下载）。
+func writePartValidator(path string, v partValidator) {
+	if !v.usable() {
+		return
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
+		log.Printf("[download] WARNING: could not persist partial-file validator %s: %v", path, err)
+	}
+}
+
+// cleanupAfterSuccess 清理一次成功下载留下的残留。
+//
+// 第十轮审计 P2-6（P2）：清理此前只挂在 `tryURLList` 成功的**第一个**出口上，
+// 而「代理失败 → 直连重试成功」是**第二个**成功出口 —— 它直接 return，于是
+// 「配了代理且代理不可用」这一常见组合下，失败候选的 `.part` / `.part.lock` /
+// `.meta` 仍然永久残留（审计实测残留 `.part` + 2 个 `.part.lock`）。
+//
+// 抽成一个 helper，两个成功出口共用，避免下次再加出口时又漏。
+//
+// 复用 removePartialFiles（P2-5 修复前它是死代码，全仓无调用方），传入
+// Fallbacks() 覆盖全部候选 URL + 历史未分代命名。成功的那一代 `.part` 已在
+// finalizeDownload 里被 rename 掉，删除是幂等的；`.meta` 也由
+// removePartResidueIfUnheld 一并清掉。
+func cleanupAfterSuccess(opts Options) {
+	if rmErr := removePartialFiles(opts.Dest, opts.Fallbacks()...); rmErr != nil {
+		log.Printf("[download] WARNING: 成功下载后清理残留临时文件失败: %v", rmErr)
+	}
 }
 
 // isNotFoundError reports whether the error indicates the resource was
@@ -363,7 +812,7 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 			return nil
 		}
 		lastErr = err
-		log.Printf("[download] Attempt %d failed: %v", attempt, err)
+		log.Printf("[download] Attempt %d failed: %s", attempt, sanitizedReason(err))
 		// Don't retry on 404 — move to fallback immediately
 		if isNotFoundError(err) {
 			return err
@@ -385,7 +834,27 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 }
 
 func downloadOnce(ctx context.Context, opts Options) error {
-	partPath := opts.Dest + ".part"
+	// F-12：.part 按候选 URL 分代（<dest>.<sha256(url)[:16]>.part）。同一 URL
+	// 的崩溃残留仍被续传；**另一个 URL** 的残留落在别的文件里，永远不会被
+	// 当成前缀拼成本 URL 的续传目标。
+	partPath := partPathFor(opts.Dest, opts.URL)
+
+	// Ticket 21 (audit-fixes / P1-01): exclusive lock on the partial file.
+	// Two xdev processes sharing one cache destination (GUI + CLI, or a
+	// batch item + a manual install) used to interleave Range requests and
+	// writes into the same .part — both reported success while the archive
+	// was a mix of two responses.
+	//
+	// The lock is stale-safe: AcquireFileLock uses OS byte-range locks
+	// (LockFileEx/flock), released by the kernel when a holder dies — a
+	// leftover .part.lock from a crashed process never blocks a takeover,
+	// which is exactly what keeps crash-resume working (ticket 23
+	// inventory conclusion).
+	partLock, lockErr := util.AcquireFileLock(partPath+".lock", 1*time.Second)
+	if lockErr != nil {
+		return fmt.Errorf("another download is already in progress for %s (lock %s: %w) — retry once it finishes, or delete the .part/.part.lock files if no download is running", opts.ProgressDesc, partPath+".lock", lockErr)
+	}
+	defer partLock.Release()
 
 	// Security (M-6): Open the .part file first, then stat the open handle
 	// to avoid TOCTOU race between os.Stat and os.OpenFile.
@@ -399,11 +868,14 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// would redirect the archive write to an arbitrary file. Only
 		// resume when the existing .part is a regular file (lstat, not
 		// stat); otherwise remove the impostor and start fresh with O_EXCL.
+		// Ticket 21: this branch stays INSIDE the .part lock — the lock is
+		// never treated as "another download in progress" for a crash
+		// residue (that is the whole point of taking it over).
 		if fi, stErr := os.Lstat(partPath); stErr == nil && fi.Mode().IsRegular() {
 			flags = os.O_CREATE | os.O_WRONLY
 			f, openErr = os.OpenFile(partPath, flags, 0o644)
 		} else {
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			f, openErr = os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 		}
 	}
@@ -417,6 +889,35 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] Resuming from %d bytes (partial file exists)", fromBytes)
 	}
 
+	// 第九轮审计 P2-6（P2）：同一 URL 的内容变更后，旧残留被当作续传前缀拼接。
+	//
+	// F-12 让 `.part` 按 URL 分代，于是「不同 URL 互不干扰」成立；但**同一个 URL**
+	// 重新发布内容（nightly / 重打 tag / CDN 回源换了对象）时，代际键不变，旧内容的
+	// 前缀会与**新内容**的后缀拼成一份文件。F-12b 只校验偏移（起点对得上），
+	// `fromBytes` 那段前缀本身没有任何一致性证据。实测 H16：本地残留 = 旧内容前
+	// 2048 字节，服务端同 URL 现返回新内容（同长度）→ err=nil、拼接结果被接受并写 pin。
+	//
+	// 标准做法是 `If-Range`：把下载开始时记录的校验器（ETag / Last-Modified）带上，
+	// 不匹配时**服务端**回 200 全量，客户端自然丢弃旧前缀（下面的
+	// "Server did not honor Range header" 分支已覆盖）。但 If-Range 依赖服务端
+	// 合规，因此再加一道本地校验：拿到 206 后比对响应校验器与本地记录，
+	// 不一致就删 `.part` 并 fail closed。
+	partMeta := partValidatorFor(partPath)
+	var resumeValidator partValidator
+	if fromBytes > 0 {
+		if v, ok := readPartValidator(partMeta); ok {
+			resumeValidator = v
+		}
+	}
+	// P2-2（Round 10）：校验器**不可靠**这一标记必须跨代保留 —— 它在 `.part` 被丢弃后
+	// 仍然有效（同一 URL 的性质，不是某一代 `.part` 的性质）。因此这里无论 fromBytes
+	// 是否为 0 都读一次，后续写回时把它带上，否则下一次从零下载会把标记覆盖掉，
+	// 「轮换 ETag 永远下不完」的问题就会复发。
+	validatorUnreliable := false
+	if v, ok := readPartValidator(partMeta); ok && v.Unreliable {
+		validatorUnreliable = true
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", opts.URL, nil)
 	if err != nil {
 		log.Printf("[download] ERROR: failed to create request: %v", err)
@@ -425,6 +926,10 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	if fromBytes > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", fromBytes))
 		log.Printf("[download] Set Range header: bytes=%d-", fromBytes)
+		if ir := resumeValidator.ifRange(); ir != "" {
+			req.Header.Set("If-Range", ir)
+			log.Printf("[download] Set If-Range from stored validator")
+		}
 	}
 	req.Header.Set("User-Agent", "xdev/0.1")
 	if opts.Cookie != "" {
@@ -435,12 +940,66 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	log.Printf("[download] Sending HTTP GET request to %s", sanitizedURL(opts.URL))
 	resp, err := opts.Client.Do(req)
 	if err != nil {
-		log.Printf("[download] ERROR: HTTP request failed: %v", err)
+		log.Printf("[download] ERROR: HTTP request failed: %s", sanitizedReason(err))
 		return err
 	}
 	defer resp.Body.Close()
 
 	log.Printf("[download] Response: status=%d content-length=%d", resp.StatusCode, resp.ContentLength)
+
+	// F-13：416 Range Not Satisfiable 单独处理。它恰恰是「本地 .part 已等于
+	// 完整文件」时服务器唯一合法的回答。修复前该分支按普通非 2xx 直接返回，
+	// 且**不删 .part** → 下次安装读到同样大小、发同样越界的 Range、再吃 416，
+	// 该 dest 永久不可恢复。
+	//
+	// 正确动作：把手上的 .part 当作完整文件走后续的校验 + rename 路径。
+	// 但这只在「服务器确实说请求的区间越界（区间从 fromBytes 起）」时才成立，
+	// 所以先确认本地确有内容、且（若服务端给了 Content-Range）声明的是
+	// `bytes */total` 且 total 与本地长度一致。
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		// 第九轮审计 P2-1（P2，P2-6 修复的补齐）：**416 提升路径同样需要内容身份证据**。
+		//
+		// P2-6 的本地校验原先只写在 `fromBytes > 0 && 206` 分支，416 提升分支只靠
+		// `completePartResidue` 的「长度 == total」就放行 —— 而「长度相等」不是
+		// 「内容相同」的证据。同一 URL 换了内容且**新旧同长度**时，本地那份满长的
+		// **旧内容**会被当成新归档 rename 并在 TOFU 通路上写 pin（实测：`ETag "v1"`
+		// 的 4096 字节旧内容 + 服务端 `ETag "v2"` 的 `bytes */4096` → `err=nil`，
+		// 落盘旧内容、pin 写入，之后正常下载新内容反被旧 pin 拒绝）。
+		//
+		// 客户端这时**手里已经有反证**（响应的 ETag/Last-Modified 与本地记录不同），
+		// 因此属于修复缺口而非不可判定。规则：
+		//   - 本地有校验器、响应也有校验器且**不一致** → 删 `.part`+`.meta`，放弃提升；
+		//   - 本地有校验器、响应无校验器 → 无法证伪，允许提升（与 206 分支同口径）；
+		//   - 本地无校验器（升级前的残留、或 `.meta` 被外部删除）→ 保持 P1-2 的
+		//     保守原则，仍按 `completePartResidue` 判定（不因此拒绝所有提升，
+		//     否则会让 P1-2 修好的恢复路径失效）。
+		if fromBytes > 0 && completePartResidue(resp, fromBytes) {
+			if resumeValidator.usable() && !resumeValidator.matchesResponse(resp) {
+				got := validatorFromResponse(resp)
+				log.Printf("[download] ERROR: 416 promotion refused — content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q); discarding the partial file",
+					resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
+				f.Close()
+				discardPart(partPath)
+				_ = os.Remove(partMeta)
+				return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — refusing to promote the stale local file as complete; discarding it and retrying from scratch",
+					sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
+			}
+			log.Printf("[download] HTTP 416 with a complete local .part (%d bytes) — verifying and promoting it instead of failing", fromBytes)
+			notifyStatus(opts, "Server reported the partial file is already complete — verifying it")
+			resp.Body.Close()
+			// written=0：本次响应没有写入任何字节（完整内容已在 .part 里），
+			// finalizeDownload 会把既有内容补喂给 hasher。
+			return finalizeDownload(opts, partPath, f, sha256.New(), fromBytes, 0)
+		}
+		// 无法证明本地就是完整文件（无残留 / 服务端未确认 total）：删掉 .part
+		// 让下次能从头重来，而不是把一个永不满足的 Range 留给下一次。
+		log.Printf("[download] ERROR: HTTP 416 for %s (local .part=%d bytes) — discarding the partial file", sanitizedURL(opts.URL), fromBytes)
+		f.Close()
+		discardPart(partPath)
+		_ = os.Remove(partMeta)
+		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
+	}
+
 	if resp.StatusCode/100 != 2 {
 		log.Printf("[download] ERROR: non-2xx status code %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
@@ -450,6 +1009,118 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		log.Printf("[download] Server did not honor Range header, restarting from scratch")
 		notifyStatus(opts, "Server ignored Range header — restarting from scratch")
 		fromBytes = 0
+		// 全量重下：旧的校验器与旧前缀一起作废（If-Range 命中了「内容已变」）。
+		_ = os.Remove(partMeta)
+		resumeValidator = partValidator{}
+	}
+	// P2-6：把本次响应的校验器记到该代的旁路文件，供**下一次**续传比对。
+	// 首次下载（fromBytes==0）与「服务端忽略 Range 后重下」都在这里落定；
+	// 续传时若原先没有校验器，也用本次响应补上（下一次就有据可依）。
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
+		if v := validatorFromResponse(resp); v.usable() {
+			// P2-2：把「校验器不可靠」的既有标记带上（它是 URL 的性质，不是某一代
+			// `.part` 的性质）—— 否则下一次从零下载会把标记覆盖掉，轮换 ETag 的
+			// 服务端又会回到「永远下不完」。
+			v.Unreliable = validatorUnreliable
+			if !resumeValidator.usable() || fromBytes == 0 {
+				writePartValidator(partMeta, v)
+			}
+		}
+	}
+
+	// P1-1 (a)：新鲜下载（未发 Range）绝不允许收到 206。
+	//
+	// F-12b 的 Content-Range 偏移校验被门控在 `fromBytes > 0 && 206`，于是
+	// 「未发 Range 的请求收到 206 + bytes 0-499/1000」这条路径完全没有校验：
+	// F-13b 只比 ContentLength（500 == 500）→ 500 字节残缺归档被 rename，并在
+	// 无哈希(TOFU)通路上写入 sidecar pin 永久固化（后续安装比对的是同一个坏 pin，
+	// 永远通过，只能手动删缓存才能恢复）。对 206 的合法前提是「我们确实请求了
+	// 某个区间」，因此这里直接删 .part 并 fail closed。
+	if fromBytes == 0 && resp.StatusCode == http.StatusPartialContent {
+		log.Printf("[download] ERROR: server returned 206 Partial Content for a fresh request without Range (Content-Range=%q) — discarding",
+			resp.Header.Get("Content-Range"))
+		f.Close()
+		discardPart(partPath)
+		return fmt.Errorf("server returned 206 Partial Content with Content-Range %q for a request that asked for the whole file — the response is only part of the archive; discarding the partial file and retrying from scratch",
+			resp.Header.Get("Content-Range"))
+	}
+
+	// F-12b：resume 时必须校验响应的 Content-Range 起始偏移 == fromBytes。
+	// 修复前从不校验：服务端回 206 但起点是 0（或任何别的偏移）时，body 被
+	// 写在偏移 fromBytes 处 → 错位文件；无哈希(TOFU)通路上还会被接受并写 pin。
+	//
+	// P1-1 (b)：除起点外还必须校验**组装后的总长度 == Content-Range 声明的
+	// total**。只比起点抓不住「服务端只回部分区间但如实声明该区间的
+	// Content-Length」（例：本地 500 字节 + `bytes 500-599/1000` + 如实
+	// Content-Length: 100 → 组装出 600 字节就被接受并写 pin）。total 为 `*`
+	// （parseContentRange 返回 -1）时无从证明完整性 —— 也 fail closed。
+	if fromBytes > 0 && resp.StatusCode == http.StatusPartialContent {
+		// P2-6 本地校验（If-Range 的纵深防御）：服务端回了 206，说明它接受续传，
+		// 但**可能无视 If-Range**（非合规实现）。此时若响应携带的校验器与本地
+		// 记录不一致，说明同一 URL 的内容已经换过 —— 旧前缀与新后缀拼起来会得到
+		// 一份「长度正确、内容错误」的归档，并在 TOFU 通路上被 pin 永久固化
+		// （实测 H16：旧内容前 2048 字节 + 新内容后缀 = 被接受的拼接文件）。
+		//
+		// P2-2（Round 10）：若该 URL 已被标记为**校验器不可靠**（同一内容每次换
+		// ETag 的 CDN），则不再因不一致而丢弃前缀 —— 否则续传永远无法累积字节
+		// （审计实测 8 次重试全部失败、dest 长度 0）。首次不匹配时仍按 P2-6 处理，
+		// 并在新一代 `.meta` 里打上 Unreliable。
+		if resumeValidator.usable() && !resumeValidator.matchesResponse(resp) {
+			got := validatorFromResponse(resp)
+			if resumeValidator.Unreliable {
+				log.Printf("[download] NOTE: validator changed again (stored etag=%q → response etag=%q) but this URL is marked as having unstable validators — keeping the local prefix so the transfer can make progress",
+					resumeValidator.ETag, got.ETag)
+			} else {
+				log.Printf("[download] ERROR: content changed under the same URL (stored etag=%q last-modified=%q, response etag=%q last-modified=%q) — discarding the partial file",
+					resumeValidator.ETag, resumeValidator.LastModified, got.ETag, got.LastModified)
+				f.Close()
+				discardPart(partPath)
+				// P2-2（Round 10）：把本次响应作为**新一代**的基准，并标记
+				// Unreliable —— 下一次若又变，就不再丢弃前缀（避免「轮换 ETag 的
+				// 服务端永远下不完」）。首次不匹配仍然丢弃前缀，P2-6 的核心保护不变。
+				got.Unreliable = true
+				writePartValidator(partMeta, got)
+				return fmt.Errorf("content at %s changed since the partial download started (stored ETag %q vs response ETag %q) — the local prefix cannot be spliced onto the new content; discarding the partial file and retrying from scratch",
+					sanitizedURL(opts.URL), resumeValidator.ETag, got.ETag)
+			}
+		}
+		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || start != fromBytes {
+			log.Printf("[download] ERROR: Content-Range mismatch: server=%q requested-start=%d — discarding the partial file",
+				resp.Header.Get("Content-Range"), fromBytes)
+			f.Close()
+			discardPart(partPath)
+			return fmt.Errorf("server returned Content-Range %q which does not start at the requested offset %d for %s — discarding the partial file and retrying from scratch",
+				resp.Header.Get("Content-Range"), fromBytes, sanitizedURL(opts.URL))
+		}
+		if total < 0 {
+			log.Printf("[download] ERROR: Content-Range %q declares an unknown total — cannot prove the assembled archive is complete",
+				resp.Header.Get("Content-Range"))
+			f.Close()
+			discardPart(partPath)
+			return fmt.Errorf("server returned Content-Range %q with an unknown total for %s — cannot verify that the assembled archive is complete; discarding the partial file",
+				resp.Header.Get("Content-Range"), sanitizedURL(opts.URL))
+		}
+		// 期望总长度 = 续传起点 + 本次响应应写入的字节数。响应自带
+		// Content-Length 时用它；chunked（-1）时只能用 Content-Range 推出的
+		// 区间长度（end-start+1），并在写完后再与实写字节数交叉校验。
+		if total < fromBytes {
+			log.Printf("[download] ERROR: Content-Range %q declares total=%d which is smaller than the local partial file (%d bytes) — discarding",
+				resp.Header.Get("Content-Range"), total, fromBytes)
+			f.Close()
+			discardPart(partPath)
+			return fmt.Errorf("server declared Content-Range total %d for %s but the local partial file already holds %d bytes — discarding the partial file and retrying from scratch",
+				total, sanitizedURL(opts.URL), fromBytes)
+		}
+		// 响应区间长度必须正好补齐 total（否则组装出来的文件长度就对不上）。
+		if resp.ContentLength >= 0 && fromBytes+resp.ContentLength != total {
+			log.Printf("[download] ERROR: Content-Range total=%d but local=%d + Content-Length=%d = %d — discarding the partial file",
+				total, fromBytes, resp.ContentLength, fromBytes+resp.ContentLength)
+			f.Close()
+			discardPart(partPath)
+			return fmt.Errorf("server returned Content-Range %q for %s but the declared total %d does not match the assembled length %d (local %d + response %d) — discarding the partial file and retrying from scratch",
+				resp.Header.Get("Content-Range"), sanitizedURL(opts.URL), total, fromBytes+resp.ContentLength, fromBytes, resp.ContentLength)
+		}
 	}
 
 	// If resuming, seek to the end; if fresh, truncate any existing .part file.
@@ -500,28 +1171,114 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	}
 	log.Printf("[download] Writing to %s (total expected: %d bytes)", partPath, writer.total)
 	written, err := io.Copy(writer, resp.Body)
-	f.Close()
 	if err != nil {
+		f.Close()
 		log.Printf("[download] ERROR: write failed after %d bytes: %v", written, err)
 		return err
 	}
+
+	// F-13b：close-delimited（无 Content-Length、非 chunked）短 body 被当完整
+	// 下载接受。服务端声明 total 却提前收尾时，io.Copy 以 nil 错误结束——
+	// 必须自己比对字节数，否则残缺归档会被 rename 并写入 TOFU pin。
+	if resp.ContentLength >= 0 && resp.ContentLength+fromBytes != written+fromBytes {
+		f.Close()
+		log.Printf("[download] ERROR: short body: wrote %d bytes, server declared %d", written+fromBytes, resp.ContentLength+fromBytes)
+		discardPart(partPath)
+		return fmt.Errorf("incomplete download for %s: wrote %d bytes but the server declared %d — discarding the partial file",
+			sanitizedURL(opts.URL), written+fromBytes, resp.ContentLength+fromBytes)
+	}
+
+	// P1-1 (b) 收尾交叉校验：206 已声明的 total 必须等于实际组装出的总长度。
+	// 上面只校验了「本地 + Content-Length」这一对，chunked（ContentLength == -1）
+	// 的 206 响应绕过了它——这里用实写字节数再核一次，任何少于 total 的组装结果
+	// 都删 .part 并 fail closed（残缺归档绝不能进 TOFU pin）。
+	if resp.StatusCode == http.StatusPartialContent {
+		if _, total, ok := parseContentRange(resp.Header.Get("Content-Range")); ok && total >= 0 {
+			if assembled := fromBytes + written; assembled != total {
+				f.Close()
+				log.Printf("[download] ERROR: assembled length %d != Content-Range total %d (local=%d written=%d) — discarding",
+					assembled, total, fromBytes, written)
+				discardPart(partPath)
+				return fmt.Errorf("incomplete download for %s: the assembled archive is %d bytes but the server declared a total of %d — discarding the partial file",
+					sanitizedURL(opts.URL), assembled, total)
+			}
+		}
+	}
+
+	// P1-1 (c)：显式拒绝空下载。
+	//
+	// `200 + Content-Length: 0` 在修复前会通过 F-13b 的 `0 == 0` 判据 →
+	// 0 字节文件被 rename 成正式归档，并写入空文件哈希
+	// (e3b0c442…b855) 的 TOFU pin。真实归档不可能是 0 字节：这里删 .part
+	// 并 fail closed。注意 chunked 响应（ContentLength == -1）不在此列——
+	// 它由上面的实写字节数校验负责。
+	if written == 0 && fromBytes == 0 {
+		f.Close()
+		log.Printf("[download] ERROR: empty download (0 bytes written) for %s — discarding", sanitizedURL(opts.URL))
+		discardPart(partPath)
+		return fmt.Errorf("empty download for %s: the server returned 0 bytes — refusing to promote an empty file to a complete archive",
+			sanitizedURL(opts.URL))
+	}
 	log.Printf("[download] Write complete: %d bytes written", written+fromBytes)
+
+	return finalizeDownload(opts, partPath, f, hasher, fromBytes, written)
+}
+
+// finalizeDownload 完成「关闭句柄 → SHA-256/TOFU 校验 → 原子 rename → 审计」
+// 这条收尾链。它被两条路径复用：
+//
+//   - 正常路径：刚写完响应 body（written 为本次写入字节数）；
+//   - F-13 的 416 恢复路径：本地 .part 已等于完整文件，没有可写内容
+//     （written == 0），但 .part 的既有内容必须先喂进 hasher 才能校验。
+//
+// f 是打开的 .part 句柄（本函数负责关闭）；fromBytes 是续传起点（也是要
+// 预先喂给 hasher 的既有字节数）。
+func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Hash, fromBytes, written int64) error {
+	// 416 恢复路径下 fromBytes > 0 而没有任何写入：既有内容尚未进入 hasher
+	// （正常路径在写之前已喂过），这里补上，保证 gotHash 覆盖整个文件。
+	if written == 0 && fromBytes > 0 {
+		if pf, err := os.Open(partPath); err == nil {
+			if _, copyErr := io.Copy(hasher, pf); copyErr != nil {
+				pf.Close()
+				f.Close()
+				log.Printf("[download] ERROR: failed to hash the complete partial file: %v", copyErr)
+				return copyErr
+			}
+			pf.Close()
+			log.Printf("[download] Hashed %d bytes of the complete partial file for SHA-256 continuity", fromBytes)
+		} else {
+			f.Close()
+			log.Printf("[download] ERROR: failed to open the complete partial file for hashing: %v", err)
+			return err
+		}
+	}
+	f.Close()
 
 	// SHA-256 verification.
 	//
-	// Security (C-4 + L-10): The sidecar .sha256 file uses a TOFU (Trust On
-	// First Use) model — the first download's hash is recorded and used to
+	// Security (C-4 + L-10 + 第六轮审计 F5): The sidecar .sha256 file uses a TOFU
+	// (Trust On First Use) model — the first download's hash is recorded and used to
 	// verify subsequent downloads. This is inherently weaker than a manifest-
 	// provided hash because an attacker who can replace the archive can also
 	// replace the sidecar. The following hardening measures are applied:
 	//
-	//   1. When a root public key is embedded (signer.HasRootKey()), downloads
-	//      without a real SHA-256 hash are REJECTED — the sidecar TOFU path is
-	//      disabled entirely, forcing manifest-signed hashes.
+	//   1. When a root public key is embedded (signer.HasRootKey()) AND the caller
+	//      has NOT opted into placeholder-TOFU (AllowPlaceholderTOFU=false) AND the
+	//      version is not a legitimately unsigned discovery (UnsignedVersion),
+	//      downloads without a real SHA-256 hash are REJECTED.
+	//      ⚠ 现状（过渡期）：两个生产调用方（installer.go / app_install.go）在
+	//      哈希为空/占位时把 AllowPlaceholderTOFU 派生为 true——这正是 L-10 设计要
+	//      拒绝的场景，即当前 keyed 构建对空哈希内置条目仍走 TOFU 兜底。这是
+	//      票 17 数据线（163 空哈希待填充）完成前的**有意过渡策略**（否则 keyed
+	//      发布版本直接拒装 17/52 工具）；数据线完成后调用方应改为 false，
+	//      让下方门控真正生效（已在票 17 卡片登记为端态要求）。
 	//   2. Sidecar files are written read-only (0o444) to raise the bar for
 	//      casual tampering.
 	//   3. First-use downloads print a prominent stderr WARNING.
 	//   4. The audit log records Verified=false for all TOFU-based checks.
+	//
+	// 守卫测试 TestPlaceholderTOFU_TransitionalPolicy 以生产调用方的派生方式构造
+	// Options，把上述过渡语义钉死：策略翻转时该测试必须同步更新。
 	gotHash := hex.EncodeToString(hasher.Sum(nil))
 
 	// Determine which SHA to use for verification:
@@ -541,9 +1298,12 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			// archives. Sniff-discovered versions (Unverified / Discovered)
 			// intentionally ship a zero hash so the first download can
 			// establish a TOFU pin — that is not a signed-hash downgrade.
-			if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU {
+			// Ticket 13: the derivation is centralised in UnsignedVersion
+			// (Discovered || Unverified, no hash condition) so the same
+			// verdict applies before AND after the TOFU write-back.
+			if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU && !opts.UnsignedVersion {
 				log.Printf("[download] ERROR: sha256 is all-zero placeholder and signature verification is enabled — refusing download")
-				_ = os.Remove(partPath)
+				discardPart(partPath)
 				return fmt.Errorf("manifest has all-zero SHA-256 placeholder for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
 			}
 			// Security (F-04 / D15): 已有 sidecar pin 时校验本次下载内容，
@@ -554,7 +1314,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 				if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
 					if !strings.EqualFold(gotHash, parts[0]) {
 						log.Printf("[download] ERROR: sha256 mismatch with cached sidecar pin! cached=%s got=%s", parts[0], gotHash)
-						_ = os.Remove(partPath)
+						discardPart(partPath)
 						return fmt.Errorf("sha256 mismatch with cached sidecar pin: expected %s, got %s", parts[0], gotHash)
 					}
 					log.Printf("[download] SHA-256 verification passed (cached sidecar pin): %s", gotHash[:16]+"...")
@@ -572,7 +1332,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		} else {
 			if !strings.EqualFold(gotHash, expectedSHA) {
 				log.Printf("[download] ERROR: sha256 mismatch! expected=%s got=%s", expectedSHA, gotHash)
-				_ = os.Remove(partPath)
+				discardPart(partPath)
 				return fmt.Errorf("sha256 mismatch: expected %s, got %s", expectedSHA, gotHash)
 			}
 			log.Printf("[download] SHA-256 verification passed: %s", gotHash[:16]+"...")
@@ -582,10 +1342,11 @@ func downloadOnce(ctx context.Context, opts Options) error {
 		// Security (L-10): When signature verification is enabled, refuse
 		// downloads that have no hash at all on built-in manifests —
 		// sidecar TOFU is disabled for them. Third-party manifests
-		// fall back to TOFU.
-		if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU {
+		// fall back to TOFU. Ticket 13: legitimately unsigned versions
+		// (Discovered / Unverified / custom / Lua) keep the TOFU path.
+		if signer.HasRootKey() && !opts.IsThirdParty && !opts.AllowPlaceholderTOFU && !opts.UnsignedVersion {
 			log.Printf("[download] ERROR: no sha256 hash provided and signature verification is enabled — refusing download")
-			_ = os.Remove(partPath)
+			discardPart(partPath)
 			return fmt.Errorf("manifest has no SHA-256 hash for %s and signature verification is enabled — refusing to download without a verified hash", opts.ProgressDesc)
 		}
 		// No root key embedded: fall back to sidecar TOFU model (with warnings)
@@ -596,7 +1357,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
 				if !strings.EqualFold(gotHash, parts[0]) {
 					log.Printf("[download] ERROR: sha256 mismatch with cached hash! cached=%s got=%s", parts[0], gotHash)
-					_ = os.Remove(partPath)
+					discardPart(partPath)
 					return fmt.Errorf("sha256 mismatch with cached hash: expected %s, got %s", parts[0], gotHash)
 				}
 				log.Printf("[download] SHA-256 verification passed (cached sidecar): %s", gotHash[:16]+"...")
@@ -618,6 +1379,9 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	}
 	log.Printf("[download] File renamed to final destination: %s", opts.Dest)
 
+	// P2-6：内容身份旁路文件只服务于「未完成的 .part」，收尾后即作废。
+	_ = os.Remove(partValidatorFor(partPath))
+
 	// Audit log
 	LogAudit(AuditEntry{
 		URL:      opts.URL,
@@ -631,22 +1395,52 @@ func downloadOnce(ctx context.Context, opts Options) error {
 }
 
 // writeSidecarHash writes the SHA-256 sidecar file for TOFU (Trust On First
-// Use) verification. If the file already exists (from a previous download)
-// and is read-only (0o444 from a prior run), the read-only attribute is
-// cleared before writing so the update succeeds.
+// Use) verification.
 //
-// Security (L-10): After writing, the file is set to read-only (0o444) to
-// hinder casual tampering. This is not a strong security boundary — an
-// attacker who can write to the directory can still clear the attribute —
+// Ticket 23 (audit-fixes / D-08): the write is atomic so a concurrent reader
+// (another xdev process checking the pin, or the same process after a crash)
+// can never observe a half-written sidecar — a torn pin would either reject
+// a good archive or, worse, look like a valid user-edited pin. Steps:
+//
+//  1. write <sidecar>.tmp
+//  2. fsync it
+//  3. clear the read-only attribute of an existing target (0o444 from a
+//     previous run; Windows would otherwise fail the rename)
+//  4. rename over the target
+//  5. mark the result read-only (0o444)
+//
+// Security (L-10): the read-only attribute is not a strong security
+// boundary — an attacker who can write to the directory can still clear it —
 // but it raises the bar for opportunistic modification.
 func writeSidecarHash(sidecarPath, gotHash, dest string) {
 	content := gotHash + "  " + filepath.Base(dest) + "\n"
-	// Clear read-only attribute if the file exists from a previous run
-	if _, err := os.Stat(sidecarPath); err == nil {
+
+	tmpPath := sidecarPath + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		log.Printf("[download] WARNING: failed to create sidecar temp %s: %v", tmpPath, err)
+		return
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		_ = os.Remove(tmpPath)
+		log.Printf("[download] WARNING: failed to write sidecar temp %s: %v", tmpPath, err)
+		return
+	}
+	// fsync so the rename cannot expose an empty/partial file after a crash.
+	if err := f.Sync(); err != nil {
+		log.Printf("[download] WARNING: failed to sync sidecar temp %s: %v", tmpPath, err)
+	}
+	if err := f.Close(); err != nil {
+		log.Printf("[download] WARNING: failed to close sidecar temp %s: %v", tmpPath, err)
+	}
+	// A previous pin is read-only — clear the attribute or the rename fails.
+	if _, statErr := os.Stat(sidecarPath); statErr == nil {
 		_ = os.Chmod(sidecarPath, 0o644)
 	}
-	if err := os.WriteFile(sidecarPath, []byte(content), 0o644); err != nil {
-		log.Printf("[download] WARNING: failed to write sidecar hash file %s: %v", sidecarPath, err)
+	if err := os.Rename(tmpPath, sidecarPath); err != nil {
+		_ = os.Remove(tmpPath)
+		log.Printf("[download] WARNING: failed to replace sidecar %s: %v", sidecarPath, err)
 		return
 	}
 	// Set sidecar read-only to hinder casual tampering
@@ -698,35 +1492,117 @@ func verifyManifestSignature(opts Options) error {
 		return fmt.Errorf("manifest signature is invalid for tool %q — possible tampering detected", ms.Tool)
 	}
 
+	// Ticket 13 (N-02): the signed payload must belong to the tool being
+	// installed. Without this check a valid signature of tool A could
+	// authorise a download for tool B (whose hash happens to appear in A's
+	// map) — cross-tool confusion.
+	if opts.ToolName != "" && ms.Tool != "" && !strings.EqualFold(ms.Tool, opts.ToolName) {
+		return fmt.Errorf("manifest signature tool mismatch: signature is for %q but the download is for %q — refusing (possible cross-tool confusion)", ms.Tool, opts.ToolName)
+	}
+
 	// Verify the ExpectedSHA matches the signed SHA-256 map.
 	// Sniff-discovered versions carry an all-zero placeholder hash that is
 	// intentionally absent from the signed map; those fall through to the
 	// existing TOFU sidecar path instead of being treated as tampering.
-	if opts.ExpectedSHA != "" && ms.SHA256Map != "" && !util.IsAllZeroHash(opts.ExpectedSHA) {
-		if !verifySHAInMap(ms.SHA256Map, opts.ExpectedSHA) {
+	//
+	// Ticket 13: legitimately unsigned versions (Discovered / Unverified /
+	// custom / Lua plugins) skip the membership check entirely — after a
+	// TOFU write-back the hash is real but still not in the signed map, so
+	// enforcing membership would report tampering on re-install.
+	if opts.ExpectedSHA != "" && ms.SHA256Map != "" && !util.IsAllZeroHash(opts.ExpectedSHA) && !opts.UnsignedVersion {
+		if !verifySHAInMapForVersion(ms.SHA256Map, opts.Version, opts.OSArch, opts.ExpectedSHA) {
 			shaPreview := opts.ExpectedSHA
 			if len(shaPreview) > 16 {
 				shaPreview = shaPreview[:16] + "..."
 			}
-			return fmt.Errorf("expected SHA-256 %s not found in signed manifest for tool %q — possible hash tampering", shaPreview, ms.Tool)
+			return fmt.Errorf("expected SHA-256 %s not found in signed manifest for tool %q version %q (%s) — possible hash tampering", shaPreview, ms.Tool, opts.Version, opts.OSArch)
 		}
 	}
 
 	return nil
 }
 
-// verifySHAInMap checks if the expected SHA-256 hash exists in the signed map.
-func verifySHAInMap(sha256MapJSON, expectedSHA string) bool {
+// signedSHA256Map extracts the sha256_map JSON payload from a manifest
+// signature, or "" when the signature carries none.
+func signedSHA256Map(opts Options) string {
+	if len(opts.ManifestSignature) == 0 {
+		return ""
+	}
+	var ms struct {
+		SHA256Map string `json:"sha256_map"`
+	}
+	if err := json.Unmarshal(opts.ManifestSignature, &ms); err != nil {
+		return ""
+	}
+	return ms.SHA256Map
+}
+
+// filterSignatureCoveredURLs drops candidate URLs whose effective hash is
+// not covered by the signed map for this version. URLs without a usable
+// hash are kept — the L-10 gate inside downloadOnce decides their fate.
+func filterSignatureCoveredURLs(opts Options, urls []string) []string {
+	signedMap := signedSHA256Map(opts)
+	if signedMap == "" {
+		// Signature without a hash map: nothing can be proven covered.
+		// Keep the list intact and let signature verification (which runs
+		// earlier) decide — it rejects a missing/invalid map upstream.
+		return urls
+	}
+	kept := make([]string, 0, len(urls))
+	for _, u := range urls {
+		effSHA := opts.ExpectedSHA
+		if opts.URLShaMap != nil {
+			if urlSHA, ok := opts.URLShaMap[u]; ok {
+				effSHA = urlSHA
+			}
+		}
+		if effSHA == "" || util.IsAllZeroHash(effSHA) {
+			kept = append(kept, u)
+			continue
+		}
+		if verifySHAInMapForVersion(signedMap, opts.Version, opts.OSArch, effSHA) {
+			kept = append(kept, u)
+			continue
+		}
+		log.Printf("[download] WARNING: candidate %s is not covered by the signed hash map for %s@%s — skipping", sanitizedURL(u), opts.ToolName, opts.Version)
+		notifyStatus(opts, "mirror hash not covered by signature — skipping %s", shortHost(u))
+	}
+	return kept
+}
+
+// verifySHAInMapForVersion checks the expected hash against the signed map
+// with exact-key semantics plus a SAME-VERSION fallback:
+//
+//  1. exact key: m[version][os/arch] exists and equals the expected hash;
+//  2. same-version fallback: any os/arch key under m[version] matches —
+//     this keeps old signatures (whose os/arch key naming may differ) and
+//     same-version cross-platform re-use working.
+//
+// Ticket 13 (P0-02 / G2): the previous implementation searched EVERY
+// version's keys, so a newly added version could reuse another version's —
+// or, since tool maps share the same shape, another tool's — signed hash.
+// Cross-version matches are now rejected, and a missing version key is a
+// hard fail (fail closed).
+func verifySHAInMapForVersion(sha256MapJSON, version, osArch, expectedSHA string) bool {
+	if sha256MapJSON == "" || version == "" || expectedSHA == "" {
+		return false
+	}
 	var m map[string]map[string]string
 	if err := json.Unmarshal([]byte(sha256MapJSON), &m); err != nil {
 		return false
 	}
-	lower := strings.ToLower(expectedSHA)
-	for _, verMap := range m {
-		for _, hash := range verMap {
-			if strings.ToLower(hash) == lower {
-				return true
-			}
+	verMap, ok := m[version]
+	if !ok {
+		return false
+	}
+	if osArch != "" {
+		if h, ok := verMap[osArch]; ok && strings.EqualFold(h, expectedSHA) {
+			return true
+		}
+	}
+	for _, h := range verMap {
+		if strings.EqualFold(h, expectedSHA) {
+			return true
 		}
 	}
 	return false
@@ -748,7 +1624,8 @@ func proxyFromOptions(opts Options) func(*http.Request) (*url.URL, error) {
 	}
 	proxyURL, err := url.Parse(opts.ProxyURL)
 	if err != nil {
-		log.Printf("[download] WARNING: invalid proxy URL %q: %v", opts.ProxyURL, err)
+		// F-17：url.Parse 的错误文本会原样带上含凭据的 URL，先脱敏再进日志。
+		log.Printf("[download] WARNING: invalid proxy URL %q: %v", redactProxyCredentials(opts.ProxyURL), redactProxyCredentials(err.Error()))
 		return http.ProxyFromEnvironment
 	}
 	log.Printf("[download] Using proxy: %s", proxyURL.Host)

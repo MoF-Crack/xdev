@@ -112,14 +112,26 @@ Short aliases you can add to your shell rc:
 	// bind persistent pre-run so every subcommand can rely on cfg being loaded
 	cobra.OnInitialize(func() {
 		initContext(flagXMDevDir, flagVerbose, flagNoColor, flagNoPathFix)
-		// Trigger Scheduler.OnStartup per configured strategy (FR-006).
-		// This runs on every command invocation but is idempotent —
-		// interval checks last_sniff_at, startup launches async, etc.
+		// 票 34（P1-30 / E-11）：此处只构建 Scheduler 句柄（供
+		// ShutdownSniffScheduler 刷缓存，startupCancel==nil 时 Shutdown 秒退），
+		// 不再无条件调用 OnStartup——`xdev hook`/`xdev env`/一次性子命令
+		// 此前也会 spawn 后台嗅探。启动嗅探改由三个交互入口经
+		// PersistentPreRunE 显式挂载（见 mountStartupSniff / isInteractiveEntry）。
 		cfg := Cfg()
-		s := discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
-		s.OnStartup(context.Background())
-		sniffScheduler = s
+		sniffScheduler = discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
 	})
+
+	// 票 34（P1-30 / E-11）：startup / interval 策略的启动嗅探只挂交互入口
+	// （无参 TUI = root 自身、xdev tui、xdev gui）。用命令身份判定而不是在
+	// 各 RunE 里逐点插入，使「恰好三入口」在单一位置可见（守卫测试
+	// startup_sniff_test.go 直接断言本函数与命令名清单）。
+	// 零参 GUI（main.go 的 len(os.Args)<=1 → runGUI）不走 Cobra，保持无嗅探。
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if isInteractiveEntry(cmd) {
+			mountStartupSniff()
+		}
+		return nil
+	}
 
 	// register subcommands
 	root.AddCommand(
@@ -167,4 +179,66 @@ Short aliases you can add to your shell rc:
 	)
 
 	return root
+}
+
+// ---------------------------------------------------------------------------
+// 票 34（P1-30 / E-11）：启动嗅探的三入口挂载
+// ---------------------------------------------------------------------------
+
+// interactiveEntryNames 是「交互入口」子命令名清单。无参调用（root 自身
+// 的 RunE，默认 TUI）由 isInteractiveEntry 的 HasParent()==false 分支覆盖，
+// 不在此列表中。
+var interactiveEntryNames = []string{"tui", "gui"}
+
+// isInteractiveEntry reports whether the command being executed is one of the
+// three interactive entry points (root TUI / `xdev tui` / `xdev gui`).
+// Everything else — including the cd-hook path (`xdev hook`, `xdev env`) and
+// every one-shot subcommand — must not trigger a startup sniff.
+func isInteractiveEntry(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	if !cmd.HasParent() {
+		return true // 无子命令：root 的 RunE 启动 TUI
+	}
+	name := cmd.Name()
+	for _, n := range interactiveEntryNames {
+		if name == n {
+			return true
+		}
+	}
+	return false
+}
+
+// startupSniffMounted guards against a second mount when a command tree is
+// executed more than once in the same process (tests / embedding).
+var startupSniffMounted bool
+
+// mountStartupSniff triggers Scheduler.OnStartup for the configured strategy.
+// Only called from an interactive entry (idempotent).
+func mountStartupSniff() {
+	if sniffScheduler == nil || startupSniffMounted {
+		return
+	}
+	startupSniffMounted = true
+	sniffScheduler.OnStartup(context.Background())
+}
+
+// HasStartupSniff reports whether this process launched (or is about to
+// launch) a background startup sniff, so main.go can replace its
+// unconditional 100ms wait.
+//
+// 票 34（P1-30 / E-11）：语义 = 「交互入口已挂载」∧「策略条件成立」。
+// interval 策略的 TTL 到期条件由 Scheduler.StartupSniffPending 计入
+// （与 onStartupInterval 的实际 spawn 判定共用 intervalElapsed）；
+// 缓存新鲜、strategy=manual/service、以及 `xdev hook`/`xdev env` 等非交互
+// 命令都返回 false（一次性子命令不再付出 100ms）。
+//
+// 注意：调用方须在 ShutdownSniffScheduler 之前取本值——Shutdown 会把
+// sniff-cache 的 last_sniff_at 刷成 now，令 interval 判定失真。
+func HasStartupSniff() bool {
+	if sniffScheduler == nil || !startupSniffMounted {
+		return false
+	}
+	return sniffScheduler.StartupSniffPending()
 }

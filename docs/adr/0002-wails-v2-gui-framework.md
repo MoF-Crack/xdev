@@ -2,6 +2,11 @@
 
 > **状态**：Accepted
 > **日期**：2026-07-25
+>
+> **注意（2026-10-21）**：本 ADR 的「候选框架 / 采用 Wails」结论仍然有效，但
+>「GUI 变体 `xdev-gui` + `-tags gui`」的产物形态已被
+> [ADR-0006](0006-single-binary-distribution.md) 取代：现为单二进制
+> `xdev[.exe]`，默认构建即包含 GUI。阅读 §决策 时请以 ADR-0006 为准。
 
 ## 背景
 

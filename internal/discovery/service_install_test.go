@@ -273,24 +273,24 @@ func TestParseCronSchedule(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"0 3 * *",         // 4 fields
-		"0 3 * * * *",     // 6 fields
-		"0 3 * * a",       // letter
+		"0 3 * *",     // 4 fields
+		"0 3 * * * *", // 6 fields
+		"0 3 * * a",   // letter
 		"0 3 * * *; rm -rf /",
 		"0 3 * * * & evil",
 		"0 3 * * * | cat",
 		"0 3 * * * $HOME",
 		"0 3 * * * `ls`",
 		"0 3 * * * \"x\"",
-		"0\n3 * * *",      // newline
-		"60 3 * * *",      // minute out of range
-		"0 24 * * *",      // hour out of range
-		"0 3 32 * *",      // day out of range
-		"0 3 * 13 *",      // month out of range
-		"0 3 * * 8",       // weekday out of range
-		"0 3 * * ?",       // '?' not allowed
-		"0 3 * * *-",      // dangling range
-		"0 3 */0 * *",     // zero step
+		"0\n3 * * *",  // newline
+		"60 3 * * *",  // minute out of range
+		"0 24 * * *",  // hour out of range
+		"0 3 32 * *",  // day out of range
+		"0 3 * 13 *",  // month out of range
+		"0 3 * * 8",   // weekday out of range
+		"0 3 * * ?",   // '?' not allowed
+		"0 3 * * *-",  // dangling range
+		"0 3 */0 * *", // zero step
 	}
 	for _, s := range invalid {
 		if err := parseCronSchedule(s); err == nil {

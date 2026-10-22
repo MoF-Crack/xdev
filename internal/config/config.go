@@ -54,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/util"
@@ -64,15 +65,34 @@ import (
 // even if Load is called concurrently from multiple goroutines.
 var migrateOnce sync.Once
 
+// integritySchemaVersion 是**落盘配置的完整性 schema 版本**（第十轮审计 P2-4）。
+//
+// 为什么需要它：H-12 的校验原先只在 Integrity 非空时进行
+// （`if cfg.Integrity != ""`），于是「把 config.yaml 里的 integrity: 那一行
+// 删掉」等价于**完全关闭**完整性校验，且没有任何告警 —— 运维无法区分
+// 「从未配置过 integrity」（全新安装的正常状态，首次 Save 才写入）与
+// 「integrity 被删掉了」。
+//
+// 落盘时写入本版本号（config.yaml 的 integrity_schema）；Load 时据此判断
+// 「文件由 xdev 写出、本应有 integrity，但这一行不见了」→ 告警 + 按既有路径
+// 重置敏感字段，但**不拒绝启动**（硬失败会让全新安装无法启动）。
+//
+// 定性（必须如实）：这是**可运维性**标记，不是防篡改机制 —— 能写
+// config.yaml 的攻击者同样能改本字段。与 internal/util/hmac_key.go 声明的
+// 威胁模型自洽（P2-22 / F-14：该 HMAC 只防误改 / 意外损坏，不防本地攻击者）。
+// 本字段要挡的是「误改 / 脚本重写 / 传输损坏把 integrity 行弄丢」这一类
+// **非预期改动**，让它在加载时至少留下一次告警。
+const integritySchemaVersion = 1
+
 // SniffConfig controls the automatic tool-discovery sniffing behaviour
 // (spec 011-tool-discovery-automanage).
 type SniffConfig struct {
-	Strategy        string `yaml:"strategy"`            // interval|startup|service|manual
-	Interval        string `yaml:"interval"`            // default 24h
-	Concurrency     int    `yaml:"concurrency"`         // default 3
-	RateLimitPerHr  int    `yaml:"rate_limit_per_hour"` // default 60
-	AutoArchiveFill bool   `yaml:"auto_archive_fill"`   // default true
-	LastSniffAt     string `yaml:"last_sniff_at"`       // ISO timestamp, maintained by scheduler
+	Strategy        string `yaml:"strategy"`               // interval|startup|service|manual
+	Interval        string `yaml:"interval"`               // default 24h
+	Concurrency     int    `yaml:"concurrency"`            // default 3
+	RateLimitPerHr  int    `yaml:"rate_limit_per_hour"`    // default 60
+	AutoArchiveFill bool   `yaml:"auto_archive_fill"`      // default true
+	LastSniffAt     string `yaml:"last_sniff_at"`          // ISO timestamp, maintained by scheduler
 	GitHubToken     string `yaml:"github_token,omitempty"` // optional GitHub API token (env GITHUB_TOKEN/GH_TOKEN also checked)
 }
 
@@ -121,7 +141,11 @@ type Config struct {
 	Migration   MigrationConfig        `yaml:"migration"`              // Local-tool migration mode
 	CustomTools []CustomToolConfig     `yaml:"custom_tools,omitempty"` // User-defined custom tools
 	Integrity   string                 `yaml:"integrity,omitempty"`    // Security (H-12): HMAC-SHA256 of sensitive fields
-	mu          sync.Mutex             `yaml:"-"`                      // protects Save and field mutations
+	// IntegritySchema 是落盘配置的完整性 schema 版本（第十轮审计 P2-4）。
+	// 见 integritySchemaVersion 的说明：它让「文件本应有 integrity 却缺失」
+	// 可被识别并告警，而不是被当作「从未配置过」静默放行。
+	IntegritySchema int        `yaml:"integrity_schema,omitempty"`
+	mu              sync.Mutex `yaml:"-"` // protects Save and field mutations
 }
 
 // CoreConfig holds the high-level paths and global toggles.
@@ -129,20 +153,20 @@ type Config struct {
 // (resolved by ResolvePaths). LogLevel defaults to "info", SelfUpdate
 // defaults to true, and ManifestTTL defaults to "24h".
 type CoreConfig struct {
-	XMDevDir         string   `yaml:"xmdevenv_dir"`      // Root xdev home directory
-	DownloadDir      string   `yaml:"download_dir"`      // Where archives are cached
-	InstallDir       string   `yaml:"install_dir"`       // Where tools are extracted to
-	ShimDir          string   `yaml:"shim_dir"`          // Where shim binaries live
-	CacheDir         string   `yaml:"cache_dir"`         // Manifest cache directory
-	EnvDir           string   `yaml:"env_dir"`           // Environment variable fragment directory
-	ManifestDir      string   `yaml:"manifest_dir"`      // Tool manifest YAML directory
-	LogLevel         string   `yaml:"log_level"`         // Logging verbosity: "debug"|"info"|"warn"|"error"
-	SelfUpdate       bool     `yaml:"self_update"`       // Whether to auto-check for xdev updates
+	XMDevDir    string `yaml:"xmdevenv_dir"` // Root xdev home directory
+	DownloadDir string `yaml:"download_dir"` // Where archives are cached
+	InstallDir  string `yaml:"install_dir"`  // Where tools are extracted to
+	ShimDir     string `yaml:"shim_dir"`     // Where shim binaries live
+	CacheDir    string `yaml:"cache_dir"`    // Manifest cache directory
+	EnvDir      string `yaml:"env_dir"`      // Environment variable fragment directory
+	ManifestDir string `yaml:"manifest_dir"` // Tool manifest YAML directory
+	LogLevel    string `yaml:"log_level"`    // Logging verbosity: "debug"|"info"|"warn"|"error"
+	SelfUpdate  bool   `yaml:"self_update"`  // Whether to auto-check for xdev updates
 	// SelfUpdateMode 启动自检发现新版本时的默认行为（Spec 034）：
 	// "prompt"（默认，三选：更新/忽略并继续/退出）| "auto"（自动更新）| "notify"（仅提示）
 	SelfUpdateMode string `yaml:"self_update_mode"`
 	// SelfUpdateStale 启动时是否把 XMDevDir 根下旧版本 xdev CLI 副本替换为当前版本（默认 true）
-	SelfUpdateStale bool `yaml:"self_update_stale"`
+	SelfUpdateStale  bool     `yaml:"self_update_stale"`
 	ManifestTTL      string   `yaml:"manifest_ttl"`      // Cache TTL for remote version lists (Go duration)
 	MirrorPreference []string `yaml:"mirror_preference"` // User-preferred mirror URLs, highest priority
 	// ArchiveRetention 下载归档的保留策略：
@@ -215,12 +239,13 @@ func (c *Config) SetProxy(http, https, noProxy string, enabled bool) error {
 // 的并发修改影响；副本上的修改不会写回原配置。
 func (c *Config) Clone() *Config {
 	cp := Config{
-		Core:      c.Core,
-		Path:      c.Path,
-		Proxy:     c.Proxy,
-		Sniff:     c.Sniff,
-		Migration: c.Migration,
-		Integrity: c.Integrity,
+		Core:            c.Core,
+		Path:            c.Path,
+		Proxy:           c.Proxy,
+		Sniff:           c.Sniff,
+		Migration:       c.Migration,
+		Integrity:       c.Integrity,
+		IntegritySchema: c.IntegritySchema,
 	}
 	cp.Mirror = make(map[string]string, len(c.Mirror))
 	for k, v := range c.Mirror {
@@ -256,6 +281,11 @@ func (c *Config) GetPathMode() string {
 }
 
 // SetPathMode updates the PATH management mode and saves the config.
+//
+// 票 33（P1-28 / E-09）：枚举单一化——只接受 shim | direct | auto。
+// "symlink" 是历史遗留值（无任何实现），此处与 cli/config.go setPathField
+// 同源拒绝；存量 config.yaml 里的 "symlink" 由 GetPathMode 静默降级为
+// "shim"（保持现状，不破坏既有安装）。
 func (c *Config) SetPathMode(mode string) error {
 	if mode != "shim" && mode != "direct" && mode != "auto" {
 		return fmt.Errorf("invalid path mode: %q", mode)
@@ -349,6 +379,27 @@ func Load(xmdeDir string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
+	// 第十轮审计 P2-5 附带修正：yaml.v3 对 **map** 字段的语义是**合并**而非替换
+	// ——cfg 在 Unmarshal 前已被 defaults() 播种了 defaultMirrors()，因此
+	// 文件里写了 `mirror: {}`（或只写了部分键）时，解码后仍是「默认表 ∪ 文件表」。
+	//
+	// 这会直接破坏 HMAC 往返：Save 时 mirror 为空 → HMAC 按空表算；Load 时
+	// 同一个文件被合并回默认表 → HMAC 按默认表算 → **无篡改也验签失败**。
+	// 在 P2-5 把 mirror 之外的字段也纳入覆盖之前，这个错配被「重置后恰好又
+	// 等于默认表」掩盖了；现在它会把正常配置误判成篡改并**清空 CustomTools**
+	// （internal/gui 的 TestConfigCustomToolsRoundTrip 正是这样被暴露的）。
+	//
+	// 修法：先探测文件里是否**显式**声明了 mirror 段，是则清空播种值再解码，
+	// 使「文件里的 mirror」成为唯一事实来源（与用户在文件里写的内容一致）。
+	// 文件完全没有 mirror 段时保留默认表 —— 那是全新安装/极简手写配置的既有
+	// 行为，且此时不会有 HMAC（首次 Save 才会写入），不会产生往返错配。
+	if fileDeclaresKey(data, "mirror") {
+		cfg.Mirror = nil
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+	}
+
 	// Security (H-12): Verify config integrity if HMAC is present.
 	// A mismatch indicates the config was tampered with or edited
 	// outside of xdev. To protect against malicious redirection of
@@ -357,22 +408,41 @@ func Load(xmdeDir string) (*Config, error) {
 	// (e.g., AI config) are preserved to support legitimate cross-
 	// machine migration. The user is prompted to reconfigure via
 	// `xdev config set` which regenerates the HMAC.
+	//
+	// 第十轮审计 P2-4（可运维性缺口）：校验原先只在 Integrity **非空**时进行，
+	// 于是「删掉 config.yaml 里的 integrity: 那一行」等价于**完全关闭**校验且
+	// 无任何告警 —— 运维无法区分「从未配置过 integrity」（全新安装的正常状态）
+	// 与「integrity 被删掉了」。现在分两条路径，但都走同一套「告警 + 重置 +
+	// 清空 Integrity，不拒绝启动」的既有契约（A-15）：
+	//
+	//	a) Integrity 非空但验签失败 —— 篡改或跨机迁移（原有路径，文案不变）；
+	//	b) Integrity 为空、但落盘文件带 schema 标记 —— 说明本文件**由 xdev 写出**
+	//	   （本应有 integrity），那一行却不见了：误改 / 脚本重写 / 传输损坏。
+	//
+	// 注意 (b) 的判据是**文件里的** schema 标记（cfg.IntegritySchema 来自
+	// yaml.Unmarshal），而不是内存默认值 —— 否则全新安装（无 config.yaml）与
+	// 用户手写的极简配置都会被误报。
 	if cfg.Integrity != "" {
 		expectedHMAC := cfg.computeIntegrityHMAC()
 		if expectedHMAC != cfg.Integrity {
 			safeDefaults := defaults(xmdeDir)
 			fmt.Fprintln(os.Stderr, "⚠ WARNING: config.yaml integrity check FAILED — the file may have been tampered with or edited outside xdev.")
-			fmt.Fprintln(os.Stderr, "  Security-sensitive fields (paths, mirrors, path mode) have been reset to safe defaults to protect against malicious redirection.")
+			fmt.Fprintln(os.Stderr, "  Security-sensitive fields (root dir, paths, mirrors, mirror preference, proxy, custom tools, path mode) have been reset to safe defaults to protect against malicious redirection.")
 			fmt.Fprintln(os.Stderr, "  Run `xdev config set` to reconfigure and regenerate the integrity hash.")
-			log.Printf("[config] WARNING: integrity check failed — sensitive fields (paths, mirrors, path mode) reset to defaults")
-			cfg.Core.InstallDir = safeDefaults.Core.InstallDir
-			cfg.Core.ShimDir = safeDefaults.Core.ShimDir
-			cfg.Core.ManifestDir = safeDefaults.Core.ManifestDir
-			cfg.Core.DownloadDir = safeDefaults.Core.DownloadDir
-			cfg.Mirror = safeDefaults.Mirror
-			cfg.Path.Mode = safeDefaults.Path.Mode
-			cfg.Integrity = ""
+			log.Printf("[config] WARNING: integrity check failed — sensitive fields (root dir, paths, mirrors, mirror preference, proxy, custom tools, path mode) reset to defaults")
+			cfg.resetSensitiveFields(safeDefaults)
 		}
+	} else if cfg.IntegritySchema >= integritySchemaVersion {
+		// P2-4：文件声明「由完整性感知的版本写出」，integrity 却不见了。
+		// 与验签失败同样处理（告警 + 重置 + 清空），但**不拒绝启动**：硬失败
+		// 会让所有全新安装（首次 Save 之前本就没有 integrity）无法启动。
+		safeDefaults := defaults(xmdeDir)
+		fmt.Fprintln(os.Stderr, "⚠ WARNING: config.yaml integrity check FAILED — the `integrity` field is MISSING from a file that xdev wrote (integrity_schema is set).")
+		fmt.Fprintln(os.Stderr, "  The integrity hash was deleted or lost, so tampering with the fields it covers can no longer be detected.")
+		fmt.Fprintln(os.Stderr, "  Security-sensitive fields (root dir, paths, mirrors, mirror preference, proxy, custom tools, path mode) have been reset to safe defaults.")
+		fmt.Fprintln(os.Stderr, "  Run `xdev config set` to reconfigure and regenerate the integrity hash.")
+		log.Printf("[config] WARNING: integrity field is missing while integrity_schema=%d is set — sensitive fields reset to defaults", cfg.IntegritySchema)
+		cfg.resetSensitiveFields(safeDefaults)
 	}
 
 	// Security (H-12): Validate mirror URLs use HTTPS.
@@ -434,31 +504,149 @@ func Load(xmdeDir string) (*Config, error) {
 	return cfg, nil
 }
 
+// fileDeclaresKey 判断 YAML 文档在**顶层**是否显式声明了 key（第十轮 P2-5）。
+//
+// 用途：Load 前 cfg 已被 defaults() 播种，而 yaml.v3 对 map 字段是**合并**
+// 语义 —— 只有先知道「文件里到底写没写这一段」，才能决定是否清空播种值，
+// 让文件成为唯一事实来源。这里只看顶层键，解析失败（坏 YAML）交由调用方的
+// 主 Unmarshal 报错，本函数返回 false 不改变既有错误路径。
+func fileDeclaresKey(data []byte, key string) bool {
+	var top map[string]interface{}
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return false
+	}
+	_, ok := top[key]
+	return ok
+}
+
+// resetSensitiveFields 把全部**重定向类**敏感字段拉回 safeDefaults，并清空
+// Integrity 以便下一次 Save 按当前格式重新生成。
+//
+// 第九轮 A-15：根目录同属敏感字段（它决定全部派生子目录的归属）。重置时把
+// 根与**全部 6 个**派生子目录一起拉回 safeDefaults，避免留下「新根 + 旧子目录」
+// 的混合状态（A-14 的同一类错配）。
+//
+// 第十轮 P2-5：新增 mirror_preference / proxy / custom_tools 三项。它们与既有的
+// mirror 表同属**下载重定向面**（mirror_preference 是最高优先级下载源，
+// proxy 决定流量去向，custom_tools[].source_url 决定自定义工具从哪里取版本），
+// 因此一律按同一语义**重置**而非仅告警——理由见 computeIntegrityHMAC 的注释。
+func (c *Config) resetSensitiveFields(safeDefaults *Config) {
+	c.Core.XMDevDir = safeDefaults.Core.XMDevDir
+	c.Core.InstallDir = safeDefaults.Core.InstallDir
+	c.Core.ShimDir = safeDefaults.Core.ShimDir
+	c.Core.ManifestDir = safeDefaults.Core.ManifestDir
+	c.Core.DownloadDir = safeDefaults.Core.DownloadDir
+	c.Core.CacheDir = safeDefaults.Core.CacheDir
+	c.Core.EnvDir = safeDefaults.Core.EnvDir
+	c.Mirror = safeDefaults.Mirror
+	c.Path.Mode = safeDefaults.Path.Mode
+	// P2-5：下载重定向面。
+	c.Core.MirrorPreference = nil
+	c.Proxy = safeDefaults.Proxy
+	c.CustomTools = nil
+	c.Integrity = ""
+}
+
 // computeIntegrityHMAC computes an HMAC-SHA256 over the security-sensitive
 // fields of the config using the machine-specific key. This allows detection
 // of tampering with paths, mirror URLs, or other settings that could redirect
 // downloads or tool invocations.
 func (c *Config) computeIntegrityHMAC() string {
-	// Build a deterministic representation of security-sensitive fields
+	// Build a deterministic representation of security-sensitive fields.
+	//
+	// 第九轮审计 A-15（P2）：必须包含 XMDevDir。它是**重定向类**字段——决定全部
+	// 6 个派生子目录的归属。旧快照只覆盖 install/shim/manifest/download + mirror
+	// + path_mode，于是「只篡改 xmdevenv_dir」既不触发告警、也不被重置：H-12 的
+	// 「防重定向」对配置根本身失效。与 A-14（改根后派生子目录仍指向旧值）叠加时，
+	// 会放大成「根被换掉但工具/PATH 仍写旧目录」的静默错配。
+	//
+	// 第十轮审计 P2-5（P2）：补齐三项下载重定向面的残留覆盖 ——
+	//
+	//   - mirror_preference：**最高优先级**下载源（installer.go:1087 的
+	//     buildMirrorCandidates 把它排在 manifest 镜像与官方 URL 之前），篡改它
+	//     可把下载重定向到攻击者控制的镜像；
+	//   - proxy.*：决定下载流量走哪个代理（installer.go:744 ProxyURL）；
+	//   - custom_tools[].source_url：决定自定义工具从哪里取版本清单。
+	//
+	// 为什么这三项**重置**而不是「只告警」：它们与既有被重置的 mirror 表同属
+	// 同一类字段（重定向面），拆分两种语义会让「验签失败」的含义变得不一致，
+	// 用户也无从预期。重置的代价已由既有提示文案覆盖（"Run `xdev config set`
+	// to reconfigure"）：proxy 重置**确实**会让用户暂时失去代理配置（表现为
+	// 直连），custom_tools 的重置会清掉自定义工具注册（manifest 文件仍在
+	// ManifestDir 下，可重新添加）。这是「不静默采信被改过的重定向配置」与
+	// 「不打断用户既有配置」之间的取舍，本轮选前者：一次告警 + 重配，好过把
+	// 被篡改的镜像/代理静默用于后续所有下载。
+	//
+	// 代价（已由守卫钉住）：纳入字段会**改变 HMAC 值**，升级前写下的配置文件
+	// 必然验签失败一次。Load 的既有行为是「告警 + 重置敏感字段 + 清空 Integrity」，
+	// **不拒绝启动**——这一契约被 TestIntegrityHMAC_LegacyConfigUpgradeIsNotFatal
+	// 与 TestIntegrityHMAC_Round9FormatUpgradeIsNotFatal 显式钉死，因此升级不会
+	// 锁死用户。
+	// 用**独立的只含敏感子字段**的结构体，而不是直接序列化 ProxyConfig /
+	// CustomToolConfig：后者的 yaml/json tag 一旦调整（例如新增展示字段）会
+	// 无声地改变 HMAC，把一次无害的重构变成全员验签失败。
+	type proxyIntegrityData = struct {
+		HTTP    string `json:"http"`
+		HTTPS   string `json:"https"`
+		NoProxy string `json:"no_proxy"`
+		Enabled bool   `json:"enabled"`
+	}
+	type customToolIntegrity = struct {
+		Name       string `json:"name"`
+		SourceURL  string `json:"source_url"`
+		SourceType string `json:"source_type"`
+		Shim       string `json:"shim"`
+		EnvVar     string `json:"env_var"`
+	}
 	type integrityData struct {
-		InstallDir  string            `json:"install_dir"`
-		ShimDir     string            `json:"shim_dir"`
-		ManifestDir string            `json:"manifest_dir"`
-		DownloadDir string            `json:"download_dir"`
-		Mirror      map[string]string `json:"mirror"`
-		PathMode    string            `json:"path_mode"`
+		XMDevDir         string                `json:"xmdevenv_dir"`
+		InstallDir       string                `json:"install_dir"`
+		ShimDir          string                `json:"shim_dir"`
+		ManifestDir      string                `json:"manifest_dir"`
+		DownloadDir      string                `json:"download_dir"`
+		Mirror           map[string]string     `json:"mirror"`
+		PathMode         string                `json:"path_mode"`
+		MirrorPreference []string              `json:"mirror_preference"`
+		Proxy            proxyIntegrityData    `json:"proxy"`
+		CustomTools      []customToolIntegrity `json:"custom_tools"`
 	}
 	snapshot := integrityData{
+		XMDevDir:    c.Core.XMDevDir,
 		InstallDir:  c.Core.InstallDir,
 		ShimDir:     c.Core.ShimDir,
 		ManifestDir: c.Core.ManifestDir,
 		DownloadDir: c.Core.DownloadDir,
 		Mirror:      make(map[string]string),
 		PathMode:    c.Path.Mode,
+		Proxy: proxyIntegrityData{
+			HTTP:    c.Proxy.HTTP,
+			HTTPS:   c.Proxy.HTTPS,
+			NoProxy: c.Proxy.NoProxy,
+			Enabled: c.Proxy.Enabled,
+		},
+		CustomTools: make([]customToolIntegrity, 0, len(c.CustomTools)),
+	}
+	// 规范化 nil / 空切片：yaml 把 nil 与空切片都写成 `key: []`，回读时得到
+	// **非 nil 空切片**，而 encoding/json 对二者的编码不同（null vs []）。
+	// 若不归一，「Save 写 nil → Load 读空切片」会在**没有任何篡改**的情况下
+	// 造成验签失败，把正常往返误判成篡改（TestIntegrityHMAC_SaveLoadRoundTripStillValid
+	// 正是钉住这一点的守卫）。
+	if len(c.Core.MirrorPreference) > 0 {
+		snapshot.MirrorPreference = append([]string(nil), c.Core.MirrorPreference...)
 	}
 	// Sort mirror keys for deterministic output
 	for k, v := range c.Mirror {
 		snapshot.Mirror[k] = v
+	}
+	// 顺序敏感：保持配置里的原始顺序（顺序本身影响候选优先级）。
+	for _, ct := range c.CustomTools {
+		snapshot.CustomTools = append(snapshot.CustomTools, customToolIntegrity{
+			Name:       ct.Name,
+			SourceURL:  ct.SourceURL,
+			SourceType: ct.SourceType,
+			Shim:       ct.Shim,
+			EnvVar:     ct.EnvVar,
+		})
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -471,11 +659,14 @@ func (c *Config) computeIntegrityHMAC() string {
 // pattern (write to .tmp, then os.Rename) to prevent corruption.
 // Security (H-12): Before saving, an HMAC of sensitive fields is computed
 // and stored in the Integrity field so tampering can be detected on next load.
+// 第十轮 P2-4：同时盖上 integritySchemaVersion 标记，使「本文件由 xdev 写出」
+// 这一事实在 integrity 行丢失时仍可辨认（见 integritySchemaVersion 的说明）。
 func (c *Config) Save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// Compute and store integrity HMAC before saving
 	c.Integrity = c.computeIntegrityHMAC()
+	c.IntegritySchema = integritySchemaVersion
 	return c.saveLocked()
 }
 
@@ -522,18 +713,18 @@ func (c *Config) EnsureDirs() error {
 func defaults(xmdeDir string) *Config {
 	c := &Config{
 		Core: CoreConfig{
-			XMDevDir:    xmdeDir,
-			DownloadDir: filepath.Join(xmdeDir, "downloads"),
-			InstallDir:  filepath.Join(xmdeDir, "install"),
-			ShimDir:     filepath.Join(xmdeDir, "shims"),
-			CacheDir:    filepath.Join(xmdeDir, "cache"),
-			EnvDir:      filepath.Join(xmdeDir, "env"),
-			ManifestDir: filepath.Join(xmdeDir, "manifests"),
-			LogLevel:    "info",
-			SelfUpdate:  true,
+			XMDevDir:        xmdeDir,
+			DownloadDir:     filepath.Join(xmdeDir, "downloads"),
+			InstallDir:      filepath.Join(xmdeDir, "install"),
+			ShimDir:         filepath.Join(xmdeDir, "shims"),
+			CacheDir:        filepath.Join(xmdeDir, "cache"),
+			EnvDir:          filepath.Join(xmdeDir, "env"),
+			ManifestDir:     filepath.Join(xmdeDir, "manifests"),
+			LogLevel:        "info",
+			SelfUpdate:      true,
 			SelfUpdateMode:  "prompt",
 			SelfUpdateStale: true,
-			ManifestTTL: "24h",
+			ManifestTTL:     "24h",
 		},
 		Path: PathConfig{
 			Mode:                "shim",
@@ -556,6 +747,34 @@ func defaults(xmdeDir string) *Config {
 	}
 	c.ResolvePaths(xmdeDir)
 	return c
+}
+
+// SetRootDir 把配置的根目录改为 newRoot，并把 6 个派生子目录**重新锚定**到
+// 新根之下。
+//
+// 第九轮审计 A-14（P2）：没有这个助手时，`xdev config set core.xmdevenv_dir X`
+// 只改 `XMDevDir` 然后 `Save()`。而 `defaults(xmdeDir)` 是按**初始** xmdeDir
+// 播种 install/shim/cache/env/manifest/downloads 的，`ResolvePaths` 又只填**空**
+// 字段（每个字段都有 `if ... == ""` 守卫）—— 于是「新根 + 旧子目录」的**混合
+// 状态**被持久化：工具仍装进旧 home、PATH 仍写旧 shims。
+//
+// 这是**重定根**而非普通配置修改，因此必须显式清空派生子目录后再解析。
+// 与既有先例一致（`internal/cli/init.go:105-112`、
+// `internal/gui/app_migration.go:269-276` 都显式清空同一组字段）。
+//
+// 注意：**不要**把这段语义塞进 `ResolvePaths` —— 它对非空字段的 no-op 契约是
+// 多个调用方依赖的（见 TestResolvePaths_KeepsNoOpContractForNonEmptyFields）。
+func (c *Config) SetRootDir(newRoot string) {
+	c.Core.XMDevDir = newRoot
+	// 清空派生子目录，让 ResolvePaths 按新根重算。显式覆盖过的字段同样清空：
+	// 否则「新根 + 旧覆盖」仍是混合状态。
+	c.Core.DownloadDir = ""
+	c.Core.InstallDir = ""
+	c.Core.ShimDir = ""
+	c.Core.CacheDir = ""
+	c.Core.EnvDir = ""
+	c.Core.ManifestDir = ""
+	c.ResolvePaths(newRoot)
 }
 
 // ResolvePaths fills in any empty path fields relative to the
@@ -599,7 +818,30 @@ func (c *Config) ResolvePaths(xmdeDir string) {
 //
 // Set the environment variable XMDEV_FORCE_HOME=1 to bypass the
 // heuristic and always use ~/.xdev.
+//
+// 票 33（P1-27 / E-08）：返回前统一 filepath.Abs——本函数是所有路径的
+// 单一来源（config.yaml / last_selection.json / 缓存 / 驱动器扫描），
+// 一旦返回相对路径，后续 Join 出的 shim/install/cache 路径都会相对 CWD
+// 漂移（跨进程注册表与缓存写入落到错误位置）。归一失败（CWD 不可用等
+// 极端情况）时保留原值，不因归一失败而拒绝启动。
 func resolveXMDevDir(explicit string) (string, error) {
+	dir, err := resolveXMDevDirRaw(explicit)
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		return "", nil
+	}
+	abs, absErr := filepath.Abs(dir)
+	if absErr != nil {
+		return dir, nil
+	}
+	return abs, nil
+}
+
+// resolveXMDevDirRaw implements the precedence chain documented above;
+// callers must use resolveXMDevDir so the absolute-path invariant holds.
+func resolveXMDevDirRaw(explicit string) (string, error) {
 	if explicit != "" {
 		return expandHome(explicit)
 	}
@@ -812,7 +1054,10 @@ func UpdateConfigPaths(dir string) {
 	content = strings.ReplaceAll(content, "XimuLocalDev/xdev", "XDev")
 	content = strings.ReplaceAll(content, ".xmdevenvmt", ".xdev")
 	if err := util.AtomicWriteFile(configPath, []byte(content), 0o644); err != nil {
-		log.Printf("[config] WARNING: failed to save last_selection.json: %v", err)
+		// 票 40（P2-33 / N-18）：文案原先误写成 last_selection.json，而这里
+		// 写的是 configPath（<home>/config.yaml）——出错时日志必须指向真正
+		// 失败的文件，否则用户会去排查一个从未被写过的文件。
+		log.Printf("[config] WARNING: failed to save config.yaml: %v", err)
 	}
 }
 
@@ -1115,9 +1360,25 @@ func ResolveHomeDir() string {
 // Call this from `xdev init` and `xdev self uninstall` so the next
 // invocation re-discovers the correct home.  It removes both the
 // primary cache and any legacy LOCALAPPDATA cache.
+//
+// 第八轮审计 A-09（P1）：还必须重置**进程内**的 sync.Once 缓存。
+//
+// 旧实现只删两个缓存文件，而 `homeOnce` 已经 fire 过、`homeVal` 仍是旧值 ——
+// 于是长驻进程（GUI）里"改 home 后失效缓存、下次重新发现"的期望**不成立**：
+// 实测 `ResolveHomeDir()`=home1 → 改 `XMDEV_HOME`=home2 → `InvalidateHomeCache()`
+// → 仍返回 home1（只有测试专用的 `ResetHomeDirForTest` 能刷新）。
+//
+// 生产可达点：`gui/app_migration.go:88` 与 `:374`（迁移后改
+// `cfg.Core.XMDevDir` + `Save()` + `InvalidateHomeCache()`）、`cli/extra.go:58`、
+// `cli/init.go:91`。此后同进程的 `shim.go`（shim 索引读写）与 `update.go`
+// （自更新）继续用**旧 home** → shim 分发失效或写回已迁移走的目录，直到重启进程。
+// 这与历史上 sync.Once 粘滞引发的大事故同源。
 func InvalidateHomeCache() {
 	os.Remove(homeCachePath())
 	os.Remove(fallbackCachePath())
+	// 进程内缓存必须一并失效，否则长驻进程仍会拿到旧 home。
+	homeOnce = sync.Once{}
+	homeVal = ""
 }
 
 // homeCachePath returns the path to the cross-process home cache file.
@@ -1179,19 +1440,32 @@ func readHomeCache() string {
 
 // readCacheFile reads and validates a single cache file.
 // Returns the cached home directory or "" if invalid.
+//
+// 票 43：写入端的内容是 `dir + "\n" + os.Getenv("XMDEV_HOME")`，而生产环境的
+// 正常情形是 XMDEV_HOME **未设置**（home 是「被发现」的，不是配置的），此时
+// 文件只有一行。本函数原先要求 `len(lines) >= 2`，于是单行缓存永远被拒收——
+// 跨进程缓存从未生效：每个 xdev/shim/CLI/GUI 进程都重新全盘扫描
+// （saferWindowsHome 对 8 个盘符求剩余空间 / scanForExistingInstall 逐盘 stat）
+// 并重写该文件。现在接受单行形式（缺第二行 = 记录时环境变量为空），并对读到的
+// 两行做 TrimSpace（Windows 写出的 CRLF 同样能对上）。
 func readCacheFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) < 2 {
+	if len(lines) == 0 {
 		return ""
 	}
-	cachedHome := lines[0]
-	cachedEnv := lines[1]
-	currentEnv := os.Getenv("XMDEV_HOME")
-	if currentEnv != cachedEnv {
+	cachedHome := strings.TrimSpace(lines[0])
+	cachedEnv := ""
+	if len(lines) >= 2 {
+		cachedEnv = strings.TrimSpace(lines[1])
+	}
+	if cachedHome == "" {
+		return ""
+	}
+	if os.Getenv("XMDEV_HOME") != cachedEnv {
 		return ""
 	}
 	if fi, err := os.Stat(cachedHome); err != nil || !fi.IsDir() {
@@ -1200,16 +1474,84 @@ func readCacheFile(path string) string {
 	return cachedHome
 }
 
+// PeekCachedHomeDir returns the xdev home directory that previous runs
+// recorded, WITHOUT performing discovery and WITHOUT writing anything.
+//
+// It exists for host-pollution auditing (internal/testkit/hostsnapshot): a
+// test suite must be able to watch the developer's real xdev home for writes
+// even when XMDEV_HOME is pinned to a temp directory for the test process.
+// Unlike ResolveHomeDir it never calls writeHomeCache, and unlike
+// readHomeCache it does not invalidate an entry when the current process's
+// XMDEV_HOME differs from the value recorded in the cache file.
+func PeekCachedHomeDir() string {
+	if homeVal != "" {
+		return homeVal
+	}
+	var candidates []string
+	if v := os.Getenv("XMDEV_HOME"); v != "" {
+		candidates = append(candidates, filepath.Join(v, ".home.cache"))
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
+			candidates = append(candidates, filepath.Join(appData, "xdev", "home.cache"))
+		}
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			candidates = append(candidates, filepath.Join(appData, "xdev", "home.cache"))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".xdev", "home.cache"))
+	}
+	for _, c := range candidates {
+		if dir := rawCachedDir(c); dir != "" {
+			return dir
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if dir := scanForExistingInstall(); dir != "" {
+			return dir
+		}
+	}
+	return ""
+}
+
+// rawCachedDir reads the home directory recorded in a cache file without
+// validating it against the current XMDEV_HOME. Returns "" when the file is
+// missing/malformed or when the recorded directory no longer exists.
+func rawCachedDir(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	dir := strings.TrimSpace(lines[0])
+	if dir == "" {
+		return ""
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return dir
+}
+
 // writeHomeCache atomically writes the home directory cache file.
 // When the cache is written to the xdev home directory (non-C: drive),
 // it also removes the legacy LOCALAPPDATA cache to avoid stale entries.
+//
+// 票 31（P1-24 收敛核验）：本处原为「固定 path+".tmp" + os.WriteFile」克隆，
+// 多进程（GUI/shim/CLI 并发启动）会互相截断同一中间文件，rename 方拿到
+// 半截内容或直接失败。改用唯名临时文件（CreateTemp）+ 权限还原 + rename；
+// 与 internal/util.AtomicWriteFile 的 CreateTemp 版本同型（该本体由
+// internal/util 域负责，见票 31 报告的白名单外清单）。
 func writeHomeCache(dir string) {
 	path := homeCachePath()
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	content := dir + "\n" + os.Getenv("XMDEV_HOME")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err == nil {
-		os.Rename(tmp, path)
+	if err := writeFileCreateTemp(path, []byte(content), 0o644); err != nil {
+		log.Printf("[config] WARNING: write home cache %s: %v", path, err)
 	}
 	// Clean up legacy LOCALAPPDATA cache if we're now writing elsewhere.
 	if fallback := fallbackCachePath(); fallback != path {
@@ -1217,22 +1559,87 @@ func writeHomeCache(dir string) {
 	}
 }
 
-// expandHome replaces a leading "~" or "~/" with the user's home dir.
-func expandHome(p string) (string, error) {
-	if !strings.HasPrefix(p, "~") {
-		return p, nil
-	}
-	home, err := os.UserHomeDir()
+// writeFileCreateTemp writes data to path atomically using a uniquely named
+// temporary file in the same directory (CreateTemp gives the 0600 default,
+// so the requested perm is restored explicitly; on Windows the read-only bit
+// is not part of FileMode perm, so there is no side effect).
+// 票 31: 固定 "<path>.tmp" 会被并发写者互相截断，唯名临时文件消除该竞态。
+func writeFileCreateTemp(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return "", err
+		return fmt.Errorf("create temp in %s: %w", dir, err)
 	}
-	if p == "~" {
-		return home, nil
+	tmpName := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpName)
 	}
-	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\") {
-		return filepath.Join(home, p[2:]), nil
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return fmt.Errorf("write tmp %s: %w", tmpName, err)
 	}
-	return p, nil
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return fmt.Errorf("sync tmp %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close tmp %s: %w", tmpName, err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("chmod tmp %s: %w", tmpName, err)
+	}
+	if err := renameWithRetry(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename %s -> %s: %w", tmpName, path, err)
+	}
+	return nil
+}
+
+// renameWithRetry renames with a short bounded retry window.
+//
+// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一
+// 目标时会偶发 ERROR_ACCESS_DENIED（已知行为，不是调用方的错）：直接冒泡
+// 会把这个正常的并发写当失败。重试窗口 ~55ms，超时后原样返回错误。
+func renameWithRetry(oldPath, newPath string) error {
+	const attempts = 10
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(oldPath, newPath); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return err
+}
+
+// expandHome replaces a leading "~" or "~/" with the user's home dir,
+// and（票 33 / P1-27 / E-08）normalises the result to an absolute path so
+// that a relative --xmdevenv-dir / $XMDEV_HOME never propagates into the
+// rest of the config (which would resolve relative to the process CWD).
+func expandHome(p string) (string, error) {
+	out := p
+	if strings.HasPrefix(p, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case p == "~":
+			out = home
+		case strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~\\"):
+			out = filepath.Join(home, p[2:])
+		}
+	}
+	if out == "" {
+		return "", nil
+	}
+	if abs, err := filepath.Abs(out); err == nil {
+		return abs, nil
+	}
+	return out, nil
 }
 
 // IsWindows reports whether we are on Windows.  Small helper to avoid

@@ -53,7 +53,11 @@ Examples:
 }
 
 func newIsolateSetupCmd() *cobra.Command {
-	return &cobra.Command{
+	// Ticket 35 (C-07): --force is the explicit opt-in for overwriting files
+	// the user already owns (flake.nix / devcontainer.json). The default is
+	// "refuse" so a setup never clobbers hand-written config.
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Create an isolated environment",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,6 +66,7 @@ func newIsolateSetupCmd() *cobra.Command {
 				return err
 			}
 			spec := buildEnvSpec()
+			spec.Force = force
 			if err := iso.Setup(cmd.Context(), spec); err != nil {
 				return err
 			}
@@ -69,6 +74,8 @@ func newIsolateSetupCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing flake.nix / devcontainer.json (ticket 35 / C-07)")
+	return cmd
 }
 
 func newIsolateTeardownCmd() *cobra.Command {

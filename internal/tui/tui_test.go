@@ -15,9 +15,9 @@ import (
 func TestNewModelCreatesValidState(t *testing.T) {
 	cfg := &config.Config{
 		Core: config.CoreConfig{
-			XMDevDir:    "/tmp/xmde-test",
-			InstallDir:  "/tmp/xmde-test/install",
-			ShimDir:     "/tmp/xmde-test/shims",
+			XMDevDir:   "/tmp/xmde-test",
+			InstallDir: "/tmp/xmde-test/install",
+			ShimDir:    "/tmp/xmde-test/shims",
 		},
 	}
 	cat := &manifest.Catalog{}
@@ -409,9 +409,15 @@ func TestViewInstallOverlay_ClampsNegativePercent(t *testing.T) {
 // TestInstallResultError_ClearsUpdateQueue (Spec 035 F3): a failed
 // install clears the batch update queue so a later plain install
 // cannot accidentally resume "update all".
+//
+// 票 40（P2-19 / E-15）：结果消息现在的归属判定是
+// `msg.ID != m.currentOpID`，因此用例必须模拟真实起点——startInstall
+// 会同时置 installState.ID 与 currentOpID。此前本用例只手工构造了
+// installState，不设 currentOpID → 修复后消息被判为陈旧消息丢弃（必红）。
 func TestInstallResultError_ClearsUpdateQueue(t *testing.T) {
 	m := newTUITestModel(t)
 	m.installState = &InstallState{ID: 1, Tool: "go", Version: "1.26.5"}
+	m.currentOpID = 1
 	m.updateQueue = []toolUpdate{{Tool: "go", Current: "1.0", Latest: "2.0"}}
 	m.updateIdx = 0
 
@@ -425,6 +431,9 @@ func TestInstallResultError_ClearsUpdateQueue(t *testing.T) {
 	}
 	if m2.installState != nil {
 		t.Error("installState should be cleared")
+	}
+	if m2.currentOpID != 0 {
+		t.Errorf("currentOpID = %d, want 0（结果已消费，操作槽位必须复位）", m2.currentOpID)
 	}
 }
 
@@ -569,5 +578,247 @@ func TestUpdatesViewEmptyListWithErrMsg(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "暂无可用更新") || !strings.Contains(out, "Error: boom") {
 		t.Errorf("both the empty-list hint and the error line should render:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 票 40（P2-19 / E-15）：陈旧结果消息判定改用 currentOpID，且必须覆盖
+// 成功与错误两条分支
+// ---------------------------------------------------------------------------
+//
+// 旧实现只在 installState != nil 时比对 ID：取消（installState=nil）或
+// 卸载（借用 installState.ID，为 0）之后到达的迟到消息会被当作「当前
+// 操作的结果」——错误消息弹误导性横幅，成功消息甚至会让刚被清空的
+// 「全部更新」队列静默续跑（N-14）。
+
+// TestStartInstall_SetsCurrentOpID 起点：startInstall 同时置位
+// installState.ID 与 currentOpID（doInstall 只构造 Cmd，不执行安装）。
+func TestStartInstall_SetsCurrentOpID(t *testing.T) {
+	cfg := &config.Config{
+		Core: config.CoreConfig{
+			XMDevDir:   t.TempDir(),
+			InstallDir: t.TempDir(),
+			ShimDir:    t.TempDir(),
+		},
+	}
+	cat := &manifest.Catalog{}
+	reg := plugin.NewRegistry()
+	tool := &manifest.Tool{Name: "go", Category: "language", Shims: []string{"go"},
+		VersionList: []manifest.Version{{Version: "1.26.5"}}}
+	reg.Register(plugin.NewGeneric(tool))
+
+	m := NewModel(cfg, cat, reg)
+	updated, _ := m.startInstall()
+	m2 := updated.(Model)
+
+	if m2.installState == nil {
+		t.Fatal("startInstall 未建立 installState")
+	}
+	if m2.currentOpID == 0 {
+		t.Error("currentOpID = 0, want 非零（结果消息将无法与操作对上）")
+	}
+	if m2.installState.ID != m2.currentOpID {
+		t.Errorf("installState.ID = %d, currentOpID = %d, want 相同",
+			m2.installState.ID, m2.currentOpID)
+	}
+}
+
+// TestInstallResultSuccess_LateMessageDoesNotResumeQueue（N-14）：取消后
+// 迟到的**成功**消息不得推动更新队列（旧实现会走成功分支续跑/清队列）。
+func TestInstallResultSuccess_LateMessageDoesNotResumeQueue(t *testing.T) {
+	m := newTUITestModel(t)
+	// 取消后的状态：currentOpID 已作废，队列刻意保留以暴露「静默续跑」。
+	m.currentOpID = 0
+	m.updateQueue = []toolUpdate{
+		{Tool: "go", Current: "1.0", Latest: "2.0"},
+		{Tool: "node", Current: "18.0", Latest: "20.0"},
+	}
+	m.updateIdx = 0
+
+	updated, cmd := m.Update(InstallResultMsg{ID: 1, Tool: "go", Version: "2.0"})
+	m2 := updated.(Model)
+	if cmd != nil {
+		t.Error("迟到的成功消息触发了命令（可能是续跑批量更新）")
+	}
+	if len(m2.updateQueue) != 2 || m2.updateIdx != 0 {
+		t.Errorf("迟到消息改动了更新队列: len=%d idx=%d, want 2/0",
+			len(m2.updateQueue), m2.updateIdx)
+	}
+	if m2.installState != nil {
+		t.Error("迟到的成功消息不应建立 installState")
+	}
+}
+
+// TestInstallResultError_LateMessageDoesNotSetErrMsg：取消后迟到的**错误**
+// 消息不得弹出误导性错误横幅。
+func TestInstallResultError_LateMessageDoesNotSetErrMsg(t *testing.T) {
+	m := newTUITestModel(t)
+	m.currentOpID = 0
+
+	updated, cmd := m.Update(InstallResultMsg{ID: 99, Err: fmt.Errorf("stale boom")})
+	m2 := updated.(Model)
+	if m2.errMsg != "" {
+		t.Errorf("errMsg = %q, want 空（陈旧错误消息被污染当前状态）", m2.errMsg)
+	}
+	if cmd != nil {
+		t.Error("陈旧错误消息不应触发命令")
+	}
+}
+
+// TestInstallCancel_InvalidatesOpID：取消即作废 currentOpID——取消后到达
+// 的结果消息走「陈旧」分支被整体丢弃（E-15 的原始场景）。
+func TestInstallCancel_InvalidatesOpID(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 42, Tool: "go", Version: "1.26.5", Cancel: func() {}}
+	m.currentOpID = 42
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m2 := updated.(Model)
+	if m2.currentOpID != 0 {
+		t.Fatalf("取消后 currentOpID = %d, want 0", m2.currentOpID)
+	}
+
+	updated, cmd := m2.Update(InstallResultMsg{ID: 42, Err: fmt.Errorf("cancelled install failed late")})
+	m3 := updated.(Model)
+	if m3.errMsg != "" {
+		t.Errorf("取消后迟到的错误消息污染了 errMsg: %q", m3.errMsg)
+	}
+	if cmd != nil {
+		t.Error("取消后迟到的结果消息不应触发命令")
+	}
+}
+
+// TestUninstallResultMsg_OwnTypeAndStaleGuard：卸载结果使用**独立消息类型**
+// （防与安装结果跨空间撞号），陈旧判定口径与安装一致。
+func TestUninstallResultMsg_OwnTypeAndStaleGuard(t *testing.T) {
+	m := newTUITestModel(t)
+	m.currentOpID = 7
+
+	// 1) ID 不匹配 → 整体丢弃，连 currentOpID 都不动。
+	updated, cmd := m.Update(UninstallResultMsg{ID: 6, Tool: "go", Version: "1.0", Err: fmt.Errorf("stale")})
+	m2 := updated.(Model)
+	if m2.errMsg != "" || cmd != nil {
+		t.Errorf("陈旧卸载结果被接受: errMsg=%q cmd=%v", m2.errMsg, cmd)
+	}
+	if m2.currentOpID != 7 {
+		t.Errorf("陈旧卸载结果改动了 currentOpID = %d, want 7", m2.currentOpID)
+	}
+
+	// 2) ID 匹配的成功 → 复位 currentOpID 并刷新数据。
+	updated, cmd = m2.Update(UninstallResultMsg{ID: 7, Tool: "go", Version: "1.0"})
+	m3 := updated.(Model)
+	if cmd == nil {
+		t.Error("当前卸载操作的成功结果应触发刷新命令")
+	}
+	if m3.currentOpID != 0 {
+		t.Errorf("currentOpID = %d, want 0（结果已消费）", m3.currentOpID)
+	}
+
+	// 3) ID 匹配的失败 → 错误可见。
+	updated, _ = m2.Update(UninstallResultMsg{ID: 7, Tool: "go", Version: "1.0", Err: fmt.Errorf("uninstall boom")})
+	m4 := updated.(Model)
+	if m4.errMsg != "uninstall boom" {
+		t.Errorf("errMsg = %q, want %q", m4.errMsg, "uninstall boom")
+	}
+	if m4.currentOpID != 0 {
+		t.Errorf("currentOpID = %d, want 0", m4.currentOpID)
+	}
+}
+
+// TestInstallResultMsg_StaleForNewerOp：新操作进行中时，上一个操作的迟到
+// 消息不得干扰新操作（installState 与 currentOpID 都保持）。
+func TestInstallResultMsg_StaleForNewerOp(t *testing.T) {
+	m := newTUITestModel(t)
+	m.installState = &InstallState{ID: 2, Tool: "node", Version: "20.0"}
+	m.currentOpID = 2
+	m.updateQueue = []toolUpdate{{Tool: "go", Current: "1.0", Latest: "2.0"}}
+
+	updated, cmd := m.Update(InstallResultMsg{ID: 1, Err: fmt.Errorf("stale boom")})
+	m2 := updated.(Model)
+	if m2.installState == nil || m2.installState.ID != 2 {
+		t.Errorf("当前安装状态被陈旧消息破坏: %+v", m2.installState)
+	}
+	if m2.currentOpID != 2 {
+		t.Errorf("currentOpID = %d, want 2", m2.currentOpID)
+	}
+	if m2.errMsg != "" || cmd != nil {
+		t.Errorf("陈旧消息产生副作用: errMsg=%q cmd=%v", m2.errMsg, cmd)
+	}
+	if len(m2.updateQueue) != 1 {
+		t.Errorf("updateQueue 被陈旧消息改动: %v", m2.updateQueue)
+	}
+}
+
+// --- F-57: RemoteVersionsMsg must be tool-scoped ---
+
+// newTUITestModelWithTools builds a Model whose filteredTools holds the
+// given tool names (stable registry order = alphabetical).
+func newTUITestModelWithTools(t *testing.T, names ...string) Model {
+	t.Helper()
+	cfg := &config.Config{
+		Core: config.CoreConfig{
+			XMDevDir:   t.TempDir(),
+			InstallDir: t.TempDir(),
+			ShimDir:    t.TempDir(),
+		},
+	}
+	cat := &manifest.Catalog{}
+	reg := plugin.NewRegistry()
+	for _, n := range names {
+		reg.Register(plugin.NewGeneric(&manifest.Tool{
+			Name: n, Category: "language", Shims: []string{n},
+			VersionList: []manifest.Version{{Version: "1.0.0"}},
+		}))
+	}
+	m := NewModel(cfg, cat, reg)
+	m.applyCategoryFilter()
+	return m
+}
+
+// TestRemoteVersionsMsg_DropsMessageForOtherTool (F-57): a late reply for
+// tool A arriving after the cursor moved to tool B must be discarded, not
+// written into the version list that now belongs to B.
+func TestRemoteVersionsMsg_DropsMessageForOtherTool(t *testing.T) {
+	m := newTUITestModelWithTools(t, "aaa", "bbb")
+	m.toolIdx = 1 // "bbb" selected
+	m.remoteVersions = []string{"1.0.0"}
+
+	if got := m.currentToolName(); got != "bbb" {
+		t.Fatalf("test setup: current tool = %q, want bbb", got)
+	}
+
+	updated, _ := m.Update(RemoteVersionsMsg{Tool: "aaa", Versions: []string{"9.9.9", "8.8.8"}})
+	m2 := updated.(Model)
+
+	if len(m2.remoteVersions) != 1 || m2.remoteVersions[0] != "1.0.0" {
+		t.Errorf("remoteVersions = %v, want [1.0.0] (stale reply for aaa must be dropped)", m2.remoteVersions)
+	}
+}
+
+// TestRemoteVersionsMsg_AcceptsMessageForCurrentTool is the matching
+// positive case: a reply for the selected tool still updates the list.
+func TestRemoteVersionsMsg_AcceptsMessageForCurrentTool(t *testing.T) {
+	m := newTUITestModelWithTools(t, "aaa", "bbb")
+	m.toolIdx = 1 // "bbb"
+
+	updated, _ := m.Update(RemoteVersionsMsg{Tool: "bbb", Versions: []string{"2.0.0"}})
+	m2 := updated.(Model)
+
+	if len(m2.remoteVersions) != 1 || m2.remoteVersions[0] != "2.0.0" {
+		t.Errorf("remoteVersions = %v, want [2.0.0] (reply for the selected tool must be accepted)", m2.remoteVersions)
+	}
+}
+
+// TestRemoteVersionsMsg_IgnoresErrForOtherTool: the Err field must not be
+// surfaced for a tool that is no longer selected either.
+func TestRemoteVersionsMsg_IgnoresErrForOtherTool(t *testing.T) {
+	m := newTUITestModelWithTools(t, "aaa", "bbb")
+	m.toolIdx = 1 // "bbb"
+
+	updated, _ := m.Update(RemoteVersionsMsg{Tool: "aaa", Err: fmt.Errorf("boom")})
+	m2 := updated.(Model)
+
+	if len(m2.remoteVersions) != 0 {
+		t.Errorf("remoteVersions = %v, want empty", m2.remoteVersions)
 	}
 }

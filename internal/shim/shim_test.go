@@ -49,6 +49,20 @@ func TestPathPrependMultiple(t *testing.T) {
 	}
 }
 
+// TestPathPrepend_KeepsEntriesBeforeDuplicate (F-54): a duplicate of
+// shimDir later in PATH must only be skipped — the entries accumulated
+// before it (here /a) must survive. The old implementation reset the
+// accumulator (out = out[:0]), silently dropping /a.
+func TestPathPrepend_KeepsEntriesBeforeDuplicate(t *testing.T) {
+	in := "/a" + sep() + "/shims" + sep() + "/b"
+	got := PathPrepend(in, "/shims")
+	want := "/shims" + sep() + "/a" + sep() + "/b"
+	if got != want {
+		t.Errorf("PathPrepend(%q, %q) = %q, want %q (entries before the duplicate must be preserved)",
+			in, "/shims", got, want)
+	}
+}
+
 // --- FindInDir tests ---
 
 // helper: returns the executable suffix for the current OS
@@ -371,6 +385,11 @@ func TestMaybeExec_ShimName(t *testing.T) {
 	// is true, meaning the shim path was taken.
 	home := t.TempDir()
 	t.Setenv("XMDEV_HOME", home)
+	// PATH 必须隔离：macOS CI 的 setup-node 把真实 node 放进 PATH，
+	// 未命中 shim 后 passthrough 会 unix.Exec("node", os.Args)，
+	// 用 -test.paniconexit0 等参数替换掉测试进程（20261022 CI）。
+	// 空目录保证 passthrough 查不到、返回 (true, error)。
+	t.Setenv("PATH", t.TempDir())
 	config.ResetHomeDirForTest()
 	InvalidateShimIndex()
 
@@ -420,13 +439,12 @@ func TestMaybeExec_AliasDispatchesToRealTarget(t *testing.T) {
 	InvalidateShimIndex()
 
 	// MaybeExec passes os.Args[1:] through to the dispatched child.  The
-	// child is a copy of this very test binary: the inherited -test.*
-	// flags would make it re-run the whole suite (and this test again)
-	// recursively.  Neutralize the args so the child matches no tests
-	// ("-test.run=^$") and exits 0 immediately, standing in for a real
-	// tool invoked with zero arguments.
+	// child is a copy of this very test binary.  XDEV_SHIM_CHILD makes
+	// TestMain exit 0 before testing.Main runs, so the child neither
+	// re-runs the suite nor prints testing/coverage output (P3-13).
+	t.Setenv("XDEV_SHIM_CHILD", "1")
 	origArgs := os.Args
-	os.Args = []string{origArgs[0], "-test.run=^$"}
+	os.Args = []string{origArgs[0]}
 	defer func() { os.Args = origArgs }()
 
 	handled, err := MaybeExec("fakepy" + ext)

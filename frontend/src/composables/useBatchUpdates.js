@@ -57,6 +57,13 @@ export function useBatchUpdates({
       message.warning(t('install.busy'));
       return;
     }
+    // Ticket 12 (G-02 layer 1): never enter while a previous batch is
+    // still running — the flag used to be set only AFTER the confirmation
+    // dialog resolved, so the dialog window allowed double entry.
+    if (batchActive?.value) {
+      message.warning(t('install.busy'));
+      return;
+    }
     const ok = await new Promise((resolve) => {
       dialog.warning({
         title: t('updates.title'),
@@ -70,7 +77,20 @@ export function useBatchUpdates({
       });
     });
     if (!ok) return;
+    // Ticket 12 (G-02 layer 2): the dialog may have stayed open long
+    // enough for another entry to start a batch — re-check AFTER the
+    // dialog resolved and BEFORE taking ownership.
+    if (batchActive?.value) {
+      message.warning(t('install.busy'));
+      return;
+    }
 
+    // Ticket 12 (G-02 layer 4 — ownership): only the invocation that SET
+    // the flags may RESET them. A rejected late-comer reaching this point
+    // must not clear the running batch's state (batchActive=false +
+    // setShowProgress(false) would strip the re-entry protection and
+    // close the live progress dialog).
+    const owned = !batchActive.value;
     if (batchActive) batchActive.value = true;
     try {
       // ---- Phase 1 (serial): per-item FR-018 confirmation ----
@@ -109,8 +129,11 @@ export function useBatchUpdates({
       await loadUpdates();
       message.info(t('updates.install_all_summary', { done, failed, skipped: skipped + cancelled }));
     } finally {
-      if (batchActive) batchActive.value = false;
-      setShowProgress(false); // safety net: reset on every exit path
+      // Ticket 12 (G-02 layer 4): only the owner resets the shared flags.
+      if (owned) {
+        if (batchActive) batchActive.value = false;
+        setShowProgress(false); // safety net: reset on every exit path
+      }
     }
   }
 

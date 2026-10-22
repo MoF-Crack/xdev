@@ -168,12 +168,29 @@ func (a *App) SetPathMode(mode string) error {
 		p    plugin.Plugin
 	}
 	for _, e := range entries {
-		if !e.IsDir() {
+		// 第十轮审计 P3-8（P3）：current/ 下可能残留 xdev 自己的旁路条目
+		// （`.stale-*` 来自 removeLinkEntry 的重命名，`.tmp-*` 来自 Activate
+		// 的临时链接名）。它们不是工具，绝不能被当成"已激活工具"参与
+		// PATH 迁移 —— 否则会把残留目录的 bin 路径写进 PATH，或为其创建
+		// shim。过滤规则与 shim 反向索引共用同一份定义。
+		if shim.IsStaleResidueName(e.Name()) {
 			continue
 		}
-		// 检查是否是有效的 Junction/目录
+		// 检查是否是有效的 Junction/目录。
+		//
+		// 第十轮审计附带发现（**P0 级**，由本项守卫暴露）：不能用 `e.IsDir()`。
+		// `current/<tool>` 在 Windows 上是**目录联接（junction）**，而
+		// `os.ReadDir` 的 `DirEntry.IsDir()` 对重解析点返回 **false**
+		// （本机实测：`IsDir()=false`、`Type=?---------`；同一路径 `os.Stat`
+		// 的 `IsDir()` 为 **true**）。于是旧代码的 `!e.IsDir() { continue }`
+		// 会**跳过每一个真实工具** —— `SetPathMode("direct")` 静默地一个 bin
+		// 路径都不加，用户切到 direct 后 PATH 里没有工具，且没有任何报错。
+		//
+		// 正确判据是「**跟随**链接后确实是目录」，即 `os.Stat`（而非 Lstat）。
+		// 这同时保留原有语义：悬空链接会被 `os.Stat` 判为不存在而跳过。
 		linkPath := filepath.Join(currentDir, e.Name())
-		if _, err := os.Stat(linkPath); err != nil {
+		fi, statErr := os.Stat(linkPath)
+		if statErr != nil || !fi.IsDir() {
 			continue
 		}
 		if p, ok := a.registry.Get(e.Name()); ok {
@@ -488,43 +505,19 @@ func (a *App) GetCacheBreakdown() CacheBreakdown {
 
 // CleanCache 按分类删除缓存文件
 // category: "archives" | "shaFiles" | "partFiles" | "all"
+//
+// 第七轮审计 F-06（P1）：本函数曾与 CleanCacheCategory 语义分叉——它的
+// `case "all"` 直接 `shouldDelete = true`，把 CacheDir 下的**每一个**文件都
+// 删掉，而 CacheDir 里同时住着**非缓存的用户状态文件**：favorites.json（收藏）、
+// ignored_tools.json（更新忽略列表）、custom_tools.json（自定义工具注册）、
+// keystore.dat（TOFU 密钥库）、shim-index.v1、sniff-cache.json、
+// tool_scan_cache.json。用户点一次「清理所有缓存」即静默清空这些数据，
+// 且确认文案只说「需要重新下载」。
+//
+// 现在收敛为**单一实现**：直接委托给 CleanCacheCategory（分类规则来自
+// cache_classify.go 的 cacheEntryCategory 单一来源），"all" 只删真正的缓存
+// （归档 / .sha256 / .part），元数据归入 "otherFiles" 而**不被 "all" 删除**。
+// 保留本入口是为了不破坏既有 Wails 绑定（前端历史调用点仍可达）。
 func (a *App) CleanCache(category string) error {
-	cfg := a.getCfg()
-
-	entries, err := os.ReadDir(cfg.Core.CacheDir)
-	if err != nil {
-		return fmt.Errorf("读取缓存目录失败: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		shouldDelete := false
-
-		switch category {
-		case "archives":
-			shouldDelete = isArchiveName(name)
-		case "shaFiles":
-			shouldDelete = strings.HasSuffix(name, ".sha256")
-		case "partFiles":
-			shouldDelete = strings.HasSuffix(name, ".part")
-		case "all":
-			shouldDelete = true
-		default:
-			return fmt.Errorf("未知的缓存分类: %s", category)
-		}
-
-		if shouldDelete {
-			if err := os.Remove(filepath.Join(cfg.Core.CacheDir, name)); err != nil {
-				logWarn("[CleanCache] 删除缓存文件失败 %s: %v", name, err)
-			}
-		}
-	}
-
-	// 缓存文件已删除，缓存占用明细必须立即失效。
-	a.InvalidateSizeBreakdown()
-
-	return nil
+	return a.CleanCacheCategory(category)
 }

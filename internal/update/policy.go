@@ -137,7 +137,11 @@ func readJSON(path string, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// writeJSONAtomic 原子写 JSON：临时文件 + rename（与 gui cache 同模式，防并发撕裂）。
+// writeJSONAtomic 原子写 JSON：唯名临时文件 + rename（与 gui cache 同模式，防并发撕裂）。
+//
+// 票 31（P1-24 收敛核验）：补 Sync 与权限还原——os.CreateTemp 建出的是
+// 0600，旧实现让落盘缓存恒为 0600（与其它 0644 缓存不一致），且缺 Sync
+// 时崩溃可能发布空文件。与 util.AtomicWriteFile 的 CreateTemp 版本同型。
 func writeJSONAtomic(path string, v interface{}) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -153,8 +157,50 @@ func writeJSONAtomic(path string, v interface{}) error {
 		tmp.Close()
 		return fmt.Errorf("encode: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp: %w", err)
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	// 第九轮审计 P1-1：rename 必须有界重试。
+	//
+	// 这是仓库里第三份原子写实现（`util.AtomicWriteFile`、`config.writeFileCreateTemp`
+	// 是另两份），而收敛只对齐了「唯名临时文件 + Sync + Chmod」，漏了 rename 重试。
+	// Windows 上多个进程/goroutine 同时以 MoveFileEx(REPLACE_EXISTING) 覆盖同一目标
+	// 会偶发 ERROR_ACCESS_DENIED，这是**瞬态**的：审计实测首次尝试 563.7µs 即失败，
+	// 释放句柄后同一次 rename 就能成功。裸 os.Rename 把它当硬失败 →
+	// 12 写者 × 60 轮 + 6 并发读者下 **696/720（96.7%）失败**，而同构压测走
+	// util.AtomicWriteFile 为 **0 失败**（434 次瞬态冲突被 ~55ms 重试吸收）。
+	//
+	// 后果是自我更新节流失效：policy 缓存写不进去 → 每次启动都重查远端，
+	// 可能触发 API 限流。
+	//
+	// 注意**不能**朴素替换成 util.AtomicWriteFile：本函数用 json.NewEncoder
+	// （多一个尾换行，10 vs 9 字节）且自己 MkdirAll 父目录，util 两者都不同。
+	if err := renameWithRetry(tmpName, path); err != nil {
+		return err
+	}
+	return nil
+}
+
+// renameWithRetry 以有界重试窗口执行 rename（10 次，1..10ms，约 55ms）。
+//
+// 与 util.renameWithRetry / config.renameWithRetry 语义一致：吸收 Windows 上
+// 「多写者同时 REPLACE_EXISTING 同一目标」的瞬态 ERROR_ACCESS_DENIED，
+// 超时后原样返回错误。三份实现各自被自己的并发守卫钉住。
+func renameWithRetry(oldPath, newPath string) error {
+	const attempts = 10
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(oldPath, newPath); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Millisecond)
+	}
+	return err
 }

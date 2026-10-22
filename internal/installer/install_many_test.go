@@ -44,18 +44,18 @@ type simplePlugin struct {
 	name string
 }
 
-func (p *simplePlugin) Name() string                         { return p.name }
-func (p *simplePlugin) DisplayName() string                  { return p.name }
-func (p *simplePlugin) Description() string                  { return "test tool " + p.name }
-func (p *simplePlugin) Homepage() string                     { return "" }
-func (p *simplePlugin) Category() string                     { return "language" }
-func (p *simplePlugin) Manifest() *manifest.Tool             { return nil }
-func (p *simplePlugin) Shims() []string                      { return []string{p.name} }
-func (p *simplePlugin) DefaultVersion() string               { return "1.0.0" }
-func (p *simplePlugin) RequiredPlugin() []string             { return nil }
-func (p *simplePlugin) EnvVars(string) map[string]string     { return nil }
+func (p *simplePlugin) Name() string                              { return p.name }
+func (p *simplePlugin) DisplayName() string                       { return p.name }
+func (p *simplePlugin) Description() string                       { return "test tool " + p.name }
+func (p *simplePlugin) Homepage() string                          { return "" }
+func (p *simplePlugin) Category() string                          { return "language" }
+func (p *simplePlugin) Manifest() *manifest.Tool                  { return nil }
+func (p *simplePlugin) Shims() []string                           { return []string{p.name} }
+func (p *simplePlugin) DefaultVersion() string                    { return "1.0.0" }
+func (p *simplePlugin) RequiredPlugin() []string                  { return nil }
+func (p *simplePlugin) EnvVars(string) map[string]string          { return nil }
 func (p *simplePlugin) PostInstall(context.Context, string) error { return nil }
-func (p *simplePlugin) Deactivate(string) error              { return nil }
+func (p *simplePlugin) Deactivate(string) error                   { return nil }
 
 func (p *simplePlugin) ResolveVersion(spec string) (string, error) {
 	if spec == "" {
@@ -72,8 +72,8 @@ func (p *simplePlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 	}, nil
 }
 
-func (p *simplePlugin) InstallDir(root, version string) string {
-	return filepath.Join(root, p.name, version)
+func (p *simplePlugin) InstallDir(root, version string) (string, error) {
+	return filepath.Join(root, p.name, version), nil
 }
 
 func TestInstallMany_Empty(t *testing.T) {
@@ -122,7 +122,10 @@ func TestInstallMany_AlreadyInstalled(t *testing.T) {
 	// Pre-create an INTACT install dir to simulate already-installed
 	// (Spec 021 D8: an incomplete dir is no longer treated as installed).
 	p, _ := reg.Get("go")
-	installPath := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	makeIntactInstall(t, installPath, "go")
 
 	items := []BatchInstallItem{{ToolName: "go", Version: "1.0.0"}}
@@ -146,7 +149,10 @@ func TestInstallMany_IncompleteFails(t *testing.T) {
 	ins := newSimpleInstaller(t, reg)
 
 	p, _ := reg.Get("go")
-	installPath := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := os.MkdirAll(installPath, 0o755); err != nil {
 		t.Fatalf("mkdir installPath: %v", err)
 	}
@@ -170,7 +176,10 @@ func TestInstallMany_MixedResults(t *testing.T) {
 
 	// Pre-create an INTACT install dir for "go" (already installed)
 	p, _ := reg.Get("go")
-	installPath := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(ins.cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	makeIntactInstall(t, installPath, "go")
 
 	items := []BatchInstallItem{

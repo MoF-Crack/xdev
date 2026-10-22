@@ -7,10 +7,12 @@
     <AsyncState :loading="loading" :error="error" :empty="!tools.length" :retry-label="t('btn.retry')" @retry="$emit('retry')">
       <template #loading>{{ t('catalog.loading') }}</template>
       <template #empty><EmptyState :title="t('no_tools_found')" /></template>
-      <ResponsiveDataTable :columns="contractColumns" :data="tools" row-key="name" :breakpoint="760">
-        <template #default><ToolTable :tools="tools" :t="t" @open-detail="$emit('open-detail', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
-        <template #card="{ row }"><ToolCard :tool="row" :t="t" @open-detail="$emit('open-detail', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
-      </ResponsiveDataTable>
+      <div class="tool-catalog__table">
+        <ResponsiveDataTable :columns="contractColumns" :data="tools" row-key="name" :breakpoint="760">
+          <template #default><ToolTable :tools="tools" :t="t" @open-detail="$emit('open-detail', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
+          <template #card="{ row }"><ToolCard :tool="row" :t="t" @open-detail="$emit('open-detail', $event)" @toggle-favorite="$emit('toggle-favorite', $event)" /></template>
+        </ResponsiveDataTable>
+      </div>
     </AsyncState>
   </section>
 </template>
@@ -28,8 +30,10 @@ const contractColumns = [{ key: 'identity', contract: 'identity' }, { key: 'stat
 
 <style scoped>
 .tool-catalog { width: min(var(--xdev-table-max-width), 100%); margin: 0 auto; display: grid; gap: var(--xdev-section-gap); }
-.tool-catalog__filters { display: flex; align-items: center; justify-content: space-between; gap: var(--xdev-space-3); padding: var(--xdev-space-3) var(--xdev-space-4); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-lg); background: color-mix(in srgb, var(--xdev-bg-panel) 72%, transparent); }
-.tool-catalog__filters > input { width: min(360px, 100%); padding: 8px 10px; border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-panel); color: var(--xdev-text-primary); }
+.tool-catalog__filters { display: flex; align-items: center; justify-content: space-between; gap: var(--xdev-space-3); padding: var(--xdev-space-3) var(--xdev-space-4); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-lg); background: var(--xdev-bg-card); }
+.tool-catalog__filters > input { width: min(360px, 100%); padding: 7px 10px; border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-panel); color: var(--xdev-text-primary); }
+.tool-catalog__filters > input:focus-visible { border-color: var(--xdev-accent); }
 .tool-catalog__filters label { color: var(--xdev-text-muted); font-size: 12px; white-space: nowrap; }
+.tool-catalog__table { border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-lg); background: var(--xdev-bg-card); overflow: hidden; }
 @media (max-width: 560px) { .tool-catalog__filters { align-items: stretch; flex-direction: column; } }
 </style>

@@ -259,7 +259,20 @@ func (a *App) InitConfig(baseDir string) error {
 		}
 	}
 
+	// 第七轮审计 F-07：切换 home 时必须**先清空派生子目录字段**再 ResolvePaths。
+	// config.ResolvePaths 对非空字段是 no-op（每个字段都是 `if c.Core.X == ""` 守卫），
+	// 因此只设 XMDevDir 再调用它，会让 InstallDir/ShimDir/CacheDir/ManifestDir/
+	// DownloadDir/EnvDir **继续指向旧 home** —— 用户看到「已切换到新目录」，
+	// 实际工具树、shim、缓存仍落在旧目录，且 Save() 会把这种不一致持久化。
+	// CLI 的同一场景（internal/cli/init.go:105-112）正是显式清空这 6 个字段后才
+	// ResolvePaths；此处与它对齐。
 	a.cfg.Core.XMDevDir = baseDir
+	a.cfg.Core.DownloadDir = ""
+	a.cfg.Core.InstallDir = ""
+	a.cfg.Core.ShimDir = ""
+	a.cfg.Core.CacheDir = ""
+	a.cfg.Core.EnvDir = ""
+	a.cfg.Core.ManifestDir = ""
 	a.cfg.ResolvePaths(baseDir)
 	if err := a.cfg.EnsureDirs(); err != nil {
 		logError("[InitConfig] EnsureDirs failed: %v", err)
@@ -307,7 +320,9 @@ func (a *App) InitConfig(baseDir string) error {
 func (a *App) cleanupUserPath(cfg *config.Config, baseDir string) {
 	mode := cfg.GetPathMode()
 	shimDir := filepath.Join(baseDir, "shims")
-	changed, err := env.CleanupUserPath(shimDir, mode)
+	// 票 11（P0-13）：home 锚定——仅清理 baseDir 下的 xdev 自有条目，
+	// 用户无关目录（如 D:\xdev）不再被误删。
+	changed, err := env.CleanupUserPath(baseDir, shimDir, mode)
 	if err != nil {
 		logWarn("[cleanupUserPath] 清理用户 PATH 失败: %v", err)
 	} else if changed {
@@ -431,7 +446,13 @@ func (a *App) MigrateLocalToolByJunction(toolJson string) error {
 		return err
 	}
 
-	return a.migrateLocalToolByJunction(tool)
+	if err := a.migrateLocalToolByJunction(tool); err != nil {
+		return err
+	}
+	// 票 22（P1-16 / D-08）：刷新上提到调用方——单工具迁移恰刷新一次。
+	// 批量迁移走 migrateLocalToolOne（不经此函数），由批量尾部刷新一次。
+	a.refreshAndSaveLocalCache()
+	return nil
 }
 
 // validateMigrationSource 校验迁移源（F-10）：
@@ -491,8 +512,10 @@ func (a *App) migrateLocalToolByJunction(tool env.LocalTool) error {
 	// 广播环境变量变更
 	env.BroadcastEnvironmentChange()
 
-	// 刷新本地缓存（单次迁移后刷新一次）
-	a.refreshAndSaveLocalCache()
+	// 票 22（P1-16 / D-08）：worker 内不再刷新本地缓存。本函数被批量迁移
+	// （MigrateAllLocalTools → migrateLocalToolOne）复用，N 个工具会并发进入，
+	// 若在此刷新会退化成 N 次全盘 hostscan + N 次落盘。刷新统一由调用方负责：
+	// 批量迁移在尾部刷一次，单工具迁移在入口（MigrateLocalToolByJunction）刷一次。
 
 	logInfo("[MigrateLocalToolByJunction] %s 迁移成功", tool.Name)
 	return nil
@@ -516,7 +539,12 @@ func (a *App) MigrateLocalToolByMove(toolJson string) error {
 		return err
 	}
 
-	return a.migrateLocalToolByMove(tool)
+	if err := a.migrateLocalToolByMove(tool); err != nil {
+		return err
+	}
+	// 票 22（P1-16 / D-08）：刷新上提到调用方——单工具迁移恰刷新一次。
+	a.refreshAndSaveLocalCache()
+	return nil
 }
 
 // migrateLocalToolByMove 以 move 方式迁移单个本地工具。
@@ -541,7 +569,10 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 	if err != nil {
 		return err
 	}
-	targetPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	targetPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+	if dirErr != nil {
+		return dirErr
+	}
 
 	// 4. 如果目标路径已存在，返回错误
 	if _, err := os.Stat(targetPath); err == nil {
@@ -567,8 +598,10 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 	if err := os.Rename(localPath, targetPath); err != nil {
 		logInfo("[MigrateLocalToolByMove] Rename 失败（可能跨盘符），回退到复制+删除: %v", err)
 		movedByRename = false
-		// 回退：复制目录（带进度反馈）
-		err := util.CopyDirProgress(localPath, targetPath, func(copied, total int) {
+		// 回退：复制目录（带进度反馈 + 断链可见化——票 09/N-01：
+		// 复制报告携带被跳过的链接条目数，在源目录即将被 RemoveAll
+		// 之前把潜在数据损失显式暴露出来）
+		_, skippedLinks, copyErr := util.CopyDirReport(localPath, targetPath, func(copied, total int) {
 			if a.ctx != nil {
 				wailsRuntime.EventsEmit(a.ctx, "migrationProgress", map[string]interface{}{
 					"tool":    tool.Name,
@@ -579,8 +612,11 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 				})
 			}
 		})
-		if err != nil {
-			return fmt.Errorf("复制目录失败: %v", err)
+		if copyErr != nil {
+			return fmt.Errorf("复制目录失败: %v", copyErr)
+		}
+		if skippedLinks > 0 {
+			logWarn("[MigrateLocalToolByMove] 复制完成但跳过了 %d 个无法解析/断链的条目（详见 [copydir] 日志）——请确认这些内容不需要", skippedLinks)
 		}
 		// 复制成功后删除原始目录
 		if err := os.RemoveAll(localPath); err != nil {
@@ -604,8 +640,9 @@ func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
 	// 9. 广播环境变量变更
 	env.BroadcastEnvironmentChange()
 
-	// 刷新本地缓存（单次迁移后刷新一次）
-	a.refreshAndSaveLocalCache()
+	// 票 22（P1-16 / D-08）：worker 内不再刷新本地缓存（同 junction 版说明）。
+	// 批量迁移由 MigrateAllLocalTools 尾部统一刷新一次；单工具迁移由
+	// MigrateLocalToolByMove 入口刷新一次。
 
 	logInfo("[MigrateLocalToolByMove] %s 迁移成功", tool.Name)
 	return nil
@@ -633,6 +670,12 @@ func (a *App) rollbackMove(targetPath, originalPath string, movedByRename bool) 
 	}
 }
 
+// scanLocalToolsForMigration 是 MigrateAllLocalTools 的扫描入口 seam
+// （票 22 守卫测试用）：生产恒为 env.ScanLocalTools（全盘扫描真实主机），
+// 仅测试替换为临时目录中的假工具集，以便在无副作用的前提下驱动批量迁移
+// 路径并断言「每批恰好刷新一次缓存」。非测试代码从不赋值 → 生产行为不变。
+var scanLocalToolsForMigration = env.ScanLocalTools
+
 // MigrateAllLocalTools 一键迁移所有扫描到的本地工具（并行执行）。
 // mode 指定迁移方式："junction" | "move"。
 func (a *App) MigrateAllLocalTools(mode string) []MigrationResult {
@@ -641,7 +684,7 @@ func (a *App) MigrateAllLocalTools(mode string) []MigrationResult {
 		mode = "junction"
 	}
 	cfg := a.getCfg()
-	tools := env.ScanLocalTools(cfg.Core.XMDevDir)
+	tools := scanLocalToolsForMigration(cfg.Core.XMDevDir)
 
 	results := make([]MigrationResult, len(tools))
 	var wg sync.WaitGroup
@@ -692,7 +735,8 @@ func (a *App) MigrateAllLocalTools(mode string) []MigrationResult {
 
 	env.BroadcastEnvironmentChange()
 
-	// 所有迁移完成后统一刷新一次缓存
+	// 所有迁移完成后统一刷新一次缓存（票 22：worker 内已移除刷新，
+	// 这里是批量路径唯一的刷新点）
 	a.refreshAndSaveLocalCache()
 
 	logInfo("[MigrateAllLocalTools] 一键迁移完成，共 %d 个工具", len(results))
@@ -719,7 +763,11 @@ func (a *App) postMigrateSetup(tool env.LocalTool, cfg *config.Config) {
 	if ver == "" {
 		ver = a.detectToolVersion(tool.Name, tool.Path)
 	}
-	installPath := p.InstallDir(cfg.Core.InstallDir, ver)
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
+	if dirErr != nil {
+		logWarn("[postMigrateSetup] resolve install dir for %s@%s: %v", tool.Name, ver, dirErr)
+		return
+	}
 
 	// 创建 shim 文件
 	if cfg.GetPathMode() == "shim" {
@@ -735,15 +783,28 @@ func (a *App) postMigrateSetup(tool env.LocalTool, cfg *config.Config) {
 	}
 
 	// 设置环境变量
+	//
+	// P1-1（第六轮审计）：这里此前直调 env.SetEnvVar——manifest env_vars 是
+	// **不可信数据**（第三方/手工放置的 yaml 可声明任意键值），而 SetEnvVar 的
+	// PATH 分支在所有校验之前路由到整串覆写（WriteUserPath）——"env_vars:
+	// {Path: C:\evil}" 经 GUI 迁移就能整体替换用户 PATH；其它键（如
+	// GOROOT=%TEMP%\evil、目录外 JAVA_HOME）也全无 X-08 校验。与安装器
+	// setUserEnvVars 同语义对齐：
+	//   - PATH 一律跳过（大小写不敏感）——由 xdev 的 shim/目录注入机制管理；
+	//   - 其余键走 SetUserEnvVarTrusted（受保护键拒绝 + 路径型值 X-08 校验）。
 	vars := p.EnvVars(installPath)
 	if len(vars) > 0 {
 		// Windows registry writes must be serialized to prevent lost updates
 		regMu.Lock()
 		for k, v := range vars {
-			if err := env.SetEnvVar(k, v, "user"); err != nil {
+			if strings.EqualFold(k, "PATH") {
+				logWarn("[postMigrateSetup] 跳过 manifest 声明的 %s（PATH 由 xdev 目录注入机制管理，迁移不覆写用户 PATH）", k)
+				continue
+			}
+			if err := env.SetUserEnvVarTrusted(k, v); err != nil {
 				logWarn("[postMigrateSetup] 设置环境变量 %s 失败: %v", k, err)
 			} else {
-				logInfo("[postMigrateSetup] 设置环境变量: %s=%s", k, v)
+				logInfo("[postMigrateSetup] 设置环境变量: %s", k)
 			}
 		}
 		regMu.Unlock()

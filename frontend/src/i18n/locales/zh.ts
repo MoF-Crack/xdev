@@ -62,6 +62,11 @@ export default {
   'status.version': '版本: {version}',
   'status.unknown': '未知',
 
+  // AI / assistant status
+  'ai.command': '命令',
+  'ai.available': '可用',
+  'ai.unavailable': '不可用',
+
   // Category names
   'category.language': '编程语言',
   'category.build': '构建工具',
@@ -105,6 +110,7 @@ export default {
   'settings.mirror_config': '镜像配置',
   'settings.self_update': '自我更新',
   'settings.diagnostics': '诊断',
+  'settings.check_update': '检查更新',
   'settings.cache_management': '缓存管理',
   'settings.archive_retention': '归档保留策略',
   'settings.retention_immediate': '立即删除',
@@ -164,6 +170,7 @@ export default {
   'detail.no_versions_installed': '未安装任何版本',
   'detail.show_more': '显示更多（剩余 {count} 个）',
   'detail.active': '当前激活',
+  'detail.prerelease': '预发行',
   'detail.versions_count': '{count} 个版本',
   'detail.custom_version_placeholder': '例如 3.11.5',
   'detail.incomplete': '不完整',
@@ -183,8 +190,11 @@ export default {
   'detail.deps_required': ' ≥ {version}',
   'detail.deps_reason_not_found': 'PATH 中未找到 {tool}',
   'detail.deps_reason_version_low': '已安装 {installed}，需要 {required}',
-  'detail.deps_reason_platform': '当前平台不支持',
+  'detail.deps_reason_platform': '当前平台不支持（需要 {needed}，当前 {current}）',
   'detail.deps_reason_unknown_tool': '未知工具',
+  // F-42：reasonCode "version_unknown"（Go 侧在依赖存在但版本串不可解析/不可
+  // 比较时设置）。缺这个键时抽屉会直接把键名渲染上屏。
+  'detail.deps_reason_version_unknown': '无法确定版本',
   'detail.launch': '启动',
   'detail.launched': '已启动 {name}',
   'detail.launch_failed': '启动失败',
@@ -219,6 +229,9 @@ export default {
   'installing_extracting': '解压中...',
   'installing_installing': '正在安装（运行安装器，可能需要数分钟）...',
   'installing_completed': '已完成',
+  'installing_cancelled': '已取消',
+  'installing_paused': '已暂停',
+  'installing_error': '失败',
   'install.background': '后台运行',
   'install.copy_error': '复制错误',
   'install.copied': '已复制',
@@ -470,6 +483,8 @@ export default {
   'favorites.show_all_versions': '查看全部 {count} 个版本',
   'favorites.no_available_version': '没有可用版本',
   'favorites.install_failed': '安装失败',
+  'favorites.details': '详情',
+  'favorites.query_failed': '收藏加载失败',
 
   // Lockfile
   'lockfile.title': '锁定文件',
@@ -539,9 +554,14 @@ export default {
   'window.close': '关闭',
 
   // Theme controls
-  'theme.dark': '暗色',
-  'theme.light': '浅色',
+  'theme.dark': '石墨',
+  'theme.midnight': '午夜',
+  'theme.nord': '极夜',
+  'theme.ember': '余烬',
+  'theme.light': '日光',
   'theme.eye_care': '护眼',
+  'theme.family_dark': '暗色',
+  'theme.family_light': '浅色',
   'settings.load_failed': '加载设置失败',
   'settings.mirror_saved': '镜像配置已保存',
   'settings.diagnostics_failed': '诊断失败',
@@ -587,6 +607,12 @@ export default {
   'updates.service_status_not_installed': '未安装',
   'updates.sniff_completed': '嗅探完成',
   'updates.sniff_failed': '嗅探失败',
+  'updates.sniffed_tool': '已嗅探 {tool}',
+  'updates.sniff_strategy_save_failed': '保存嗅探策略失败',
+  'updates.service_installed': '嗅探服务已安装',
+  'updates.service_install_failed': '安装嗅探服务失败',
+  'updates.service_uninstalled': '嗅探服务已卸载',
+  'updates.service_uninstall_failed': '卸载嗅探服务失败',
   'updates.last_sniff': '上次嗅探',
   'updates.next_run': '下次运行',
   'scan.results_title': '本地扫描结果',
@@ -611,6 +637,9 @@ export default {
   'install.tofu_warning_title': '版本校验提示',
   'install.tofu_warning_content': '{tool} {version} 未经预校验，已下载并计算校验值，后续安装将以此校验。',
   'install.tofu_warning_confirm': '继续',
+
+  // 第七轮审计 F-41：安装成功但激活失败——版本已落盘，但 current 未切换。
+  'install.activation_warning': '{tool} {version} 已安装但激活失败，尚未成为当前版本。原因：{message}。可运行 `xdev doctor --fix`，或在版本列表中手动激活。',
 
   // Install mutex (Spec 036 N2)
   'install.busy': '已有安装进行中',
@@ -637,6 +666,7 @@ export default {
   'custom_tools.env_var': '环境变量名',
   'custom_tools.preview': '预览版本',
   'custom_tools.preview_results': '发现版本',
+  'custom_tools.preview_failed': '预览版本失败',
   'custom_tools.remove': '删除',
   'custom_tools.added': '自定义工具已添加',
   'custom_tools.add_failed': '添加自定义工具失败',

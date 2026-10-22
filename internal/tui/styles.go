@@ -80,14 +80,14 @@ var (
 
 // ANSI color constants for degradation
 const (
-	ansiBlack   = "0"
-	ansiRed     = "1"
-	ansiGreen   = "2"
-	ansiYellow  = "3"
-	ansiBlue    = "4"
-	ansiMagenta = "5"
-	ansiCyan    = "6"
-	ansiWhite   = "7"
+	ansiBlack         = "0"
+	ansiRed           = "1"
+	ansiGreen         = "2"
+	ansiYellow        = "3"
+	ansiBlue          = "4"
+	ansiMagenta       = "5"
+	ansiCyan          = "6"
+	ansiWhite         = "7"
 	ansiBrightBlack   = "8"
 	ansiBrightRed     = "9"
 	ansiBrightGreen   = "10"
@@ -114,7 +114,7 @@ func init() {
 		ColorTextDim = lipgloss.Color("#888888")
 		ColorHighlight = lipgloss.Color("#FFFFFF")
 	case color256:
-		ColorPrimary = lipgloss.Color("98")   // purple
+		ColorPrimary = lipgloss.Color("98")    // purple
 		ColorSecondary = lipgloss.Color("40")  // green
 		ColorWarning = lipgloss.Color("220")   // yellow
 		ColorError = lipgloss.Color("196")     // red
@@ -181,7 +181,7 @@ var (
 			Foreground(ColorSecondary)
 
 	StyleNotInstalled = lipgloss.NewStyle().
-			Foreground(ColorMuted)
+				Foreground(ColorMuted)
 
 	StyleError = lipgloss.NewStyle().
 			Foreground(ColorError).

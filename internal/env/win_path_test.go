@@ -113,23 +113,30 @@ func TestToolBinPaths_Unknown(t *testing.T) {
 }
 
 // ---- CleanupUserPath tests ----
-// These tests save and restore the original user PATH to avoid side effects.
+//
+// 第四轮复核改造：这些用例原先直接在**开发者真实的用户 PATH** 上 WriteUserPath 再
+// defer 恢复。两个后果：并发跑全量时撞上别的包的宿主机快照窗口（假红）；测试进程被
+// 强杀时恢复不执行，临时目录死条目会**永久留在用户 PATH** 里（影响面比单个 GOROOT 更大）。
+// 现在 saveUserPath 把 PATH 读写切到内存后端：用例逻辑与断言一字未改，宿主零接触。
+// 跨进程锁**保留**（锁文件改到临时目录），因此 TestConcurrentPathRMW_NoLostWrite 的
+// 并发丢写守卫依然有效。
 
 func saveUserPath(t *testing.T) string {
 	t.Helper()
-	path, err := ReadUserPath()
-	if err != nil {
-		t.Fatalf("failed to read user PATH: %v", err)
-	}
-	return path
+	// 只读真实 PATH 作为初始种子（不再写回真实注册表）。
+	seed, _ := readUserPathFromRegistry()
+	_, restore := UseInMemoryUserPathForTesting(seed)
+	t.Cleanup(restore)
+	return seed
 }
 
 func restoreUserPath(t *testing.T, original string) {
 	t.Helper()
-	if err := WriteUserPath(original); err != nil {
-		t.Fatalf("failed to restore user PATH: %v", err)
+	// 内存后端由 saveUserPath 注册的 t.Cleanup 还原；这里只做一次泄漏自检，
+	// 确保用例没有把内存后端遗留给后续用例（顺序相关的隐性依赖）。
+	if inMemoryUserPath == nil {
+		t.Fatal("saveUserPath 的内存后端已被提前还原（用例之间有顺序依赖）")
 	}
-	BroadcastEnvironmentChange()
 }
 
 func TestCleanupUserPath_ShimMode(t *testing.T) {
@@ -149,7 +156,7 @@ func TestCleanupUserPath_ShimMode(t *testing.T) {
 		t.Fatalf("WriteUserPath: %v", err)
 	}
 
-	changed, err := CleanupUserPath(shimDir, "shim")
+	changed, err := CleanupUserPath(xdevDir, shimDir, "shim")
 	if err != nil {
 		t.Fatalf("CleanupUserPath: %v", err)
 	}
@@ -193,7 +200,7 @@ func TestCleanupUserPath_DirectMode(t *testing.T) {
 		t.Fatalf("WriteUserPath: %v", err)
 	}
 
-	changed, err := CleanupUserPath(shimDir, "direct")
+	changed, err := CleanupUserPath(xdevDir, shimDir, "direct")
 	if err != nil {
 		t.Fatalf("CleanupUserPath: %v", err)
 	}
@@ -232,7 +239,7 @@ func TestCleanupUserPath_RemoveXDevRoot(t *testing.T) {
 		t.Fatalf("WriteUserPath: %v", err)
 	}
 
-	changed, err := CleanupUserPath(shimDir, "shim")
+	changed, err := CleanupUserPath(xdevDir, shimDir, "shim")
 	if err != nil {
 		t.Fatalf("CleanupUserPath: %v", err)
 	}
@@ -245,8 +252,8 @@ func TestCleanupUserPath_RemoveXDevRoot(t *testing.T) {
 		t.Fatalf("ReadUserPath after cleanup: %v", err)
 	}
 
-	normalized := strings.ToLower(result)
 	// Bare XDev root should be removed
+	normalized := strings.ToLower(result)
 	for _, p := range strings.Split(normalized, ";") {
 		cleaned := strings.ToLower(filepath.Clean(p))
 		if isXDevRoot(cleaned) {
@@ -271,7 +278,7 @@ func TestCleanupUserPath_KeepCurrentXdev(t *testing.T) {
 		t.Fatalf("WriteUserPath: %v", err)
 	}
 
-	_, err := CleanupUserPath(shimDir, "shim")
+	_, err := CleanupUserPath(xdevDir, shimDir, "shim")
 	if err != nil {
 		t.Fatalf("CleanupUserPath: %v", err)
 	}
@@ -284,5 +291,139 @@ func TestCleanupUserPath_KeepCurrentXdev(t *testing.T) {
 	normalized := strings.ToLower(result)
 	if !strings.Contains(normalized, "\\xdev\\current\\xdev") {
 		t.Errorf("current\\xdev entry should be preserved in shim mode, got PATH=%q", result)
+	}
+}
+
+// ---- Ticket 11 (audit-fixes / P0-13) home anchoring guards ----
+
+// H1: an unrelated user directory that merely LOOKS like an xdev root
+// (D:\xdev — the user's own project dir) must never be deleted. The old
+// drive-agnostic isXDevRoot rule removed it on every install/doctor run.
+func TestCleanupUserPath_KeepsUnrelatedXdevDir(t *testing.T) {
+	original := saveUserPath(t)
+	defer restoreUserPath(t, original)
+
+	home := "E:\\XDev"
+	shimDir := home + "\\shims"
+	testPath := strings.Join([]string{
+		"D:\\xdev", // unrelated user directory on another drive
+		home + "\\install\\go\\1.22",
+		"C:\\Windows\\System32",
+	}, ";")
+	if err := WriteUserPath(testPath); err != nil {
+		t.Fatalf("WriteUserPath: %v", err)
+	}
+
+	changed, err := CleanupUserPath(home, shimDir, "shim")
+	if err != nil {
+		t.Fatalf("CleanupUserPath: %v", err)
+	}
+	if !changed {
+		t.Error("expected changed=true (home install entry removed)")
+	}
+
+	result, err := ReadUserPath()
+	if err != nil {
+		t.Fatalf("ReadUserPath: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(result), "d:\\xdev") {
+		t.Errorf("unrelated D:\\xdev directory was deleted — home anchoring regression: PATH=%q", result)
+	}
+	if strings.Contains(strings.ToLower(result), "\\xdev\\install\\") {
+		t.Errorf("home install entry should be removed, PATH=%q", result)
+	}
+}
+
+// H2: xdev-owned entries under the actual home are still removed.
+func TestCleanupUserPath_RemovesUnderHome(t *testing.T) {
+	original := saveUserPath(t)
+	defer restoreUserPath(t, original)
+
+	home := "E:\\XDev"
+	shimDir := home + "\\shims"
+	testPath := strings.Join([]string{
+		home + "\\install\\go\\1.22",
+		home + "\\current\\node",
+		"C:\\Windows\\System32",
+	}, ";")
+	if err := WriteUserPath(testPath); err != nil {
+		t.Fatalf("WriteUserPath: %v", err)
+	}
+
+	if _, err := CleanupUserPath(home, shimDir, "shim"); err != nil {
+		t.Fatalf("CleanupUserPath: %v", err)
+	}
+
+	result, err := ReadUserPath()
+	if err != nil {
+		t.Fatalf("ReadUserPath: %v", err)
+	}
+	normalized := strings.ToLower(result)
+	if strings.Contains(normalized, "install\\go") {
+		t.Errorf("home install entry not removed: PATH=%q", result)
+	}
+	if strings.Contains(normalized, "current\\node") {
+		t.Errorf("home current entry not removed (shim mode): PATH=%q", result)
+	}
+}
+
+// H3: the historical legacy substrings keep their cleanup semantics.
+func TestCleanupUserPath_KeepsHistoricalSubstrings(t *testing.T) {
+	original := saveUserPath(t)
+	defer restoreUserPath(t, original)
+
+	home := "E:\\XDev"
+	shimDir := home + "\\shims"
+	testPath := strings.Join([]string{
+		"C:\\work\\ReverseEng\\xmdevenvmt", // historical legacy entry
+		"D:\\tools",                        // unrelated dir, no substring
+		"C:\\Windows\\System32",
+	}, ";")
+	if err := WriteUserPath(testPath); err != nil {
+		t.Fatalf("WriteUserPath: %v", err)
+	}
+
+	if _, err := CleanupUserPath(home, shimDir, "shim"); err != nil {
+		t.Fatalf("CleanupUserPath: %v", err)
+	}
+
+	result, err := ReadUserPath()
+	if err != nil {
+		t.Fatalf("ReadUserPath: %v", err)
+	}
+	normalized := strings.ToLower(result)
+	if strings.Contains(normalized, "\\reverseeng\\xmdevenvmt") {
+		t.Errorf("historical legacy entry should still be removed: PATH=%q", result)
+	}
+	if !strings.Contains(normalized, "d:\\tools") {
+		t.Errorf("unrelated D:\\tools must be kept: PATH=%q", result)
+	}
+}
+
+// H4: home prefix matching is case-insensitive (Windows semantics).
+func TestCleanupUserPath_CaseInsensitiveHomePrefix(t *testing.T) {
+	original := saveUserPath(t)
+	defer restoreUserPath(t, original)
+
+	home := "E:\\XDev"
+	shimDir := home + "\\shims"
+	testPath := strings.Join([]string{
+		"E:\\XDEV\\INSTALL\\JAVA\\25", // uppercase variant of home install
+		"C:\\Windows\\System32",
+	}, ";")
+	if err := WriteUserPath(testPath); err != nil {
+		t.Fatalf("WriteUserPath: %v", err)
+	}
+
+	if _, err := CleanupUserPath(home, shimDir, "shim"); err != nil {
+		t.Fatalf("CleanupUserPath: %v", err)
+	}
+
+	result, err := ReadUserPath()
+	if err != nil {
+		t.Fatalf("ReadUserPath: %v", err)
+	}
+	if strings.Contains(strings.ToLower(result), "install\\java") {
+		t.Errorf("case-variant home install entry not removed: PATH=%q", result)
 	}
 }

@@ -155,6 +155,12 @@ func promptDriveWith(in io.Reader, out io.Writer, drives []config.DriveInfo) (Dr
 				fmt.Fprintln(out, "  empty path, please try again.")
 				continue
 			}
+			// 票 33（P1-27 / E-08）：拒绝相对路径与 UNC 路径——home 一旦是
+			// 相对路径，派生目录会随 CWD 漂移；UNC 无法承载 shim/注册表语义。
+			if err := validateLocalAbsPath(p); err != nil {
+				fmt.Fprintf(out, "  %v\n", err)
+				continue
+			}
 			return DriveChoice{Path: p}, nil
 		}
 		// Treat as a drive letter.
@@ -168,7 +174,7 @@ func promptDriveWith(in io.Reader, out io.Writer, drives []config.DriveInfo) (Dr
 			if letter == "C" {
 				fmt.Fprintf(out, "  ⚠ you picked the system drive C: (%s free)\n", humanBytes(info.Free))
 				fmt.Fprintln(out, "    C: may not have enough space for Android SDK + runtimes.")
-				fmt.Fprint(out,   "    type 'yes' to confirm, anything else to pick again: ")
+				fmt.Fprint(out, "    type 'yes' to confirm, anything else to pick again: ")
 				confirm, err := reader.ReadString('\n')
 				if err != nil && err != io.EOF {
 					return DriveChoice{}, err
@@ -181,7 +187,7 @@ func promptDriveWith(in io.Reader, out io.Writer, drives []config.DriveInfo) (Dr
 			if info.Free < config.MinFreeBytesDefault {
 				fmt.Fprintf(out, "  ⚠ %s: has only %s free (recommend %s+)\n",
 					info.Letter, humanBytes(info.Free), humanBytes(config.MinFreeBytesDefault))
-				fmt.Fprint(out,    "    type 'yes' to confirm, anything else to pick again: ")
+				fmt.Fprint(out, "    type 'yes' to confirm, anything else to pick again: ")
 				confirm, err := reader.ReadString('\n')
 				if err != nil && err != io.EOF {
 					return DriveChoice{}, err

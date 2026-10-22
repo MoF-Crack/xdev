@@ -28,6 +28,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/tui"
 	"github.com/xmdemt/xdev/internal/update"
 	"github.com/xmdemt/xdev/internal/util"
@@ -66,7 +67,7 @@ func newSelfCmd() *cobra.Command {
 				// 2. Remove shell RC injection
 				fmt.Println("Cleaning up shell configuration...")
 				shellInfo := env.DetectShell()
-				if err := env.RemoveShellRC(shellInfo); err != nil {
+				if err := stripAllXdevRCBlocks(shellInfo); err != nil {
 					fmt.Printf("Warning: failed to clean shell RC: %v\n", err)
 				}
 
@@ -120,8 +121,53 @@ func newSelfCmd() *cobra.Command {
 				return nil
 			},
 		},
+		&cobra.Command{
+			Use:   "install",
+			Short: "Install/repair the running xdev binary in install/xdev and switch current/xdev",
+			Long: `Install (or repair) the xdev binary that is currently executing.
+
+The running binary is copied to <xmdevenv_dir>/install/xdev/<version>/ and
+current/xdev is switched to that directory. Use this when ` + "`where xdev`" + `
+resolves to an older copy (for example after upgrading the root
+xdev.exe by hand).
+
+IMPORTANT: run this with the *new* binary. Running it with an old version
+only installs that old version again.`,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runSelfInstall(Cfg())
+			},
+		},
 	)
 	return cmd
+}
+
+// runSelfInstall 把当前正在运行的 xdev 安装到 install/xdev/<version> 并切换
+// current/xdev（20261021 审计 P1-3：CLI 侧缺少显式修复入口，导致 PATH 上的
+// current/xdev 可能长期停留在旧版本）。
+//
+// 只做本地复制 + junction，不访问网络；失败时保留原 current 状态。
+func runSelfInstall(cfg *config.Config) error {
+	path, isNew, err := installer.InstallSelf(cfg)
+	if err != nil {
+		return fmt.Errorf("self install: %w", err)
+	}
+	if isNew {
+		fmt.Printf("installed xdev@%s -> %s\n", version.Version, path)
+	} else {
+		fmt.Printf("xdev@%s already installed at %s\n", version.Version, path)
+	}
+
+	// ensureSelfJunction 是 best-effort（日志告警、不返回错误）。这里如实回读
+	// current/xdev，避免在 junction 切换失败时向用户报告成功。
+	active, ok := util.ActiveVersion(cfg.Core.XMDevDir, "xdev")
+	if !ok || active != version.Version {
+		fmt.Fprintf(os.Stderr,
+			"warning: current/xdev does not point at %s (active=%q); "+
+				"the running binary may not be the managed copy\n", version.Version, active)
+	} else {
+		fmt.Printf("current/xdev -> install/xdev/%s\n", active)
+	}
+	return nil
 }
 
 // runSelfUpdate 执行 xdev 自更新（self update 命令与交互入口共用，

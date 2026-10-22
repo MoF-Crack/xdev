@@ -52,11 +52,11 @@ export function useSniffSession({ t, message, addNotification, doInstall }) {
   async function sniffTool(tool) {
     try {
       await window.go.gui.App.SniffNow(tool);
-      addNotification(`Sniffed ${tool}`, 'success');
+      addNotification(t('updates.sniffed_tool', { tool }), 'success');
       await loadUpdates();
     } catch (e) {
       console.error('Sniff tool failed:', e);
-      addNotification('Sniff failed: ' + e, 'error');
+      addNotification(`${t('updates.sniff_failed')}: ${e}`, 'error');
     }
   }
 
@@ -71,27 +71,27 @@ export function useSniffSession({ t, message, addNotification, doInstall }) {
       sniffConfig.value.strategy = strategy;
       message.success(t('settings.saved'));
     } catch (e) {
-      message.error('Failed to save sniff strategy: ' + e);
+      message.error(`${t('updates.sniff_strategy_save_failed')}: ${e}`);
     }
   }
 
   async function installSniffService(schedule) {
     try {
       await window.go.gui.App.InstallSniffService(schedule);
-      message.success('Sniff service installed');
+      message.success(t('updates.service_installed'));
       await loadSniffServiceStatus();
     } catch (e) {
-      message.error('Failed to install sniff service: ' + e);
+      message.error(`${t('updates.service_install_failed')}: ${e}`);
     }
   }
 
   async function uninstallSniffService() {
     try {
       await window.go.gui.App.UninstallSniffService();
-      message.success('Sniff service uninstalled');
+      message.success(t('updates.service_uninstalled'));
       await loadSniffServiceStatus();
     } catch (e) {
-      message.error('Failed to uninstall sniff service: ' + e);
+      message.error(`${t('updates.service_uninstall_failed')}: ${e}`);
     }
   }
 

@@ -31,10 +31,10 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"log"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/resolver"
@@ -76,8 +76,18 @@ func HostArch() string {
 // Every M2 plugin that does not need custom Install/PostInstall logic
 // can simply embed a *Generic and override individual methods when
 // necessary.
+//
+// 票 24（P1-16 / P2-07）：mu 保护 M 指针。reloadCatalog 在嗅探合并后调用
+// SetManifest 换掉整个 manifest，而 GUI/installer 的读方（Name/Shims/
+// ResolveVersion/ArchiveFor/InstallDir/EnvVars 等 13 个只读方法）可能同时在
+// 读同一个 *Generic —— 修复前是无锁的指针写/读竞争。
+//
+// 注意：加入 mu 后 Generic 成为不可拷贝类型（含 sync.RWMutex）。Generic
+// 只以 *Generic 形式使用（NewGeneric / 嵌入 *plugin.Generic），不要按值
+// 传递或拷贝；go vet 的 copylocks 检查会把这类拷贝报出来。
 type Generic struct {
-	M *manifest.Tool
+	mu sync.RWMutex
+	M  *manifest.Tool
 }
 
 // NewGeneric wraps a manifest.Tool in a Plugin.
@@ -85,22 +95,69 @@ func NewGeneric(m *manifest.Tool) *Generic {
 	return &Generic{M: m}
 }
 
-func (g *Generic) Name() string             { return g.M.Name }
-func (g *Generic) DisplayName() string      { return g.M.DisplayName }
-func (g *Generic) Description() string      { return g.M.Description }
-func (g *Generic) Homepage() string         { return g.M.Homepage }
-func (g *Generic) Category() string         { return g.M.Category }
-func (g *Generic) Manifest() *manifest.Tool { return g.M }
-func (g *Generic) Shims() []string          { return append([]string{}, g.M.Shims...) }
-func (g *Generic) DefaultVersion() string   { return g.M.DefaultVersion() }
+func (g *Generic) Name() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M.Name
+}
+
+func (g *Generic) DisplayName() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M.DisplayName
+}
+
+func (g *Generic) Description() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M.Description
+}
+
+func (g *Generic) Homepage() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M.Homepage
+}
+
+func (g *Generic) Category() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M.Category
+}
+
+// Manifest returns the current manifest pointer. 读方持有该指针期间不受
+// SetManifest 的指针替换影响（拿到的是替换前/后的某一个完整快照）；
+// 其他路径若就地修改同一个 *manifest.Tool，本锁无法覆盖——请改为调用
+// SetManifest 替换指针。
+func (g *Generic) Manifest() *manifest.Tool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M
+}
+
+func (g *Generic) Shims() []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return append([]string{}, g.M.Shims...)
+}
+
+func (g *Generic) DefaultVersion() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.M.DefaultVersion()
+}
 
 // SetManifest replaces the in-memory tool manifest after a sniff merge
 // so ResolveVersion / ArchiveFor see newly discovered versions without
 // restarting the process.
 func (g *Generic) SetManifest(m *manifest.Tool) {
-	if m != nil {
-		g.M = m
+	if m == nil {
+		return
 	}
+	// 票 24：与 13 个只读方法的 RLock 配对，整体替换指针。
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.M = m
 }
 
 // ResolveVersion translates a user spec ("latest", "3.12", "^3.11")
@@ -110,12 +167,16 @@ func (g *Generic) ResolveVersion(spec string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	available := g.M.Versions()
 	return resolver.Resolve(parsed, available, g.M.Latest, g.M.LTS)
 }
 
 // ArchiveFor picks the right Archive for the current OS/Arch.
 func (g *Generic) ArchiveFor(version string) (*manifest.Archive, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	v, ok := g.M.FindVersion(version)
 	if !ok {
 		return nil, fmt.Errorf("version %s not in manifest", version)
@@ -123,7 +184,9 @@ func (g *Generic) ArchiveFor(version string) (*manifest.Archive, error) {
 	a, ok := v.ArchiveForCurrent(HostOS(), HostArch())
 	if !ok {
 		if len(v.Archives) == 0 {
-			return nil, fmt.Errorf("no download URL for %s@%s on %s/%s — sniff found the version but could not derive an archive URL from the existing manifest (re-sniff after updating the tool, or install a pinned version)", g.Name(), version, HostOS(), HostArch())
+			// 注意：持锁期间不调用 g.Name()（它自己也要 RLock，嵌套 RLock
+			// 在写方等待时会死锁），直接读 g.M.Name。
+			return nil, fmt.Errorf("no download URL for %s@%s on %s/%s — sniff found the version but could not derive an archive URL from the existing manifest (re-sniff after updating the tool, or install a pinned version)", g.M.Name, version, HostOS(), HostArch())
 		}
 		return nil, fmt.Errorf("no archive for %s/%s in %s", HostOS(), HostArch(), version)
 	}
@@ -137,40 +200,40 @@ func (g *Generic) ArchiveFor(version string) (*manifest.Archive, error) {
 // Security: The manifest's Name, InstallRoot, and the version string
 // are validated with util.SafeName and the final path is checked with
 // util.ValidateSubPath to prevent path traversal attacks (C-1).
-func (g *Generic) InstallDir(installRoot, version string) string {
+//
+// 20261021 审计 P1-5（阶段 2）：校验失败返回 ErrUnsafeInstallPath，而不是
+// 替换成 `unsafe-version-blocked` 继续（旧行为会在 install/ 下留下伪版本目录）。
+func (g *Generic) InstallDir(installRoot, version string) (string, error) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if _, err := util.SafeName(g.M.Name); err != nil {
+		return "", fmt.Errorf("%w: tool name %q: %v", ErrUnsafeInstallPath, g.M.Name, err)
+	}
 	base := g.M.Name
 
-	// Validate tool name is a safe path component
-	if _, err := util.SafeName(g.M.Name); err != nil {
-		log.Printf("[plugin] CRITICAL: tool name %q is not a safe path component: %v — using sanitized fallback", g.M.Name, err)
-		base = "unsafe-name-blocked"
-	}
-
 	if g.M.InstallRoot != "" {
-		// Validate install_root doesn't escape the install directory
+		// Validate install_root doesn't escape the install directory.
 		candidate := filepath.Join(installRoot, g.M.InstallRoot, g.M.Name)
 		if err := util.ValidateSubPath(installRoot, candidate); err != nil {
-			log.Printf("[plugin] CRITICAL: install_root %q escapes install dir %q: %v — ignoring install_root", g.M.InstallRoot, installRoot, err)
-		} else {
-			base = filepath.Join(g.M.InstallRoot, g.M.Name)
+			return "", fmt.Errorf("%w: install_root %q escapes %q: %v",
+				ErrUnsafeInstallPath, g.M.InstallRoot, installRoot, err)
 		}
+		base = filepath.Join(g.M.InstallRoot, g.M.Name)
 	}
 
-	// Validate version is a safe path component
 	if _, err := util.SafeName(version); err != nil {
-		log.Printf("[plugin] CRITICAL: version %q is not a safe path component: %v — using sanitized fallback", version, err)
-		version = "unsafe-version-blocked"
+		return "", fmt.Errorf("%w: version %q: %v", ErrUnsafeInstallPath, version, err)
 	}
 
 	result := filepath.Join(installRoot, base, version)
 
-	// Final safety check: the resolved path must be under installRoot
+	// Final safety check: the resolved path must be under installRoot.
 	if err := util.ValidateSubPath(installRoot, result); err != nil {
-		log.Printf("[plugin] CRITICAL: InstallDir %q escapes install root %q — using safe fallback", result, installRoot)
-		return filepath.Join(installRoot, base, "unsafe-path-blocked")
+		return "", fmt.Errorf("%w: %q escapes %q: %v", ErrUnsafeInstallPath, result, installRoot, err)
 	}
 
-	return result
+	return result, nil
 }
 
 // EnvVars interpolates {{install}} placeholders in the manifest's
@@ -179,6 +242,8 @@ func (g *Generic) InstallDir(installRoot, version string) string {
 // are authored on Windows and write `{{install}}\..\gopath`, which
 // would otherwise leak literal backslashes into GOPATH on Unix.
 func (g *Generic) EnvVars(installPath string) map[string]string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	out := map[string]string{}
 	for k, v := range g.M.EnvVars {
 		v = strings.ReplaceAll(v, "{{install}}", installPath)
@@ -204,5 +269,7 @@ func (g *Generic) Deactivate(_ string) error { return nil }
 // RequiredPlugin returns the plugin names that this tool depends on,
 // as declared in the manifest's required_plugins field.
 func (g *Generic) RequiredPlugin() []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
 	return g.M.RequiredPlugin
 }

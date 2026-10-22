@@ -76,7 +76,10 @@ func TestGenericSetManifestSwapsVersionList(t *testing.T) {
 
 func TestGenericInstallDir(t *testing.T) {
 	p := NewGeneric(sampleTool())
-	got := p.InstallDir("/opt/xdev/install", "1.2.0")
+	got, err := p.InstallDir("/opt/xdev/install", "1.2.0")
+	if err != nil {
+		t.Fatalf("InstallDir: %v", err)
+	}
 	want := filepath.Join("/opt/xdev/install", "demo", "1.2.0")
 	if got != want {
 		t.Errorf("InstallDir = %q, want %q", got, want)

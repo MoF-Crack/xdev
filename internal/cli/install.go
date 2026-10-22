@@ -36,6 +36,7 @@ import (
 	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -117,6 +118,11 @@ func newUninstallCmd() *cobra.Command {
 				return unsupportedToolErr(name)
 			}
 			ins := installer.New(Cfg(), reg)
+			// F-32（P2）：与 install/use/init/profile/upgrade 五处同源的门。
+			// 缺这一处时 noEnvWrite 保持零值 false，Uninstall 在「删掉最后一个
+			// 版本」分支会执行真实的 removeUserEnvVars——删除宿主的
+			// JAVA_HOME/GOPATH（internal/installer/installer.go:1704）。
+			ins.SetNoEnvWrite(NoPathFix())
 			if err := ins.Uninstall(p, ver); err != nil {
 				return err
 			}
@@ -142,7 +148,10 @@ func newUseCmd() *cobra.Command {
 			if ver == "" {
 				return fmt.Errorf("use requires a version, e.g. %s@3.12.0", name)
 			}
-			installPath := p.InstallDir(Cfg().Core.InstallDir, ver)
+			installPath, dirErr := p.InstallDir(Cfg().Core.InstallDir, ver)
+			if dirErr != nil {
+				return dirErr
+			}
 			if _, err := os.Stat(installPath); err != nil {
 				return fmt.Errorf("%s@%s is not installed (run `xdev install %s@%s`)",
 					name, ver, name, ver)
@@ -155,7 +164,7 @@ func newUseCmd() *cobra.Command {
 			// 清理用户 PATH 中残留的 xdev install 目录条目
 			if !NoPathFix() {
 				shimDir := filepath.Join(Cfg().Core.XMDevDir, "shims")
-				if changed, _ := env.CleanupUserPath(shimDir, Cfg().GetPathMode()); changed {
+				if changed, _ := env.CleanupUserPath(Cfg().Core.XMDevDir, shimDir, Cfg().GetPathMode()); changed {
 					fmt.Println("  (cleaned up stale PATH entries)")
 				}
 			}
@@ -223,19 +232,23 @@ func newListCmd() *cobra.Command {
 					continue
 				}
 				tool := e.Name()
-				versions, _ := os.ReadDir(filepath.Join(installRoot, tool))
+				// 20261021 审计 P1-4：只枚举“看起来是版本”的目录。
+				// 空工具目录（实测 perl）与只含辅助目录的工具（gopath /
+				// export_templates / unsafe-version-blocked）不再显示。
+				versions, verr := util.ListVersionDirNames(filepath.Join(installRoot, tool))
+				if verr != nil || len(versions) == 0 {
+					continue
+				}
 				active := ""
 				if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
 					active = filepath.Base(target)
 				}
 				vs := make([]string, 0, len(versions))
 				for _, v := range versions {
-					if v.IsDir() {
-						if v.Name() == active {
-							vs = append(vs, "★ "+v.Name())
-						} else {
-							vs = append(vs, v.Name())
-						}
+					if v == active {
+						vs = append(vs, "★ "+v)
+					} else {
+						vs = append(vs, v)
 					}
 				}
 
@@ -262,7 +275,24 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 		return unsupportedToolErr(tool)
 	}
 	if remote {
-		versions := p.Manifest().Versions()
+		// F-28（P0）：Lua 插件的 Manifest() 恒返回 nil（internal/plugin/lua_plugin.go:49
+		// ——Lua 插件没有静态 manifest，版本只能经 available() 动态求值）。
+		// 旧代码直接 p.Manifest().Versions() 会对 nil *manifest.Tool 解引用 panic。
+		//
+		// 降级语义：没有静态版本列表时不要伪造一个版本，也不要静默打空表——
+		// 明确告知用户该插件不提供静态列表（版本由插件运行时解析），并顺带
+		// 尝试 ResolveVersion("latest") 给出一个可安装的提示值。
+		m := p.Manifest()
+		if m == nil {
+			fmt.Printf("• %s: plugin does not provide a static version list\n", tool)
+			if latest, err := p.ResolveVersion("latest"); err == nil && latest != "" {
+				fmt.Printf("  latest resolvable version: %s\n", latest)
+			} else {
+				fmt.Printf("  (versions are resolved dynamically by the plugin at install time)\n")
+			}
+			return nil
+		}
+		versions := m.Versions()
 		active := ""
 		if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
 			active = filepath.Base(target)
@@ -407,6 +437,11 @@ func checkUnverifiedVersion(cmd *cobra.Command, tool, ver string, skipConfirm bo
 	if !found || !v.Unverified {
 		return nil
 	}
+	// Spec 039: npm-kind 安装不下载归档（依赖树与完整性由 npm 负责），
+	// 「归档 URL 未验证」提示与确认不适用。
+	if versionNPMManaged(t, v) {
+		return nil
+	}
 	fmt.Printf("⚠ This version (%s@%s) was discovered by sniffing.\n", tool, ver)
 	fmt.Printf("  The archive URL has not been verified — downloads may fail.\n")
 	fmt.Printf("  If the download fails, update the manifest manually or wait for the next xdev release.\n")
@@ -420,4 +455,27 @@ func checkUnverifiedVersion(cmd *cobra.Command, tool, ver string, skipConfirm bo
 		}
 	}
 	return nil
+}
+
+// versionNPMManaged reports whether the version's archives declare an
+// npm-managed install (install_kind: npm); versions without archives
+// fall back to the tool's other versions (mirrors the GUI's
+// versionArchivesNPMManaged semantics, Spec 039).
+func versionNPMManaged(t *manifest.Tool, v *manifest.Version) bool {
+	for _, a := range v.Archives {
+		if a.EffectiveKind() == manifest.InstallKindNPM {
+			return true
+		}
+	}
+	if len(v.Archives) > 0 {
+		return false
+	}
+	for _, other := range t.VersionList {
+		for _, a := range other.Archives {
+			if a.EffectiveKind() == manifest.InstallKindNPM {
+				return true
+			}
+		}
+	}
+	return false
 }

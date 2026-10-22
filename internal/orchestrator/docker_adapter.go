@@ -2,11 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -125,15 +127,26 @@ func (d *DockerAdapter) Exec(ctx context.Context, id string, cmd []string) (*Exe
 
 // ConnectInteractive runs `docker exec -it` with stdin/stdout/stderr
 // wired to the terminal so the user gets a real shell (Spec 032).
+//
+// 第七轮审计 F-52：本函数**不得**调用 os.Exit —— 它是在库函数里终止进程，
+// 违反本仓库自定约定（internal/cli/isolate.go:9-11：「用 shim.ExitCodeError
+// 传播子进程退出码，而不是 os.Exit（那会跳过 deferred 清理）」），并使
+// cli/remote.go 的 `fmt.Errorf("connect to %s: %w", ...)` 包装与 main.go 的
+// exitCodeForError 统一收口成为死代码。改为返回 *shim.ExitCodeError，
+// 由 main.go 的 errors.As 提取真实退出码（用户 `exit 3` 应得到退出码 3）。
+//
+// 同时补上 M-6/N-14 的 `--` 参数注入守卫：此前只有两条 Exec 腿加了 `--`，
+// 这条 connect 腿漏了，容器 id 以 "-" 开头时会被 docker 当作 exec 选项解析。
 func (d *DockerAdapter) ConnectInteractive(ctx context.Context, id string, shell []string) error {
-	args := append([]string{"exec", "-it", id}, shell...)
+	args := append([]string{"exec", "-it", "--", id}, shell...)
 	c := exec.CommandContext(ctx, "docker", args...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			os.Exit(exitErr.ExitCode())
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return &shim.ExitCodeError{Code: exitErr.ExitCode()}
 		}
 		return err
 	}
@@ -200,11 +213,7 @@ func IsDockerAvailable() bool {
 // Ensure DockerAdapter satisfies Adapter interface.
 var _ Adapter = (*DockerAdapter)(nil)
 
-// SaveInstance persists an instance ID to the xdev home for later lookup.
-func SaveInstance(xmdeDir string, inst *Instance) error {
-	dir := xmdeDir + string(os.PathSeparator) + "remote"
-	os.MkdirAll(dir, 0o755)
-	// Write a simple marker file with the container ID
-	marker := dir + string(os.PathSeparator) + inst.ID
-	return os.WriteFile(marker, []byte(inst.Status), 0o644)
-}
+// SaveInstance — the persisted instance store — moved to instance_store.go
+// (ticket 35 / C-08): it is shared by every adapter, not docker-specific, and
+// now writes <home>/instances/<id>.json instead of a bare <home>/remote/<ID>
+// status marker.

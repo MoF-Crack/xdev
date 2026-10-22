@@ -38,3 +38,33 @@ func InitEmbedded(efs fs.FS) {
 	}
 	embeddedFS = efs
 }
+
+// HasEmbeddedManifest reports whether a built-in (embedded) manifest
+// exists for the given tool name.
+//
+// Audit-fixes ticket 13 (N-03): the installer's same-name trust guard uses
+// this to decide whether a disk manifest under third-party/ may downgrade
+// a tool to the third-party (TOFU) trust model. It must be false for
+// genuinely third-party tools and true for anything shipped in the binary.
+func HasEmbeddedManifest(toolName string) bool {
+	if embeddedFS == nil || toolName == "" {
+		return false
+	}
+	_, err := fs.ReadFile(embeddedFS, toolName+".yaml")
+	return err == nil
+}
+
+// EmbeddedManifest returns the built-in YAML bytes for toolName.
+//
+// 20261021 审计：doctor --fix 用它把损坏的磁盘 manifest 重新播种为
+// 发布时内置的版本（旧文件先备份为 .corrupt-<ts>，绝不直接删除）。
+func EmbeddedManifest(toolName string) ([]byte, bool) {
+	if embeddedFS == nil || toolName == "" {
+		return nil, false
+	}
+	data, err := fs.ReadFile(embeddedFS, toolName+".yaml")
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}

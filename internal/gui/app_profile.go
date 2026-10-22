@@ -115,6 +115,17 @@ func (a *App) ExportProfile(filePath string) error {
 // profileMaxSize 是导入配置文件的大小上限（10 MB），防止读取任意超大文件。
 const profileMaxSize = 10 << 20
 
+// installToolForProfile 是 ImportProfile 的安装入口（默认 = 真实安装）。
+//
+// 包级可替换的理由：GUI 单测没有 Wails 运行时上下文，而安装成功路径会经
+// wailsRuntime.EventsEmit 发进度事件（ctx 缺失时 Wails 直接 log.Fatalf
+// 结束整个测试进程），所以守卫 29-2「未安装的 active 项不产生假错误」无法
+// 在测试里走真实下载/激活。测试注入内存实现后，UseVersion 这一侧的行为
+// （本票的修复点）仍然走真实代码。
+var installToolForProfile = func(a *App, tool, version string) error {
+	return a.InstallTool(tool, version)
+}
+
 // ImportProfile imports an environment profile from a JSON file.
 // It installs the specified tool versions, sets active versions,
 // configures environment variables, proxy, and mirrors.
@@ -195,13 +206,29 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 		errors = append(errors, fmt.Sprintf("set proxy: %v", err))
 	}
 
-	// Apply mirror settings
+	// Apply mirror settings.
+	// 票 16（P1-17 / P2-15）：profile 是不可信的用户输入 JSON，mirrors 必须
+	// 逐项用 util.IsSafeHTTPSExternalURL 校验后才写入 cfg.Mirror：明文 http、
+	// localhost、内网/保留地址等不安全项一律丢弃，并把该项计入 result.Errors
+	// （保持既有 result 结构，逐项追加错误消息）。
 	if len(profile.Mirrors) > 0 {
-		if err := a.mutateCfg(func(cfg *config.Config) error {
-			cfg.Mirror = profile.Mirrors
-			return cfg.Save()
-		}); err != nil {
-			errors = append(errors, fmt.Sprintf("set mirrors: %v", err))
+		safeMirrors := make(map[string]string, len(profile.Mirrors))
+		for name, mirrorURL := range profile.Mirrors {
+			if err := util.IsSafeHTTPSExternalURL(mirrorURL); err != nil {
+				errors = append(errors, fmt.Sprintf("mirror %s: %v", name, err))
+				continue
+			}
+			safeMirrors[name] = mirrorURL
+		}
+		// 只在校验后仍有合法项时落盘；全部被拒绝时保留用户既有 mirrors，
+		// 避免 profile 里的一批坏 URL 反而清空配置。
+		if len(safeMirrors) > 0 {
+			if err := a.mutateCfg(func(cfg *config.Config) error {
+				cfg.Mirror = safeMirrors
+				return cfg.Save()
+			}); err != nil {
+				errors = append(errors, fmt.Sprintf("set mirrors: %v", err))
+			}
 		}
 	}
 
@@ -220,18 +247,26 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 					}
 				}
 
+				// B-06（票 29 / P1-19）：本项若由下面的 InstallTool 安装
+				// （后台安装路径），就绝不能再调 UseVersion —— 安装本身已经
+				// 完成激活，而旧代码会对这个「刚下安装意图、版本目录尚未落地」
+				// 的版本调用 UseVersion → Activate 在缺失的 installPath 上失败
+				// → result.Errors 里出现一条假错误（导入报告「失败」但工具其实
+				// 装好了）。UseVersion 只用于切换**已安装**版本。
+				justInstalled := false
 				if !alreadyInstalled {
-					if err := a.InstallTool(t.Tool, t.Version); err != nil {
+					if err := installToolForProfile(a, t.Tool, t.Version); err != nil {
 						failed++
 						errors = append(errors, fmt.Sprintf("%s@%s: %v", t.Tool, t.Version, err))
 						continue
 					}
+					justInstalled = true
 				}
 
 				installed++
 
 				// Set active version
-				if t.Active == "true" {
+				if t.Active == "true" && !justInstalled {
 					if err := a.UseVersion(t.Tool, t.Version); err != nil {
 						errors = append(errors, fmt.Sprintf("%s use %s: %v", t.Tool, t.Version, err))
 					}

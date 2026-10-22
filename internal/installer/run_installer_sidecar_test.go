@@ -40,7 +40,10 @@ func TestRunInstaller_SidecarPinAllowsEmptySHA(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath); err != nil {
 		t.Fatalf("ExtractAndActivate failed: %v", err)
 	}
@@ -72,7 +75,10 @@ func TestRunInstaller_SidecarPinMismatchRejects(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath)
 	if err == nil {
 		t.Fatal("expected refusal on mismatching sidecar pin")
@@ -104,7 +110,10 @@ func TestRunInstaller_NoSidecarRejectsEmptySHA(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath)
 	if err == nil {
 		t.Fatal("expected refusal when no sidecar pin exists")
@@ -137,7 +146,10 @@ func TestExtractAndActivate_ExecutableDoesNotExtract(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath); err != nil {
 		t.Fatalf("ExtractAndActivate failed: %v", err)
 	}
@@ -178,7 +190,10 @@ func TestRunInstaller_TemplateSubstitution(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.97.1")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.97.1")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := ins.ExtractAndActivate(p, p.archive, "1.97.1", installPath); err != nil {
 		t.Fatalf("ExtractAndActivate failed: %v", err)
 	}
@@ -229,7 +244,10 @@ func TestRunInstaller_TemplateSubstitution_SinglePass(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath); err != nil {
 		t.Fatalf("ExtractAndActivate failed: %v", err)
 	}
@@ -273,7 +291,10 @@ func TestRunInstaller_ExecutesUnderURLBasename(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath); err != nil {
 		t.Fatalf("ExtractAndActivate failed: %v", err)
 	}
@@ -317,7 +338,10 @@ func TestRunInstaller_SameBasenameNoCopy(t *testing.T) {
 		},
 	}
 
-	installPath := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
 	if err := ins.ExtractAndActivate(p, p.archive, "1.0.0", installPath); err != nil {
 		t.Fatalf("ExtractAndActivate failed: %v", err)
 	}

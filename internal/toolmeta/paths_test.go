@@ -18,14 +18,14 @@ func TestCommonInstallPaths_EnvCompatible(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", `C:\TestLA`)
 
 	cases := map[string][]string{
-		"python":               {`C:\TestLA\Programs\Python`},
-		"node":                 {`C:\TestPF\nodejs`, `C:\TestLA\nvm`},
-		"go":                   {`C:\TestPF\Go`},
-		"java":                 {`C:\TestPF\Java`, `C:\TestPF86\Java`},
-		"dotnet":               {`C:\TestPF\dotnet`},
-		"ruby":                 {`C:\TestPF\Ruby`},
-		"git":                  {`C:\TestPF\Git`},
-		"flutter":              {`C:\TestLA\flutter`},
+		"python":                 {`C:\TestLA\Programs\Python`},
+		"node":                   {`C:\TestPF\nodejs`, `C:\TestLA\nvm`},
+		"go":                     {`C:\TestPF\Go`},
+		"java":                   {`C:\TestPF\Java`, `C:\TestPF86\Java`},
+		"dotnet":                 {`C:\TestPF\dotnet`},
+		"ruby":                   {`C:\TestPF\Ruby`},
+		"git":                    {`C:\TestPF\Git`},
+		"flutter":                {`C:\TestLA\flutter`},
 		"android-platform-tools": {filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Local", "Android", "Sdk", "platform-tools")},
 	}
 	for name, want := range cases {

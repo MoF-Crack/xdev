@@ -1,4 +1,4 @@
-﻿name: zig
+name: zig
 display_name: Zig
 description: Systems programming language designed to be robust, optimal, and reusable.
 homepage: https://ziglang.org/
@@ -25,16 +25,19 @@ versions:
       - os: linux
         arch: x86_64
         format: tar.xz
-        url: https://ziglang.org/download/0.15.1/zig-linux-x86_64-0.15.1.tar.xz
-        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-linux-x86_64-0.15.1.tar.xz
+        # 上游 0.14+ 改为 `zig-<arch>-<os>-<ver>` 命名（旧 `zig-<os>-<arch>-<ver>` 已 404）；
+        # 本文件更早的版本（如 0.11.0）仍是旧命名——两种写法都只对各自版本有效。
+        # 顺带清掉 mirror_url：清华镜像未收录 0.15.1，新旧两种路径实测均 404（windows 条目本来也是空）。
+        url: https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz
+        mirror_url: ""
         sha256: ""
         size: 45000000
         strip: 1
       - os: darwin
         arch: arm64
         format: tar.xz
-        url: https://ziglang.org/download/0.15.1/zig-macos-aarch64-0.15.1.tar.xz
-        mirror_url: https://mirrors.tuna.tsinghua.edu.cn/zig/zig-macos-aarch64-0.15.1.tar.xz
+        url: https://ziglang.org/download/0.15.1/zig-aarch64-macos-0.15.1.tar.xz
+        mirror_url: ""
         sha256: ""
         size: 42000000
         strip: 1

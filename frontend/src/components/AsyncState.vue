@@ -19,5 +19,4 @@ const errorMessage = computed(() => props.error instanceof Error ? props.error.m
 .async-state { padding: var(--xdev-space-6); color: var(--xdev-text-muted); text-align: center; }
 .async-state--error { color: var(--xdev-error); }
 .async-state p { margin: 0 0 var(--xdev-space-3); }
-button { padding: var(--xdev-space-2) var(--xdev-space-3); border: 1px solid var(--xdev-border-strong); border-radius: var(--xdev-radius-md); background: var(--xdev-bg-elevated); color: var(--xdev-text-primary); cursor: pointer; }
 </style>

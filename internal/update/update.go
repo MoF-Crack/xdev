@@ -22,7 +22,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/remote"
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -154,8 +156,61 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
+	// P2-A（第六轮审计 shim 链）：publish 后立即刷新 shims/ 下现存的分发器副本。
+	// replaceBinaryWindows 走 rename 舞步发布新 inode——工具 Activate 时刻硬链接
+	// 的旧分发器仍持有旧 inode（缺 PATH 透传/别名修复，遮蔽系统真实工具）。
+	// 此前刷新只挂在 GUI domReady 的 EnsureSelfInstalled 上：`xdev self update`、
+	// TUI 自检更新、GUI 手动更新全部不刷新，CLI-only 主机永久滞后；GUI 主机
+	// 也要等下一次启动才收敛。exe 此刻指向新二进制（rename 已完成），作为刷新
+	// 源是完整镜像。刷新失败只告警——更新本体已成功，刷新由下次启动兜底。
+	refreshShimDispatchers(exe)
+
 	log.Printf("[update] Successfully updated to %s", result.LatestVersion)
 	return nil
+}
+
+// refreshShimDispatchers 把 home 下 shims/ 的现存分发器副本重指到 selfPath。
+//
+// 第七轮审计 F-47：不能硬拼 `<home>/shims` —— `core.shim_dir` 是**受支持的可配置项**
+// （internal/cli/config.go 的 `config set core.shim_dir` 可写），GUI 侧的同一动作走
+// cfg.Core.ShimDir。旧实现硬拼默认路径，于是改过 shim_dir 的机器上：刷新落在不存在
+// 的目录 → shim.RefreshDispatchers 返回 (0,0) **静默成功** → 真实 shim 目录里的旧
+// inode 分发器永不更新，正是第六轮 P2-A 要修的「分发器版本永久滞后、遮蔽真实工具」。
+//
+// 现在优先读配置里的 shim_dir，读不到再回落 `<home>/shims`；两者都拿不到才跳过。
+// 刷新失败/目录不存在时给出可诊断的告警，而不是静默。
+func refreshShimDispatchers(selfPath string) {
+	shimDir := resolveShimDir()
+	if shimDir == "" {
+		log.Printf("[update] WARNING: cannot resolve shim dir (no config and no home) — shim dispatchers not refreshed; run `xdev doctor` to repair")
+		return
+	}
+	if fi, err := os.Stat(shimDir); err != nil || !fi.IsDir() {
+		log.Printf("[update] WARNING: shim dir %s does not exist or is not a directory — shim dispatchers not refreshed", shimDir)
+		return
+	}
+	refreshed, failed := shim.RefreshDispatchers(shimDir, selfPath)
+	if refreshed > 0 || failed > 0 {
+		log.Printf("[update] shim dispatchers refreshed=%d failed=%d (dir=%s)", refreshed, failed, shimDir)
+	}
+	if failed > 0 {
+		log.Printf("[update] WARNING: %d shim dispatcher(s) could not be refreshed in %s", failed, shimDir)
+	}
+}
+
+// resolveShimDir 返回本次更新应当刷新的 shim 目录：优先配置里的 core.shim_dir，
+// 回落 `<home>/shims`（F-47）。
+func resolveShimDir() string {
+	if cfg, err := config.Load(""); err == nil && cfg != nil {
+		if d := cfg.Core.ShimDir; d != "" {
+			return d
+		}
+	}
+	home := config.ResolveHomeDir()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, "shims")
 }
 
 // fetchLatestRelease calls the GitHub API to get the latest release.
@@ -223,18 +278,37 @@ func binaryNameInArchive() string {
 // Only a root-level xdev / xdev.exe is accepted (zip-slip: no "..", no dirs).
 func extractUpdateBinary(archivePath, archiveName, destDir string) (string, error) {
 	want := binaryNameInArchive()
-	out := filepath.Join(destDir, ".xdev-update-bin")
+	// 第六轮审计 P2-B（shim 链）：唯名暂存文件（票 31 / P1-24 的既定教训：
+	// 固定 <name> 会被并发写者互相截断）。GUI 自动更新（每次启动 ~2s 触发）与
+	// CLI `xdev self update` 可能同时跑到这里——固定名 .xdev-update-bin 下，
+	// 后写者的 O_TRUNC 截断前者的在途提取，两个 io.Copy 写同一文件后谁先
+	// rename 谁把混合损坏字节发布成 home 主二进制；而损坏的 home 副本无法
+	// 自愈（stale.go probe 失败 → 永久跳过，只有「完全缺失」分支才重建）。
+	// 唯名后各进程写各自的暂存文件，publish 点（rename）保持原子。
+	tmp, err := os.CreateTemp(destDir, ".xdev-update-bin-*")
+	if err != nil {
+		return "", fmt.Errorf("create update staging file: %w", err)
+	}
+	out := tmp.Name()
+	// 提取器以 O_CREATE|O_TRUNC 打开同一路径，这里关闭即可（留空文件无碍）。
+	if err := tmp.Close(); err != nil {
+		os.Remove(out)
+		return "", fmt.Errorf("create update staging file: %w", err)
+	}
 	lower := strings.ToLower(archiveName)
 	switch {
 	case strings.HasSuffix(lower, ".zip"):
 		if err := extractNamedZipMember(archivePath, want, out); err != nil {
+			os.Remove(out)
 			return "", err
 		}
 	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
 		if err := extractNamedTarGzMember(archivePath, want, out); err != nil {
+			os.Remove(out)
 			return "", err
 		}
 	default:
+		os.Remove(out)
 		return "", fmt.Errorf("unsupported update archive %q", archiveName)
 	}
 	return out, nil
@@ -379,6 +453,21 @@ func replaceBinary(currentExe, newBinary string) error {
 func replaceBinaryWindows(currentExe, newBinary string) error {
 	backup := currentExe + ".old"
 
+	// 票 32（P1-25 / E-06）崩溃自愈：上一次更新若在「currentExe → .old」
+	// 之后、「新二进制 → currentExe」之前中断（断电/杀进程/蓝屏），
+	// currentExe 会永久缺失而 .old 完好。旧实现紧接着就 os.Remove(backup)
+	// ——把唯一的可恢复副本删掉，再走 copyAndReplace 新建文件，崩溃被
+	// 固化成「二进制丢失」。现在先把 .old 恢复回 currentExe 再继续。
+	if healed, err := restoreFromBackup(currentExe); err != nil {
+		log.Printf("[update] WARNING: recover %s from %s: %v", currentExe, backup, err)
+	} else if healed {
+		log.Printf("[update] recovered %s from an interrupted previous update", currentExe)
+	}
+
+	// 票 32（E-06）：清理上一次中断留下的 .new 半成品（copyAndReplace 的
+	// 中间文件），避免把陈旧内容当成新二进制发布。
+	_ = os.Remove(currentExe + ".new")
+
 	// Remove any leftover backup from a previous update
 	_ = os.Remove(backup)
 
@@ -406,23 +495,72 @@ func replaceBinaryWindows(currentExe, newBinary string) error {
 	return nil
 }
 
+// restoreFromBackup renames currentExe+".old" back to currentExe when the live
+// binary is missing (票 32 / P1-25 / E-06).  Reports whether a restore
+// happened.  A missing live binary together with a present backup is the
+// signature of an interrupted update; without this step the only recoverable
+// copy gets deleted by the caller.
+func restoreFromBackup(currentExe string) (bool, error) {
+	if _, err := os.Stat(currentExe); err == nil {
+		return false, nil // 活二进制在位：无需自愈
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	backup := currentExe + ".old"
+	fi, err := os.Stat(backup)
+	if err != nil {
+		return false, nil // 没有可恢复的副本
+	}
+	if fi.IsDir() {
+		return false, nil
+	}
+	if err := os.Rename(backup, currentExe); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // copyAndReplace copies the new binary over the current one.
 // This is a fallback for Windows when rename fails.
+//
+// 票 32（E-06）：旧实现直接以 O_TRUNC 打开 currentExe 覆盖写——中途失败
+// （磁盘满/被中断）会留下半截损坏的二进制，而且运行中的 exe 更是写不通。
+// 现在改为「写 <currentExe>.new → rename 覆盖」：rename 是原子发布点，
+// 失败时 currentExe 保持原样（或缺失由 restoreFromBackup 自愈），
+// 只留下一个可被启动清理的 .new 中间文件。
 func copyAndReplace(currentExe, newBinary string) error {
+	staging := currentExe + ".new"
+	_ = os.Remove(staging)
+
 	src, err := os.Open(newBinary)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(currentExe, os.O_WRONLY|os.O_TRUNC, 0o755)
+	dst, err := os.OpenFile(staging, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-
-	_, err = io.Copy(dst, src)
-	return err
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		os.Remove(staging)
+		return err
+	}
+	if err := dst.Sync(); err != nil {
+		dst.Close()
+		os.Remove(staging)
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		os.Remove(staging)
+		return err
+	}
+	if err := os.Rename(staging, currentExe); err != nil {
+		os.Remove(staging)
+		return err
+	}
+	return nil
 }
 
 // semverLess reports whether version a is less than version b

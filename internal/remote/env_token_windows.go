@@ -16,10 +16,10 @@ var (
 )
 
 const (
-	_HKEY_CURRENT_USER   = 0x80000001
-	_KEY_QUERY_VALUE     = 0x0001
+	_HKEY_CURRENT_USER    = 0x80000001
+	_KEY_QUERY_VALUE      = 0x0001
 	_ERROR_FILE_NOT_FOUND = 2
-	_ERROR_MORE_DATA     = 234
+	_ERROR_MORE_DATA      = 234
 )
 
 // windowsUserEnv reads a Windows user-level environment variable from

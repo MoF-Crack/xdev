@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,8 +21,44 @@ import (
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/util"
 	"github.com/xmdemt/xdev/internal/version"
 )
+
+// collectExportEnvVars reads the HKCU user environment variables and keeps
+// only names in the xdev whitelist (util.AllowedEnvVarNames), returning the
+// entries ready to be serialized as the profile "envVars" array plus the
+// number of variables that were skipped.
+//
+// 票 14（P0-12 / 审计 E-03）: the exported profile is a shareable/backup
+// artifact, so it must only carry variables xdev itself manages. Before this
+// filter the CLI dumped every user variable (GITHUB_TOKEN, MY_SECRET, …) into
+// the file. The GUI export uses the fixed GetEnvVars enumeration and needs no
+// change.
+func collectExportEnvVars() ([]map[string]string, int) {
+	userEnv := env.GetAllUserEnvVars()
+	envVars := make([]map[string]string, 0, len(userEnv))
+	skipped := 0
+	for name, value := range userEnv {
+		if !util.IsAllowedEnvVarName(name) {
+			skipped++
+			continue
+		}
+		envVars = append(envVars, map[string]string{
+			"name":  name,
+			"value": value,
+			"level": "user",
+		})
+	}
+	return envVars, skipped
+}
+
+// profileExportSummary builds the human-readable export summary line.
+// 票 14: the summary must report how many non-xdev variables were left out,
+// so a user can tell that filtering happened.
+func profileExportSummary(path string, skipped int) string {
+	return fmt.Sprintf("Profile exported to %s (skipped %d non-xdev variables)", path, skipped)
+}
 
 func newProfileCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -57,21 +94,20 @@ func newExportCmd() *cobra.Command {
 				activeVer, _ := activeVersion(p.Name())
 
 				// List installed versions from install/<tool>/ directory
+				// 20261021 审计 P1-4：只导出真实版本目录，避免 profile
+				// 把 gopath / export_templates 当版本带给导入方。
 				installDir := filepath.Join(cfg.Core.InstallDir, p.Name())
-				entries, err := os.ReadDir(installDir)
-				if err != nil {
+				versionNames, verr := util.ListVersionDirNames(installDir)
+				if verr != nil {
 					continue
 				}
-				for _, e := range entries {
-					if !e.IsDir() {
-						continue
-					}
+				for _, ver := range versionNames {
 					entry := map[string]string{
 						"tool":    p.Name(),
-						"version": e.Name(),
+						"version": ver,
 						"active":  "",
 					}
-					if e.Name() == activeVer {
+					if ver == activeVer {
 						entry["active"] = "true"
 					}
 					tools = append(tools, entry)
@@ -79,16 +115,10 @@ func newExportCmd() *cobra.Command {
 			}
 			profile["tools"] = tools
 
-			// Collect user environment variables set by xdev
-			envVars := profile["envVars"].([]map[string]string)
-			userEnv := env.GetAllUserEnvVars()
-			for name, value := range userEnv {
-				envVars = append(envVars, map[string]string{
-					"name":  name,
-					"value": value,
-					"level": "user",
-				})
-			}
+			// Collect user environment variables set by xdev.
+			// 票 14（P0-12 / 审计 E-03）：只导出白名单内的变量名，
+			// 其余（与 xdev 无关的敏感变量）一律跳过并计入摘要。
+			envVars, skipped := collectExportEnvVars()
 			profile["envVars"] = envVars
 
 			// Collect GUI favorites and custom tools from the cache dir.
@@ -117,10 +147,52 @@ func newExportCmd() *cobra.Command {
 				return fmt.Errorf("write profile: %w", err)
 			}
 
-			fmt.Printf("Profile exported to %s\n", args[0])
+			// Printed on the command's stdout (same stream as before; cobra's
+			// default output is os.Stdout) so the summary stays testable.
+			fmt.Fprintln(cmd.OutOrStdout(), profileExportSummary(args[0], skipped))
 			return nil
 		},
 	}
+}
+
+// profileImportMaxSize 是 `xdev profile import` 允许的导入文件上限。
+//
+// 票 40（P2-33 / N-18）：GUI 侧的 ImportProfile 用 profileMaxSize（10 MB，
+// internal/gui/app_profile.go）限制导入大小，CLI 侧原先直接 os.ReadFile
+// 任意大小文件——同一个产品两条路径不对称，且一个被误选/恶意构造的超大
+// JSON 会直接把 CLI 读爆内存。此处对齐同一个 10 MB 上限。
+const profileImportMaxSize = 10 << 20
+
+// readProfileForImport 读取导入文件，并强制 10 MB 上限。
+//
+// 先用 os.Stat 做一次廉价检查（能报出确切字节数），再用
+// io.LimitReader 多读 1 字节兜住 Stat 与读取之间的 TOCTOU（文件在两次
+// 调用之间长大时仍然只读入上限 + 1 字节即判定超限，不会把超大文件整体
+// 读进内存）。超限一律返回明确错误，不做截断——截断后的 JSON 会以
+// 「解析失败」误导用户。
+func readProfileForImport(path string) ([]byte, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	if fi.Size() > profileImportMaxSize {
+		return nil, fmt.Errorf("profile file is too large: %d bytes exceeds the %d MiB limit",
+			fi.Size(), profileImportMaxSize>>20)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, profileImportMaxSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	if int64(len(data)) > profileImportMaxSize {
+		return nil, fmt.Errorf("profile file is too large: exceeds the %d MiB limit", profileImportMaxSize>>20)
+	}
+	return data, nil
 }
 
 func newImportCmd() *cobra.Command {
@@ -129,9 +201,9 @@ func newImportCmd() *cobra.Command {
 		Short: "Import environment profile from a JSON file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			data, err := os.ReadFile(args[0])
+			data, err := readProfileForImport(args[0])
 			if err != nil {
-				return fmt.Errorf("read file: %w", err)
+				return err
 			}
 
 			var profile struct {
@@ -174,15 +246,34 @@ func newImportCmd() *cobra.Command {
 				return fmt.Errorf("set proxy: %w", err)
 			}
 
-			// Apply mirror settings
+			// Apply mirror settings.
+			// 票 16（P1-17 / P2-15）：mirrors 来自不可信的 profile JSON，
+			// 必须逐项用 util.IsSafeHTTPSExternalURL 校验（与 GUI 的
+			// ImportProfile 同一函数、同一语义）：非 https、localhost、
+			// 内网/保留地址一律不写入 cfg.Mirror，只报告错误。
 			if len(profile.Mirrors) > 0 {
-				cfg.Mirror = profile.Mirrors
-				cfg.Save()
+				safeMirrors := make(map[string]string, len(profile.Mirrors))
+				for name, mirrorURL := range profile.Mirrors {
+					if err := util.IsSafeHTTPSExternalURL(mirrorURL); err != nil {
+						fmt.Printf("  ✗ mirror %s: %v\n", name, err)
+						continue
+					}
+					safeMirrors[name] = mirrorURL
+				}
+				// 全部被拒绝时不覆盖既有 mirrors（不写入空集合）。
+				if len(safeMirrors) > 0 {
+					cfg.Mirror = safeMirrors
+					cfg.Save()
+				}
 			}
 
-	// Install tools
+			// Install tools
 			ctx := context.Background()
 			ins = installer.New(cfg, reg)
+			// F-32（P2）结构性守卫命中点：这里**重新构造**了 installer，
+			// 上面 :236 的门随旧实例一起被丢弃——不补这一行，profile import
+			// 的安装/激活阶段会重新写注册表（noEnvWrite 回落零值 false）。
+			ins.SetNoEnvWrite(NoPathFix())
 			var items []installer.BatchInstallItem
 			for _, t := range profile.Tools {
 				items = append(items, installer.BatchInstallItem{
@@ -224,8 +315,10 @@ func newImportCmd() *cobra.Command {
 				if activeField == "true" {
 					p, ok := reg.Get(r.Tool)
 					if ok {
-						installPath := p.InstallDir(cfg.Core.InstallDir, r.Version)
-						if err := ins.Activate(p, installPath, r.Version); err != nil {
+						installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, r.Version)
+						if dirErr != nil {
+							fmt.Printf("  ✗ %s use %s: %v\n", r.Tool, r.Version, dirErr)
+						} else if err := ins.Activate(p, installPath, r.Version); err != nil {
 							fmt.Printf("  ✗ %s use %s: %v\n", r.Tool, r.Version, err)
 						} else {
 							fmt.Printf("  ✔ %s@%s: activated\n", r.Tool, r.Version)

@@ -34,6 +34,10 @@ Git repositories.`,
 		newManifestAddCmd(),
 		newManifestRemoveCmd(),
 		newManifestUpdateCmd(),
+		// 票 18 / P2-15：index.yaml 重新生成（守卫要求索引与工具清单同步）。
+		newManifestIndexCmd(),
+		// A 方案风险 R4/R9：归档 URL 存活探测（上游改名检测，HEAD-only 可定期跑）。
+		newManifestCheckURLsCmd(),
 	)
 
 	return cmd
@@ -115,11 +119,11 @@ The repository should contain .yaml files in its root or a manifests/ subdirecto
 			defer os.RemoveAll(tmpDir)
 
 			fmt.Printf("Cloning %s ...\n", repoURL)
-				// Security (M-13): Validate git clone URL to prevent ext:: protocol attacks
-				if err := validateGitCloneURL(repoURL); err != nil {
-					return fmt.Errorf("invalid manifest URL: %w", err)
-				}
-				cloneCmd := exec.Command("git", "clone", "--depth", "1", repoURL, tmpDir)
+			// Security (M-13): Validate git clone URL to prevent ext:: protocol attacks
+			if err := validateGitCloneURL(repoURL); err != nil {
+				return fmt.Errorf("invalid manifest URL: %w", err)
+			}
+			cloneCmd := exec.Command("git", "clone", "--depth", "1", repoURL, tmpDir)
 			if out, err := cloneCmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("git clone failed: %w\n%s", err, string(out))
 			}
@@ -190,14 +194,14 @@ func newManifestRemoveCmd() *cobra.Command {
 		Use:   "remove <name>",
 		Short: "Remove a third-party manifest",
 		Args:  cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				name := args[0]
-				// Security (M-9): Validate name is a safe path component to
-				// prevent path traversal when constructing file paths.
-				if _, err := util.SafeName(name); err != nil {
-					return fmt.Errorf("manifest name %q is not valid: %w", name, err)
-				}
-				destDir := thirdPartyManifestDir()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			// Security (M-9): Validate name is a safe path component to
+			// prevent path traversal when constructing file paths.
+			if _, err := util.SafeName(name); err != nil {
+				return fmt.Errorf("manifest name %q is not valid: %w", name, err)
+			}
+			destDir := thirdPartyManifestDir()
 
 			// Try exact filename first, then with .yaml suffix
 			candidates := []string{
@@ -239,12 +243,12 @@ func newManifestUpdateCmd() *cobra.Command {
 
 			for _, repoURL := range repos {
 				fmt.Printf("Updating manifests from %s ...\n", repoURL)
-					// Security (M-13): Validate git clone URL to prevent ext:: protocol attacks
-					if err := validateGitCloneURL(repoURL); err != nil {
-						fmt.Fprintf(stderr(), "⚠ invalid manifest URL %s: %v\n", repoURL, err)
-						continue
-					}
-					// Re-run the add logic (clone + copy)
+				// Security (M-13): Validate git clone URL to prevent ext:: protocol attacks
+				if err := validateGitCloneURL(repoURL); err != nil {
+					fmt.Fprintf(stderr(), "⚠ invalid manifest URL %s: %v\n", repoURL, err)
+					continue
+				}
+				// Re-run the add logic (clone + copy)
 				tmpDir, err := os.MkdirTemp("", "xdev-manifest-update-*")
 				if err != nil {
 					fmt.Fprintf(stderr(), "⚠ failed to create temp dir: %v\n", err)

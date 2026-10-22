@@ -94,7 +94,13 @@ func Audit(ctx context.Context, req Request) ([]Result, error) {
 	// Retry TRANSIENT_ERROR results up to 3 times with short backoff
 	// (Spec 007 #4: transient network errors should not permanently block).
 	// Only retries if there are TRANSIENT errors; backoff is 2s to keep tests fast.
+	//
+	// P2-21：循环带标签。修复前 ctx.Done() 分支里写的是裸 break——它只跳出
+	// select，循环继续（retry 递增）并在下一轮用已取消的 ctx 继续重试全部
+	// 瞬时错误项，等于取消信号被吞掉。加 retryLoop 标签后 break 真正终止
+	// 重试循环（其余逻辑与跳出后的行为完全一致：不重试，直接排序返回已得结果）。
 	maxRetries := 3
+retryLoop:
 	for retry := 0; retry < maxRetries; retry++ {
 		transientIdx := []int{}
 		for i, r := range results {
@@ -109,7 +115,7 @@ func Audit(ctx context.Context, req Request) ([]Result, error) {
 			select {
 			case <-time.After(2 * time.Second):
 			case <-ctx.Done():
-				break
+				break retryLoop
 			}
 		}
 		for _, i := range transientIdx {

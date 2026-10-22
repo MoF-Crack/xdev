@@ -20,7 +20,7 @@ defineProps({ title: { type: String, default: '' }, description: { type: String,
 <style scoped>
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xdev-space-6); }
 .page-header__copy { min-width: 0; }
-h1 { margin: 0; color: var(--xdev-text-primary); font-size: 24px; line-height: 1.25; }
+h1 { margin: 0; color: var(--xdev-text-primary); font-size: 20px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.25; }
 .page-header__description { margin-top: var(--xdev-space-2); color: var(--xdev-text-muted); line-height: 1.5; }
 .page-header__actions, .page-header__secondary { display: flex; align-items: center; gap: var(--xdev-space-3); flex-wrap: wrap; }
 @media (max-width: 799px) { .page-header { flex-direction: column; } .page-header__actions { width: 100%; } }

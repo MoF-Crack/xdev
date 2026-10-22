@@ -40,6 +40,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -307,7 +308,18 @@ func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) [
 		// Check if already installed. Unlike the old plain directory check,
 		// an existing-but-incomplete install is NOT treated as installed —
 		// same decision as InstallWithProgress (Spec 021 D8).
-		installPath := p.InstallDir(i.cfg.Core.InstallDir, ver)
+		// 20261021 审计 P1-5（阶段 2）：InstallDir 校验失败必须中止该项，
+		// 不能把伪路径带进后续 Stat/安装流程。
+		installPath, dirErr := p.InstallDir(i.cfg.Core.InstallDir, ver)
+		if dirErr != nil {
+			results[idx] = BatchInstallResult{
+				Tool:    item.ToolName,
+				Version: ver,
+				Status:  "failed",
+				Error:   dirErr,
+			}
+			continue
+		}
 		if fi, err := os.Stat(installPath); err == nil && fi.IsDir() {
 			integrity := VerifyInstallIntegrity(p, installPath)
 			if integrity.OK {
@@ -386,8 +398,18 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			if !ok {
 				return nil, fmt.Errorf("required plugin %q is not supported; cannot install %q", depName, p.Name())
 			}
-			depPath := depPlugin.InstallDir(i.cfg.Core.InstallDir, depPlugin.DefaultVersion())
-			if fi, err := os.Stat(depPath); err != nil || !fi.IsDir() {
+			depPath, dirErr := depPlugin.InstallDir(i.cfg.Core.InstallDir, depPlugin.DefaultVersion())
+			if dirErr != nil {
+				return nil, dirErr
+			}
+			// F-27: a mere os.Stat + IsDir accepted an EMPTY (or binary-less)
+			// dependency directory — exactly what a truncated extraction
+			// leaves behind — so the dependent tool installed against a
+			// broken prerequisite. Use the same integrity rule as the rest
+			// of the installer (InstallWithProgress / InstallMany).
+			if integrity := VerifyInstallIntegrity(depPlugin, depPath); !integrity.OK {
+				log.Printf("[install] required plugin %q is present at %s but incomplete: %s",
+					depName, depPath, integrity.Reason)
 				return nil, fmt.Errorf("required plugin %q is not installed; run 'xdev install %s' first before installing %q", depName, depName, p.Name())
 			}
 		}
@@ -400,6 +422,18 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	}
 	log.Printf("[install] Resolved version: %s -> %s", spec, ver)
 
+	// 20261021 审计 P1-5（阶段 1）：在**任何文件系统写入之前**拒绝非法
+	// tool/version。插件 `InstallDir` 的 SafeName 失败是 fail-open 的
+	// （替换成 `unsafe-version-blocked` 后继续安装，宿主实测留下过该目录）。
+	// 这里集中 fail-closed，保证新代码不再产生伪版本目录；阶段 2 再把
+	// 插件接口改为返回 error。
+	if err := validateInstallComponent("tool name", p.Name()); err != nil {
+		return nil, err
+	}
+	if err := validateInstallComponent("version", ver); err != nil {
+		return nil, err
+	}
+
 	arch, err := p.ArchiveFor(ver)
 	if err != nil {
 		log.Printf("[install] ERROR: archive resolution failed for %s@%s: %v", p.Name(), ver, err)
@@ -407,7 +441,10 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	}
 	log.Printf("[install] Archive: url=%s format=%s os=%s arch=%s", arch.URL, arch.Format, arch.OS, arch.Arch)
 
-	installPath := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	installPath, err := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	if err != nil {
+		return nil, err
+	}
 	log.Printf("[install] Install path: %s", installPath)
 
 	// Capture archive metadata once for lockfile pinning. We record the
@@ -416,6 +453,11 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	resSpec := spec
 	resURL := arch.URL
 	resSHA := arch.SHA256
+
+	// Ticket 26 (A-07): force reinstall defers the removal of the existing
+	// install tree until the replacement archive has been downloaded and
+	// verified (see the installLock critical section below).
+	forceReinstall := false
 
 	if _, err := os.Stat(installPath); err == nil {
 		// Already installed. Verify integrity: an incomplete install must
@@ -434,12 +476,14 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			}
 		}
 		if opts.Force {
-			// Force reinstall: remove the existing directory (complete or
-			// incomplete) and fall through to a full download + install.
-			log.Printf("[install] Force reinstall requested for %s@%s — removing existing install dir", p.Name(), ver)
-			if err := os.RemoveAll(installPath); err != nil {
-				return nil, fmt.Errorf("force reinstall: remove existing install dir: %w", err)
-			}
+			// Force reinstall (ticket 26 / A-07): DO NOT delete the existing
+			// install here. Removing before the download meant a failed
+			// download (offline / 404 / hash mismatch) destroyed a working
+			// installation and left `current` dangling. The removal now
+			// happens after the archive is downloaded and verified, inside
+			// the install lock, right before extraction.
+			log.Printf("[install] Force reinstall requested for %s@%s — deferring removal until the new archive is verified", p.Name(), ver)
+			forceReinstall = true
 		} else {
 			// Intact install — just activate (unless NoActivate).
 			log.Printf("[install] Already installed at %s", installPath)
@@ -459,10 +503,15 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		}
 	}
 
-	log.Printf("[install] Starting download phase")
-	if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts.BatchIndex, opts.BatchTotal); err != nil {
-		log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
-		return nil, err
+	// Spec 039: npm-kind installs never download the archive — the entry is
+	// metadata only and npm fetches the dependency tree itself (verifying
+	// registry integrity per package).
+	if ResolveKind(arch) != manifest.InstallKindNPM {
+		log.Printf("[install] Starting download phase")
+		if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts.BatchIndex, opts.BatchTotal); err != nil {
+			log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
+			return nil, err
+		}
 	}
 
 	// Security (M-3 fix): serialize the remove/extract/verify span for the
@@ -483,6 +532,18 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	err = func() error {
 		defer installLock.Release()
 		log.Printf("[install] Download complete, starting install-by-kind")
+
+		// Ticket 26 (A-07): the deferred force-reinstall removal. By this
+		// point the archive is downloaded, SHA-verified and cached, so a
+		// failure here is recoverable by re-running install; a failure
+		// BEFORE this point leaves the previous installation intact.
+		if forceReinstall {
+			log.Printf("[install] Force reinstall: removing previous install dir %s (archive verified)", installPath)
+			if rmErr := os.RemoveAll(installPath); rmErr != nil {
+				return fmt.Errorf("force reinstall: remove existing install dir: %w", rmErr)
+			}
+		}
+
 		// 阶段语义：archive 走"解压"；executable/script（rustup 等滚动安装器）
 		// 走"正在安装"——运行安装器可能耗时数分钟（下载 toolchain）且无确定
 		// 进度，percent=-1 通知前端保持当前进度条、仅切换阶段文案。
@@ -497,11 +558,13 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			log.Printf("[install] ERROR: install-by-kind failed for %s@%s: %v", p.Name(), ver, err)
 			return err
 		}
-		// Hard gate for archive extracts only. Executable/script installers
-		// may populate the install tree asynchronously or outside installPath
-		// (e.g. rustup), so binary-presence checks would false-fail them.
+		// Hard gate for archive extracts and npm installs. Executable/script
+		// installers may populate the install tree asynchronously or outside
+		// installPath (e.g. rustup), so binary-presence checks would
+		// false-fail them. npm is synchronous — the tree is complete when
+		// the npm CLI returns (Spec 039).
 		kind := ResolveKind(arch)
-		if kind == manifest.InstallKindArchive {
+		if kind == manifest.InstallKindArchive || kind == manifest.InstallKindNPM {
 			if err := ensureInstallIntegrity(p, installPath, arch.Strip); err != nil {
 				log.Printf("[install] ERROR: %v", err)
 				// Best-effort cleanup so the broken dir is not left as "installed".
@@ -571,7 +634,15 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 //     primary (mirrored) URL fails
 //   - Progress reporting via the onProgress callback
 func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, batchIndex, batchTotal int) error {
-	url, fallbackURLs, dest, urlShaMap := i.BuildDownloadOptions(tool, ver, a)
+	// F-25: reject an unsafe tool/version BEFORE anything touches the cache.
+	// 上面的 cacheArchivePath 已经给出精确错误；这里改用 E 版本并把诊断错误也
+	// 检查一遍（**防御性**：若日后有人删掉上面的预检，这里仍然会以可读错误失败，
+	// 而不是带着空 dest 继续走到 downloader 的 "empty destination"）。
+	url, fallbackURLs, dest, urlShaMap, optErr := i.BuildDownloadOptionsE(tool, ver, a)
+	if optErr != nil {
+		log.Printf("[install] ERROR: %v", optErr)
+		return optErr
+	}
 	log.Printf("[install] Cache destination: %s", dest)
 
 	progressDesc := fmt.Sprintf("%s@%s", tool, ver)
@@ -582,7 +653,20 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		// Cache hit — verify SHA-256 if available
 		if a.SHA256 != "" && !util.IsAllZeroHash(a.SHA256) {
 			if cacheHash, err := util.FileSHA256(dest); err == nil {
-				if !strings.EqualFold(cacheHash, a.SHA256) {
+				// F-24: accept the cache when it matches the OFFICIAL hash OR
+				// the manifest-declared MIRROR hash. A mirror may legitimately
+				// serve a byte-different rebuild under mirror_sha256; pre-fix
+				// only a.SHA256 was compared, so such a cache was judged a
+				// mismatch, deleted and re-downloaded on every install.
+				// runInstaller and the URLShaMap already use this
+				// "official OR mirror" rule — this makes the cache-hit branch
+				// consistent with them. A placeholder mirror hash is ignored.
+				matchedOfficial := strings.EqualFold(cacheHash, a.SHA256)
+				matchedMirror := false
+				if !matchedOfficial && a.MirrorSHA256 != "" && !util.IsAllZeroHash(a.MirrorSHA256) {
+					matchedMirror = strings.EqualFold(cacheHash, a.MirrorSHA256)
+				}
+				if !matchedOfficial && !matchedMirror {
 					expPreview := a.SHA256
 					if len(expPreview) > 16 {
 						expPreview = expPreview[:16] + "..."
@@ -591,11 +675,19 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 					if len(gotPreview) > 16 {
 						gotPreview = gotPreview[:16] + "..."
 					}
-					log.Printf("[install] Cache SHA-256 mismatch! expected=%s got=%s — re-downloading", expPreview, gotPreview)
+					mirrorPreview := a.MirrorSHA256
+					if len(mirrorPreview) > 16 {
+						mirrorPreview = mirrorPreview[:16] + "..."
+					}
+					log.Printf("[install] Cache SHA-256 mismatch! expected=%s (mirror=%s) got=%s — re-downloading", expPreview, mirrorPreview, gotPreview)
 					os.Remove(dest)
 					// Fall through to download
 				} else {
-					log.Printf("[install] Cache hit (verified): %s", dest)
+					if matchedMirror {
+						log.Printf("[install] Cache hit (verified against the mirror hash): %s", dest)
+					} else {
+						log.Printf("[install] Cache hit (verified): %s", dest)
+					}
 					if onProgress != nil {
 						onProgress(PhaseDownloading, 100, "", "")
 					}
@@ -657,6 +749,14 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 	}
 
 	var err error
+	// Ticket 13 (P0-02): the downloader needs the exact signed-map slot
+	// (<version> → <os>/<arch>) and the unsigned-version verdict so its
+	// three signature gates behave correctly. Derivation is shared with
+	// the GUI pipeline (DeriveUnsignedVersion).
+	var toolManifest *manifest.Tool
+	if p, ok := i.reg.Get(tool); ok {
+		toolManifest = p.Manifest()
+	}
 	err = downloader.Download(ctx, downloader.Options{
 		URL:                  url,
 		Dest:                 dest,
@@ -667,6 +767,10 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		ManifestSignature:    manifestSig,
 		IsThirdParty:         isThirdParty,
 		AllowPlaceholderTOFU: a.SHA256 == "" || util.IsAllZeroHash(a.SHA256),
+		ToolName:             tool,
+		Version:              ver,
+		OSArch:               a.OS + "/" + a.Arch,
+		UnsignedVersion:      DeriveUnsignedVersion(toolManifest, ver),
 		ProxyURL:             i.cfg.GetProxyURL("https"),
 		FallbackURLs:         fallbackURLs,
 		// Surface non-byte status updates (retries, fallback switches,
@@ -722,19 +826,43 @@ func (i *Installer) LoadManifestSignature(tool string) ([]byte, bool) {
 		log.Printf("[install] Found third-party manifest signature for %s", tool)
 	} else {
 		// Also check embedded manifests
+		embeddedHit := false
 		if embeddedSig, err := signer.ReadEmbeddedSignature(tool); err == nil && embeddedSig != nil {
 			if sigJSON, err := json.Marshal(embeddedSig); err == nil {
 				manifestSig = sigJSON
+				embeddedHit = true
 				log.Printf("[install] Found embedded manifest signature for %s", tool)
 			}
 		}
-		// Determine if this is a third-party manifest (no embedded/built-in sig)
-		if _, err := os.Stat(filepath.Join(thirdPartyDir, tool+".yaml")); err == nil {
-			isThirdParty = true
-			log.Printf("[install] Third-party manifest detected for %s (TOFU fallback if no signature)", tool)
+		// Ticket 13 (N-03): a disk manifest under third-party/ must NOT be
+		// able to downgrade a BUILT-IN tool to the third-party trust model
+		// (TOFU fallback instead of a mandatory signature). The built-in
+		// side is: an embedded manifest for this tool (embeddedHit covers
+		// the signed case) or a top-level manifest in the manifest dir.
+		// Only tools that exist SOLELY under third-party/ may fall back.
+		if !embeddedHit && !isBuiltinManifest(tool, i.cfg.Core.ManifestDir) {
+			if _, err := os.Stat(filepath.Join(thirdPartyDir, tool+".yaml")); err == nil {
+				isThirdParty = true
+				log.Printf("[install] Third-party manifest detected for %s (TOFU fallback if no signature)", tool)
+			}
+		} else {
+			log.Printf("[install] %s is a built-in tool — a third-party manifest with the same name cannot downgrade it to TOFU (rename the third-party manifest)", tool)
 		}
 	}
 	return manifestSig, isThirdParty
+}
+
+// isBuiltinManifest reports whether tool belongs to the built-in manifest
+// set: an embedded manifest, or a top-level manifest in the manifest
+// directory. Ticket 13 (N-03) — the same-name trust downgrade guard.
+func isBuiltinManifest(tool, manifestDir string) bool {
+	if manifest.HasEmbeddedManifest(tool) {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(manifestDir, tool+".yaml")); err == nil {
+		return true
+	}
+	return false
 }
 
 // TOFUArchiveIfNeeded computes the SHA-256 of the downloaded archive and
@@ -751,20 +879,34 @@ func (i *Installer) TOFUArchiveIfNeeded(tool, ver string, a *manifest.Archive, d
 		return fmt.Errorf("computed SHA-256 is empty")
 	}
 
-	// Determine OS and arch from the archive entry.
+	// Ticket 26 (A-11/D-10): pass the entry's ORIGINAL os/arch. Substituting
+	// "any" with the host platform made the update target a concrete entry
+	// that may not exist, so the TOFU pin was silently not written back and
+	// the next install re-ran TOFU. The manifest-side matcher now falls back
+	// to an "any" entry when the requested key is the host platform.
 	osName := a.OS
 	arch := a.Arch
-	if osName == "" || osName == "any" {
-		osName = plugin.HostOS()
-	}
-	if arch == "" || arch == "any" {
-		arch = plugin.HostArch()
-	}
 
-	// Write to on-disk manifest.
-	manifestDir := filepath.Join(i.cfg.Core.XMDevDir, "manifests")
+	// Write to on-disk manifest. Ticket 13 (N-04): use the configured
+	// manifest dir (the pre-fix code hard-coded <home>/manifests, so a
+	// custom --manifest-dir deployment pinned the hash into the wrong tree
+	// and the next install re-ran TOFU instead of verifying).
+	manifestDir := i.cfg.Core.ManifestDir
 	if err := manifest.UpdateArchiveSHA256(manifestDir, tool, ver, osName, arch, actualSHA); err != nil {
-		return fmt.Errorf("UpdateArchiveSHA256: %w", err)
+		// Host-platform fallback (ticket 26 / A-11): entries declared with
+		// the host platform but requested as "any" (or vice versa) must still
+		// pin. Retry once with the host platform before giving up.
+		hostOS, hostArch := plugin.HostOS(), plugin.HostArch()
+		if (osName == "" || osName == "any" || arch == "" || arch == "any") && (osName != hostOS || arch != hostArch) {
+			if retryErr := manifest.UpdateArchiveSHA256(manifestDir, tool, ver, hostOS, hostArch, actualSHA); retryErr == nil {
+				log.Printf("[install] TOFU: pinned %s@%s via host-platform fallback (%s/%s)", tool, ver, hostOS, hostArch)
+				osName, arch = hostOS, hostArch
+			} else {
+				return fmt.Errorf("UpdateArchiveSHA256: %w (host-platform fallback also failed: %v)", err, retryErr)
+			}
+		} else {
+			return fmt.Errorf("UpdateArchiveSHA256: %w", err)
+		}
 	}
 
 	log.Printf("[install] TOFU: computed SHA256 for %s@%s (%s/%s): %s", tool, ver, osName, arch, actualSHA)
@@ -795,8 +937,23 @@ func verifyCacheSidecar(dest string) (bool, string) {
 		return false, fmt.Sprintf("cannot compute SHA-256 of cached archive %s: %v", dest, err)
 	}
 	if !strings.EqualFold(cacheHash, parts[0]) {
+		// F-21: parts[0] is an arbitrary token from a sidecar file and may
+		// be shorter than 16 chars (a truncated/corrupt pin such as "abc").
+		// The pre-fix code sliced [:16] unconditionally and panicked BEFORE
+		// the caller's os.Remove — so the broken pin was never cleared and
+		// every subsequent install crashed the same way. Truncate only when
+		// the value is actually longer (same pattern as the cache-hit
+		// preview above).
+		pinPreview := parts[0]
+		if len(pinPreview) > 16 {
+			pinPreview = pinPreview[:16] + "..."
+		}
+		hashPreview := cacheHash
+		if len(hashPreview) > 16 {
+			hashPreview = hashPreview[:16] + "..."
+		}
 		return false, fmt.Sprintf("cache sidecar pin mismatch for %s (cached=%s got=%s)",
-			dest, parts[0][:16]+"...", cacheHash[:16]+"...")
+			dest, pinPreview, hashPreview)
 	}
 	return true, ""
 }
@@ -831,12 +988,32 @@ func (i *Installer) getMirrorHealthCache() *MirrorHealthCache {
 	return i.mirrorCache
 }
 
-// buildDownloadOptions constructs the download URL, fallback URLs, and cache
-// destination path for a tool archive. It applies mirror rewriting and
-// smart mirror selection (concurrent HEAD probe, health cache, user preference).
+// BuildDownloadOptionsE 构造下载所需的 URL、回退 URL 列表与缓存目标路径，
+// 并把**诊断错误作为第五个返回值**交给调用方。
 //
-// Returns (primaryURL, fallbackURLs, cacheDestPath, urlShaMap).
-func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string) {
+// 返回 (primaryURL, fallbackURLs, cacheDestPath, urlShaMap, err)。
+// 当 err != nil 时 cacheDestPath 一定为空（**fail closed**），调用方应直接呈现 err。
+//
+// # 为什么是这个签名（而不是四返回值 + 访问器）
+//
+// 第十一轮先用「实例字段 `lastBuildOptionsErr` + 访问器」承载诊断信息。它能工作，
+// 但有**隐含的单线程假设**：两个 goroutine 同时调用会互相覆盖，A 调用方读到 B 的
+// 错误 —— 既是真实数据竞争，也**比没有诊断更糟**（把排查引向无关的工具/版本）。
+//
+// 第十二轮改成第五个返回值；第十三轮把四返回值版**内联掉**（它当时已是纯兼容壳，
+// 生产代码只剩一处调用）。留两个版本就有「行为分叉」的长期风险 ——
+// 这正是本仓库 Round 8-11 反复出现的失败模式。
+func (i *Installer) BuildDownloadOptionsE(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
+	return i.buildDownloadOptions(tool, ver, a)
+}
+
+// buildDownloadOptions 是真正的实现（见 BuildDownloadOptionsE 的文档）。
+//
+// 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 时**原因不再丢失**。
+// 早先的做法是：缓存路径不安全时把 dest 置空，让 `downloader.Download` 以
+// `"empty destination"` 失败 —— **fail closed 是对的**，但用户看到的错误是
+// `empty destination`，完全无法定位真实原因（工具名非法？版本号含分隔符？format 为空？）。
+func (i *Installer) buildDownloadOptions(tool, ver string, a *manifest.Archive) (string, []string, string, map[string]string, error) {
 	// 1. Build candidate list from multiple sources.
 	candidates := i.buildMirrorCandidates(tool, a)
 
@@ -896,7 +1073,23 @@ func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) 
 		fallbackURLs = append(fallbackURLs, a.URL)
 	}
 
-	dest := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", tool, ver, a.Format))
+	// F-25: the cache destination embeds the manifest-controlled tool name
+	// and version. An unsafe component must never produce a path outside
+	// CacheDir. BuildDownloadOptions cannot return an error (the GUI calls
+	// it), so an unsafe name yields an EMPTY destination: downloader.Download
+	// rejects "" with "empty destination", i.e. the operation fails closed
+	// instead of writing outside the cache. The install entry points
+	// (InstallWithProgress / ExtractAndActivate) reject unsafe names earlier
+	// with a precise error, so this is defence in depth.
+	dest, nameErr := i.cacheArchivePath(tool, ver, a.Format)
+	var diagErr error
+	if nameErr != nil {
+		log.Printf("[install] ERROR: refusing unsafe cache path: %v", nameErr)
+		dest = ""
+		// 精确原因作为返回值交给调用方（不再写共享字段 —— 并发下会互相覆盖）。
+		diagErr = fmt.Errorf(
+			"refusing to build a cache path for %s@%s (format %q): %w", tool, ver, a.Format, nameErr)
+	}
 
 	// 6. Build URL→SHA256 map so the downloader can verify each URL
 	// against the correct hash (official URL uses a.SHA256, mirror URLs
@@ -923,7 +1116,7 @@ func (i *Installer) BuildDownloadOptions(tool, ver string, a *manifest.Archive) 
 		shaMap[u] = a.SHA256
 	}
 
-	return primary, fallbackURLs, dest, shaMap
+	return primary, fallbackURLs, dest, shaMap, diagErr
 }
 
 // buildMirrorCandidates assembles the ordered list of candidate mirror URLs
@@ -967,29 +1160,123 @@ func (i *Installer) buildMirrorCandidates(tool string, a *manifest.Archive) []st
 	return candidates
 }
 
+// validateInstallComponent 在写任何文件之前校验 tool/version 是安全的
+// 单路径分量（20261021 审计 P1-5 阶段 1）。
+//
+// 这不是“防御性重复”：`plugin.InstallDir` 在 SafeName 失败时是 fail-open 的
+// （替换成 unsafe-version-blocked 后继续），因此在安装器入口集中 fail-closed
+// 才是当前接口下唯一能保证“非法值零副作用”的位置。
+func validateInstallComponent(kind, value string) error {
+	if _, err := util.SafeName(value); err != nil {
+		return fmt.Errorf("refusing install: unsafe %s %q: %w", kind, value, err)
+	}
+	return nil
+}
+
+// cacheArchiveName builds the on-disk cache file name
+// "<tool>-<version>.<format>" for a downloaded archive.
+//
+// F-25: tool and ver are manifest-controlled and were previously interpolated
+// into the path with no validation, so a version such as "../../../../evil"
+// escaped CacheDir entirely (the download then landed outside the cache).
+// plugin.Generic.InstallDir and luaBasePlugin.InstallDir already run the
+// version through util.SafeName; this applies the same rule to the cache path.
+//
+// It returns ("", error) when either component is unsafe. Callers must treat
+// that as a hard failure and must NOT fall back to an unsanitised name.
+//
+// 第九轮审计 P3-10：**空的 format 必须被拒绝**。
+//
+// 旧实现容忍空 format（注释称「产出 "tool-ver."，后续由 extractor 的 format 分支
+// 拒绝」），但那个名字带**尾随点**，而 Windows 会静默剥离尾随点/空格：
+//
+//	cacheArchiveName("go", "1.0",     "zip") -> "go-1.0.zip"
+//	cacheArchiveName("go", "1.0.zip", "")    -> "go-1.0.zip." == "go-1.0.zip"
+//
+// 两者**折叠成同一个缓存文件**：后写者覆盖先写者，其 sidecar pin 在下次安装时
+// 与内容不匹配（缓存串味）。已在本机实测碰撞（写 go-1.0.zip 后再写
+// go-1.0.zip.，目录里文件数 = 1）。
+//
+// util.SafeName 的文档正是针对这个危害；归档名必须服从同一规则，而不是指望
+// extractor 事后拒绝——那时字节已经落盘。
+//
+// 影响面已核对：`install_kind: npm` 不调本函数；`executable`/`script` 本就要求
+// format 非空（`manifest.Archive.Installable()`）；`extract` 与
+// `BuildDownloadOptions` 自动继承 fail-closed；既有测试无用例声明 `Format: ""`。
+func cacheArchiveName(tool, ver, format string) (string, error) {
+	if _, err := util.SafeName(tool); err != nil {
+		return "", fmt.Errorf("unsafe tool name %q for cache path: %w", tool, err)
+	}
+	if _, err := util.SafeName(ver); err != nil {
+		return "", fmt.Errorf("unsafe version %q for cache path: %w", ver, err)
+	}
+	if strings.TrimSpace(format) == "" {
+		return "", fmt.Errorf("empty archive format for cache path %s-%s — refusing to build a trailing-dot name that collides on Windows (P3-10)", tool, ver)
+	}
+	if _, err := util.SafeName(format); err != nil {
+		return "", fmt.Errorf("unsafe archive format %q for cache path: %w", format, err)
+	}
+	return fmt.Sprintf("%s-%s.%s", tool, ver, format), nil
+}
+
+// cacheArchivePath is the error-returning variant used by the install paths:
+// an unsafe tool/version is a hard, actionable failure rather than a path
+// escaping the cache directory.
+func (i *Installer) cacheArchivePath(tool, ver, format string) (string, error) {
+	name, err := cacheArchiveName(tool, ver, format)
+	if err != nil {
+		return "", err
+	}
+	dest := filepath.Join(i.cfg.Core.CacheDir, name)
+	// Defence in depth: the joined path must stay inside CacheDir.
+	if err := util.ValidateSubPath(i.cfg.Core.CacheDir, dest); err != nil {
+		return "", fmt.Errorf("cache path %q escapes %q: %w", dest, i.cfg.Core.CacheDir, err)
+	}
+	return dest, nil
+}
+
 // extract unpacks a cached archive to the destination directory.
 // It delegates to extractor.Extract which supports zip, tar.gz, tar.xz,
 // 7z, and zstd formats. The strip parameter controls how many leading
 // path components to remove (e.g. strip=1 removes the top-level directory
 // common in Go and Python archives).
 func (i *Installer) extract(tool string, a *manifest.Archive, ver, dest string) error {
-	// The cache filename uses the tool name (matching downloadWithProgress)
-	src := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", tool, ver, a.Format))
+	// The cache filename uses the tool name (matching downloadWithProgress).
+	// F-25: the name is validated so a traversal version cannot read/write
+	// outside CacheDir.
+	src, err := i.cacheArchivePath(tool, ver, a.Format)
+	if err != nil {
+		log.Printf("[install] ERROR: refusing unsafe cache path: %v", err)
+		return err
+	}
 	if _, err := os.Stat(src); os.IsNotExist(err) {
-		// Fallback: try matching by glob in case of naming mismatch
-		matches, _ := filepath.Glob(filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("*-%s.%s", ver, a.Format)))
-		if len(matches) > 0 {
-			src = matches[0]
-			log.Printf("[install] Extract: matched cache file by glob: %s", src)
-		} else {
-			log.Printf("[install] ERROR: cache miss for extraction, tried: %s", src)
-			return fmt.Errorf("cache miss: %s", src)
-		}
+		// Ticket 26 (A-09): NO glob fallback. The removed glob
+		// (`*-<ver>.<fmt>`) could match ANOTHER tool's cache file — a
+		// malformed name such as "lld_is_a_generic_driver._" would be
+		// extracted into this tool's install tree (wrong content, wrong
+		// integrity outcome). A cache miss is now a hard, actionable error.
+		log.Printf("[install] ERROR: cache miss for extraction, expected: %s", src)
+		return fmt.Errorf("cache miss: %s not found — clear the cache entry and reinstall (`xdev install %s@%s`)", src, tool, ver)
 	}
 	log.Printf("[install] Extracting: src=%s dest=%s format=%s strip=%d", src, dest, a.Format, a.Strip)
-	err := extractor.Extract(src, dest, a.Format, a.Strip)
+	err = extractor.Extract(src, dest, a.Format, a.Strip)
 	if err != nil {
 		log.Printf("[install] ERROR: extraction failed: %v", err)
+		// F-23: a failed extraction can leave a partially written tree
+		// behind (e.g. the archive's first entry extracts, a later one is
+		// corrupt). Because VerifyInstallIntegrity only requires AT LEAST
+		// ONE declared shim to be present, such a leftover tree looked
+		// "completely installed" to the next run — which then skipped the
+		// download/extract entirely and activated garbage. Remove the
+		// partial tree so a retry starts clean.
+		//
+		// RemoveAll is safe here: `dest` is the install tree, never the
+		// current/<tool> link (extraction targets install/<tool>/<ver>).
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			log.Printf("[install] WARNING: failed to clean partial install tree %s: %v", dest, rmErr)
+		} else {
+			log.Printf("[install] Removed partial install tree after extraction failure: %s", dest)
+		}
 	} else {
 		log.Printf("[install] Extraction complete: %s", dest)
 	}
@@ -1027,11 +1314,14 @@ func ResolveKind(a *manifest.Archive) string {
 //   - archive (default): extract the cached file into the install dir
 //   - executable: verify SHA-256, then run the cached binary
 //   - script: verify SHA-256, then execute the cached script via "sh"
+//   - npm: run the npm CLI against the install dir (no download; Spec 039)
 func (i *Installer) installByKind(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
 	kind := ResolveKind(a)
 	switch kind {
 	case manifest.InstallKindExecutable, manifest.InstallKindScript:
 		return i.runInstaller(ctx, p, a, ver, installPath)
+	case manifest.InstallKindNPM:
+		return i.installViaNPM(ctx, p, a, ver, installPath)
 	default:
 		return i.extract(p.Name(), a, ver, installPath)
 	}
@@ -1051,7 +1341,11 @@ var installerRunMu sync.Mutex
 // .sha256 sidecar pin（TOFU 首次下载时建立），允许运行——这修复了
 // rust 1.97.1（rustup-init.exe，sha256 为空）等工具的安装。
 func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
-	src := filepath.Join(i.cfg.Core.CacheDir, fmt.Sprintf("%s-%s.%s", p.Name(), ver, a.Format))
+	// F-25: validate the cache path components before building it.
+	src, err := i.cacheArchivePath(p.Name(), ver, a.Format)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return fmt.Errorf("installer binary not in cache: %s", src)
 	}
@@ -1072,8 +1366,21 @@ func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manife
 		if err != nil {
 			return fmt.Errorf("compute SHA-256 of %s: %w", src, err)
 		}
-		if !strings.EqualFold(got, a.SHA256) {
-			return fmt.Errorf("SHA-256 mismatch for %s: expected %s, got %s", p.Name(), a.SHA256, got)
+		// Ticket 38 (P2-03): a mirror URL may legitimately serve a
+		// byte-identical rebuild under its own mirror_sha256 — accept the
+		// SHA-256 OR the declared mirror SHA-256 (whichever the manifest
+		// provided). Pre-fix only a.SHA256 was accepted, so an installer
+		// fetched from a mirror was rejected even when its hash matched the
+		// manifest's mirror entry.
+		matched := strings.EqualFold(got, a.SHA256)
+		if !matched && a.MirrorSHA256 != "" && !util.IsAllZeroHash(a.MirrorSHA256) {
+			matched = strings.EqualFold(got, a.MirrorSHA256)
+			if matched {
+				log.Printf("[install] %s SHA-256 verified against the mirror hash", p.Name())
+			}
+		}
+		if !matched {
+			return fmt.Errorf("SHA-256 mismatch for %s: expected %s (mirror %s), got %s", p.Name(), a.SHA256, a.MirrorSHA256, got)
 		}
 	}
 
@@ -1156,7 +1463,12 @@ func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manife
 //
 // On Windows, junction creation is preferred over symbolic links because
 // junctions don't require Developer Mode or elevated privileges. The
-// fallback chain is: junction → symlink → directory copy.
+// fallback chain is: junction → symlink → `ln -s`. There is deliberately NO
+// directory-copy fallback (F-22): a real directory at current/<tool> breaks
+// util.ActiveVersion, which resolves the path with os.Readlink.
+//
+// The replacement link is created under a temporary name and then renamed
+// over the old one, so a failure never destroys the previously active link.
 //
 // When noEnvWrite is true (set by --no-path-fix), registry writes and
 // WM_SETTINGCHANGE broadcast are skipped for test isolation.
@@ -1177,6 +1489,11 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	// component and re-check containment before any filesystem write.
 	if _, err := util.SafeName(p.Name()); err != nil {
 		return fmt.Errorf("refusing to activate tool with unsafe name %q: %w", p.Name(), err)
+	}
+	// 20261021 审计 P1-5（阶段 1）：版本同样进入 current 的解析与安装树
+	// 定位，必须在落任何文件之前拒绝非法值。
+	if _, err := util.SafeName(ver); err != nil {
+		return fmt.Errorf("refusing to activate tool %q with unsafe version %q: %w", p.Name(), ver, err)
 	}
 
 	currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current")
@@ -1203,34 +1520,47 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 		}
 	}
 
-	_ = os.Remove(currentLink)
-
 	// --- Step 1: Create junction/symlink ---
+	//
+	// F-22: build the replacement link under a TEMPORARY name first and only
+	// swap it in once it exists. Pre-fix the old link was removed
+	// unconditionally before any link method ran, so an activation whose link
+	// creation failed left the tool permanently un-activated even though the
+	// previous version was still fully installed. With this order the old link
+	// survives every failure of link creation itself.
 	junctionCreated := false
-	// Windows 上优先使用 Junction（不需要管理员权限，比 SymbolicLink 更可靠）
-	if runtime.GOOS == "windows" {
-		if err := util.CreateJunction(currentLink, installPath); err != nil {
-			log.Printf("[install] Junction failed, trying symlink: %v", err)
-			if err := os.Symlink(installPath, currentLink); err != nil {
-				log.Printf("[install] Symlink also failed, trying other fallbacks: %v", err)
-				if err := fallbackLink(installPath, currentLink); err != nil {
-					log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", currentLink, installPath, err)
-					return fmt.Errorf("symlink %s -> %s (and fallbacks also failed: %v)", currentLink, installPath, err)
-				}
-			}
-		}
-		junctionCreated = true
-	} else {
-		if err := os.Symlink(installPath, currentLink); err != nil {
-			log.Printf("[install] Symlink failed, trying fallbacks: %v", err)
-			if err := fallbackLink(installPath, currentLink); err != nil {
-				log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", currentLink, installPath, err)
-				return fmt.Errorf("symlink %s -> %s (and fallbacks also failed: %v)", currentLink, installPath, err)
-			}
-			log.Printf("[install] Fallback link succeeded for %s", currentLink)
-		}
-		junctionCreated = true
+	// F-22/P1-24: the swap target must be a UNIQUELY named temporary entry,
+	// not a fixed "<link>.tmp" — concurrent activations of the same tool
+	// would otherwise share the path and clobber each other. os.CreateTemp
+	// yields an atomically unique name; the placeholder file is removed and
+	// the link is created in its place.
+	tmpFile, tmpErr := os.CreateTemp(currentDir, p.Name()+".tmp-*")
+	if tmpErr != nil {
+		return fmt.Errorf("activate %s: reserve temporary link name: %w", p.Name(), tmpErr)
 	}
+	tmpLink := tmpFile.Name()
+	tmpFile.Close()
+	removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
+
+	if err := linkCurrent(installPath, tmpLink); err != nil {
+		log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", currentLink, installPath, err)
+		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
+		// The previous link was never touched — nothing to restore.
+		return fmt.Errorf("symlink %s -> %s (all link methods failed: %v)", currentLink, installPath, err)
+	}
+
+	// The new link exists. Swap it in; removeLinkEntry only unlinks the
+	// current entry and never follows it into the install tree.
+	removeLinkEntry(currentLink, i.cfg.Core.XMDevDir)
+	if err := os.Rename(tmpLink, currentLink); err != nil {
+		log.Printf("[install] ERROR: failed to swap in the new link %s: %v", currentLink, err)
+		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
+		// F-22: restore the previous link instead of leaving the tool
+		// un-activated.
+		i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
+		return fmt.Errorf("activate %s: replace current link: %w", p.Name(), err)
+	}
+	junctionCreated = true
 
 	// --- Step 2: PATH mode dispatch ---
 	pathsAdded := false
@@ -1253,14 +1583,29 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	} else {
 		shimExe := i.ResolveShimExe()
 		log.Printf("[install] Creating shims in %s (exe=%s)", i.cfg.Core.ShimDir, shimExe)
+		// F-26: align with removeShims — an invalid shim NAME is skipped with
+		// a warning instead of aborting the whole loop, so one bad entry no
+		// longer prevents the remaining valid shims from being installed
+		// (pre-fix the first invalid name failed activation outright and
+		// rolled everything back). Genuine install failures are collected and
+		// reported together; if any occurred, the previous state is restored.
+		var shimErrs []string
 		for _, name := range p.Shims() {
+			if err := util.ValidateShimName(name); err != nil {
+				log.Printf("[install] WARNING: skipping invalid shim name %q: %v", name, err)
+				continue
+			}
 			log.Printf("[install] Installing shim: %s", name)
 			if err := shim.InstallShim(i.cfg.Core.ShimDir, name, shimExe); err != nil {
 				log.Printf("[install] ERROR: shim install failed for %s: %v", name, err)
-				// H-9 Rollback: restore previous junction
-				i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
-				return fmt.Errorf("shim install failed for %s: %w (activation rolled back)", name, err)
+				shimErrs = append(shimErrs, fmt.Sprintf("%s: %v", name, err))
 			}
+		}
+		if len(shimErrs) > 0 {
+			// H-9 Rollback: restore previous junction
+			i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
+			return fmt.Errorf("shim install failed for %d shim(s) [%s] (activation rolled back)",
+				len(shimErrs), strings.Join(shimErrs, "; "))
 		}
 	}
 
@@ -1288,6 +1633,27 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 
 	log.Printf("[install] Activation complete: %s@%s (%d shims)", p.Name(), ver, len(p.Shims()))
 	shim.InvalidateShimIndex()
+	// 第十二轮审计（Round 11 报告 §七-④）：**激活成功后顺带回收 `.stale-*` 残留**。
+	//
+	// 之前只在 `buildShimIndexMap` 里回收，而那个函数只在「重建 shim 反向索引」时
+	// 才跑 —— 长期不触发索引重建的用户（例如只用 `xdev use` 切换、从不安装新 shim）
+	// 残留永远不会被回收。激活是**必然经过**的路径，在这里补一次覆盖。
+	//
+	// best-effort：失败绝不影响激活结果（回收是卫生工作）。
+	_ = shim.ReapStaleResidue(i.cfg.Core.XMDevDir)
+
+	// Ticket 01 (audit-fixes / X-07): for the go tool, self-heal the stale
+	// GOROOT registry value left by the pre-v2 manifest (GOROOT pointed one
+	// level above the real toolchain because the archives keep their
+	// top-level go/ directory). The manifest no longer writes GOROOT —
+	// Go >= 1.26 self-derives it from the go binary location — so existing
+	// installs recover on the next `xdev use go` / activate.
+	if p.Name() == "go" && !i.noEnvWrite {
+		if err := env.CleanupStaleGOROOT(); err != nil {
+			// Non-fatal: activation itself succeeded.
+			log.Printf("[install] WARNING: stale GOROOT cleanup failed: %v", err)
+		}
+	}
 
 	// 广播 WM_SETTINGCHANGE 让新终端感知 PATH 变化
 	if !i.noEnvWrite {
@@ -1300,22 +1666,134 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	return nil
 }
 
+// linkCurrent creates the current/<tool> link at `link` pointing at `target`.
+// It is a package-level variable so tests can force the "every link method
+// failed" path, which is otherwise only reachable on a hostile filesystem or
+// when the target binary is locked.
+//
+// F-22: the chain is junction (Windows) → symlink → fallbackLink. The old
+// chain ended in util.CopyDir, which produced a real directory COPY: that
+// violates the "current must be a link" contract because
+// util.ActiveVersion resolves the path with os.Readlink and therefore
+// reported ("", false) forever — the tool looked broken and no later
+// `xdev use` could repair it.
+var linkCurrent = defaultLinkCurrent
+
+// defaultLinkCurrent implements the platform link chain.
+func defaultLinkCurrent(target, link string) error {
+	// Windows 上优先使用 Junction（不需要管理员权限，比 SymbolicLink 更可靠）
+	if runtime.GOOS == "windows" {
+		if err := util.CreateJunction(link, target); err == nil {
+			return nil
+		} else {
+			log.Printf("[install] Junction failed, trying symlink: %v", err)
+		}
+	}
+	if err := os.Symlink(target, link); err != nil {
+		log.Printf("[install] Symlink failed, trying fallbacks: %v", err)
+		return fallbackLink(target, link)
+	}
+	return nil
+}
+
+// removeLinkEntry removes a current/<tool> entry (junction, symlink or stale
+// leftover) WITHOUT following it into the install tree: os.Remove unlinks the
+// reparse point itself and never recurses into its target. This is why the
+// code must never use os.RemoveAll here.
+//
+// 第八轮审计 P1-3（F-22 的自引入回归）：旧版本 xdev 的 CopyDir 兜底会在
+// `current/<tool>` 留下一个**真实目录**（非 reparse point）。os.Remove 对**非空**
+// 目录必定失败（Windows: "The directory is not empty"），随后
+// `os.Rename(tmpLink, currentLink)` 也无法覆盖已存在的目录
+// （"Access is denied"），`rollbackActivation` 走同一个函数同样失败 —— 于是
+// `xdev install`/`xdev use` **每次重试都是同一条错误链，永远修不好**，
+// 正是 F-22 注释里声称已消除的症状（实测 H10）。
+//
+// 修复：显式识别这个已知的遗留形态（真实目录、非 symlink、非 junction），把它
+// **重命名**到一个不再被 `ActiveVersion` 解析的旁路名字（`.stale-<随机>`）后
+// 再 RemoveAll。先 rename 是关键：`current/` 下立刻不再有该条目，安装流程可以
+// 继续；即便随后的删除失败，残留也只是一个不影响解析的旁路目录，且删除是
+// 有界的（只删这个我们已确认是遗留产物的目录）。
+//
+// 绝不在此对**链接**调用 RemoveAll —— 那会顺着 reparse point 删掉安装树。
+// removeAllResidue 是测试接缝：让归档后的删除失败，从而保留归档条目，
+// 用于断言“归档位置确实由显式 xmdeHome 决定”。生产路径就是 os.RemoveAll。
+var removeAllResidue = os.RemoveAll
+
+func removeLinkEntry(path, xmdeHome string) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return // nothing there
+	}
+	if err := os.Remove(path); err == nil {
+		return
+	} else if !isLegacyRealDir(fi) {
+		// 链接/junction/文件：os.Remove 已尽力，失败只告警（绝不 RemoveAll）。
+		log.Printf("[install] WARNING: failed to remove link entry %s: %v", path, err)
+		return
+	}
+
+	// 遗留的真实目录（旧 CopyDir 产物）：rename 到旁路名后再删。
+	//
+	// 第十二轮收口（Round 12 报告 §七-③）：**rename 的目标改到 `current/` 之外**。
+	//
+	// 旧实现是 `path + ".stale-" + <nano>`，也就是残留**留在 `current/` 里**。
+	// 这导致一组互相矛盾的需求：回收方要「够旧就删」，而并发写方可能刚 rename 完、
+	// 正要去 RemoveAll —— 为保证不误删在途条目，回收方只能按年龄等 1 小时，
+	// 于是刚产生的残留必然在 `current/` 里停留一小时，期间仍是一个需要被所有扫描方
+	// 过滤掉的污染源。
+	//
+	// 搬到 `current/` 之外（`<xmdeHome>/.stale-residue/`）就解开了这对矛盾：
+	// 归档目录里的条目**永远不可能在途**，因此可以安全删除；而 `current/`
+	// 从此**根本不会**出现 `.stale-*`（除历史遗留，由 shim.ReapStaleResidue 清）。
+	stale, staleErr := shim.ResidueArchivePath(xmdeHome, filepath.Base(path))
+	if staleErr != nil {
+		// 归档目录建不出来：退回「就地改名 + 立即删」（旧行为），至少不阻塞安装。
+		log.Printf("[install] WARNING: cannot create residue archive dir: %v — falling back to in-place rename", staleErr)
+		stale = path + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	if rerr := os.Rename(path, stale); rerr != nil {
+		log.Printf("[install] WARNING: failed to remove legacy directory %s: %v", path, rerr)
+		return
+	}
+	log.Printf("[install] removed legacy CopyDir directory at %s (moved to %s)", path, stale)
+	// 归档目录里的条目不在 current/ 下，可以直接删；失败也没关系 ——
+	// 它已经不再污染 current/，shim.ReapStaleResidue 会按年龄收尾。
+	if rerr := removeAllResidue(stale); rerr != nil {
+		log.Printf("[install] WARNING: could not fully delete legacy directory %s (archived; will be reaped): %v", stale, rerr)
+	}
+}
+
+// isLegacyRealDir 报告该 FileInfo 是否为「旧版 CopyDir 兜底留下的真实目录」——
+// 即：是目录，且不是 symlink、不是 Windows junction（Lstat 报 ModeIrregular）。
+// 只有这一种形态才允许走 rename+RemoveAll 的清理路径。
+func isLegacyRealDir(fi os.FileInfo) bool {
+	if fi == nil || !fi.IsDir() {
+		return false
+	}
+	m := fi.Mode()
+	if m&os.ModeSymlink != 0 {
+		return false
+	}
+	if m&os.ModeIrregular != 0 { // Windows junction
+		return false
+	}
+	return true
+}
+
 // rollbackActivation restores the previous junction/symlink after a failed
 // activation step. This is part of the H-9 fix for partial-activation failures.
 func (i *Installer) rollbackActivation(currentLink string, junctionExisted bool, oldTarget string, p plugin.Plugin) {
 	log.Printf("[install] Rolling back activation for %s", currentLink)
-	_ = os.Remove(currentLink)
+	// removeLinkEntry (not os.RemoveAll): a legacy CopyDir fallback left a
+	// REAL directory here, and RemoveAll would delete the installed files.
+	removeLinkEntry(currentLink, i.cfg.Core.XMDevDir)
 	if junctionExisted && oldTarget != "" {
-		if runtime.GOOS == "windows" {
-			if err := util.CreateJunction(currentLink, oldTarget); err != nil {
-				log.Printf("[install] WARNING: failed to restore junction during rollback: %v", err)
-			}
+		if err := linkCurrent(oldTarget, currentLink); err != nil {
+			log.Printf("[install] WARNING: failed to restore previous link during rollback: %v", err)
 		} else {
-			if err := os.Symlink(oldTarget, currentLink); err != nil {
-				log.Printf("[install] WARNING: failed to restore symlink during rollback: %v", err)
-			}
+			log.Printf("[install] Restored previous junction: %s -> %s", currentLink, oldTarget)
 		}
-		log.Printf("[install] Restored previous junction: %s -> %s", currentLink, oldTarget)
 	}
 }
 
@@ -1388,7 +1866,11 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 		log.Printf("[install] Rolling back %d env var writes due to failure", len(written))
 		for _, name := range written {
 			if orig, ok := originals[name]; ok {
-				if err := env.SetUserEnvVarTrusted(name, orig); err != nil {
+				// P2-4（第六轮审计）：回滚必须用 Restore 变体——原值先于 xdev 存在
+				//（用户自己的 GOROOT=C:\Go / 含 %VAR% 的原值），对回滚值复跑 X-08
+				// 写时校验会拒绝恢复，导致「安装失败 + manifest 值留驻 + 用户原值
+				// 永久丢失」的更坏终态。
+				if err := env.SetUserEnvVarRestore(name, orig); err != nil {
 					log.Printf("[install] WARNING: failed to rollback env var %s: %v", name, err)
 				}
 			} else {
@@ -1414,30 +1896,65 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 //   - err != nil 且解压已成功：err 是激活错误（版本已安装）
 //   - err != nil 且解压失败：err 是解压错误（版本未安装）
 func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
-	kind := ResolveKind(a)
-	switch kind {
-	case manifest.InstallKindExecutable, manifest.InstallKindScript:
-		// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
-		// 跳过解压与完整性硬门（安装器可能异步/在 installPath 外写文件）。
-		if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
-			return fmt.Errorf("installer run failed: %w", err)
-		}
-	default:
-		if err := i.extract(p.Name(), a, ver, installPath); err != nil {
-			return fmt.Errorf("extraction failed: %w", err)
-		}
-		// Hard gate after extract (same as InstallWithProgress): broken trees
-		// must not be treated as successful installs.
-		if err := ensureInstallIntegrity(p, installPath, a.Strip); err != nil {
-			log.Printf("[install] ERROR: %v", err)
-			_ = os.RemoveAll(installPath)
-			return err
-		}
+	// Ticket 19 (audit-fixes / B-02, A-04): the ENTIRE pre-activation span —
+	// extraction, the executable/script installer run, the integrity gate and
+	// the post-install hook — runs under the same per-tool lock used by
+	// InstallWithProgress, InstallNPMPackage and Activate. Without it a GUI
+	// ExtractAndActivate (local-tool migration / custom-tool install) could
+	// interleave with a concurrent force install of the same tool and leave a
+	// half-written tree behind.
+	//
+	// The lock is released BEFORE Activate, which takes the same lock
+	// internally (nested acquisition self-deadlocks — Unix flock is per open
+	// file description, the Windows named mutex is reentrant only
+	// per-thread; see the InstallWithProgress comment for the full story).
+	//
+	// Known residual (F-03, disclosed): the Windows named mutex is
+	// thread-affine, so a goroutine migration between acquisition and release
+	// can still let a concurrent installer slip through. The minimal
+	// hardening (Release return-value logging) lives in mutex_windows.go.
+	toolLock, lockErr := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
+	if lockErr != nil {
+		return fmt.Errorf("extract lock %s: %w", p.Name(), lockErr)
 	}
-	// Post-install hook — run even if activation will fail later.
-	if err := p.PostInstall(context.Background(), installPath); err != nil {
-		log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+	err := func() error {
+		defer toolLock.Release()
+
+		kind := ResolveKind(a)
+		switch kind {
+		case manifest.InstallKindExecutable, manifest.InstallKindScript:
+			// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
+			// 跳过解压与完整性硬门（安装器可能异步/在 installPath 外写文件）。
+			if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
+				return fmt.Errorf("installer run failed: %w", err)
+			}
+		case manifest.InstallKindNPM:
+			// Spec 039: npm-kind 工具没有「已下载归档」可解压——调用方应改走
+			// InstallNPMPackage（预检 → npm install → 完整性门 → 激活）。
+			return fmt.Errorf("npm-kind tool %s must be installed via InstallNPMPackage (no archive to extract)", p.Name())
+		default:
+			if err := i.extract(p.Name(), a, ver, installPath); err != nil {
+				return fmt.Errorf("extraction failed: %w", err)
+			}
+			// Hard gate after extract (same as InstallWithProgress): broken trees
+			// must not be treated as successful installs.
+			if err := ensureInstallIntegrity(p, installPath, a.Strip); err != nil {
+				log.Printf("[install] ERROR: %v", err)
+				_ = os.RemoveAll(installPath)
+				return err
+			}
+		}
+		// Post-install hook — run even if activation will fail later.
+		if err := p.PostInstall(context.Background(), installPath); err != nil {
+			log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
+
+	// Activation runs WITHOUT the extract lock (it re-acquires the same lock).
 	if err := i.Activate(p, installPath, ver); err != nil {
 		log.Printf("[install] WARNING: activation failed for %s@%s (version installed, not activated): %v", p.Name(), ver, err)
 		return &ActivationError{Tool: p.Name(), Version: ver, Err: err}
@@ -1484,6 +2001,14 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	if ver == "" {
 		return fmt.Errorf("uninstall requires an explicit version")
 	}
+	// 20261021 审计 P1-5（阶段 1）：卸载路径同样用 SafeName 校验
+	// tool/version，避免把非法值带进 install/current 的路径拼接。
+	if err := validateInstallComponent("tool name", p.Name()); err != nil {
+		return err
+	}
+	if err := validateInstallComponent("version", ver); err != nil {
+		return err
+	}
 	lock, err := util.AcquireToolLock(i.cfg.Core.XMDevDir, p.Name(), 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("uninstall lock %s: %w", p.Name(), err)
@@ -1498,7 +2023,12 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 		for _, req := range other.RequiredPlugin() {
 			if req == p.Name() {
 				// Check if the dependent tool is actually installed
-				depPath := other.InstallDir(i.cfg.Core.InstallDir, other.DefaultVersion())
+				depPath, dirErr := other.InstallDir(i.cfg.Core.InstallDir, other.DefaultVersion())
+				if dirErr != nil {
+					// 依赖工具的路径不合法：视为未安装（不能阻止卸载）。
+					log.Printf("[install] WARNING: cannot resolve install dir for dependent tool %q: %v", other.Name(), dirErr)
+					continue
+				}
 				if fi, err := os.Stat(depPath); err == nil && fi.IsDir() {
 					return fmt.Errorf("cannot uninstall %q: required by %q; uninstall %q first", p.Name(), other.Name(), other.Name())
 				}
@@ -1506,8 +2036,26 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 		}
 	}
 
-	target := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	target, err := p.InstallDir(i.cfg.Core.InstallDir, ver)
+	if err != nil {
+		return err
+	}
 	log.Printf("[install] Uninstalling: %s@%s from %s", p.Name(), ver, target)
+
+	// 第十一轮审计（Round 10 报告待办 5 / P3-7）：**必须在删除目标之前**读活跃版本。
+	//
+	// 旧代码把 `currentVersion`（→ `util.ActiveVersion`）放在 `os.RemoveAll(target)`
+	// **之后**。它能工作，只是因为 `ActiveVersion` 当时**不检查目标是否存在** ——
+	// 删掉 install/<tool>/<ver> 后 `current/<tool>` 变成悬空链接，而旧实现仍
+	// 报「已激活」，于是 `activeVer == ver` 成立、下面的重指向/清理分支才会执行。
+	//
+	// 也就是说：Uninstall 一直**依赖那个幻影行为**来判断「被卸载的是当前活跃版本」。
+	// P3-7 修复后 `ActiveVersion` 正确地返回 ("", false)，这个依赖就断了 ——
+	// 卸载活跃版本时既不重指向也不清理 shim/环境变量，`current/<tool>` 永久悬空。
+	// 这是「修掉一个 bug 暴露出另一个隐藏依赖」的典型形态。
+	//
+	// 正确做法：在删除前把活跃版本读出来，之后只用这个快照判断。
+	activeVer, _ := i.currentVersion(p.Name())
 
 	// 1. Remove the installation directory
 	if err := os.RemoveAll(target); err != nil {
@@ -1516,7 +2064,6 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	}
 
 	// 2. Check if the uninstalled version was the active one
-	activeVer, _ := i.currentVersion(p.Name())
 	if activeVer == ver {
 		// Remove the current symlink
 		currentLink := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
@@ -1525,8 +2072,25 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 
 		// Try to re-point to another installed version
 		if otherVer := i.findOtherVersion(p); otherVer != "" {
-			otherPath := p.InstallDir(i.cfg.Core.InstallDir, otherVer)
+			otherPath, dirErr := p.InstallDir(i.cfg.Core.InstallDir, otherVer)
+			if dirErr != nil {
+				return dirErr
+			}
 			log.Printf("[install] Re-pointing %s to %s@%s", p.Name(), p.Name(), otherVer)
+			// Ticket 03 (audit-fixes / P0-05): Release the uninstall lock
+			// before re-acquiring inside Activate — Activate takes the
+			// same tool lock internally, and a nested acquisition self-
+			// deadlocks (Unix flock locks are per open-file-description,
+			// so a second acquire from the same process blocks the full
+			// 30s timeout; the Windows named mutex is reentrant only
+			// per-thread, and goroutine migration between the two
+			// acquisitions hangs the same way). Same pattern as the
+			// InstallWithProgress critical section (Spec 037).
+			// ToolLock.Release is idempotent (nil release check), so the
+			// deferred release at the top of Uninstall becomes a no-op.
+			// The lock is intentionally NOT re-acquired afterwards: the
+			// remainder of Uninstall only touches shim-index memory state.
+			lock.Release()
 			if err := i.Activate(p, otherPath, otherVer); err != nil {
 				log.Printf("[install] WARNING: failed to re-activate %s@%s: %v", p.Name(), otherVer, err)
 			}
@@ -1538,8 +2102,16 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 			// Security (M-1): Clean up user-level environment variables (JAVA_HOME, GOROOT, etc.)
 			// that were set during Activate. These point to the now-deleted installation
 			// and would cause errors if left in the registry.
+			//
+			// P2-3（第六轮审计）：removeUserEnvVars 的删除不广播 WM_SETTINGCHANGE——
+			// RemoveCurrentBinPaths 自带广播，但注册表环境变量的删除没有；Explorer
+			// 派生的新终端会继续持有已删除的 JAVA_HOME/GOROOT（正是 goroot_cleanup
+			// 注释里描述的陈旧值效应）。本分支是 Uninstall 中唯一的环境变量删除点，
+			// 在分支末尾广播一次覆盖 env 删除与（可能的）direct 模式 PATH 清理。
+			envTouched := false
 			if !i.noEnvWrite {
 				i.removeUserEnvVars(p)
+				envTouched = true
 			}
 			// direct 模式：从 PATH 中移除 current/<tool> 的 bin 子目录
 			if i.cfg.GetPathMode() == "direct" {
@@ -1551,11 +2123,20 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 					}
 				}
 			}
+			if envTouched {
+				env.BroadcastEnvironmentChange()
+				log.Printf("[install] Broadcast environment change after %s env cleanup", p.Name())
+			}
 		}
 	}
 
 	log.Printf("[install] Uninstall complete: %s@%s", p.Name(), ver)
 	shim.InvalidateShimIndex()
+	// 第十二轮审计（Round 11 报告 §七-④）：卸载成功后同样回收 `.stale-*` 残留。
+	// 卸载是产生残留的另一条主要路径（removeLinkEntry 的 rename+RemoveAll 可能
+	// 因文件被占用而只完成 rename），在这里补一次覆盖。
+	// best-effort：失败绝不影响卸载结果。
+	_ = shim.ReapStaleResidue(i.cfg.Core.XMDevDir)
 	return nil
 }
 
@@ -1599,17 +2180,13 @@ func (i *Installer) ListInstalledTools() []string {
 		if !e.IsDir() {
 			continue
 		}
-		toolDir := filepath.Join(i.cfg.Core.InstallDir, e.Name())
-		versions, err := os.ReadDir(toolDir)
-		if err != nil {
+		// 20261021 审计 P1-4：与 CLI/GUI 共用版本判据；只含辅助目录的
+		// 工具（Godot/export_templates）与空目录（perl）不算已安装。
+		versions, verr := util.ListVersionDirNames(filepath.Join(i.cfg.Core.InstallDir, e.Name()))
+		if verr != nil || len(versions) == 0 {
 			continue
 		}
-		for _, v := range versions {
-			if v.IsDir() {
-				tools = append(tools, e.Name())
-				break
-			}
-		}
+		tools = append(tools, e.Name())
 	}
 	return tools
 }
@@ -1624,22 +2201,19 @@ func (i *Installer) currentVersion(toolName string) (string, bool) {
 // (excluding the one being uninstalled), or "" if none exist.
 func (i *Installer) findOtherVersion(p plugin.Plugin) string {
 	dir := filepath.Join(i.cfg.Core.InstallDir, p.Name())
-	entries, err := os.ReadDir(dir)
+	versions, err := util.ListVersionDirNames(dir)
 	if err != nil {
 		return ""
 	}
 	var best string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
+	for _, v := range versions {
 		if best == "" {
-			best = e.Name()
+			best = v
 			continue
 		}
 		// Compare using semver, not lexicographic ordering
-		if util.CompareSemver(e.Name(), best) > 0 {
-			best = e.Name()
+		if util.CompareSemver(v, best) > 0 {
+			best = v
 		}
 	}
 	return best
@@ -1714,8 +2288,17 @@ func (i *Installer) removeUserEnvVars(p plugin.Plugin) {
 //  2. plain `ln -s` (in case the failure was on a network drive or
 //     overlay filesystem where Symlink syscall fails for other
 //     reasons).
-//  3. recursive copy of installPath -> currentLink (always works
-//     but uses disk space).
+//
+// F-22: the old chain ended in a recursive util.CopyDir of installPath ->
+// dst. That produced a REAL DIRECTORY at current/<tool>, which violates the
+// "current must be a link" contract — util.ActiveVersion resolves the path
+// with os.Readlink and so returned ("", false) forever, leaving the tool
+// permanently un-activated with no way to repair it. The copy fallback is
+// gone: this function now reports an explicit error instead.
+//
+// The `ln` invocation passes `-sT` where supported so the link is created AT
+// dst rather than INSIDE it (plain `ln -s src dst` puts the link at
+// dst/<basename> when dst already exists as a directory).
 //
 // Returns nil on the first success, otherwise a combined error.
 func fallbackLink(src, dst string) error {
@@ -1727,16 +2310,21 @@ func fallbackLink(src, dst string) error {
 	}
 	// Try the platform's `ln` tool, just in case the syscall was
 	// blocked by AppLocker or similar.
+	var lnErr error
 	if cmd, err := exec.LookPath("ln"); err == nil {
-		lnCmd := exec.Command(cmd, "-s", src, dst)
+		lnCmd := exec.Command(cmd, "-sT", src, dst)
 		util.HideWindow(lnCmd)
-		if err := lnCmd.Run(); err == nil {
+		if runErr := lnCmd.Run(); runErr == nil {
 			return nil
+		} else {
+			lnErr = runErr
 		}
+	} else {
+		lnErr = err
 	}
-	// Last resort: copy the directory tree.  This is slow and
-	// wastes disk, but it is bulletproof.
-	return util.CopyDir(src, dst)
+	// No copy fallback (see above) — fail loudly instead of materialising a
+	// plain directory that ActiveVersion can never resolve.
+	return fmt.Errorf("cannot create link %s -> %s: junction and symlink both failed (directory-copy fallback removed: current must be a link): %v", dst, src, lnErr)
 }
 
 // InstallSelf 将当前运行的 xdev 二进制安装到 install/xdev/<version>/ 并创建 junction

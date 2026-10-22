@@ -53,6 +53,21 @@ func Parse(raw string) (Spec, error) {
 	case "lts":
 		return Spec{Raw: raw, Original: original, Kind: KindLTS}, nil
 	}
+	// 第八轮审计 A-05（P1）：**先判 partial，再判 exact**。
+	//
+	// parseSemver 接受 2 段（`3.12`），因此 isExactSemver("3.12") 为真，旧顺序会把
+	// `python@3.12` 归为 KindExact → 精确匹配 "3.12" 失败并报
+	// "version 3.12 not found"。于是 isPartial / resolveRange 的 "x.y" 分支是
+	// **完全死代码**，而 README.md 与 installation-guide.md 都把
+	// `xdev install python@3.12` 当首要示例，resolver.go 的注释也承诺
+	// `"3.12" -> any 3.12.x`。实测：`xdev install python@3.12` 报
+	// "resolve version failed … version 3.12 not found"，而 `^3.12`/`~3.12`/`3.12.7`
+	// 均能进入下载阶段。
+	//
+	// `3.12` 是「部分版本」（= 3.12.x 中最高者），必须走范围解析。
+	if isPartial(raw) {
+		return Spec{Raw: raw, Original: original, Kind: KindRange, Constraint: raw}, nil
+	}
 	if isExactSemver(raw) {
 		return Spec{Raw: raw, Original: original, Kind: KindExact}, nil
 	}
@@ -76,8 +91,23 @@ func Resolve(spec Spec, available []string, latest, lts string) (string, error) 
 		}
 		return highest(available), nil
 	case KindExact:
+		// D-09（审计 P1-14，方案 B）：先原始串全等——内置清单与 available
+		// 列表的既有形态（两侧都不带 v）走原路径，零回归；miss 后再做
+		// **双侧** 去 "v" 前缀比较。原因是预填/自定义工具（remote.Pattern
+		// 捕获组可能含 v）产出的版本可能带前缀（v3.12.0），而 available
+		// 是不带前缀的 3.12.0，反之亦然——单侧去前缀只能修一半。
+		//
+		// 刻意不规范化 available 本身：返回值必须是列表里的**原始字符串**，
+		// 调用方（installer/isolator）用它拼安装目录名；也保证自定义工具
+		// 带 v 的产出仍可被匹配到。
 		for _, v := range available {
 			if v == spec.Raw {
+				return v, nil
+			}
+		}
+		want := strings.TrimPrefix(spec.Raw, "v")
+		for _, v := range available {
+			if strings.TrimPrefix(v, "v") == want {
 				return v, nil
 			}
 		}
@@ -263,23 +293,48 @@ func isConstraint(s string) bool {
 // We store major/minor/patch and optional pre-release tag.
 type semver struct {
 	major, minor, patch int
-	pre                 string // e.g. "beta.1", "rc1"
+	// extra 是第 4 段及以后的数值段（第九轮审计 P1-3）。
+	//
+	// 真实语料里存在 4 段构建号：clion/goland/webstorm 的 latest 是
+	// "2026.2.0.1"，jetbrains-idea-community "2025.2.6.3"、
+	// pycharm-community "2025.2.6.2"。旧实现用 SplitN(s, ".", 3)，于是第 3 段变成
+	// "0.1"、Atoi 失败 → `unrecognised version spec`：显式安装报错，而范围安装会
+	// 因 filterVersions 静默丢弃该条目而**永远选不到**（与 R8-2 同形态的
+	// 「以为在更新，其实没推上去」）。
+	//
+	// 按「缺失段视为 0」比较，使 "2026.2" 与 "2026.2.0.0" 相等（与 util.CompareSemver
+	// 对 3 段的既有语义一致），而 "2026.2.0.1" > "2026.2"。
+	extra []int
+	pre   string // e.g. "beta.1", "rc1"
 }
 
 func parseSemver(s string) (*semver, error) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
+	// 第九轮审计 A-16（P2）：**先剥 build metadata，再切 pre-release**。
+	//
+	// 缺陷原形是反过来的两步：先按 '-' 切 pre-release，再按 '+' 去 build
+	// metadata。对 "1.0.0-rc.1+build" 而言，第一步之后 '+' 已经落在
+	// pre-release 段里（pre="rc.1+build"），第二步的 '+' 查找只作用于主版本
+	// 段（此时已无 '+'）—— 于是 pre-release 残留 "+build"。实测
+	// compare("1.0.0-rc.1+build","1.0.0-rc.1") = 1，而 SemVer 2.0.0 §10 要求
+	// build metadata **不参与**优先级比较（应为 0）；同仓库的
+	// util.CompareSemver 给出的正是 0，两者结论相反。
+	//
+	// 顺序调换后："1.0.0-rc.1+build" → 剥 '+' 得 "1.0.0-rc.1" → 切 '-' 得
+	// pre="rc.1"。build metadata 里的 '-' 也不会再被误当成 pre-release 分隔符。
+	if idx := strings.Index(s, "+"); idx >= 0 {
+		s = s[:idx]
+	}
 	// Extract pre-release after '-'
 	var pre string
 	if idx := strings.Index(s, "-"); idx >= 0 {
 		pre = s[idx+1:]
 		s = s[:idx]
 	}
-	// Strip build metadata after '+'
-	if idx := strings.Index(s, "+"); idx >= 0 {
-		s = s[:idx]
-	}
-	parts := strings.SplitN(s, ".", 3)
-	if len(parts) < 1 || len(parts) > 3 {
+	// 第九轮审计 P1-3：接受**任意段数**（≥1）。旧的 `SplitN(s, ".", 3)` 让第 3 段
+	// 变成 "0.1"，4 段版本（真实语料 2026.2.0.1 等）直接解析失败。
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 {
 		return nil, fmt.Errorf("not a semver: %q", s)
 	}
 	v := &semver{pre: pre}
@@ -295,6 +350,8 @@ func parseSemver(s string) (*semver, error) {
 			v.minor = n
 		case 2:
 			v.patch = n
+		default:
+			v.extra = append(v.extra, n)
 		}
 	}
 	return v, nil
@@ -319,6 +376,12 @@ func (a *semver) compare(b *semver) int {
 		}
 		return 1
 	}
+	// 第九轮审计 P1-3：第 4 段及以后按数值比较，**缺失段视为 0**
+	// （于是 "2026.2" == "2026.2.0.0"，而 "2026.2.0.1" > "2026.2"）。
+	// extra 属于「数值核心」，因此排在 pre-release 之前比较。
+	if c := compareExtraSegments(a.extra, b.extra); c != 0 {
+		return c
+	}
 	// Pre-release comparison: a version without pre-release is
 	// higher than one with a pre-release tag.
 	// e.g. 1.0.0 > 1.0.0-beta.1
@@ -329,6 +392,31 @@ func (a *semver) compare(b *semver) int {
 		return -1
 	}
 	return comparePreRelease(a.pre, b.pre)
+}
+
+// compareExtraSegments 比较第 4 段及以后的数值段，缺失段视为 0。
+// 长度不等时按最短长度补齐后比较（"1" vs "1.0" 相等，1 vs 1.0.1 → 后者更大）。
+func compareExtraSegments(a, b []int) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			if av < bv {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 // comparePreRelease compares two pre-release strings per SemVer 2.0.0.

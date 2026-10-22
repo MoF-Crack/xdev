@@ -53,6 +53,7 @@ func createTestZip(t *testing.T, dstPath string, entries []string) {
 		t.Fatalf("zip close: %v", err)
 	}
 }
+
 // createTestTarGz creates a tar.gz file at dstPath with the given entries.
 // Each entry is "path|content" — if content is empty and path ends with "/", it's a directory.
 func createTestTarGz(t *testing.T, dstPath string, entries []string) {

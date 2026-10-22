@@ -55,9 +55,18 @@ async function expectNoSeriousAxeViolations(page) {
   return serious;
 }
 
-async function expectVisibleStateAccessible(page, include = 'main') {
+// axe 的 include 选择器在视图切换后可能尚未渲染：此时 axe-core 会抛
+// "No elements found for include in page Context"（并发跑 e2e 时实测到一次假红：
+// isolation/remote/about 用例）。扫描前先等目标可见——「该状态可访问」本来就以元素
+// 存在为前提，等待不降低断言语义，只消除渲染时序竞态。
+async function expectIncludedStateAccessible(page, include) {
+  await page.locator(include).first().waitFor({ state: 'visible' });
   const results = await new AxeBuilder({ page }).include(include).analyze();
   expect(results.violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
+}
+
+async function expectVisibleStateAccessible(page, include = 'main') {
+  await expectIncludedStateAccessible(page, include);
 }
 
 async function expectVisibleDialogAccessible(page) {
@@ -175,7 +184,7 @@ test('settings actions reach Wails APIs and destructive cache requires confirmat
   expect(await page.evaluate(() => window.__wailsCalls.CleanCache)).toEqual([]);
   await page.locator('[role="dialog"] [data-action="confirm"]').click();
   expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetPathMode: [['direct']], TestMirrorConnectivity: [['https://nodejs.org/dist']], SetProxyConfig: [['http://127.0.0.1:8080', '', '', true]], RunDiagnostics: 1, CleanCache: [['all']] });
-  expect((await new AxeBuilder({ page }).include('.settings-page').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+  await expectIncludedStateAccessible(page, '.settings-page');
 });
 
 test('environment actions and migration reach Wails APIs', async ({ page }, testInfo) => {
@@ -200,7 +209,7 @@ test('environment actions and migration reach Wails APIs', async ({ page }, test
   await page.locator('[data-action="migration-all"]').click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ SetEnvVar: [['', 'JAVA_HOME', 'C:\\Java', 'user']], DeleteEnvVarEntry: [['OLD_HOME', 'user']], ScanMigration: 2, MigrateSingle: expect.any(Array) });
-  expect((await new AxeBuilder({ page }).include('.env-page').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+  await expectIncludedStateAccessible(page, '.env-page');
 });
 
 test('isolation, remote, and about pages preserve API contracts', async ({ page }, testInfo) => {
@@ -210,7 +219,7 @@ test('isolation, remote, and about pages preserve API contracts', async ({ page 
   await page.locator('[data-view="remote"]').click(); await expectVisibleStateAccessible(page); await page.locator('[data-field="remote-image"]').fill('ubuntu:22.04'); await page.locator('[data-action="create-remote"]').click(); await page.locator('[data-action="copy-address"]').click(); expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('C:\\remote'); await page.locator('[data-field="remote-command"]').fill('pwd'); await page.locator('[data-action="exec-remote"]').click(); await page.locator('[data-action="destroy-remote"]').click(); expect(await page.evaluate(() => window.__wailsCalls.DestroyRemoteInstance)).toEqual([]); await expectVisibleDialogAccessible(page); await page.locator('[role="dialog"] [data-action="confirm"]').click();
   await page.locator('[data-view="about"]').click(); await expect(page.getByText('1.0.0', { exact: true })).toBeVisible(); await expectVisibleStateAccessible(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect((await new AxeBuilder({ page }).include('main').analyze()).violations.filter(v => ['serious', 'critical'].includes(v.impact))).toEqual([]);
+  await expectIncludedStateAccessible(page, 'main');
   expect(await page.evaluate(() => window.__wailsCalls)).toMatchObject({ IsolateSetup: [['container']], IsolateExec: [[['node', '--version']]], IsolateTeardown: [[]], CreateRemoteInstance: [['docker', 'ubuntu:22.04', '', 22, 'root', '', '']], ExecRemoteInstance: [['docker', 'remote-1', ['pwd']]], DestroyRemoteInstance: [['docker', 'remote-1']] });
 });
 
@@ -284,6 +293,20 @@ test('command palette supports keyboard navigation and restores trigger focus', 
 
   await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeHidden();
   await expect(trigger).toBeFocused();
+});
+
+test('command palette switches the active theme end to end', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 1024, height: 640 }, theme: 'dark', locale: 'en' });
+  await page.getByRole('button', { name: 'Open command palette' }).click();
+  const combobox = page.getByRole('combobox', { name: 'Search commands, pages, and tools' });
+  await combobox.fill('nord');
+  await combobox.press('Enter');
+
+  // The document attribute, the persisted choice and the rendered surface
+  // (Nord's polar night app background) all follow the selection.
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'nord');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('xdev-theme'))).toBe('nord');
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(46, 52, 64)');
 });
 
 test('installation progress visual baseline', async ({ page }, testInfo) => {
@@ -407,6 +430,19 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
   // The parallel property: both installs launched before any completion.
   expect(await page.evaluate(() => window.__wailsCalls.InstallToolConfirmed.length)).toBe(2);
 
+  // Ticket 12 / B-7 (G-02): while the batch runs, re-entry is blocked at
+  // the UI level — the dashboard's "Update All" button is disabled even
+  // after the dialog is backgrounded (the composable guards are the
+  // authoritative gate; the disabled button is what the user sees).
+  await expect(installAll).toBeDisabled();
+  await page.locator('.n-modal--wide [data-action="background"]').click();
+  await expect(modal).toBeHidden();
+  await expect(installAll).toBeDisabled();
+
+  // Re-open the dialog through the toolbar indicator to finish the batch.
+  await page.locator('[data-action="show-install-progress"]').click();
+  await expect(modal).toBeVisible();
+
   // Complete both — the batch resolves, reports the truthful summary,
   // and the finally net closes the progress dialog.
   await page.evaluate(() => window.__wailsEmit('installProgress', {
@@ -416,6 +452,8 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
     taskId: 'go@1.26.0', tool: 'go', version: '1.26.0', phase: 'Completed', percent: 100,
   }));
   await expect(modal).toBeHidden();
+  // The batch settled → the button is usable again.
+  await expect(installAll).toBeEnabled();
 });
 
 test('narrow app shell is compact, contained, and has no serious accessibility violations', async ({ page }, testInfo) => {

@@ -32,11 +32,20 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 
 	"github.com/xmdemt/xdev/internal/manifest"
 )
+
+// ErrUnsafeInstallPath 表示 tool name / version / install_root 无法安全地
+// 组成 <installRoot>/<tool>/<version> 路径。
+//
+// 20261021 审计 P1-5（阶段 2）：InstallDir 以前是 `string` 返回，校验失败只能
+// 替换成 `unsafe-version-blocked` 继续安装（fail-open，宿主实测留下过伪目录）。
+// 现在写路径必须拿到 error 并中止。
+var ErrUnsafeInstallPath = errors.New("unsafe install path")
 
 // Plugin is the contract every supported tool implements.
 //
@@ -91,7 +100,11 @@ type Plugin interface {
 
 	// InstallDir returns the absolute path where this tool's
 	// installation should live, e.g. "E:/XDev/install/go/1.22.0".
-	InstallDir(root, version string) string
+	//
+	// Returns ErrUnsafeInstallPath (wrapped) when the tool name,
+	// install_root or version cannot be safely joined into the path.
+	// Callers must abort rather than fall back to a sanitised name.
+	InstallDir(root, version string) (string, error)
 
 	// Shims lists the binary names that need a shim entry in the
 	// shims/ directory. For example, Go returns ["go", "gofmt", "godoc"].

@@ -2,7 +2,7 @@
   <AppShell :selected-view="selectedView" :navigation-groups="localizedNavigationGroups" :t="t"
     :minimize="minimizeWindow" :toggle-maximize="toggleMaximize" :close="closeWindow"
     :minimize-label="t('window.minimize')" :maximize-label="isMaximized ? t('window.restore') : t('window.maximize')" :close-label="t('window.close')"
-    @select-view="onMenuSelect" @open-command-palette="openCommandPalette" @escape="setCommandPaletteVisible(false)">
+    @select-view="onMenuSelect" @open-command-palette="openCommandPalette" @escape="() => { /* G-05: Escape 只归命令面板所有——无条件调用 setCommandPaletteVisible(false) 会把焦点抢到 Ctrl+K 触发器上，破坏自行处理 Escape 的抽屉/对话框的焦点返还契约。 */ if (showCommandPalette) setCommandPaletteVisible(false); }">
     <template #toolbar>
       <PageToolbar :title="headerTitle">
         <n-space>
@@ -26,14 +26,14 @@
       </PageToolbar>
     </template>
         <!-- Dashboard -->
-        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @install-all-updates="installAllUpdates" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
+        <DashboardPage v-if="selectedView === 'dashboard'" :stats="stats" :loading="dashboardLoading" :error="dashboardError" :t="t" :updates="availableUpdates" :updates-loading="updatesLoading" :sniffing="sniffOperating" :scan-operating="scanOperating" :update-operating="updateOperating" :batch-installing="batchInstalling" :expanded-name="dashVersionExpanded" :installed-versions="dashInstalledVers" :available-versions="dashAvailableVers" :scan-results="scanResults" :scan-attempted="scanAttempted" :ignored-tools="ignoredTools" :install-size-entries="installSizeEntries" :cache-size-entries="cacheSizeEntries" :install-size-loading="installSizeLoading" :cache-size-loading="cacheSizeLoading" :migration-busy="!!migratingAll || !!migratingSingle" @scan-local="scanLocal" @check-update="checkUpdate" @retry="loadDashboard" @refresh-updates="loadUpdates" @install-update="installUpdate" @install-all-updates="installAllUpdates" @sniff-all="sniffAll" @manage-versions="openDashVersionManager" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="installDashVersion" @repair="repairDashVersion" @scan-migrate="migrateScanTool" @scan-ignore="ignoreScanTool" @unignore="unignoreTool" @show-install-size="showInstallSize" @show-cache-size="showCacheSize" @clean-cache-category="cleanCacheCategory" @delete-cache-file="deleteCacheFile" />
 
         <!-- Favorites Page -->
-        <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
+        <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
         <!-- Settings -->
         <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
         <!-- Environment Variables Page -->
-        <EnvironmentVariablesPage v-else-if="selectedView === 'env-vars'" :t="t" :all-env-vars="allEnvVars" :all-level="envAllLevel" :validation-stats="envValidationStats" :migration-mode="migrationMode" :migration-tools="migrationTools" :migration-results="migrationResults" @update:all-level="setEnvAllLevel" @validate="validateAllEnvVars" @new="newEnvVar" @edit="editEnvVar" @delete="deleteEnvRow" @clean="cleanEnvRow" @clean-all-invalid="cleanAllInvalidEnvVars" @migration-scan="scanForMigration" @migration-single="migrateSingle" @migration-all="migrateAll" />
+        <EnvironmentVariablesPage v-else-if="selectedView === 'env-vars'" :t="t" :all-env-vars="allEnvVars" :all-level="envAllLevel" :validation-stats="envValidationStats" :migration-mode="migrationMode" :migration-tools="migrationTools" :migration-results="migrationResults" :migration-busy="!!migratingAll || !!migratingSingle" @update:all-level="setEnvAllLevel" @validate="validateAllEnvVars" @new="newEnvVar" @edit="editEnvVar" @delete="deleteEnvRow" @clean="cleanEnvRow" @clean-all-invalid="cleanAllInvalidEnvVars" @migration-scan="scanForMigration" @migration-single="migrateSingle" @migration-all="migrateAll" />
 
         <IsolationPage v-else-if="selectedView === 'isolate'" :t="t" :status="isolateStatus" :loading="isolateLoading" :error="isolateError" :output="isolateExecOutput" :operating="isolateOperating" @setup="isolateSetup" @exec="isolateExec" @teardown="isolateTeardown" />
 
@@ -45,7 +45,7 @@
         <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
   </AppShell>
 
-  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
+  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
@@ -99,6 +99,7 @@ import { useSniffSession } from './composables/useSniffSession.js';
 import AppShell from './layouts/AppShell.vue';
 import PageToolbar from './layouts/PageToolbar.vue';
 import { commandPaletteEntries, createNavigationGroups, findPageDefinition } from './navigation/navigation.js';
+import { DEFAULT_THEME, isKnownTheme, THEMES } from './theme/themes.js';
 import { sameEnvIdentity } from './pages/envIdentity.js';
 import { createLatestRequestController } from './pages/settingsState.js';
 
@@ -117,30 +118,27 @@ onUnmounted(() => {
   // TOFU warning dialog / self-update toast fires duplicated.
   window.runtime?.EventsOff?.('xdev:tofu-warning');
   window.runtime?.EventsOff?.('self-update');
+  // F-41: 同样在 onMounted 注册，必须一并注销（否则重挂载后重复提示）。
+  window.runtime?.EventsOff?.('xdev:activation-warning');
 });
 
-onMounted(async () => {
-  // Spec 032: one bootstrap round-trip replaces the categories +
-  // dashboard + favorites waterfall.
-  try {
-    const boot = await window.go.gui.App.GetBootstrapState();
-    if (boot?.categories) categories.value = boot.categories;
-    if (boot?.stats) stats.value = boot.stats;
-    if (boot?.favorites) favorites.value = boot.favorites;
-  } catch (e) {
-    console.error('Bootstrap failed, falling back to individual loads:', e);
-    await loadCategories();
-    await loadDashboard();
-    await loadFavorites();
-  }
-  await loadUpdates();
-  await loadIgnoredTools();
-  await loadSniffConfig();
-  await loadSniffServiceStatus();
-  await loadMigrationMode();
-  // 扫描旧版目录，发现后弹出迁移确认对话框
-  scanAndPromptLegacyMigration();
-
+// R8-01（第八轮审计，P1）：事件注册必须全部落在**同步前缀**，即任何 await 之前。
+//
+// 缺陷现场：这 4 个 EventsOn 原本写在 `onMounted(async () => {...})` 的**多个 await
+// 之后**（GetBootstrapState → loadUpdates → … → loadMigrationMode），而 onUnmounted
+// 的 EventsOff 是同步的。真实时序窗口：App.vue 的 `checkInit()` 在 bootstrap 未决时
+// 返回 false → <AppContent> 被 <SetupWizard> 替换 → 卸载执行 EventsOff（此时还没有
+// 任何监听者）→ 挂起的 await 恢复 → **卸载之后**才 EventsOn 注册。
+// Wails 的 EventsOn 按事件名把回调追加进一个 Set，EventsOff(name) 只在注册之后调用
+// 才有效，因此这些监听者**永不注销**：每次卸载/重挂载泄漏 4 个，且它们会在组件已经
+// 不在时继续跑 message.warning(...) / loadDashboard() —— 用户看到「幽灵」激活失败
+// toast，并触发无意义的仪表盘重算。
+//
+// 修复：把注册提到 onMounted 的同步前缀。回调只引用函数声明（提升）与在同步前缀处
+// 已初始化的 ref（showSelfUpdate/selfUpdateInfo 在 <script setup> 顶层、早于
+// onMounted 回调执行时求值，故安全）；回调体内对其它 ref 的访问发生在事件到达时，
+// 与注册位置无关。
+function registerRuntimeListeners() {
   // Listen for TOFU warning events from the backend
   window.runtime?.EventsOn?.('xdev:tofu-warning', (data) => {
     if (!data || !data.tool) return;
@@ -151,6 +149,21 @@ onMounted(async () => {
       closable: false,
       maskClosable: false,
     });
+  });
+
+  // 第七轮审计 F-41：安装成功但**激活失败**的软告警。
+  // Go 侧在 ExtractAndActivate 返回激活类错误时会 emit 'xdev:activation-warning'
+  //（internal/gui/app_install.go），但前端从无监听者 —— 事件被静默丢弃，用户看到
+  // 的是「Completed」，而工具其实**没有**切到新版本（版本装上了、current 链接没动）。
+  // 这里补上监听，明确告知「已安装但未激活」以及如何修复。
+  window.runtime?.EventsOn?.('xdev:activation-warning', (data) => {
+    if (!data || !data.tool) return;
+    message.warning(
+      t('install.activation_warning', { tool: data.tool, version: data.version, message: data.message }),
+      { duration: 10000 },
+    );
+    // 激活失败通常意味着 shim/链接状态异常，刷新详情以便用户看到真实状态。
+    loadDashboard();
   });
 
   // Listen for dashboard stats refresh events from the backend
@@ -174,18 +187,45 @@ onMounted(async () => {
       message.error(t('update_check_failed'));
     }
   });
+}
+
+onMounted(async () => {
+  // R8-01：先同步注册（第一个 await 之前），保证「注册先于任何挂起点」；
+  // 即使本组件在 bootstrap 未决期间被卸载，onUnmounted 的 EventsOff 也能清干净。
+  registerRuntimeListeners();
+
+  // Spec 032: one bootstrap round-trip replaces the categories +
+  // dashboard + favorites waterfall.
+  try {
+    const boot = await window.go.gui.App.GetBootstrapState();
+    if (boot?.categories) categories.value = boot.categories;
+    if (boot?.stats) stats.value = boot.stats;
+    if (boot?.favorites) favorites.value = boot.favorites;
+  } catch (e) {
+    console.error('Bootstrap failed, falling back to individual loads:', e);
+    await loadCategories();
+    await loadDashboard();
+    await loadFavorites();
+  }
+  await loadUpdates();
+  await loadIgnoredTools();
+  await loadSniffConfig();
+  await loadSniffServiceStatus();
+  await loadMigrationMode();
+  // 扫描旧版目录，发现后弹出迁移确认对话框
+  scanAndPromptLegacyMigration();
 });
 
 const selectedView = ref('dashboard');
 const storedTheme = localStorage.getItem('xdev-theme');
-const themeName = ref(storedTheme === 'true' ? 'dark' : storedTheme === 'false' ? 'light' : ['light', 'dark', 'eye-care'].includes(storedTheme) ? storedTheme : 'dark');
+const themeName = ref(storedTheme === 'true' ? 'dark' : storedTheme === 'false' ? 'light' : isKnownTheme(storedTheme) ? storedTheme : DEFAULT_THEME);
 
 function applyThemeToDocument() {
   document.documentElement.setAttribute('data-theme', themeName.value);
 }
 
 function setTheme(name) {
-  if (!['light', 'dark', 'eye-care'].includes(name)) return;
+  if (!isKnownTheme(name)) return;
   themeName.value = name;
   localStorage.setItem('xdev-theme', name);
   applyThemeToDocument();
@@ -444,10 +484,19 @@ async function openFavVersionManager(fav, force = false) {
       window.go.gui.App.GetInstalledVersions(fav.name),
       window.go.gui.App.GetAvailableVersions(fav.name),
     ]);
+    // 票 25 (P1-22) 竞态守卫：慢响应期间用户可能已展开另一个收藏项，
+    // 无条件落盘会用旧条目覆盖新条目的版本列表（交错污染）。守卫失败
+    // 静默丢弃（对照本文件 toolDeps 的既有守卫写法）。
+    if (favVersionExpanded.value !== fav.name) {
+      console.debug('[AppContent] discarding stale fav versions response for', fav.name);
+      return;
+    }
     favInstalledVers.value = installed || [];
     favAvailableVers.value = available || [];
   } catch (e) {
     console.error('Failed to load fav versions:', e);
+    // 同上：失败清零也必须落在当前展开的条目上。
+    if (favVersionExpanded.value !== fav.name) return;
     favInstalledVers.value = [];
     favAvailableVers.value = [];
   }
@@ -464,10 +513,17 @@ async function openDashVersionManager(tool, force = false) {
       window.go.gui.App.GetInstalledVersions(tool.name),
       window.go.gui.App.GetAvailableVersions(tool.name),
     ]);
+    // 票 25 (P1-22) 竞态守卫：同 openFavVersionManager，比对仪表盘当前
+    // 展开的工具名，避免旧响应覆盖新工具的版本列表。
+    if (dashVersionExpanded.value !== tool.name) {
+      console.debug('[AppContent] discarding stale dashboard versions response for', tool.name);
+      return;
+    }
     dashInstalledVers.value = installed || [];
     dashAvailableVers.value = available || [];
   } catch (e) {
     console.error('Failed to load dashboard versions:', e);
+    if (dashVersionExpanded.value !== tool.name) return;
     dashInstalledVers.value = [];
     dashAvailableVers.value = [];
   }
@@ -719,9 +775,22 @@ const localizedNavigationGroups = computed(() => mergedNavigationGroups.value.ma
 })));
 const currentPage = computed(() => findPageDefinition(selectedView.value, localizedNavigationGroups.value));
 const headerTitle = computed(() => currentPage.value?.label ?? selectedView.value);
-const commandPaletteOptions = computed(() => commandPaletteEntries(localizedNavigationGroups.value, t));
+const commandPaletteOptions = computed(() => [
+  ...commandPaletteEntries(localizedNavigationGroups.value, t),
+  // Spec 040: quick theme switching from the palette (Ctrl+K).
+  ...THEMES.map((theme) => ({
+    key: `theme:${theme.value}`,
+    label: t(theme.labelKey),
+    group: t('settings.theme'),
+  })),
+]);
 
 async function onCommandSelect(key) {
+  if (key.startsWith('theme:')) {
+    const name = key.slice('theme:'.length);
+    if (isKnownTheme(name)) setTheme(name);
+    return;
+  }
   await onMenuSelect(key);
 }
 
@@ -922,6 +991,13 @@ async function loadVersions(toolName) {
       window.go.gui.App.GetInstalledVersions(toolName),
       window.go.gui.App.GetAvailableVersions(toolName),
     ]);
+    // 票 25 (P1-22) 竞态守卫：两个入口是异步的，慢响应期间用户可能已切换
+    // 选中工具；此时无条件落盘会把旧工具的版本列表写进抽屉，造成交错污染
+    // （对照 openDetail 里 toolDeps 的同型守卫）。
+    if (selectedTool.value?.name !== toolName) {
+      console.debug('[AppContent] discarding stale versions response for', toolName);
+      return;
+    }
     installedVersions.value = installed || [];
     availableVersions.value = available || [];
   } catch (e) {
@@ -1387,9 +1463,17 @@ async function previewCustomToolVersions(formData) {
   customToolSubmitting.value = true;
   customToolPreview.value = [];
   try {
-    customToolPreview.value = await window.go.gui.App.PreviewCustomToolVersions(
+    // F-2（前端复审）：Go 侧契约已改为 {success, message, versions}——
+    // 失败不再被 `|| []` 吞成静默空列表，原因直达 toast。
+    const result = await window.go.gui.App.PreviewCustomToolVersions(
       formData.sourceURL, formData.sourceType, formData.pattern || '',
-    ) || [];
+    );
+    if (result && result.success) {
+      customToolPreview.value = result.versions || [];
+    } else {
+      customToolPreview.value = [];
+      message.error(t('custom_tools.preview_failed') + ': ' + ((result && result.message) || ''));
+    }
   } catch (e) {
     console.error('Preview failed:', e);
     message.error(t('custom_tools.preview_failed') + ': ' + e);
@@ -1453,6 +1537,17 @@ async function saveArchiveRetention(policy) {
 }
 
 async function migrateTool(toolName, localPath) {
+  // R8-02（第八轮审计，P1）：F-40 的重入守卫**只覆盖了 migrateSingle/migrateAll**，
+  // 而同一时刻可用的另外两条迁移入口都走本函数：
+  //   - DashboardPage 扫描结果行「迁移」→ @scan-migrate → migrateScanTool → migrateTool；
+  //   - FavoritesPage / ToolDetailDrawer 的「迁移到 xdev」→ @migrate → migrateTool。
+  // 本函数既不读也不写 migratingAll/migratingSingle，Go 侧
+  // MigrateLocalTool / migrateLocalToolByJunction / migrateLocalToolByMove 也都不取
+  // 工具锁，因此双击 = 两次并发 MigrateLocalTool，对同一目录并发
+  // CopyDir/os.Rename/CreateJunction；move 模式下第二个流程还会对已被移走的源路径做
+  // os.RemoveAll。这里复用同一对标志（并在 finally 复位）。
+  if (migratingAll.value || migratingSingle.value) return;
+  migratingSingle.value = toolName;
   try {
     await window.go.gui.App.MigrateLocalTool(toolName, localPath);
     message.success(t('migration.migrated_to_xdev', { name: toolName }));
@@ -1460,6 +1555,8 @@ async function migrateTool(toolName, localPath) {
     await refreshTools();
   } catch (e) {
     message.error(t('migration.migrate_failed') + ': ' + e);
+  } finally {
+    migratingSingle.value = '';
   }
 }
 
@@ -1502,6 +1599,11 @@ async function scanForMigration() {
 }
 
 async function migrateSingle(tool) {
+  // 第七轮审计 F-40：重入守卫。migratingSingle/migratingAll 此前**只被写、从不被读**
+  // （模板零次引用），按钮唯一约束是 `:disabled="!migrationTools.length"`，不随进行中
+  // 状态禁用。迁移是长耗时复制/移动，快速双击会让同一个工具被两个并发迁移流程同时
+  // 处理（Go 侧也无工具锁），造成重复移动 / 半迁移状态。
+  if (migratingAll.value || migratingSingle.value) return;
   migratingSingle.value = tool.name;
   try {
     const toolJson = JSON.stringify(tool);
@@ -1521,6 +1623,8 @@ async function migrateSingle(tool) {
 }
 
 async function migrateAll() {
+  // 第七轮审计 F-40：同上，批量迁移也必须防重入（否则两轮循环会并发处理同一批工具）。
+  if (migratingAll.value || migratingSingle.value) return;
   const mode = migrationMode.value;
   migratingAll.value = true;
   migrationResults.value = [];
