@@ -48,6 +48,9 @@ func makeStaleShimDir(t *testing.T) (shimDir, newSrc string) {
 }
 
 func TestRefreshDispatchers_ReroutesStaleShims(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("regular-file shim copies are Windows-only; Unix shims are symlinks")
+	}
 	shimDir, newSrc := makeStaleShimDir(t)
 
 	refreshed, failed := RefreshDispatchers(shimDir, newSrc)
@@ -90,6 +93,9 @@ func TestRefreshDispatchers_ReroutesStaleShims(t *testing.T) {
 }
 
 func TestRefreshDispatchers_IdempotentSecondCall(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("regular-file shim copies are Windows-only; Unix shims are symlinks")
+	}
 	shimDir, newSrc := makeStaleShimDir(t)
 
 	RefreshDispatchers(shimDir, newSrc)

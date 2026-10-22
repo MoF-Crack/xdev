@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,9 @@ func b5JavaHomeWithBin(t *testing.T) string {
 // （进程 env 里没有）。B-08 前 os.ExpandEnv 不认 %VAR% → 字面量送 os.Stat
 // 必失败 → 合法条目被删；修复后保留合法条目、清理失效条目。
 func TestCleanEnvVarPath_PercentVarEntrySurvives(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("%VAR% expansion is Windows-specific")
+	}
 	javaHome := b5JavaHomeWithBin(t)
 	missing := filepath.Join(t.TempDir(), "gone")
 
@@ -146,6 +150,9 @@ func TestCleanEnvVarPath_PercentVarEntrySurvives(t *testing.T) {
 // buildPathEntries）——含 %VAR% 的合法条目必须判为有效，前端不再把它显示成
 // invalid；未定义引用仍判无效。
 func TestValidateEnvVar_PercentVarEntryValid(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("%VAR% expansion is Windows-specific")
+	}
 	javaHome := b5JavaHomeWithBin(t)
 	store := &b5EnvStore{vars: map[string]string{}}
 	b5InstallEnvSeams(t, store, map[string]string{"JAVA_HOME": javaHome}, nil)
@@ -235,6 +242,9 @@ func TestExpandPercentVars_CaseInsensitiveAndPreservingUnresolved(t *testing.T) 
 // %JAVA_HOME% 引用）走一次批量清理，合并环境必须只枚举一次（票 30 第 3 条）；
 // 同时断言合法条目全保留、失效条目全清理（双向防回归）。
 func TestCleanAllInvalidEnvVars_EnumeratesMergedEnvOnce(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("%VAR% expansion is Windows-specific")
+	}
 	javaHome := b5JavaHomeWithBin(t)
 	missingRoot := t.TempDir()
 

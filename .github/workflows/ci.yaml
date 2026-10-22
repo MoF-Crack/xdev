@@ -29,14 +29,20 @@ jobs:
             goos: linux
             goarch: amd64
             ext: ""
+            cgo_ldflags: ""
           - os: windows-latest
             goos: windows
             goarch: amd64
             ext: ".exe"
+            cgo_ldflags: ""
           - os: macos-latest
             goos: darwin
             goarch: arm64
             ext: ""
+            # Wails v2.12 的 darwin cgo LDFLAGS 未包含
+            # UniformTypeIdentifiers；macOS 26 SDK 下必须显式补上，
+            # 否则链接报 _OBJC_CLASS_$_UTType undefined。
+            cgo_ldflags: "-framework UniformTypeIdentifiers"
 
     runs-on: ${{ matrix.os }}
 
@@ -110,11 +116,22 @@ jobs:
       # 被无 tag 的 _test.go 引用时只有在 Linux/macOS 跑 `go test` 才会暴露。
       # 交叉 GOOS 的 `go vet` 会编译测试文件，是最便宜的防线。
       - name: Cross-platform test compilation (non-Windows)
-        if: matrix.goos == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         run: bash scripts/ci/check-cross-compile.sh
 
+      # Wails 的 Linux 后端需要 GTK3 + WebKit2GTK 开发库（cgo）。
+      # ubuntu-latest（24.04）只提供 webkit2gtk-4.1，因此构建标签需带
+      # webkit2_41；4.0 在该镜像上不可用。
+      - name: Install Linux GUI build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Build CLI
-        run: go build -tags desktop,production -ldflags="-s -w" -o xdev${{ matrix.ext }} .
+        env:
+          CGO_LDFLAGS: ${{ matrix.cgo_ldflags }}
+        run: go build -tags desktop,production,webkit2_41 -ldflags="-s -w" -o xdev${{ matrix.ext }} .
 
       # Spec 005 FR-004: host state snapshot is enabled by package TestMain
       # (internal/testkit/hostsnapshot). Do not set XDEV_HOST_SNAPSHOT=0 here.
@@ -253,6 +270,11 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install Linux GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Verify signing secrets (hard gate)
         env:
           XDEV_SIGNING_PRIVATE_KEY: ${{ secrets.XDEV_SIGNING_PRIVATE_KEY }}
@@ -279,7 +301,7 @@ jobs:
           mkdir -p keys
           printf '%s' "$XDEV_SIGNING_PRIVATE_KEY" > keys/priv.key
           chmod 600 keys/priv.key
-          go build -tags desktop,production -o xdev .
+          go build -tags desktop,production,webkit2_41 -o xdev .
           ./xdev sign-manifests --manifests-dir manifests --priv-key keys/priv.key
 
       - name: Build all platforms
@@ -295,7 +317,7 @@ jobs:
 
           # linux-amd64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-amd64-v${VER}.tar.gz"; then
-            GOOS=linux   GOARCH=amd64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev .
+            GOOS=linux   GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
             tar -czf "dist/xdev-linux-amd64-v${VER}.tar.gz" xdev
             rm -f xdev
           else
@@ -304,7 +326,7 @@ jobs:
 
           # linux-arm64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-arm64-v${VER}.tar.gz"; then
-            GOOS=linux   GOARCH=arm64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev .
+            GOOS=linux   GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
             tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
             rm -f xdev
           else
@@ -313,7 +335,7 @@ jobs:
 
           # windows-amd64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-windows-amd64-v${VER}.zip"; then
-            GOOS=windows GOARCH=amd64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev.exe .
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev.exe .
             (cd "$(dirname xdev.exe)" && 7z a -tzip "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe) || \
               zip -j "dist/xdev-windows-amd64-v${VER}.zip" xdev.exe
             rm -f xdev.exe
@@ -321,23 +343,8 @@ jobs:
             echo "SKIP: xdev-windows-amd64-v${VER}.zip already exists"
           fi
 
-          # darwin-amd64
-          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-amd64-v${VER}.tar.gz"; then
-            GOOS=darwin   GOARCH=amd64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev .
-            tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev
-            rm -f xdev
-          else
-            echo "SKIP: xdev-darwin-amd64-v${VER}.tar.gz already exists"
-          fi
-
-          # darwin-arm64
-          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-darwin-arm64-v${VER}.tar.gz"; then
-            GOOS=darwin   GOARCH=arm64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev .
-            tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev
-            rm -f xdev
-          else
-            echo "SKIP: xdev-darwin-arm64-v${VER}.tar.gz already exists"
-          fi
+          # darwin 资产由 release-macos 原生 job 构建（Wails 需要 cgo，
+          # ubuntu 上无法交叉编译）；此处不再交叉构建 darwin。
 
       - name: Build Linux .deb and .rpm packages
         env:
@@ -379,7 +386,7 @@ jobs:
               continue
             fi
 
-            GOOS=linux GOARCH="$GOARCH" go build -tags desktop,production -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
+            GOOS=linux GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
 
             PKGROOT="$(mktemp -d)"
             mkdir -p "$PKGROOT/usr/bin"
@@ -417,7 +424,7 @@ jobs:
           VER="${TAG#v}"
           # 单二进制模型：一个产物同时提供 GUI/TUI/CLI（0.4.0 起产物名统一为 xdev-*）
           LDFLAGS="-s -w -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY"
-          GOARCH=amd64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev .
+          GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
 
           # Assemble AppDir
           APPDIR="XDev.AppDir"
@@ -590,6 +597,8 @@ jobs:
       - name: Build macOS DMG
         env:
           TAG: ${{ github.ref_name }}
+          # Wails v2.12 的 cgo LDFLAGS 缺少该框架；macOS 26 SDK 链接必需。
+          CGO_LDFLAGS: "-framework UniformTypeIdentifiers"
         run: |
           VER="${TAG#v}"
           mkdir -p dist
@@ -609,8 +618,8 @@ jobs:
           fi
 
           # Build CLI for both architectures
-          GOARCH=amd64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev-amd64 .
-          GOARCH=arm64 go build -tags desktop,production -ldflags="$LDFLAGS" -o xdev-arm64 .
+          GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-amd64 .
+          GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-arm64 .
 
           # Create DMG (arm64 universal-ready)
           STAGING="xdev-dmg-staging"
@@ -699,6 +708,11 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install Linux GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
       - name: Verify signing secrets (hard gate)
         env:
           # F-38：本作业不使用私钥签名，仅做存在性硬门禁——私钥只在此步骤可见。
@@ -722,7 +736,7 @@ jobs:
         run: |
           VER="${TAG#v}"
           mkdir -p dist
-          go build -tags desktop,production -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY" -o xdev .
+          go build -tags desktop,production,webkit2_41 -ldflags="-s -w -X github.com/xmdemt/xdev/internal/version.GitCommit=${GITHUB_SHA} -X github.com/xmdemt/xdev/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=$XDEV_SIGNING_PUBLIC_KEY" -o xdev .
 
           APPDIR="XDev.AppDir"
           rm -rf "$APPDIR"

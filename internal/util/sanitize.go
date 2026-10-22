@@ -194,7 +194,14 @@ func ValidateSubPath(parent, child string) error {
 	// Walk the child up until a real prefix exists, then stitch the
 	// remaining components onto the resolved prefix.
 	absParent = evalExistingPrefix(absParent)
-	absChild = evalExistingPrefix(absChild)
+	// 只解析 child 的**目录**，不跟随最后一段。
+	//
+	// 20261022 CI（macOS）实测：Activate 校验 current/<tool> 时，该路径本身
+	// 已是指向 install/<tool>/<ver> 的符号链接。旧实现 EvalSymlinks 把整条
+	// child 解析到安装树，于是每个合法激活都被判成 “escapes current dir”。
+	// Windows 的 junction 没有暴露这一点，Linux/macOS 的 symlink 会。
+	// 语义应当是：**链接路径本身**必须在 parent 内，而不是链接目标。
+	absChild = filepath.Join(evalExistingPrefix(filepath.Dir(absChild)), filepath.Base(absChild))
 
 	// Check via Rel that child does not escape parent
 	rel, err := filepath.Rel(absParent, absChild)

@@ -8,6 +8,7 @@ package manifest
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -104,8 +105,10 @@ func TestLoadCatalog_MarksInstallability(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// 用运行平台写 fixture：Installable 是“本机可安装”，不能用 windows-only
+	// 归档去断言 macOS/Linux 上为 true（20261022 CI 实测）。
 	write("good", "name: good\nversions:\n  - version: \"1.0.0\"\n    archives:\n"+
-		"      - os: windows\n        arch: amd64\n        url: https://x/good.zip\n        format: zip\n")
+		"      - os: "+runtime.GOOS+"\n        arch: "+runtime.GOARCH+"\n        url: https://x/good.zip\n        format: zip\n")
 	write("placeholder", "name: placeholder\nversions:\n  - version: \"1.0.0\"\n    archives:\n"+
 		"      - os: windows\n        arch: amd64\n")
 

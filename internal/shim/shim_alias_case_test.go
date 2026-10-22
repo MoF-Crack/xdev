@@ -190,6 +190,16 @@ func TestLookup_PreservesCaseOnUnix(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix exact-case regression gate")
 	}
+	// macOS 默认 APFS 大小写不敏感：文件系统本身会把 FAKEPY 解析到 fakepy，
+	// 该断言只在大小写敏感的文件系统上有意义（20261022 CI）。
+	probeDir := t.TempDir()
+	probe := filepath.Join(probeDir, "xdevcaseprobe")
+	if err := os.WriteFile(probe, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(probeDir, "XDEVCASEPROBE")); err == nil {
+		t.Skip("case-insensitive filesystem (macOS default)")
+	}
 
 	home := t.TempDir()
 	curDir := filepath.Join(home, "current", "fakepy")

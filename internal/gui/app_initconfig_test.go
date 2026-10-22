@@ -1,3 +1,5 @@
+//go:build windows
+
 // app_initconfig_test.go contains the F-18 deadlock regression test:
 // InitConfig must not call a.getCfg() while holding the cfgMu write lock.
 package gui

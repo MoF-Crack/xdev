@@ -1,3 +1,5 @@
+//go:build windows
+
 // app_stale_residue_r10_test.go — 第十轮审计 P3-8（P3）守卫（GUI 侧）。
 //
 // SetPathMode 迁移 PATH 时会 `ReadDir(current)` 枚举"已激活工具"。

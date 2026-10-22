@@ -18,6 +18,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -101,6 +102,9 @@ func TestReadCacheFile_RejectsBadRecords(t *testing.T) {
 // LOCALAPPDATA/APPDATA 被指向临时目录，hostCachePath 的 fallback 分支因此完全
 // 落在临时目录内，不去碰本机可能存在的 <drive>\XDev\.home.cache。
 func TestReadHomeCache_UsesSingleLineCache(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("LOCALAPPDATA/APPDATA cache fallback is Windows-specific")
+	}
 	base := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("LOCALAPPDATA", base)

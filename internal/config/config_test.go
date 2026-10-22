@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -73,6 +74,9 @@ func TestExplicitOverride(t *testing.T) {
 }
 
 func TestExplicitDirWins(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows absolute-path semantics (C:\\...)")
+	}
 	// Even when XMDEV_FORCE_HOME=1 and the smart-fallback would
 	// redirect to D:\, an explicit argument always wins.
 	t.Setenv("XMDEV_FORCE_HOME", "1")
@@ -86,6 +90,9 @@ func TestExplicitDirWins(t *testing.T) {
 }
 
 func TestXMDevHomeEnvWins(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows absolute-path semantics (C:\\...)")
+	}
 	t.Setenv("XMDEV_HOME", "C:\\custom\\home")
 	got, err := resolveXMDevDir("")
 	if err != nil {

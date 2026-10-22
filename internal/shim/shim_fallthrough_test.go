@@ -116,12 +116,20 @@ func TestDefaultExcludedDirs_CoversShims(t *testing.T) {
 	t.Setenv("XMDEV_HOME", home)
 	config.ResetHomeDirForTest() // 测试隔离：shim_alias_case_test.go 等按字母序先跑、消费 sync.Once 后不重置
 	excluded := defaultExcludedDirs()
+	// 生产实现会 EvalSymlinks（macOS /var → /private/var）；期望值必须走同一
+	// 规范化，否则在 macOS 上永远对不上（20261022 CI）。
+	canon := func(p string) string {
+		if ev, err := filepath.EvalSymlinks(p); err == nil {
+			return ev
+		}
+		return p
+	}
 	for _, d := range []string{
 		home,
 		filepath.Join(home, "current"),
 		filepath.Join(home, "shims"),
 	} {
-		if !excluded[strings.ToLower(filepath.Clean(d))] {
+		if !excluded[strings.ToLower(filepath.Clean(canon(d)))] {
 			t.Errorf("excluded set must contain %q", d)
 		}
 	}

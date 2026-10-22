@@ -66,6 +66,9 @@ func TestExtractUpdateBinary_UniqueStagingNames(t *testing.T) {
 // P2-A：refreshShimDispatchers 必须把 home 下 shims/ 的现存分发器副本
 // 重指到给定的新二进制（ApplyTo 在 replaceBinary 成功后调用它）。
 func TestRefreshShimDispatchers_ReroutesStaleShims(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("regular-file shim copies are Windows-only; Unix shims are symlinks")
+	}
 	home := t.TempDir()
 	t.Setenv("XMDEV_HOME", home)
 	config.ResetHomeDirForTest()

@@ -10,6 +10,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -116,6 +117,9 @@ func TestDoctorFix_RegistryWritesAreGatedInSource(t *testing.T) {
 // 这是 F-31 的关键实证：缺陷原形下 `doctor --fix --no-path-fix` 会真的把
 // <home>/current/xdev 追加进 PATH。用内存后端驱动，测试不碰真实 HKCU。
 func TestPlanDoctorFix_NoPathFixReallyPreventsHostWrites(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("memory registry backend is Windows-specific")
+	}
 	home := t.TempDir()
 	xdevBinDir := filepath.Join(home, "current", "xdev")
 	if err := os.MkdirAll(xdevBinDir, 0o755); err != nil {
