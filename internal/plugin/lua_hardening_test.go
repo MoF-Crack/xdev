@@ -187,10 +187,12 @@ func TestLatest_AllNonSemver_FallsBackToTableTail(t *testing.T) {
 
 // spinIterations is the loop count used by LU5. It is calibrated so the
 // bounded spin inside available() overshoots the injected 250ms timeout
-// (measured ≈1.3s here, i.e. ≈4e7 loop iterations/s in gopher-lua) but
-// still finishes well inside the production timeout, letting the orphan
-// goroutine from the first call die on its own.
-const spinIterations = 50000000
+// (≈0.5s native) but still finishes inside the production 30s — including
+// under `go test -race`, where the detector slows the VM by roughly 10×
+// (20261022 CI: 5e7 iterations exceeded 30s and the *second* call never
+// returned). 2e7 keeps the timeout path exercised on both speeds while the
+// orphan goroutine dies quickly.
+const spinIterations = 20000000
 
 // LU5 (票 20 / F-04, 红线): a timed-out call leaves an orphan goroutine
 // running inside the VM, so that LState is poisoned and must be evicted;
