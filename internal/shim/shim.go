@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/util"
@@ -596,7 +597,38 @@ func InstallShim(shimDir, name, selfPath string) error {
 		}
 		return nil
 	}
-	return os.Symlink(selfPath, filepath.Join(shimDir, name))
+	return installShimUnix(selfPath, filepath.Join(shimDir, name))
+}
+
+// installShimUnix 在 Unix 上创建/替换 shim 符号链接。
+//
+// 20261022 CI（Ubuntu/macOS）实测：并发 ExtractAndActivate 的第二个调用
+// 直接 os.Symlink → EEXIST，把“并发激活同一个版本”变成失败。Windows 的
+// installShimWindows 早已处理 SameFile/stale 替换，Unix 分支缺失。
+//
+// 语义：
+//   - 已是同目标符号链接 → no-op（幂等）；
+//   - 符号链接指向别处 → 原子替换（temp + rename）；
+//   - 普通文件/目录 → 拒绝覆盖（不能把用户文件当 shim 吞掉）。
+func installShimUnix(selfPath, dst string) error {
+	if fi, err := os.Lstat(dst); err == nil {
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("shim path %q exists and is not a symlink (refusing to overwrite)", dst)
+		}
+		if cur, rerr := os.Readlink(dst); rerr == nil && cur == selfPath {
+			return nil
+		}
+	}
+
+	tmp := fmt.Sprintf("%s.tmp-%d", dst, time.Now().UnixNano())
+	if err := os.Symlink(selfPath, tmp); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // installShimWindows places a Windows shim at dst.

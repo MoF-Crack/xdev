@@ -629,6 +629,10 @@ jobs:
           hdiutil create -volname "XDev" -srcfolder "$STAGING" -ov -format UDZO "dist/xdev-darwin-arm64-v${VER}.dmg"
           rm -rf "$STAGING"
 
+          # 保留原有的 tar.gz 资产名（此前由 ubuntu 交叉构建；现在改原生构建）。
+          tar -czf "dist/xdev-darwin-amd64-v${VER}.tar.gz" xdev-amd64
+          tar -czf "dist/xdev-darwin-arm64-v${VER}.tar.gz" xdev-arm64
+
           rm -f xdev-amd64 xdev-arm64
 
       - name: Generate macOS SHA256SUMS
