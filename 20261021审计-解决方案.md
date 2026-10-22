@@ -539,9 +539,12 @@ func FuncBody(t *testing.T, pkgDir, funcName string) string
 | B1 | ✅ | `076554f` | `xdev self install`；doctor running-copy / RC-home / catalog-source / 缺失目录合并；`util.LooksLikeVersionDirName` + `ListVersionDirNames` 接入 6 个消费点；主机 `current/xdev` 已从 0.3.3-rc.2 切到 0.4.0 |
 | B2 | ✅ | `7f0f7e9` | 安装/激活/卸载/npm 入口 fail-closed；Lua 计量串行化 + 诊断日志；shim `TestMain`（覆盖率 0.0% → 82.4%）；`removeLinkEntry(path, xmdeHome)` + 删除死开关 |
 | B2b | ✅ | `28a02b3` | 整包测试暴露：孤儿 Lua goroutine 污染进程级堆基线 → 新增 `luaActive` 归因守卫（有其它 Lua goroutine 时关闭监控）；plugin 测试用 TestMain 关闭默认监控、内存用例显式注入上限；R8-05 文档守卫排除 `docs/audits`/`docs/history` 快照 |
-| B3 | ✅ | 见最终提交 | ADR-0006 + ADR-0002 纠偏；architecture/installation/usage 修订；HANDOFF 单节重置；`docs/audits/2026/` 归档；`.gitignore` 覆盖 bugx/handoff-history；`build.ps1` 构建后自证版本 + SHA256 |
-| B2 阶段 2 | ⏸ 另立 Spec | — | `plugin.InstallDir` 接口 error 化（20 个生产调用点 + 9 个测试 fake）。阶段 1 已封闭所有写路径，接口改造属 API 硬化 |
-| B1 遗留 | ⏳ 待确认 | — | 全局 PowerShell profile 的 `XMDEV_HOME` 仍指向已删除的临时目录（见审计报告 §9.1）；需要用户确认后改为 `E:\XDev` 或删除 |
+| B3 | ✅ | `dd591df` | ADR-0006 + ADR-0002 纠偏；architecture/installation/usage 修订；HANDOFF 单节重置；`docs/audits/2026/` 归档；`.gitignore` 覆盖 bugx/handoff-history；`build.ps1` 构建后自证版本 + SHA256 |
+| B2 阶段 2 | ✅ | `f62bf7b` | `plugin.InstallDir` 改 `(string, error)` + `ErrUnsafeInstallPath`；删除 `unsafe-*-blocked` 回退；21 个生产调用点 / 8 个测试 fake / 21 个测试调用点全部迁移 |
+| B1 遗留 | ✅ | 主机操作 | 全局 PowerShell profile 已备份（`.bak-20261022`）并改为 `E:\XDev` / `E:\XDev\shims`；doctor 的 shell rc 转为 ✔ |
+| B4（doctor） | ✅ | `5247551` | manifest 汇总/重播种（旧文件备份 `.corrupt-<ts>`）；伪版本目录隔离到 `.trash`；`gopath`/`export_templates` 永不移动（实测 1.78GB / 2.07GB 完好） |
+| Item 5 | ✅ | `16bcf0e` | 冒烟暴露并修复 CI/Release 缺 Wails `desktop,production` 标签（12 条命令 + 守卫）；GUI/TUI/CLI/direct PATH 冒烟通过 |
+| Item 1 | ✅ | PR #1 | 推送 `audit/2026-10-22`（78 提交）并创建 https://github.com/MoF-Crack/xdev/pull/1 ，CI 已启动 |
 
 **验证（B0–B3 最终态）**
 
@@ -554,7 +557,26 @@ GOOS=darwin go vet ./...            exit 0
 go test ./... -count=1              32 包全绿
 go test ./internal/plugin -count=5  绿（看门狗归因稳定）
 go test ./internal/shim -cover      82.4%
-npx vitest run                      48 files / 303 tests
+npx vitest run                      49 files / 305 tests（含 Wails 标签守卫）
 npx vite build                      exit 0
 ```
+
+---
+
+## 十一、按 2→3→4→5→1 执行记录（2026-10-22）
+
+| 顺序 | 项 | 结果 |
+|---|---|---|
+| 2 | 全局 PowerShell profile | 备份 `Microsoft.PowerShell_profile.ps1.bak-20261022`；`XMDEV_HOME=E:\XDev`、PATH 改为 `E:\XDev\shims`；doctor `shell rc injected` ✔ |
+| 3 | `InstallDir` error 化 | `f62bf7b`；非法 tool/version/install_root 返回 `ErrUnsafeInstallPath`；全量测试绿 |
+| 4 | doctor 增强 | `5247551`；主机 `cursor.yaml` 已从 embedded 重播种（旧文件 4162B 备份），`gradle/unsafe-version-blocked`、`llvm/lld_is_a_generic_driver._` 已移入 `.trash`；`manifest files` / `install junk dirs` 均 ✔ |
+| 5 | 冒烟 | GUI：`wailsWindow` + WebView2 6 进程、正常关闭；TUI：主界面渲染；CLI：`version/list/current/which/use`；direct PATH 增删后逐字节还原；**发现并修复 CI/Release 缺 Wails 标签**（`16bcf0e`） |
+| 1 | 推送 PR | `audit/2026-10-22`（78 commits）已推送；PR https://github.com/MoF-Crack/xdev/pull/1 ；CI 已启动 |
+
+**仍未覆盖 / 后续**
+
+- CI 实际结果待观察（ubuntu `-race`、macOS 测试、integration）。
+- GUI 深度交互（安装、批量取消）由 305 个前端用例覆盖，未做手工点击。
+- 宿主 `doctor` 仍报 PATH shadow 冲突（`C:\Program Files\dotnet\` 等早于 shim 目录），属机器配置。
+- 远端默认分支有 4 个 Dependabot 告警（1 high / 3 moderate），建议单独处理。
 

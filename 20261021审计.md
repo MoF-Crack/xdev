@@ -537,3 +537,45 @@ C:\Users\xinyan\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
 **建议**：doctor 汇总“被跳过的 manifest 文件名 + 原因”；`doctor --fix` 对被判定为
 损坏且与 embedded 同名的文件提供重新播种（需保留用户嗅探合并的版本）。
 
+### 9.3 P1-7（执行期发现并已修）：CI/Release 构建缺 Wails 标签，GUI 完全不可用
+
+**证据**
+
+用普通 `go build` 产出的二进制执行 `xdev`（无参数）时，窗口不是 GUI，而是
+标题为 `Error` 的对话框：
+
+```text
+Wails applications will not build without the correct build tags.
+Please use "wails build" or press "OK" to open the documentation on how to use "go build"
+```
+
+WebView2 进程数不变（25 → 25），即 GUI 根本没有初始化。带
+`-tags desktop,production` 重新构建后：
+
+```text
+class=wailsWindow title=XDev - Development Environment Manager
+webview2: before=25 after=31
+closed cleanly
+```
+
+**影响**
+
+- `.github/workflows/ci.yaml` 的 build job 与 release 打包命令（12 条 `go build`）
+  全部缺少标签 → CI 上传的产物、`.tar.gz`/`.zip`/`.deb`/`.rpm`/`.AppImage`/`.dmg`
+  里的 GUI 都是坏的（CLI/TUI 仍可用）。
+- 本地 `build.ps1`/`build.sh` 使用 `wails build`（自带标签），所以只有
+  “手工 go build / CI 产物”这一路径中招 —— 也是为什么它长期未被发现。
+
+**修复**（本会话 `16bcf0e`）
+
+- 12 条 CI `go build` 全部补 `-tags desktop,production`；
+- 新增 `frontend/test/r9-ci-wails-tags.spec.js` 双向守卫（命令必须带标签；
+  本地脚本必须用 `wails build`）；
+- installation-guide / architecture / ADR-0006 同步说明；
+- 本机 `current/xdev` 已改为带标签构建的 0.4.0。
+
+**教训**：这是“单二进制 = 默认 go build”这一文档假设的反例。默认 `go build`
+产出的是 **CLI/TUI + GUI stub**；GUI 需要显式标签。发布链必须被自动化守卫覆盖，
+不能只依赖本地 `build.ps1`。
+
+
