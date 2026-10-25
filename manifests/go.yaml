@@ -19,6 +19,37 @@ env_vars:
     # 与官方默认不同，属于有意为之的 xdev 托管行为，保持现状。
     GOPATH: '{{install}}\..\gopath'
 versions:
+    # 升级（安全）：Go 1.26.5 存在中间信任漏洞，默认版本提升到 1.27.3。
+    # SHA256 / size 均取自官方索引 https://go.dev/dl/?mode=json，非估算值。
+    - version: 1.27.3
+      stable: true
+      release: "2026-10-22"
+      archives:
+        - os: windows
+          arch: amd64
+          format: zip
+          url: https://go.dev/dl/go1.27.3.windows-amd64.zip
+          mirror_url: ""
+          sha256: "f26081f438319757f8a1b46d7d0b2c5ec7583d4038e485e0aa725cfde7885fff"
+          size: 79010309
+          strip: 0
+        - os: linux
+          arch: x86_64
+          format: tar.gz
+          url: https://go.dev/dl/go1.27.3.linux-amd64.tar.gz
+          mirror_url: https://mirrors.aliyun.com/golang/go1.27.3.linux-amd64.tar.gz
+          sha256: "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+          size: 70588678
+          strip: 0
+        - os: darwin
+          arch: arm64
+          format: tar.gz
+          url: https://go.dev/dl/go1.27.3.darwin-arm64.tar.gz
+          mirror_url: https://mirrors.aliyun.com/golang/go1.27.3.darwin-arm64.tar.gz
+          sha256: "dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2"
+          size: 68196737
+          strip: 0
+    # 1.26.5 保留作为可选版本（已有安装不受影响），但不再是 latest。
     - version: 1.26.5
       stable: true
       release: "2026-07-29"
@@ -141,6 +172,6 @@ remote:
     url: https://go.dev/dl/?mode=json
     path: ""
     pattern: go(\d+\.\d+\.\d+)$
-latest: 1.26.5
+latest: 1.27.3
 lts: ""
 install_root: ""

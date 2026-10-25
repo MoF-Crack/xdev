@@ -1,6 +1,8 @@
 module github.com/xmdemt/xdev
 
-go 1.25.0
+// 升级（安全）：Go 1.26.5 存在中间信任漏洞，最低构建工具链提升到 1.27.0。
+// 本机实测工具链为 go1.27.3（GOTOOLCHAIN=auto）。
+go 1.27.0
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0
