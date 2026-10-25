@@ -1567,33 +1567,24 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	}
 	log.Printf("[install] Activating: %s -> %s", currentLink, installPath)
 
-	// --- H-9 Rollback: Save previous state ---
-	var oldJunctionTarget string
-	var junctionExisted bool
-	if _, err := os.Lstat(currentLink); err == nil {
-		junctionExisted = true
-		if target, err := os.Readlink(currentLink); err == nil {
-			oldJunctionTarget = target
-			if fi2, err2 := os.Stat(target); err2 == nil && fi2.IsDir() {
-				_ = p.Deactivate(target)
-			}
-		}
-	}
-
-	// --- Step 1: Create junction/symlink ---
+	// --- 计算激活计划（纯计算，不写磁盘）---
 	//
-	// F-22: build the replacement link under a TEMPORARY name first and only
-	// swap it in once it exists. Pre-fix the old link was removed
-	// unconditionally before any link method ran, so an activation whose link
-	// creation failed left the tool permanently un-activated even though the
-	// previous version was still fully installed. With this order the old link
-	// survives every failure of link creation itself.
-	junctionCreated := false
-	// F-22/P1-24: the swap target must be a UNIQUELY named temporary entry,
-	// not a fixed "<link>.tmp" — concurrent activations of the same tool
-	// would otherwise share the path and clobber each other. os.CreateTemp
-	// yields an atomically unique name; the placeholder file is removed and
-	// the link is created in its place.
+	// 2026-10-25（架构收口）：把「要做什么」与「做到了哪一步」都收进
+	// activationPlan。修复前这里靠三个局部布尔手工记账，而函数结尾是
+	// `_ = junctionCreated` / `_ = envVarsWritten` —— 两个变量被显式丢弃，
+	// 说明回滚记账根本不参与决策，任何新增步骤都会静默漏回滚。
+	plan, err := i.planActivate(p, installPath, ver)
+	if err != nil {
+		return err
+	}
+	log.Printf("[install] Activating: %s -> %s", plan.currentLink, installPath)
+	log.Printf("[install] %s", plan.describe())
+
+	// --- Step 1: 替换 current 链接 ---
+	//
+	// F-22：先建临时链接，成功后才换入；旧链接在任何失败下都保留。
+	// F-22/P1-24：临时名必须**唯一**（os.CreateTemp），否则同一工具的
+	// 并发激活会互相覆盖。
 	tmpFile, tmpErr := os.CreateTemp(currentDir, p.Name()+".tmp-*")
 	if tmpErr != nil {
 		return fmt.Errorf("activate %s: reserve temporary link name: %w", p.Name(), tmpErr)
@@ -1603,72 +1594,45 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
 
 	if err := linkCurrent(installPath, tmpLink); err != nil {
-		log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", currentLink, installPath, err)
+		log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", plan.currentLink, installPath, err)
 		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
-		// The previous link was never touched — nothing to restore.
-		return fmt.Errorf("symlink %s -> %s (all link methods failed: %v)", currentLink, installPath, err)
+		// 旧链接从未被触碰 —— 无需恢复。
+		return fmt.Errorf("symlink %s -> %s (all link methods failed: %v)", plan.currentLink, installPath, err)
 	}
 
-	// The new link exists. Swap it in; removeLinkEntry only unlinks the
-	// current entry and never follows it into the install tree.
-	removeLinkEntry(currentLink, i.cfg.Core.XMDevDir)
-	if err := os.Rename(tmpLink, currentLink); err != nil {
-		log.Printf("[install] ERROR: failed to swap in the new link %s: %v", currentLink, err)
+	// 新链接已就绪，换入。removeLinkEntry 只解链、不跟进安装树。
+	removeLinkEntry(plan.currentLink, i.cfg.Core.XMDevDir)
+	if err := os.Rename(tmpLink, plan.currentLink); err != nil {
+		log.Printf("[install] ERROR: failed to swap in the new link %s: %v", plan.currentLink, err)
 		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
-		// F-22: restore the previous link instead of leaving the tool
-		// un-activated.
-		i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
+		// F-22：恢复旧链接，而不是把工具留在未激活状态。
+		i.rollbackActivation(plan.currentLink, plan.linkExisted, plan.oldLinkTarget, p)
 		return fmt.Errorf("activate %s: replace current link: %w", p.Name(), err)
 	}
-	junctionCreated = true
+	plan.linkSwapped = true
 
-	// --- Step 2: PATH mode dispatch ---
-	//
-	// 2026-10-25（P0-4 / P3）：显式 switch。
-	//   - direct：把每个工具的 current/<tool>/bin 直接写进 PATH
-	//   - shim / auto：都走 shim 分支
-	//
-	// auto 为什么与 shim 同分支：auto = shim + cd hook 项目级切换。
-	// 版本选择发生在**运行时**（shim.Lookup 读 .xdev.yaml），
-	// 与安装时写什么 PATH 无关，所以安装阶段与 shim 完全一致。
-	pathsAdded := false
-	switch i.cfg.GetPathMode() {
+	// --- Step 2: 按 path.mode 分派 ---
+	switch plan.pathMode {
 	case "direct":
-		currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
-		binPaths := env.ToolBinPaths(p.Name(), currentDir)
-		// P1（2026-10-25）：合并 manifest 声明的 path_append。
-		// 这些是包管理器自己的 bin（$GOPATH/bin、$CARGO_HOME/bin 等），
-		// 不在 current/<tool>/bin 下，不追加的话 `go install` / `cargo install`
-		// 装完会 command not found。
-		binPaths = append(binPaths, p.PathAppend(installPath)...)
-		if len(binPaths) > 0 {
-			if i.noEnvWrite {
+		if len(plan.binPaths) > 0 {
+			if plan.noEnvWrite {
 				log.Printf("[install] Skipping AddCurrentBinPaths (noEnvWrite=true)")
-			} else if err := env.AddCurrentBinPaths(binPaths); err != nil {
+			} else if err := env.AddCurrentBinPaths(plan.binPaths); err != nil {
 				log.Printf("[install] WARNING: failed to add current bin paths to PATH: %v", err)
 			} else {
-				pathsAdded = true
-				for _, bp := range binPaths {
+				plan.pathsAdded = true
+				for _, bp := range plan.binPaths {
 					log.Printf("[install] Added to PATH: %s", bp)
 				}
 			}
 		}
 		log.Printf("[install] Direct mode: skipping shim creation, using PATH entries instead")
-	default: // "shim"（GetPathMode 已保证只可能是 shim 或 direct）
+	default: // shim / auto
 		shimExe := i.ResolveShimExe()
 		log.Printf("[install] Creating shims in %s (exe=%s)", i.cfg.Core.ShimDir, shimExe)
-		// F-26: align with removeShims — an invalid shim NAME is skipped with
-		// a warning instead of aborting the whole loop, so one bad entry no
-		// longer prevents the remaining valid shims from being installed
-		// (pre-fix the first invalid name failed activation outright and
-		// rolled everything back). Genuine install failures are collected and
-		// reported together; if any occurred, the previous state is restored.
+		// F-26：非法 shim 名在 plan 阶段已被过滤，这里只会遇到合法名。
 		var shimErrs []string
-		for _, name := range p.Shims() {
-			if err := util.ValidateShimName(name); err != nil {
-				log.Printf("[install] WARNING: skipping invalid shim name %q: %v", name, err)
-				continue
-			}
+		for _, name := range plan.shimNames {
 			log.Printf("[install] Installing shim: %s", name)
 			if err := shim.InstallShim(i.cfg.Core.ShimDir, name, shimExe); err != nil {
 				log.Printf("[install] ERROR: shim install failed for %s: %v", name, err)
@@ -1676,34 +1640,27 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 			}
 		}
 		if len(shimErrs) > 0 {
-			// H-9 Rollback: restore previous junction
-			i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
+			i.rollback(plan, p)
 			return fmt.Errorf("shim install failed for %d shim(s) [%s] (activation rolled back)",
 				len(shimErrs), strings.Join(shimErrs, "; "))
 		}
 	}
 
-	// --- Step 3: Write user env vars (H-10: transactional) ---
-	vars := p.EnvVars(installPath)
-	envVarsWritten := false
-	if len(vars) > 0 {
-		if i.noEnvWrite {
+	// --- Step 3: 写用户级环境变量（H-10: 事务性）---
+	if len(plan.envVars) > 0 {
+		if plan.noEnvWrite {
 			log.Printf("[install] Skipping user env var writes (noEnvWrite=true)")
 		} else {
-			if err := i.setUserEnvVars(vars); err != nil {
+			if err := i.setUserEnvVars(plan.envVars); err != nil {
 				log.Printf("[install] ERROR: setUserEnvVars failed, rolling back activation: %v", err)
-				// H-9 Rollback
-				i.rollbackActivation(currentLink, junctionExisted, oldJunctionTarget, p)
-				if pathsAdded {
-					currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
-					binPaths := env.ToolBinPaths(p.Name(), currentDir)
-					env.RemoveCurrentBinPaths(binPaths)
-				}
+				i.rollback(plan, p)
 				return fmt.Errorf("failed to set env vars (activation rolled back): %w", err)
 			}
-			envVarsWritten = true
+			plan.envVarsWritten = true
 		}
 	}
+
+
 
 	log.Printf("[install] Activation complete: %s@%s (%d shims)", p.Name(), ver, len(p.Shims()))
 	shim.InvalidateShimIndex()
@@ -1734,9 +1691,11 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 		env.BroadcastEnvironmentChange()
 	}
 
-	_ = junctionCreated
-	_ = envVarsWritten
-
+	// 2026-10-25（架构收口）：这里曾有
+	//	_ = junctionCreated
+	//	_ = envVarsWritten
+	// 两个被显式丢弃的变量 —— 证明回滚记账已死。现已改为 plan/rollback：
+	// 状态全在 activationPlan 里，rollback 据此逐项撤销。
 	return nil
 }
 
