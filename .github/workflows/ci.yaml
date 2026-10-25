@@ -633,8 +633,21 @@ jobs:
           fi
 
           # Build CLI for both architectures
-          GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-amd64 .
-          GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-arm64 .
+          #
+          # 2026-10-25 修复（undefined: Frontend）：macos-latest 是 Apple Silicon
+          # （arm64），下面两条都是**跨架构**构建：
+          #   GOARCH=amd64 —— 交叉到 x86_64
+          #   GOARCH=arm64 —— 与原生机一致
+          # 而 Go 在「GOARCH != 宿主架构」时会默认关闭 CGO，一旦 CGO_ENABLED=0，
+          # Wails 的 internal/frontend/desktop/darwin 就是纯 CGO 包
+          # （frontend.go 里 `import "C"`，type Frontend 定义其中），
+          # 整包报 undefined: Frontend。因此必须显式 CGO_ENABLED=1。
+          #
+          # amd64 交叉需要 x86_64 版 macOS SDK；Xcode 自带的 SDK 同时包含两种
+          # 架构 slice，无需额外安装。若链接阶段报架构不匹配，再加
+          # CGO_CFLAGS/CGO_LDFLAGS 的 -arch x86_64。
+          CGO_ENABLED=1 GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-amd64 .
+          CGO_ENABLED=1 GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev-arm64 .
 
           # Create DMG (arm64 universal-ready)
           STAGING="xdev-dmg-staging"
