@@ -329,17 +329,21 @@ jobs:
             echo "SKIP: xdev-linux-amd64-v${VER}.tar.gz already exists"
           fi
 
-          # linux-arm64
-          if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-arm64-v${VER}.tar.gz"; then
-            # 同上：去掉 GOOS=linux 以保留 CGO。arm64 交叉编译需要 aarch64 C 工具链
-            # （CC=aarch64-linux-gnu-gcc）与对应的 GTK/WebKit arm64 开发包；
-            # ubuntu-latest 默认没有，若此步失败请先装交叉工具链，或改为原生 arm64 runner。
-            CC=aarch64-linux-gnu-gcc GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
-            tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
-            rm -f xdev
-          else
-            echo "SKIP: xdev-linux-arm64-v${VER}.tar.gz already exists"
-          fi
+          # linux-arm64：**不在本 job 构建**。
+          #
+          # 2026-10-25 修复：原先在 ubuntu-latest（amd64）上交叉编译 arm64：
+          #   CC=aarch64-linux-gnu-gcc GOARCH=arm64 go build ...
+          # 但 ubuntu-latest 没有 aarch64-linux-gnu-gcc，也没有 arm64 的
+          # GTK/WebKit 开发包；去掉 GOOS 后 CGO 必须开启，于是直接失败：
+          #   undefined: Frontend（Wails 的 linux 后端是纯 CGO 包）
+          #
+          # 实际上仓库已有专门的 `release-arm64` job，跑在原生
+          # `ubuntu-24.04-arm` runner 上，用无 GOOS/GOARCH 的
+          # `go build -tags desktop,production,webkit2_41` 产出 arm64 AppImage。
+          # 与 darwin 的处理同理（下方注释），交给原生 job 才是正途。
+          #
+          # 若将来需要 tar.gz 形式的 arm64 资产，应加到 release-arm64 job，
+          # 而不是在这里交叉编译。
 
           # windows-amd64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-windows-amd64-v${VER}.zip"; then
@@ -396,12 +400,16 @@ jobs:
 
             # 2026-10-25 修复：同 Build all platforms —— 去掉 GOOS=linux，
             # 否则 Go 关闭 CGO，Wails 的 linux 后端报 undefined: Frontend。
-            # amd64 原生编译；arm64 需要 aarch64 C 工具链（见上）。
+            #
+            # arm64 的 deb/rpm 需要 aarch64-linux-gnu-gcc + arm64 的 GTK/WebKit
+            # 开发包，ubuntu-latest 默认都没有。跳过 arm64（只产出 amd64 包），
+            # 避免整个 release job 因交叉编译失败而中断；
+            # arm64 用户可直接用 release-arm64 job 产出的 AppImage。
             if [ "$GOARCH" = "arm64" ]; then
-              CC=aarch64-linux-gnu-gcc GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
-            else
-              GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
+              echo "SKIP: linux-arm64 deb/rpm（ubuntu-latest 无 aarch64 交叉工具链与 arm64 GTK/WebKit；请用 release-arm64 的 AppImage）"
+              continue
             fi
+            GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
 
             PKGROOT="$(mktemp -d)"
             mkdir -p "$PKGROOT/usr/bin"
