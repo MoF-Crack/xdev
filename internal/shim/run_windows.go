@@ -6,9 +6,72 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/xmdemt/xdev/internal/env"
 )
+
+// 控制台判定所需的 Win32 API。
+//
+// 为什么不能只看 GetConsoleWindow 是否非 0：实测在 VS Code / FunIDE 的
+// **集成终端**里跑，GetConsoleWindow() 返回非 0（例如 7081206），但
+// IsWindowVisible 是 false —— 集成终端把 conhost 的窗口隐藏了，只把
+// 输出管道接给终端面板。只看非 0 会误判为「用户交互场景」而保留弹窗。
+var (
+	kernel32DLL       = syscall.NewLazyDLL("kernel32.dll")
+	procGetConsoleWin = kernel32DLL.NewProc("GetConsoleWindow")
+	user32DLL         = syscall.NewLazyDLL("user32.dll")
+	procIsWindowVis   = user32DLL.NewProc("IsWindowVisible")
+)
+
+// hasVisibleConsole 判断本进程是否挂着一个**真实可见**的控制台窗口。
+//
+// 为什么需要它（2026-10-25，用户报告「频繁弹出 go/python 终端窗口，
+// 且 python 窗口关掉会自动重建」）：
+//
+// shim（E:\XDev\shims\*.exe）是 **GUI 子系统**二进制（PE Subsystem=2），
+// 它自己没有控制台。当 IDE 扩展 / MCP 服务把 shim 当控制台工具调用时：
+//   1. Windows 为 shim 分配一个新的控制台（conhost）；
+//   2. shim 再 exec 真正的工具时没有 HideWindow，子进程继承那个控制台，
+//      而该控制台的窗口是**可见**的 → 用户看到弹窗；
+//   3. 语言服务器（jedi-language-server）与 MCP server 都是长驻进程，
+//      于是窗口一直不销毁，用户关掉后 IDE 重启它又出现。
+//
+// 反向约束：用户在终端里手动敲 `python` / `go` 时，**必须**保留窗口
+// （否则交互式工具无法显示输出）。因此不能无条件 HideWindow。
+//
+// 判定标准 = 窗口存在 且 可见：
+//   - 普通 cmd/PowerShell 窗口：hwnd!=0 且 visible=true → 不隐藏（正确）
+//   - IDE 集成终端：hwnd!=0 但 visible=false → 隐藏（避免弹窗）
+//   - 无控制台（GUI 宿主调用）：hwnd==0 → 隐藏（避免弹窗）
+func hasVisibleConsole() bool {
+	if procGetConsoleWin.Find() != nil || procIsWindowVis.Find() != nil {
+		// 极端情况下拿不到 API：保守认为有可见控制台，保持原行为（不隐藏），
+		// 宁可弹窗也不要把交互式工具的输出弄丢。
+		return true
+	}
+	hwnd, _, _ := procGetConsoleWin.Call()
+	if hwnd == 0 {
+		return false
+	}
+	visible, _, _ := procIsWindowVis.Call(hwnd)
+	return visible != 0
+}
+
+// childSysProcAttrFor 根据「是否需要隐藏子进程窗口」构造 SysProcAttr。
+// hide==false 返回 nil（保持默认继承行为，交互式终端不受影响）。
+//
+// 单独抽成函数是为了可测试：run() 的决策分支能被单元测试直接覆盖，
+// 不依赖测试进程自身有没有控制台。
+func childSysProcAttrFor(hide bool) *syscall.SysProcAttr {
+	if !hide {
+		return nil
+	}
+	return &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+	}
+}
 
 // run starts the real tool and waits. Windows has no execve overlay.
 // EnrichFromRegistry injects HKCU tool homes the current shell may
@@ -20,12 +83,21 @@ import (
 // daemon 化的工具不受影响。详见 job_windows.go。
 //
 // Job 建立失败时保持旧行为（只记日志）—— 进程管理不能因它失败而拒绝执行工具。
+//
+// 2026-10-25（修复控制台窗口弹窗）：当 shim 自身没有可见控制台（被 IDE 扩展 /
+// MCP 服务等无窗口宿主调用）时，给子进程加 CREATE_NO_WINDOW + HideWindow，
+// 避免每个长驻工具（语言服务器、MCP server）都弹出一个关不掉的终端窗口。
+// 用户在终端里调用时 hasOwnConsole()==true，行为完全不变。
 func run(target string, args []string) error {
 	cmd := exec.Command(target, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env.EnrichFromRegistry(os.Environ())
+
+	// 无可见控制台 ⇒ 被无窗口宿主 / IDE 集成终端调用 ⇒ 隐藏子进程窗口。
+	// 有可见控制台 ⇒ 用户交互场景 ⇒ 保持继承，不干扰 stdin/stdout。
+	cmd.SysProcAttr = childSysProcAttrFor(!hasVisibleConsole())
 
 	// 必须在 Start 之前加入：子进程在创建时继承 Job 归属（无竞态）。
 	//
