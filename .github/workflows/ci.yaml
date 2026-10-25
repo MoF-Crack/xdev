@@ -317,7 +317,12 @@ jobs:
 
           # linux-amd64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-amd64-v${VER}.tar.gz"; then
-            GOOS=linux   GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
+            # 2026-10-25 修复：去掉 GOOS=linux。设了它 Go 会关闭 CGO，而 Wails 的
+            # internal/frontend/desktop/linux 是纯 CGO 包（frontend.go 里
+            # `import "C"` + `#cgo pkg-config: gtk+-3.0`，type Frontend 定义其中），
+            # CGO_ENABLED=0 时整包报 undefined: Frontend。
+            # runner 本身就是 ubuntu-latest，原生编译即可；GTK/WebKit 已在上一步装好。
+            GOARCH=amd64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
             tar -czf "dist/xdev-linux-amd64-v${VER}.tar.gz" xdev
             rm -f xdev
           else
@@ -326,7 +331,10 @@ jobs:
 
           # linux-arm64
           if ! echo "$EXISTING_ASSETS" | grep -qw "xdev-linux-arm64-v${VER}.tar.gz"; then
-            GOOS=linux   GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
+            # 同上：去掉 GOOS=linux 以保留 CGO。arm64 交叉编译需要 aarch64 C 工具链
+            # （CC=aarch64-linux-gnu-gcc）与对应的 GTK/WebKit arm64 开发包；
+            # ubuntu-latest 默认没有，若此步失败请先装交叉工具链，或改为原生 arm64 runner。
+            CC=aarch64-linux-gnu-gcc GOARCH=arm64 go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o xdev .
             tar -czf "dist/xdev-linux-arm64-v${VER}.tar.gz" xdev
             rm -f xdev
           else
@@ -386,7 +394,14 @@ jobs:
               continue
             fi
 
-            GOOS=linux GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
+            # 2026-10-25 修复：同 Build all platforms —— 去掉 GOOS=linux，
+            # 否则 Go 关闭 CGO，Wails 的 linux 后端报 undefined: Frontend。
+            # amd64 原生编译；arm64 需要 aarch64 C 工具链（见上）。
+            if [ "$GOARCH" = "arm64" ]; then
+              CC=aarch64-linux-gnu-gcc GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
+            else
+              GOARCH="$GOARCH" go build -tags desktop,production,webkit2_41 -ldflags="$LDFLAGS" -o "xdev-${GOARCH}" .
+            fi
 
             PKGROOT="$(mktemp -d)"
             mkdir -p "$PKGROOT/usr/bin"
