@@ -1566,10 +1566,13 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 
 	// --- Step 2: PATH mode dispatch ---
 	//
-	// 2026-10-25（P0-4）：显式 switch 而不是 if == "direct"。
-	// 原写法把一切非 direct 值都当 shim（包括理论上不可能出现的 auto），
-	// 静默行为容易掩盖配置错误。GetPathMode 已经把 auto 降级为 shim，
-	// 这里再显式列出两个合法分支，未来加 auto 时不会漏。
+	// 2026-10-25（P0-4 / P3）：显式 switch。
+	//   - direct：把每个工具的 current/<tool>/bin 直接写进 PATH
+	//   - shim / auto：都走 shim 分支
+	//
+	// auto 为什么与 shim 同分支：auto = shim + cd hook 项目级切换。
+	// 版本选择发生在**运行时**（shim.Lookup 读 .xdev.yaml），
+	// 与安装时写什么 PATH 无关，所以安装阶段与 shim 完全一致。
 	pathsAdded := false
 	switch i.cfg.GetPathMode() {
 	case "direct":

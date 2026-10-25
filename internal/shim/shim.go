@@ -50,6 +50,7 @@ import (
 	"github.com/xmdemt/xdev/internal/envctx"
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/project"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -156,6 +157,78 @@ func resolveEnvContext(toolName string) *envctx.Context {
 	return envctx.Resolve(p, installPath)
 }
 
+// lookupProjectVersion 尝试按项目配置（.xdev.yaml）解析版本。
+//
+// 返回 (可执行文件路径, 工具名, true) 表示命中；任何一步不满足都返回 false，
+// 由调用方回落到全局 current/<alias>。
+//
+// # 为什么要先试 alias 本身、再试跨工具扫描
+//
+// 项目配置里写的是**工具名**（python / node），而 shim 的 alias 可能是
+// 工具内的另一个二进制（pip / npm）。所以：
+//  1. 先看 alias 本身是否就是被声明的工具名（最常见：python、node、go）；
+//  2. 不是的话，遍历项目声明的工具，看哪个工具目录里能找到这个 alias
+//     （npm → node）。
+//
+// # 失败一律静默回落
+//
+// shim 是热路径，且“没有项目配置”是绝大多数调用的情况：
+// 不报错、不打印日志（除非声明了但未安装，那种情况由
+// warnOnceMissingVersion 提示一次）。
+func lookupProjectVersion(xmdeHome, alias string, args []string) (string, string, bool) {
+	cfg, err := project.Find("")
+	if err != nil {
+		return "", "", false // 无项目配置（或读取失败）—— 正常路径
+	}
+
+	installRoot := filepath.Join(xmdeHome, "install")
+
+	// 情形 1：alias 本身就是被声明的工具。
+	if spec, ok := cfg.Spec(alias); ok {
+		if ver, ok := project.ResolveInstalled(installRoot, alias, spec); ok {
+			dir := project.DirFor(installRoot, alias, ver)
+			if target, found := FindInDir(dir, alias); found {
+				return target, alias, true
+			}
+		}
+		// 声明了但未安装（或目录里找不到该 alias 的二进制）：
+		// 提示一次，然后回落。
+		warnOnceMissingVersion(alias, spec)
+	}
+
+	// 情形 2：alias 属于某个被声明的工具（npm → node）。
+	for _, toolName := range cfg.ToolNames() {
+		spec, _ := cfg.Spec(toolName)
+		ver, ok := project.ResolveInstalled(installRoot, toolName, spec)
+		if !ok {
+			continue
+		}
+		dir := project.DirFor(installRoot, toolName, ver)
+		if target, found := FindInDir(dir, alias); found {
+			return target, toolName, true
+		}
+	}
+
+	return "", "", false
+}
+
+// warnedMissing 记录已提示过的 (tool, spec) 组合，保证同一次进程内
+// 不重复刷屏。shim 进程是短命的，所以只需进程内去重。
+var warnedMissing sync.Map
+
+// warnOnceMissingVersion 在“项目声明了但未安装”时提示一次。
+//
+// 这里写 stderr 而不是静默：用户写了 python: "3.11" 却得到全局版本时，
+// 不提示会让人以为配置生效了 —— 那比报错更难查。
+func warnOnceMissingVersion(tool, spec string) {
+	key := tool + "@" + spec
+	if _, loaded := warnedMissing.LoadOrStore(key, true); loaded {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "xdev: 项目声明的 %s %s 未安装，已回落到全局版本（xdev install %s@%s）\n",
+		tool, spec, tool, spec)
+}
+
 // Lookup resolves a tool alias to the real underlying executable.
 //
 // resolution order:
@@ -177,6 +250,16 @@ func Lookup(alias string, args []string) (string, string, []string, error) {
 	// 同域比较。Windows 命令解析本就大小写不敏感；Unix 保留精确大小写。
 	alias = normalizeShimAlias(alias)
 	xmdeHome := config.ResolveHomeDir()
+
+	// 2026-10-25（P3）：项目级版本优先。
+	//
+	// 从 CWD 向上找 .xdev.yaml，若它声明了该工具且对应版本**已安装**，
+	// 就优先用那个版本目录；否则（无项目配置 / 未声明该工具 / 声明但未装）
+	// 完全回落到原有的 current/<alias> 逻辑 —— 无项目配置时行为与之前
+	// 字节级一致，这是本改动最重要的兼容性约束。
+	if target, toolName, ok := lookupProjectVersion(xmdeHome, alias, args); ok {
+		return target, toolName, args, nil
+	}
 
 	cur := filepath.Join(xmdeHome, "current", alias)
 	// First, look for a dedicated "<alias>/" sub-directory under

@@ -32,11 +32,27 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/project"
 )
 
 // newHookCmd handles `xdev hook --shell <shell>`.
-// It outputs shell code to set up the environment for the current
-// directory based on .xdev.toml.
+//
+// 2026-10-25（P3）：从空实现恢复为真正输出。
+//
+// 历史：Spec 012 删掉了 internal/project 与 internal/lockfile 后，
+// 本命令退化为 `return nil`，而 `xdev activate` 仍然会向 RC 文件装一个
+// 调用它的 cd hook —— 结果是每次换目录都执行一个什么都不输出的命令。
+// P3 重建了 internal/project，这里同步恢复输出。
+//
+// 输出内容：当前目录向上找到的 .xdev.yaml 所声明的工具版本对应的
+// PATH 条目与环境变量。设计为由 cd hook eval：
+//
+//	eval "$(xdev hook --shell bash)"
+//
+// 无项目配置时输出空字符串（且 exit 0）—— 这是**正常**路径，
+// 不能报错，否则每个 cd 都会吐一堆错误。
 func newHookCmd() *cobra.Command {
 	var flagShell string
 	cmd := &cobra.Command{
@@ -46,17 +62,91 @@ func newHookCmd() *cobra.Command {
 configures PATH and environment variables for the current directory.
 
 This is designed to be eval'd from a shell hook:
-  eval "$(xdev hook --shell bash)"`,
+  eval "$(xdev hook --shell bash)"
+
+Version selection comes from .xdev.yaml found by walking up from the
+current directory. With no project config it prints nothing.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if flagShell == "" {
 				flagShell = "bash"
 			}
-			// No project-based tool management — hook outputs nothing
+
+			cfg, err := project.Find("")
+			if err != nil {
+				// 无项目配置是正常情况（绝大多数目录）。
+				// 读到了但解析失败时也不阻断 shell —— cd hook 不能因为
+				// 一个写错的 YAML 就向用户终端刷错误。
+				return nil
+			}
+
+			appCfg := Cfg()
+			installRoot := appCfg.Core.InstallDir
+
+			var binPaths []string
+			vars := map[string]string{}
+
+			for _, toolName := range cfg.ToolNames() {
+				spec, _ := cfg.Spec(toolName)
+				ver, ok := project.ResolveInstalled(installRoot, toolName, spec)
+				if !ok {
+					continue // 未安装：静默跳过（shim 路径会给出提示）
+				}
+				dir := project.DirFor(installRoot, toolName, ver)
+
+				// PATH：优先 bin/，没有则用安装根（与 shim.FindInDir 同源逻辑）。
+				binDir := filepath.Join(dir, "bin")
+				if fi, err := os.Stat(binDir); err == nil && fi.IsDir() {
+					binPaths = append(binPaths, binDir)
+				} else {
+					// strip:0 布局（如 Go 保留顶层 go/ 目录）下二进制在 dir/<tool>/bin。
+					nested := filepath.Join(dir, toolName, "bin")
+					if fi, err := os.Stat(nested); err == nil && fi.IsDir() {
+						binPaths = append(binPaths, nested)
+					} else {
+						binPaths = append(binPaths, dir)
+					}
+				}
+
+				// 环境变量：复用 manifest 的声明（需加载 catalog 拿插件）。
+				// 路径型值做 Clean —— 与 envctx.Resolve 保持同一套语义，
+				// 否则 `export GOPATH='.../1.27.3/../gopath'` 会带着 `..` 进入用户 shell。
+				for k, v := range toolEnvVars(appCfg, toolName, dir) {
+					if strings.ContainsAny(v, `\\/`) {
+						v = filepath.Clean(v)
+					}
+					vars[k] = v
+				}
+			}
+
+			out := env.HookOutput(flagShell, binPaths, vars)
+			if out != "" {
+				fmt.Print(out)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&flagShell, "shell", "", "shell type (bash|zsh|fish|pwsh|powershell)")
 	return cmd
+}
+
+// toolEnvVars 取某个工具在指定安装目录下的环境变量。
+//
+// 失败一律返回空 map：hook 是 cd 热路径，不能因 catalog 损坏向用户终端
+// 刷错误（shim 侧有同样的降级约定）。
+func toolEnvVars(cfg *config.Config, toolName, installDir string) map[string]string {
+	cat, err := manifest.LoadCatalogCached(cfg.Core.ManifestDir, cfg.Core.CacheDir)
+	if err != nil {
+		return nil
+	}
+	reg := plugin.NewRegistry()
+	for _, t := range cat.Tools() {
+		reg.Register(plugin.NewGeneric(t))
+	}
+	p, ok := reg.Get(toolName)
+	if !ok {
+		return nil
+	}
+	return p.EnvVars(installDir)
 }
 
 // newActivateCmd handles `xdev activate <shell>`.
