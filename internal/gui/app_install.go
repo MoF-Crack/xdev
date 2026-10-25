@@ -1,4 +1,4 @@
-// app_install.go is the install-session module behind the Wails App
+﻿// app_install.go is the install-session module behind the Wails App
 // adapter (Spec 029 B2/B3). One InstallSpec drives catalog tools,
 // package-manager scripts, and sub-tool enable/install.
 //
@@ -23,10 +23,9 @@
 package gui
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"strings"
-	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -34,7 +33,6 @@ import (
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
-	"github.com/xmdemt/xdev/internal/util"
 )
 
 // InstallSpec is the single install-session input (Spec 029 B3).
@@ -178,340 +176,65 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		}
 	}
 
-	installPath, err := p.InstallDir(cfg.Core.InstallDir, ver)
-	if err != nil {
+	// 先校验安装路径合法（SafeName 失败时插件会 fail-open 换成
+	// unsafe-version-blocked 目录）；真正的写入由下面的 InstallWithProgress 负责。
+	if _, err := p.InstallDir(cfg.Core.InstallDir, ver); err != nil {
 		return err
 	}
 
-	// 第七轮审计 F-05（P1）：force/repair 重装**不得在下载之前删除**已有安装。
-	// CLI 侧（票 26 / A-07，internal/installer/installer.go）已把该顺序反转为
-	// 「先下载 + 校验哈希，成功后才 RemoveAll」，并有守卫
-	// TestForceInstall_DownloadFailKeepsOld。GUI 走的是自己另写的一套编排
-	// （BuildDownloadOptions → StartDownload → ExtractAndActivate），没有复用
-	// InstallWithProgress，因此**完全没有继承** A-07 的语义：旧代码在这里就
-	// os.RemoveAll(installPath)，一旦随后下载失败（离线 / 404 / 镜像全挂 /
-	// 哈希不符 / 用户取消），原本完好可用的安装就被摧毁，current/<tool> 变悬空。
-	// 现在只记录意图，真正的删除推迟到下载成功之后（见下方 StatusCompleted 分支）。
-	forceReinstall := false
-
-	// Already-installed fast path + incomplete-install handling.
-	if fi, err := os.Stat(installPath); err == nil && fi.IsDir() {
-		integrity := installer.VerifyInstallIntegrity(p, installPath)
-		if integrity.OK && !force {
-			// Intact install — activate only, no download.
-			logInfo("[install] %s@%s already installed and intact at %s — activating only", toolName, ver, installPath)
-			if err := ins.Activate(p, installPath, ver); err != nil {
-				logWarn("[install] activation of existing install failed: %v", err)
-				return fmt.Errorf("activation failed for existing install: %w", err)
-			}
-			// Ticket 29/30 follow-up: guard the emit with a nil-ctx check —
-			// Wails' getEvents log.Fatalf's on a nil context, which in tests
-			// (no Wails runtime) killed the whole process silently (exit 1,
-			// no FAIL line). app.go already guards its own emits this way.
-			if a.ctx != nil {
-				wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-					TaskID:  taskID,
-					Tool:    toolName,
-					Version: version,
-					Phase:   "Completed",
-					Percent: 100,
-				})
-			}
-			a.invalidateDashboardCache()
-			a.refreshAndSaveLocalCache()
-			return nil
-		}
-		if !integrity.OK && !force {
-			// Incomplete install — return an error so the frontend can
-			// show a Naive UI dialog (not a native Wails dialog that
-			// may be hidden behind the window). The frontend pre-checks
-			// with CheckInstallIntegrity and handles this case.
-			return &installer.IncompleteInstallError{
-				Tool:    toolName,
-				Version: ver,
-				Path:    installPath,
-				Reason:  integrity.Reason,
-				Missing: integrity.Missing,
-			}
-		}
-		// User confirmed repair (or force was requested): record the intent.
-		// The actual removal now happens only after the download succeeded and
-		// its SHA-256 was verified (F-05), mirroring installer's A-07 fix.
-		forceReinstall = true
-	}
-
-	// Spec 039: npm-kind installs never go through the download manager —
-	// npm resolves and fetches the dependency tree itself (registry integrity
-	// verified by npm). Event contract matches the download pipeline.
-	if installer.ResolveKind(arch) == manifest.InstallKindNPM {
-		return a.installNPMPackage(taskID, p, arch, ver, installPath)
-	}
-
-	// Proxy warning: if the archive explicitly requires a proxy but none
-	// is configured (either via env vars or xdev config), warn the user
-	// (shared helper with the CLI path, Spec 021 D7).
-	if arch.RequiresProxy && !installer.CheckProxyConfigured(cfg) {
-		logWarn("[install] WARNING: %s@%s requires a proxy but none is configured", toolName, ver)
-	}
-
-	// 构造下载选项 — 用 BuildDownloadOptionsE（**无共享状态**版本）。
+	// 2026-10-25（架构收口）：委托 installer.InstallWithProgress。
 	//
-	// 第十一轮审计（Round 10 报告待办 7）：`dest == ""` 是 **fail-closed**（缓存路径
-	// 不安全），但原因此前完全丢失 —— 用户只会看到 downloader 报的
-	// `"empty destination"`，无法定位是工具名/版本号/format 哪个组件非法。
+	// 修复前这里是约 330 行的自建编排（BuildDownloadOptions → StartDownload
+	// → 轮询 → TOFU → force 删除 → ExtractAndActivate），与 installer 里
+	// 已有的实现重复。后果不只是代码冗余 —— 「先下载校验成功、再删旧安装」
+	// 这条 A-07 安全语义曾在 GUI 侧漏过一次（F-05：旧代码在下载之前就
+	// os.RemoveAll，下载失败会摧毁完好安装）。
 	//
-	// 第十二轮审计：改为从**返回值**取诊断错误，不再读 `LastDownloadOptionsError()`
-	// 那个实例字段 —— 后者在两个 goroutine 同时调用时会互相覆盖，让 A 调用方读到
-	// B 的错误（错误的诊断信息比没有诊断更糟：它把排查引向无关的工具/版本）。
-	url, fallbackURLs, dest, urlShaMap, buildErr := ins.BuildDownloadOptionsE(toolName, ver, arch)
-	if buildErr != nil {
-		return fmt.Errorf("cannot start download: %w", buildErr)
-	}
-	if dest == "" {
-		// 理论上不可达（dest=="" 只由上面那条路径产生），但仍明确失败而非继续。
-		return fmt.Errorf("cannot start download: no cache destination for %s@%s (format %q)", toolName, ver, arch.Format)
-	}
-
-	// 加载 manifest 签名（内置/第三方/嵌入式，与 CLI 一致，Spec 021 D6）。
-	// 真实根密钥嵌入时，缺签名的 GUI 下载会被 downloader 拒绝。
-	manifestSig, isThirdParty := ins.LoadManifestSignature(toolName)
-
-	dlOpts := downloader.Options{
-		URL:                  url,
-		Dest:                 dest,
-		ExpectedSHA:          arch.SHA256,
-		URLShaMap:            urlShaMap,
-		ProgressDesc:         fmt.Sprintf("%s@%s", toolName, ver),
-		Cookie:               util.CookieFromInstallArgs(arch.InstallArgs),
-		ManifestSignature:    manifestSig,
-		IsThirdParty:         isThirdParty,
-		AllowPlaceholderTOFU: arch.SHA256 == "" || util.IsAllZeroHash(arch.SHA256),
-		// Ticket 13 (P0-02): same signed-map slot + unsigned-version
-		// derivation as the CLI pipeline — derived through the SHARED
-		// installer.DeriveUnsignedVersion so the two pipelines can never
-		// disagree (the older GUI-only versionUnverified helper missed
-		// Discovered and carried an npm special case).
-		ToolName:        toolName,
-		Version:         ver,
-		OSArch:          arch.OS + "/" + arch.Arch,
-		UnsignedVersion: installer.DeriveUnsignedVersion(p.Manifest(), ver),
-		ProxyURL:        cfg.GetProxyURL("https"),
-		FallbackURLs:    fallbackURLs,
-		OnProgress: func(downloaded, total int64, elapsed time.Duration) {
-			// Content-Length 缺失时 total<=0，避免进度条变成 NaN。
-			pct := -1.0
-			if total > 0 {
-				pct = float64(downloaded) / float64(total) * 100
-			}
-			wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-				TaskID:  taskID,
-				Tool:    toolName,
-				Version: version,
-				Phase:   "Downloading...",
-				Percent: pct,
-				Speed:   util.HumanSpeedStr(downloaded, elapsed),
-				ETA:     util.HumanETAStr(downloaded, total, elapsed),
-			})
-		},
-		// OnStatus surfaces non-byte status updates (retry attempts,
-		// fallback URL switches, range restarts, proxy fallback) as
-		// progress phases. A brand-new transfer resets the bar to 0:
-		// first attempt of a URL, fallback URL switch, and proxy→direct
-		// switch all start from 0 bytes. In-URL retries (Attempt 2/3…)
-		// keep the current bar position via the -1 sentinel — the
-		// transfer resumes from the partial file, so the byte progress
-		// remains valid.
-		OnStatus: func(message string) {
-			pct := -1.0
-			if strings.HasPrefix(message, "Attempt 1/") ||
-				strings.HasPrefix(message, "Trying fallback") ||
-				strings.HasPrefix(message, "Proxy unreachable") {
-				pct = 0
-			}
-			wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-				TaskID:  taskID,
-				Tool:    toolName,
-				Version: version,
-				Phase:   message,
-				Percent: pct,
-			})
-		},
-	}
-
-	// 启动下载任务
-	if err := a.dlMgr.StartDownload(taskID, toolName, ver, dlOpts); err != nil {
-		return err
-	}
-
-	// 在后台等待下载完成，然后执行安装
-	// F-20 / D18：轮询绑定应用根上下文 —— 应用退出（shutdown → rootCancel）
-	// 时立即停止，而不是继续空转最多 1 小时；maxPolls 仅作兜底。
+	// 现在只保留 GUI 独有的两件事：
+	//   1. 进度/错误事件上报（DownloadFunc 内的 OnProgress/OnStatus）
+	//   2. 基于 downloader.Manager 的下载（支持 pause/resume/cancel）
+	// 其余全部由 installer 单一拥有，两条路径的语义不可能再分叉。
 	go func() {
-		const maxPolls = 7200 // 500ms * 7200 = 1 hour max wait
-		rootDone := a.rootContext().Done()
-		for i := 0; i < maxPolls; i++ {
-			select {
-			case <-time.After(500 * time.Millisecond):
-			case <-rootDone:
-				logInfo("[InstallTool] cancelled by app shutdown for %s@%s", toolName, version)
+		res, err := ins.InstallWithProgress(
+			a.rootContext(), p, ver,
+			func(phase installer.ProgressPhase, pct float64, speed, eta string) {
+				a.emitInstallProgress(taskID, toolName, version, phase.String(), pct, speed, eta)
+			},
+			installer.InstallOptions{
+				Force:        force,
+				DownloadFunc: a.guiDownloadFunc(taskID, toolName, version),
+			},
+		)
+		if err != nil {
+			// 不完整安装：交给前端弹 Naive UI 对话框（原生 Wails 对话框
+			// 可能被窗口遮挡），因此不作为 installError 上报。
+			if errors.Is(err, installer.ErrIncompleteInstall) {
+				a.emitInstallProgress(taskID, toolName, version, "Incomplete", 0, "", "")
 				a.dlMgr.RemoveTask(taskID)
 				return
 			}
-			task, err := a.dlMgr.GetTask(taskID)
-			if err != nil {
-				return
-			}
-			status := task.GetStatus()
+			a.emitInstallError(taskID, toolName, version, err.Error())
+			a.dlMgr.RemoveTask(taskID)
+			return
+		}
 
-			if status == downloader.StatusCompleted {
-				// 下载完成，执行解压/运行安装器并激活。
-				// Keep the percent at 100 (download finished) — the phase
-				// string is enough; resetting to 0 makes the progress bar
-				// restart for no reason.
-				// 阶段语义：archive → "Extracting..."；executable/script
-				// （rustup 等滚动安装器）→ "Installing..."（运行安装器可能
-				// 耗时数分钟下载 toolchain，进度条保持 100 但文案明确在安装）。
-				phaseStr := "Extracting..."
-				// Spec 035 F10: use the installer's ResolveKind (includes the
-				// rustup URL heuristic) so preview/phase logic and the real
-				// install path can never diverge.
-				if installer.ResolveKind(arch) != manifest.InstallKindArchive {
-					phaseStr = "Installing..."
-				}
-				wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-					TaskID:  taskID,
-					Tool:    toolName,
-					Version: version,
-					Phase:   phaseStr,
-					Percent: 100,
-				})
-
-				// TOFU: If the archive had an empty or placeholder SHA-256,
-				// compute the actual hash and write it to the on-disk
-				// manifest (shared installer helper; the SetTOFUWarningCallback
-				// above emits the xdev:tofu-warning Wails event).
-				if arch.SHA256 == "" || util.IsAllZeroHash(arch.SHA256) {
-					if err := ins.TOFUArchiveIfNeeded(toolName, ver, arch, dest); err != nil {
-						logWarn("[install] TOFU warning: failed to update manifest for %s@%s: %v", toolName, ver, err)
-					}
-				}
-
-				installPath, dirErr := p.InstallDir(cfg.Core.InstallDir, ver)
-				if dirErr != nil {
-					wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-						"taskId":  taskID,
-						"tool":    toolName,
-						"version": version,
-						"error":   dirErr.Error(),
-					})
-					a.dlMgr.RemoveTask(taskID)
-					return
-				}
-
-				// 第七轮审计 F-05：force/repair 的删除推迟到这里 —— 下载已完成
-				// 且哈希校验通过（downloader 在 StatusCompleted 前已校验
-				// ExpectedSHA），此时删除旧安装才是安全的：即便随后解压失败，
-				// 也不会出现「下载失败却把好安装删了」的数据丢失。
-				// 与 installer 的 A-07 语义对齐（见 installer.go 的 forceReinstall）。
-				if forceReinstall {
-					logInfo("[install] force reinstall: removing previous install dir %s (archive verified)", installPath)
-					removeLock, removeLockErr := util.AcquireToolLock(cfg.Core.XMDevDir, p.Name(), 5*time.Minute)
-					if removeLockErr != nil {
-						wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-							"taskId":  taskID,
-							"tool":    toolName,
-							"version": version,
-							"error":   fmt.Sprintf("reinstall removal lock %s: %v", p.Name(), removeLockErr),
-						})
-						a.dlMgr.RemoveTask(taskID)
-						return
-					}
-					removeErr := os.RemoveAll(installPath)
-					removeLock.Release()
-					if removeErr != nil {
-						wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-							"taskId":  taskID,
-							"tool":    toolName,
-							"version": version,
-							"error":   fmt.Sprintf("failed to remove existing install dir: %v", removeErr),
-						})
-						a.dlMgr.RemoveTask(taskID)
-						return
-					}
-				}
-
-				err := ins.ExtractAndActivate(p, arch, ver, installPath)
-				if err != nil && !installer.IsActivationError(err) {
-					// Real failure (extraction/download) — report as error.
-					wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-						"taskId":  taskID,
-						"tool":    toolName,
-						"version": version,
-						"error":   err.Error(),
-					})
-				} else {
-					// Success (or activation-only failure: version is
-					// installed, just not switched). Emit Completed and
-					// a soft warning if activation failed.
-					wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-						TaskID:  taskID,
-						Tool:    toolName,
-						Version: version,
-						Phase:   "Completed",
-						Percent: 100,
-					})
-					if err != nil {
-						// Activation failed — version installed but not active.
-						wailsRuntime.EventsEmit(a.ctx, "xdev:activation-warning", map[string]string{
-							"tool":    toolName,
-							"version": version,
-							"message": err.Error(),
-						})
-					}
-					a.refreshAndSaveLocalCache()
-
-					// 安装成功后按保留策略处理缓存归档（immediate 删除，其余保留）。
-					a.applyArchiveRetention(toolName)
-				}
-				// 新版本已安装且缓存归档已按策略处理，明细缓存必须立即失效。
-				a.InvalidateSizeBreakdown()
-				// 工具列表（编程语言/包管理器）缓存也需失效，反映新安装状态。
-				a.InvalidateToolsCache()
-				a.dlMgr.RemoveTask(taskID)
-				return
-			}
-
-			if status == downloader.StatusFailed || status == downloader.StatusCancelled {
-				errMsg := task.ErrorMessage
-				if status == downloader.StatusFailed {
-					if errMsg == "" {
-						errMsg = "下载失败"
-					}
-				} else {
-					errMsg = "下载已取消"
-				}
-				wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-					"taskId":  taskID,
+		// 成功，或「版本已装好但激活失败」（激活失败降级为软警告）。
+		a.emitInstallProgress(taskID, toolName, version, "Completed", 100, "", "")
+		if res != nil && res.ActivationError != "" {
+			if a.ctx != nil {
+				wailsRuntime.EventsEmit(a.ctx, "xdev:activation-warning", map[string]string{
 					"tool":    toolName,
 					"version": version,
-					"error":   errMsg,
+					"message": res.ActivationError,
 				})
-				a.dlMgr.RemoveTask(taskID)
-				return
 			}
 		}
-		// 超时：下载任务耗时过长，清理
-		logWarn("[InstallTool] download poll timeout for %s@%s", toolName, version)
-		// Spec 035 F11: emit installError BEFORE cleanup — without it the
-		// frontend progress dialog waits for a Completed event that never
-		// arrives (single install) and the batch waiter hangs forever.
-		wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-			"taskId":  taskID,
-			"tool":    toolName,
-			"version": version,
-			"error":   "安装等待超时（1 小时）",
-		})
-		a.dlMgr.Cancel(taskID)
+
+		// 缓存失效与归档保留：安装已改变磁盘状态，必须让 UI 立刻反映。
+		a.refreshAndSaveLocalCache()
+		a.applyArchiveRetention(toolName)
+		a.InvalidateSizeBreakdown()
+		a.InvalidateToolsCache()
 		a.dlMgr.RemoveTask(taskID)
 	}()
 

@@ -7,8 +7,7 @@ import (
 )
 
 // stripLineComments 去掉整行注释与行尾注释，使源码级断言只匹配**真实代码**，
-// 不被解释性注释里的同名文本误触发（本文件注释里就写了 os.RemoveAll(installPath)
-// 作为说明）。
+// 不被解释性注释里的同名文本误触发。
 func stripLineComments(src string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(src, "\n") {
@@ -25,65 +24,58 @@ func stripLineComments(src string) string {
 	return b.String()
 }
 
-// 第七轮审计 F-05 守卫（源码级顺序断言）：force/repair 重装**不得在下载之前**
-// 删除已有安装目录。
+// 第七轮审计 F-05 守卫 —— 2026-10-25 架构收口后**加强**。
 //
-// 为什么用源码级断言而不是行为测试：GUI 的安装编排需要真实下载管理器 +
-// Wails 事件管线才能跑到「下载失败」分支，行为测试要拉起整套 mock；而这条
-// 缺陷的本质是**语句顺序**（RemoveAll 相对 StartDownload 的位置），顺序错误
-// 本身就是可静态判定的事实。仓库对同类「结构性约束」已有先例
-// （如 install_progress_test.go 用源码扫描断言事件载荷带 taskID）。
+// # 原守卫（已废弃）
 //
-// 语义基准：internal/installer 的 A-07（票 26）——
-// `TestForceInstall_DownloadFailKeepsOld` 断言下载失败必须保留旧安装。
-// GUI 是第二套独立编排，必须与它同语义。
+// 修复前 GUI 有一套自己的安装编排（约 330 行），F-05 的缺陷是
+// `os.RemoveAll(installPath)` 排在下载**之前**：一旦下载失败（离线 / 404 /
+// 镜像全挂 / 哈希不符 / 用户取消），原本完好可用的安装就被摧毁。
+// 当时的守卫用源码级顺序断言：「RemoveAll 必须出现在 StatusCompleted
+// 分支内」。
+//
+// # 现在
+//
+// GUI 不再自己编排 —— 整段委托给 installer.InstallWithProgress，而
+// installer 里的 force 删除时机早已是 A-07 修复后的正确顺序
+// （installer.go 的 forceReinstall 分支，由
+// TestForceInstall_DownloadFailKeepsOld 守卫）。
+//
+// 因此本守卫改为断言**更强的性质**：GUI 侧根本不存在第二份删除实现。
+// 从「顺序对不对」升级为「只有一份实现」—— 顺序问题从此不可能在 GUI
+// 侧复现，因为这里没有任何顺序可写错。
 func TestF05_ForceRemovalHappensAfterDownloadNotBefore(t *testing.T) {
-	raw, err := os.ReadFile("app_install.go")
-	if err != nil {
-		t.Fatal(err)
+	files := []string{"app_install.go", "app_install_delegate.go"}
+	var combined strings.Builder
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		combined.WriteString(stripLineComments(string(raw)))
 	}
-	s := stripLineComments(string(raw))
+	s := combined.String()
 
-	// 1. 删除旧安装目录的语句必须存在（修复不是把删除删掉，而是移位）。
-	const removal = "os.RemoveAll(installPath)"
-	if !strings.Contains(s, removal) {
-		t.Fatalf("expected %q to still exist (force reinstall must still be able to remove)", removal)
-	}
-
-	// 2. 下载启动点。
-	startIdx := strings.Index(s, "a.dlMgr.StartDownload(")
-	if startIdx < 0 {
-		t.Fatal("a.dlMgr.StartDownload( not found — the install orchestration changed shape")
-	}
-
-	// 3. 下载成功分支（StatusCompleted）里的删除才是合法的。
-	completedIdx := strings.Index(s, "if status == downloader.StatusCompleted {")
-	if completedIdx < 0 {
-		t.Fatal("StatusCompleted branch not found")
-	}
-	completedEnd := strings.Index(s[completedIdx:], "if status == downloader.StatusFailed")
-	if completedEnd < 0 {
-		t.Fatal("could not delimit the StatusCompleted branch")
-	}
-	completedBranch := s[completedIdx : completedIdx+completedEnd]
-	if !strings.Contains(completedBranch, removal) {
-		t.Error("F-05 复现：force 重装的 os.RemoveAll(installPath) 不在下载成功分支内 —— " +
-			"下载失败时旧安装会被摧毁（与 installer A-07 语义相反）")
+	// 1. GUI 不得自行删除安装目录 —— 那是 installer 的职责。
+	//    若有人重新引入，F-05 的顺序约束就会再次变成「GUI 侧的第二个真相」。
+	if strings.Contains(s, "os.RemoveAll(installPath)") {
+		t.Error("GUI 不得自行删除安装目录：force 重装的删除时机必须由 " +
+			"installer.InstallWithProgress 单一拥有（A-07 / F-05）")
 	}
 
-	// 4. 下载启动之前的区域**不得**出现该删除。
-	beforeDownload := s[:startIdx]
-	if strings.Contains(beforeDownload, removal) {
-		t.Error("F-05 复现：os.RemoveAll(installPath) 出现在 StartDownload 之前 —— " +
-			"「先删后下」会在离线/404/哈希不符/用户取消时摧毁完好的安装")
+	// 2. 安装必须走 InstallWithProgress —— 这是「只有一份编排」的前提。
+	if !strings.Contains(s, "InstallWithProgress(") {
+		t.Error("GUI 安装必须委托 installer.InstallWithProgress；" +
+			"自建编排会让 A-07/F-05 类语义再次分叉")
 	}
 
-	// 5. force 意图必须以布尔量记录并在下载成功后消费（防止只删了删除语句
-	//    而 force 语义整体失效）。
-	if !strings.Contains(s, "forceReinstall = true") {
-		t.Error("expected forceReinstall intent flag to be recorded")
+	// 3. 下载仍必须经 downloader.Manager（GUI 需要 pause/resume/cancel），
+	//    且通过 DownloadFunc 钩子交给 installer —— 不能绕开 installer 自己下载。
+	if !strings.Contains(s, "a.dlMgr.StartDownload(") {
+		t.Error("GUI 下载必须经 downloader.Manager（进度对话框需要 pause/resume/cancel）")
 	}
-	if !strings.Contains(s, "if forceReinstall {") {
-		t.Error("expected forceReinstall to gate the deferred removal")
+	if !strings.Contains(s, "DownloadFunc:") {
+		t.Error("GUI 必须通过 installer.InstallOptions.DownloadFunc 注入下载器，" +
+			"而不是绕开 installer 自行编排")
 	}
 }

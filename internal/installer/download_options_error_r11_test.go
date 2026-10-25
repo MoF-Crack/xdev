@@ -175,23 +175,42 @@ func TestBuildDownloadOptions_FailClosedContractUnchanged(t *testing.T) {
 	}
 }
 
-// 端到端（源码级）：GUI 的 dest=="" 分支必须把真实原因带进错误。
+// 端到端（源码级）：下载选项失败时的诊断不得丢失。
 //
-// 第十二轮改为检查 `BuildDownloadOptionsE` 的返回值路径（不再是字段访问器）。
+// 2026-10-25（架构收口）：GUI 不再自己构造下载选项 —— 整段安装已委托
+// installer.InstallWithProgress，而它内部就用 BuildDownloadOptionsE 并
+// 把诊断包进返回错误。
+//
+// 守卫意图不变（“dest 不安全时必须带得上真实原因”），但断言位置从
+// 「GUI 源码文本」改到「installer 源码文本 + GUI 不再重复实现」：
+//  1. installer 侧：必须用 BuildDownloadOptionsE 且用 %w 包装；
+//  2. GUI 侧：不得再出现自己那套 BuildDownloadOptionsE 调用 ——
+//     两份实现正是本仓库 Round 8-11 反复出现的失败模式。
 func TestGUIInstall_SurfacesDownloadOptionsError(t *testing.T) {
-	data, err := os.ReadFile("../gui/app_install.go")
+	// 1. installer 侧必须保留诊断链路。
+	insSrc, err := os.ReadFile("installer.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(data)
-
-	// 必须用 E 版本（唯一版本）。
-	if !strings.Contains(src, "ins.BuildDownloadOptionsE(") {
-		t.Error("GUI 应使用 BuildDownloadOptionsE 取诊断错误")
+	ins := string(insSrc)
+	if !strings.Contains(ins, "BuildDownloadOptionsE(") {
+		t.Error("installer 应使用 BuildDownloadOptionsE 取诊断错误")
 	}
-	// 必须把原因包装进返回错误（%w），而不是忽略。
-	if !strings.Contains(src, "cannot start download: %w") {
-		t.Error("GUI 应把真实原因包装进返回错误")
+	// 诊断错误必须被**返回**而不是吞掉。installer 的写法是
+	// `if optErr != nil { ...; return optErr }` —— 直接透传已带上下文的
+	// 错误，比再包一层前缀更清楚。
+	if !strings.Contains(ins, "return optErr") {
+		t.Error("installer 必须把 BuildDownloadOptionsE 的诊断错误返回给调用方")
+	}
+
+	// 2. GUI 侧不得自己再构造一遍下载选项。
+	guiSrc, err := os.ReadFile("../gui/app_install.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(guiSrc), "ins.BuildDownloadOptionsE(") {
+		t.Error("GUI 不得自己构造下载选项：安装已委托 InstallWithProgress，" +
+			"两份实现会导致诊断/校验语义分叉")
 	}
 }
 

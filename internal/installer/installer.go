@@ -158,6 +158,26 @@ const (
 	PhaseActivating                       // Creating symlinks, shims, and env vars
 )
 
+// String 返回阶段的可读名称。
+//
+// 供 UI 层直接当展示文案用（GUI 的 installProgress 事件里 phase 是字符串）。
+// 修复前 GUI 自己拼文案，与 installer 的阶段枚举存在两份真相；
+// 委托到 InstallWithProgress 后统一由这里给出。
+func (p ProgressPhase) String() string {
+	switch p {
+	case PhaseDownloading:
+		return "Downloading..."
+	case PhaseExtracting:
+		return "Extracting..."
+	case PhaseInstalling:
+		return "Installing..."
+	case PhaseActivating:
+		return "Activating..."
+	default:
+		return "Working..."
+	}
+}
+
 // ProgressCallback is called periodically during installation to report progress.
 // phase indicates the current stage, percent is 0-100, speed and eta are
 // human-readable strings (e.g. "5.2 MB/s", "2m30s") and may be empty
@@ -209,7 +229,33 @@ type InstallOptions struct {
 	// complete install is only re-activated, and an incomplete install
 	// returns ErrIncompleteInstall instead of being silently activated.
 	Force bool
+
+	// DownloadFunc, when non-nil, replaces the default downloader for the
+	// fetch step of this install.
+	//
+	// 2026-10-25（架构收口）：GUI 需要 pause/resume/cancel 与任务查询，
+	// 这些能力由 downloader.Manager 提供，而默认路径用的
+	// downloader.Download 没有。修复前 GUI 只能绕开 InstallWithProgress
+	// 自己重写整条安装编排（gui/app_install.go 约 400 行），于是
+	// 「先下载校验成功、再删旧安装」这条 A-07 安全语义在 GUI 侧漏了一次
+	// （app_install.go:186-194 的注释自己承认）。
+	//
+	// 有了这个钩子，GUI 可以把 downloader.Manager 的下载步骤塞进来，
+	// 而其余所有步骤（已装判定 / 完整性校验 / Force 删除时机 /
+	// 解压 / PostInstall / Activate）继续由 installer 单一拥有。
+	//
+	// 传 nil 时行为与以前完全一致（用 downloader.Download）。
+	DownloadFunc DownloadFunc
 }
+
+// DownloadFunc 是一次下载的抽象。
+//
+// 参数与 downloader.Download 的 Options 一致：调用方负责真正取回
+// URL 并写进 Dest，同时按需上报进度。返回 nil 表示成功。
+//
+// 设计上刻意保持「一个函数」而不是接口：installer 只需要「把文件弄到
+// dest」这一步可替换，其余状态机不该被外部实现接管。
+type DownloadFunc func(ctx context.Context, opts downloader.Options) error
 
 // ErrIncompleteInstall is the sentinel error wrapped by
 // IncompleteInstallError. It is returned when an install directory exists
@@ -510,7 +556,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	// registry integrity per package).
 	if ResolveKind(arch) != manifest.InstallKindNPM {
 		log.Printf("[install] Starting download phase")
-		if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts.BatchIndex, opts.BatchTotal); err != nil {
+		if err := i.downloadWithProgress(ctx, p.Name(), ver, arch, onProgress, opts); err != nil {
 			log.Printf("[install] ERROR: download failed for %s@%s: %v", p.Name(), ver, err)
 			return nil, err
 		}
@@ -635,7 +681,8 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 //   - Fallback URLs: the original upstream URL and mirror_url are tried if the
 //     primary (mirrored) URL fails
 //   - Progress reporting via the onProgress callback
-func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, batchIndex, batchTotal int) error {
+func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, opts InstallOptions) error {
+	batchIndex, batchTotal := opts.BatchIndex, opts.BatchTotal
 	// F-25: reject an unsafe tool/version BEFORE anything touches the cache.
 	// 上面的 cacheArchivePath 已经给出精确错误；这里改用 E 版本并把诊断错误也
 	// 检查一遍（**防御性**：若日后有人删掉上面的预检，这里仍然会以可读错误失败，
@@ -759,7 +806,7 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 	if p, ok := i.reg.Get(tool); ok {
 		toolManifest = p.Manifest()
 	}
-	err = downloader.Download(ctx, downloader.Options{
+	dlOpts := downloader.Options{
 		URL:                  url,
 		Dest:                 dest,
 		ExpectedSHA:          a.SHA256,
@@ -789,7 +836,18 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 				onProgress(PhaseDownloading, pct, speed, eta)
 			}
 		},
-	})
+	}
+
+	// 2026-10-25（架构收口）：GUI 传入 DownloadFunc（基于 downloader.Manager，
+	// 支持 pause/resume/cancel）时用它；否则走默认的 downloader.Download。
+	//
+	// 两者拿到的 Options 完全相同，因此 SHA-256 校验、TOFU、镜像回退、
+	// 代理等语义在两条路径上一致 —— 这正是以前 GUI 自写编排时丢掉的那部分。
+	dl := opts.DownloadFunc
+	if dl == nil {
+		dl = downloader.Download
+	}
+	err = dl(ctx, dlOpts)
 	if err != nil {
 		return err
 	}

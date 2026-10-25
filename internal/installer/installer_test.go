@@ -837,7 +837,7 @@ versions:
 
 	// Run downloadWithProgress - since the file is in cache, it will
 	// hit the cache-hit branch and call TOFUArchiveIfNeeded
-	err := ins.downloadWithProgress(context.Background(), toolName, version, archive, nil, 0, 0)
+	err := ins.downloadWithProgress(context.Background(), toolName, version, archive, nil, InstallOptions{})
 	if err != nil {
 		t.Fatalf("downloadWithProgress failed: %v", err)
 	}
