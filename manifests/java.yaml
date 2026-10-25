@@ -10,6 +10,10 @@ shims:
   - jshell
 env_vars:
   JAVA_HOME: "{{install}}"
+  # 修复（E-04）：JDK_HOME 是部分工具链（旧版 Ant / 某些 IDE 插件 /
+  # 第三方构建脚本）读取的别名，与 JAVA_HOME 指向同一 JDK。
+  # 两者共存不会冲突：标准工具优先读 JAVA_HOME，回退读 JDK_HOME。
+  JDK_HOME: "{{install}}"
 latest: "26"
 lts: "25"
 versions:

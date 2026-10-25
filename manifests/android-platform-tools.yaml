@@ -8,7 +8,9 @@ shims:
     - fastboot
     - sqlite3
 env_vars:
-    ANDROID_HOME: '{{install}}\..'
+    # 修复（E-01）：ANDROID_HOME 必须是 SDK 根 install/android-sdk（上两层），
+    # 旧值 '{{install}}\..' 会指向 install/android-sdk/android-platform-tools。
+    ANDROID_HOME: '{{install}}\..\..'
     ANDROID_PLATFORM_TOOLS: '{{install}}'
 versions:
     - version: 35.0.2

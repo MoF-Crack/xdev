@@ -8,7 +8,11 @@ shims:
     - ndk-stack
     - ndk-gdb
 env_vars:
-    ANDROID_HOME: '{{install}}\..'
+    # 修复（E-01）：ANDROID_HOME 必须是 SDK 根 install/android-sdk，
+    # 不是本组件目录。{{install}} = install/android-sdk/<tool>/<version>，
+    # 故需要上两层。旧值 '{{install}}\..' 指向 install/android-sdk/android-ndk，
+    # 导致 Gradle Android 插件/sdkmanager 找不到 platform-tools 等同级组件。
+    ANDROID_HOME: '{{install}}\..\..'
     ANDROID_NDK_HOME: '{{install}}'
 versions:
     - version: "r29"

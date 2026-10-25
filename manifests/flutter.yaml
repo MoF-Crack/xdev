@@ -6,6 +6,10 @@ category: mobile
 shims:
     - flutter
 env_vars:
+    # 修复（E-07）：Flutter 工具链官方读的是 FLUTTER_ROOT，不是 FLUTTER_HOME。
+    # 两者同时写入：FLUTTER_ROOT 供 flutter 自身/dart 插件识别，
+    # FLUTTER_HOME 保留给已依赖它的第三方脚本（向后兼容）。
+    FLUTTER_ROOT: '{{install}}'
     FLUTTER_HOME: '{{install}}'
     PUB_CACHE: '{{install}}\.pub-cache'
 versions:

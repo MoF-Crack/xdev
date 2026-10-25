@@ -5,7 +5,9 @@ homepage: https://developer.android.com/tools/releases/platforms
 category: mobile
 shims: []
 env_vars:
-    ANDROID_HOME: '{{install}}\..'
+    # 修复（E-01）：ANDROID_HOME 必须是 SDK 根 install/android-sdk（上两层），
+    # 旧值 '{{install}}\..' 会指向 install/android-sdk/android-platform。
+    ANDROID_HOME: '{{install}}\..\..'
     ANDROID_PLATFORM: '{{install}}'
 versions:
     - version: "35"
