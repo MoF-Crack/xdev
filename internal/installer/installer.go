@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -43,6 +44,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
@@ -2057,9 +2059,44 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	// 正确做法：在删除前把活跃版本读出来，之后只用这个快照判断。
 	activeVer, _ := i.currentVersion(p.Name())
 
+	// 审查（卸载失败 unlinkat Access is denied）：**删除目录前先探测占用**。
+	//
+	// 旧实现直接 os.RemoveAll(target)，而 shim（E:\XDev\shims\node.exe 等）
+	// 仍指向 current/<tool> → install/<tool>/<ver>/。只要用户在该版本下跑过
+	// 工具（典型：一个没关的 node REPL / 后台 dev server），Windows 就无法
+	// 删除正在执行的 exe，报 `unlinkat ...\node.exe: Access is denied`。
+	//
+	// 更糟的是 RemoveAll 是逐个删的 —— 失败时目录已被部分删除，留下
+	// 一个既不能用也无法干净重装的脏状态（实测：仅剩 node.exe 一个文件）。
+	//
+	// 因此改为「先探测可删性，被占用就立即失败且不动任何东西」。
+	if locked, lockErr := installDirLocked(target); lockErr != nil {
+		return fmt.Errorf("uninstall %s@%s: cannot verify whether %s is in use: %w",
+			p.Name(), ver, target, lockErr)
+	} else if locked {
+		return fmt.Errorf(
+			"cannot uninstall %s@%s: a file under %s is in use by a running process. "+
+				"Close any running %s process (or restart the terminal that launched it) and retry. "+
+				"Nothing was deleted.",
+			p.Name(), ver, target, p.Name())
+	}
+
+	// 确认可删后再停用：让后续启动不再指向待删目录。
+	if activeVer == ver {
+		_ = p.Deactivate(target)
+	}
+	i.removeShims(p)
+
 	// 1. Remove the installation directory
 	if err := os.RemoveAll(target); err != nil {
 		log.Printf("[install] ERROR: uninstall failed for %s@%s: %v", p.Name(), ver, err)
+		if isFileLockedError(err) {
+			return fmt.Errorf(
+				"uninstall %s@%s failed: a file under %s became in use during deletion "+
+					"(this is the usual cause of \"Access is denied\" on Windows). "+
+					"Close any running %s process and retry; the directory may be partially deleted: %w",
+				p.Name(), ver, target, p.Name(), err)
+		}
 		return err
 	}
 
@@ -2217,6 +2254,82 @@ func (i *Installer) findOtherVersion(p plugin.Plugin) string {
 		}
 	}
 	return best
+}
+
+// installDirLocked 探测 dir 内是否有「被其它进程占用」的文件。
+//
+// 审查（卸载 node.exe 报 unlinkat Access is denied）：Windows 不允许删除
+// 正在执行的可执行文件映像。旧实现直接 RemoveAll，失败时目录已被部分删除，
+// 留下既不能用也无法干净重装的脏状态。
+//
+// 探测手法：递归遍历目录，对每个文件尝试以**零共享模式**打开
+// （Windows: FILE_SHARE_NONE；其它平台：O_RDWR）。只要有一个文件打不开，
+// 就说明被占用。
+//
+// 注：最初尝试过「把目录 rename 到临时名」探测，但 Windows 对含有运行中
+// 映像的目录仍允许 rename（rename 只改目录项，不动已有句柄），实测无效。
+//
+// 返回 (locked, err)：locked=true 表示被占用；err 仅在探测本身出错时返回。
+// dir 不存在时返回 (false, nil)。
+func installDirLocked(dir string) (bool, error) {
+	if _, statErr := os.Stat(dir); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return false, nil
+		}
+		return false, statErr
+	}
+
+	locked := false
+	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// 遍历本身出错不当作占用（交给后续 RemoveAll 报真实错误）。
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !fileInUse(path) {
+			return nil
+		}
+		locked = true
+		return fs.SkipAll
+	})
+	if walkErr != nil {
+		return false, walkErr
+	}
+	return locked, nil
+}
+
+// isFileLockedError 判断 RemoveAll 失败是否由「文件被占用」引起。
+//
+// 审查（卸载 node.exe 报 unlinkat Access is denied）：Windows 不允许删除
+// 正在执行的可执行文件映像，对映射中的 DLL 也返回共享冲突。Go 把这些
+// 系统错误包成 *os.PathError / *os.LinkError，底层 errno 通常是
+// ERROR_ACCESS_DENIED (5) 或 ERROR_SHARING_VIOLATION (32)。
+//
+// 用于把裸 errno 换成带处理建议的文案 —— 用户看到
+// `unlinkat ...: Access is denied` 无法知道该做什么。
+func isFileLockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		// 5 = ERROR_ACCESS_DENIED, 32 = ERROR_SHARING_VIOLATION,
+		// 33 = ERROR_LOCK_VIOLATION
+		if errno == 5 || errno == 32 || errno == 33 {
+			return true
+		}
+	}
+	// 回退：某些平台/包装层只给出字符串。
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "access is denied") ||
+		strings.Contains(msg, "being used by another process") ||
+		strings.Contains(msg, "sharing violation") ||
+		strings.Contains(msg, "text file busy")
 }
 
 // removeShims removes all shim entries for a plugin.

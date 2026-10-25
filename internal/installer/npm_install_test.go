@@ -360,13 +360,13 @@ func TestNPMRunnerRejectsShellMetaInCmdPath(t *testing.T) {
 	}
 
 	unsafePaths := []string{
-		`C:\dir&calc\npm.cmd`,          // 命令分隔
-		`C:\dir|whoami\npm.cmd`,        // 管道
-		`C:\dir^esc\npm.cmd`,           // 转义符
-		`C:\100%portable\npm.cmd`,      // 变量展开
-		`C:\dir"quoted\npm.cmd`,        // 引号破坏
-		"C:\\dir\r\nnpm.cmd",             // 换行注入
-		`C:\a<b>c\npm.cmd`,             // 重定向
+		`C:\dir&calc\npm.cmd`,     // 命令分隔
+		`C:\dir|whoami\npm.cmd`,   // 管道
+		`C:\dir^esc\npm.cmd`,      // 转义符
+		`C:\100%portable\npm.cmd`, // 变量展开
+		`C:\dir"quoted\npm.cmd`,   // 引号破坏
+		"C:\\dir\r\nnpm.cmd",      // 换行注入
+		`C:\a<b>c\npm.cmd`,        // 重定向
 	}
 	for _, p := range unsafePaths {
 		tc := nodeToolchain{nodeBin: `C:\node\node.exe`, npmBin: p}
