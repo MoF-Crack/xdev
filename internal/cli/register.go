@@ -44,39 +44,27 @@ var customPluginNames = map[string]bool{
 
 // RegisterAll wires every built-in plugin into r, using the
 // manifest.Tools loaded from disk.
+//
+// 2026-10-25（架构收口）：装配逻辑已下沉到 plugin.BuildRegistry ——
+// 修复前它在这里、cli/hook.go、shim/shim.go 三处各写一遍，且
+// 后两处只 NewGeneric、**缺 Lua/vfox 插件**，导致插件型工具的 env 注入
+// 与项目级版本切换静默失效。本函数保留是因为它额外注册 Java 专用插件
+// （唯一的自定义 ArchiveFor 实现），其余全部委托。
 func RegisterAll(r *plugin.Registry, catalog *manifest.Catalog) {
 	// 1. 专用插件先注册 — Java 是唯一带自定义 ArchiveFor 逻辑的插件。
+	//    必须先于 Generic，否则 Generic 会先占位（"资源解析不被 Generic 覆盖"）。
 	if t, ok := catalog.Tool("java"); ok {
 		r.Register(java.New(t))
 	}
 
-	// 2. Generic 插件 — 遍历完整 catalog，每个工具生成一个
-	// plugin.Generic。新增 manifest（如 Spec 023 的 ide/agent/harness）
-	// 自动注册，无需再维护硬编码清单。
-	for _, t := range catalog.Tools() {
-		// 跳过有专用插件的工具。
-		if customPluginNames[t.Name] {
-			continue
-		}
-		// 跳过非工具 YAML（如 manifests/index.yaml 目录索引）：
-		// 没有任何可安装内容的条目注册后只会产生坏插件。
-		if !isRegisterableTool(t) {
-			continue
-		}
-		r.Register(plugin.NewGeneric(t))
-	}
-
-	// 3. 扫描 <Cfg().XMDevDir>/plugins/ 下的 Lua 插件（票 04 / P0-06 单源：
-	// 与 `xdev plugin install` 的写入目录 pluginDir() 完全一致。修复前
-	// 注册侧扫描 $XMDEV_HOME 或 ~/.xdev/plugins，默认部署下安装好的
-	// 插件永不被加载）。旧目录仍存在且非空时输出迁移提示。
-	//
-	// 票 39 / P2-31（N-09）：xdev 原生格式与 vfox 兼容格式的注册合并为
-	// 一次目录扫描 + 一个 LuaEngine（见 registerUserPlugins）——修复前
-	// 两个函数各扫一遍目录、各建一个引擎，同一个 .lua 被 DoFile 两次
-	// （顶层代码执行两遍、VM 缓存两份），且 vfox 侧加载失败静默 continue。
+	// 2. 其余全部交给统一装配（Generic + 用户 Lua/vfox 插件）。
+	//    BuildRegistry 会跳过已有专用插件的工具名。
+	//    传入 pluginsReadDir 而非让 plugin 包直调 os.ReadDir：
+	//    cli 的 P2-31 守卫靠这个包级接缝断言「目录只扫一次」。
 	hintLegacyPluginsDir()
-	registerUserPlugins(r)
+	for _, p := range plugin.BuildRegistryWithReadDir(catalog, pluginsDir(), customPluginNames, pluginsReadDir).All() {
+		r.Register(p)
+	}
 }
 
 // isRegisterableTool 报告 t 是否为可安装的真实工具：至少要有

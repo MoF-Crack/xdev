@@ -140,10 +140,11 @@ func resolveEnvContext(toolName string) *envctx.Context {
 	if err != nil {
 		return nil
 	}
-	reg := plugin.NewRegistry()
-	for _, t := range cat.Tools() {
-		reg.Register(plugin.NewGeneric(t))
-	}
+	// 2026-10-25（架构收口）：改用 plugin.BuildRegistry —— 修复前这里只
+	// NewGeneric 遍历 catalog，**拿不到 Lua/vfox 插件**，导致插件型工具
+	// 的 env 注入（P2 刚做成的核心能力）完全失效。
+	// 目录与 cli 的 pluginsDir() 同源：<XMDevDir>/plugins。
+	reg := plugin.BuildRegistry(cat, filepath.Join(cfg.Core.XMDevDir, "plugins"))
 	p, ok := reg.Get(toolName)
 	if !ok {
 		return nil

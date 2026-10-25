@@ -63,9 +63,14 @@ func TestConsolidationGuard_EnvAndGui(t *testing.T) {
 	}
 }
 
-// TC-GRD3b env 侧 isInsideXdevDir 已委托 hostscan.InsideDir（≥3 个调用点）
+// TC-GRD3b 扫描侧 isInsideXdevDir 已委托 hostscan.InsideDir（≥3 个调用点）
+//
+// 2026-10-25：扫描/迁移代码已从 internal/env 搬到 internal/localmigrate
+// （env 只保留环境变量与 shell RC 职责）。守卫的**意图**不变：
+// 三条扫描路径（scanByEnvVars / scanByPath / scanByCommonDirs）都必须
+// 走 hostscan.InsideDir，不得各自手写路径包含判定。只把目录指向新位置。
 func TestConsolidationGuard_EnvDelegatesInsideDir(t *testing.T) {
-	files := collectGoFiles(t, filepath.Join("..", "env"))
+	files := collectGoFiles(t, filepath.Join("..", "localmigrate"))
 	re := regexp.MustCompile(`hostscan\.InsideDir\s*\(`)
 	count := 0
 	for _, file := range files {
@@ -76,7 +81,7 @@ func TestConsolidationGuard_EnvDelegatesInsideDir(t *testing.T) {
 		count += len(re.FindAllString(string(data), -1))
 	}
 	if count < 3 {
-		t.Errorf("hostscan.InsideDir call sites in internal/env = %d, want >= 3 (scanByEnvVars/scanByPath/scanByCommonDirs)", count)
+		t.Errorf("hostscan.InsideDir call sites in internal/localmigrate = %d, want >= 3 (scanByEnvVars/scanByPath/scanByCommonDirs)", count)
 	}
 }
 

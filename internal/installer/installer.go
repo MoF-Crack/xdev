@@ -2162,10 +2162,13 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 				log.Printf("[install] WARNING: failed to re-activate %s@%s: %v", p.Name(), otherVer, err)
 			}
 		} else {
-			// No other version: clean up shims and env fragment
+			// No other version: clean up shims
+			//
+			// 2026-10-25：这里曾调 i.removeEnvFragment(p)，但 env 片段
+			// 的**写入方** WriteEnvFragment 早已无任何调用方（死代码，已删）。
+			// 删除一个从未被写过的文件是纯粹的无效操作，一并移除。
 			log.Printf("[install] No other version of %s, cleaning up shims and env", p.Name())
 			i.removeShims(p)
-			i.removeEnvFragment(p)
 			// Security (M-1): Clean up user-level environment variables (JAVA_HOME, GOROOT, etc.)
 			// that were set during Activate. These point to the now-deleted installation
 			// and would cause errors if left in the registry.
@@ -2380,23 +2383,6 @@ func (i *Installer) removeShims(p plugin.Plugin) {
 		}
 		log.Printf("[install] Removed shim: %s", name)
 	}
-}
-
-// removeEnvFragment removes the env fragment file for a plugin.
-// Security (M-5 fix): p.Name() is manifest-controlled — an unsafe name
-// ("..\evil") would delete an arbitrary .sh file. Validate before use.
-func (i *Installer) removeEnvFragment(p plugin.Plugin) {
-	if _, err := util.SafeName(p.Name()); err != nil {
-		log.Printf("[install] WARNING: skipping env fragment removal for unsafe tool name %q: %v", p.Name(), err)
-		return
-	}
-	fragmentPath := filepath.Join(i.cfg.Core.EnvDir, p.Name()+".sh")
-	if err := util.ValidateSubPath(i.cfg.Core.EnvDir, fragmentPath); err != nil {
-		log.Printf("[install] WARNING: skipping env fragment removal: %v", err)
-		return
-	}
-	_ = os.Remove(fragmentPath)
-	log.Printf("[install] Removed env fragment: %s", fragmentPath)
 }
 
 // removeUserEnvVars deletes the user-level environment variables that were

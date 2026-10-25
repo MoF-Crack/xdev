@@ -131,6 +131,10 @@ current directory. With no project config it prints nothing.`,
 
 // toolEnvVars 取某个工具在指定安装目录下的环境变量。
 //
+// 2026-10-25（架构收口）：改用 plugin.BuildRegistry —— 修复前这里只
+// NewGeneric 遍历 catalog，**拿不到 Lua/vfox 插件**，导致插件型工具在
+// 项目级 hook 里完全没有 env 变量（Get 必然 miss）。
+//
 // 失败一律返回空 map：hook 是 cd 热路径，不能因 catalog 损坏向用户终端
 // 刷错误（shim 侧有同样的降级约定）。
 func toolEnvVars(cfg *config.Config, toolName, installDir string) map[string]string {
@@ -138,10 +142,7 @@ func toolEnvVars(cfg *config.Config, toolName, installDir string) map[string]str
 	if err != nil {
 		return nil
 	}
-	reg := plugin.NewRegistry()
-	for _, t := range cat.Tools() {
-		reg.Register(plugin.NewGeneric(t))
-	}
+	reg := plugin.BuildRegistry(cat, pluginsDir())
 	p, ok := reg.Get(toolName)
 	if !ok {
 		return nil

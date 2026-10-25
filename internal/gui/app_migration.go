@@ -1,4 +1,4 @@
-// app_migration.go implements initialization, migration, and self-install
+﻿// app_migration.go implements initialization, migration, and self-install
 // methods for the GUI.
 //
 // Provides:
@@ -27,14 +27,15 @@ import (
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/localmigrate"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
 // ScanLegacyDir 扫描所有驱动器，查找旧版 X:\XimuLocalDev\xmdevenvmt 目录。
-func (a *App) ScanLegacyDir() []env.LegacyDirInfo {
+func (a *App) ScanLegacyDir() []localmigrate.LegacyDirInfo {
 	logInfo("[ScanLegacyDir] 扫描旧版目录...")
-	found := env.ScanLegacyDir()
+	found := localmigrate.ScanLegacyDir()
 	logInfo("[ScanLegacyDir] 发现 %d 个旧版目录", len(found))
 	return found
 }
@@ -68,7 +69,7 @@ func (a *App) MigrateLegacyDir(legacyDir string) error {
 	vol := filepath.VolumeName(legacyDir)
 	newDir := filepath.Join(vol, "XDev")
 
-	if err := env.MigrateLegacyDir(legacyDir, newDir); err != nil {
+	if err := localmigrate.MigrateLegacyDir(legacyDir, newDir); err != nil {
 		logError("[MigrateLegacyDir] 迁移失败: %v", err)
 		return err
 	}
@@ -409,13 +410,13 @@ func (a *App) BrowseDirectory(title string) string {
 
 // ScanLocalEnvironmentsForMigration 扫描系统中已安装的开发工具，
 // 返回可用于迁移的本地工具列表。
-func (a *App) ScanLocalEnvironmentsForMigration() []env.LocalTool {
+func (a *App) ScanLocalEnvironmentsForMigration() []localmigrate.LocalTool {
 	logInfo("[ScanLocalEnvironmentsForMigration] 开始扫描本地环境")
 	cfg := a.getCfg()
-	tools := env.ScanLocalTools(cfg.Core.XMDevDir)
+	tools := localmigrate.ScanLocalTools(cfg.Core.XMDevDir)
 
 	// 过滤掉已由 xdev 管理的工具
-	var result []env.LocalTool
+	var result []localmigrate.LocalTool
 	for _, t := range tools {
 		// 检查是否已有 xdev 管理的版本
 		if _, installed := a.currentVersion(t.Name); installed {
@@ -435,7 +436,7 @@ func (a *App) ScanLocalEnvironmentsForMigration() []env.LocalTool {
 func (a *App) MigrateLocalToolByJunction(toolJson string) error {
 	logInfo("[MigrateLocalToolByJunction] 接收到迁移请求")
 
-	var tool env.LocalTool
+	var tool localmigrate.LocalTool
 	if err := json.Unmarshal([]byte(toolJson), &tool); err != nil {
 		return fmt.Errorf("解析工具信息失败: %v", err)
 	}
@@ -460,7 +461,7 @@ func (a *App) MigrateLocalToolByJunction(toolJson string) error {
 //   - 源路径必须为绝对路径、存在且为目录
 //   - 源路径不得是符号链接/junction（避免跟随到系统任意目录）
 //   - 源路径不得位于 xdev 主目录内（避免迁移自管目录形成循环）
-func (a *App) validateMigrationSource(tool env.LocalTool) error {
+func (a *App) validateMigrationSource(tool localmigrate.LocalTool) error {
 	if err := util.ValidateShimName(tool.Name); err != nil {
 		return fmt.Errorf("invalid tool name %q: %w", tool.Name, err)
 	}
@@ -486,7 +487,7 @@ func (a *App) validateMigrationSource(tool env.LocalTool) error {
 }
 
 // migrateLocalToolByJunction 通过 junction 方式迁移单个本地工具。
-func (a *App) migrateLocalToolByJunction(tool env.LocalTool) error {
+func (a *App) migrateLocalToolByJunction(tool localmigrate.LocalTool) error {
 	logInfo("[MigrateLocalToolByJunction] 迁移 %s (版本: %s, 路径: %s)", tool.Name, tool.Version, tool.Path)
 
 	cfg := a.getCfg()
@@ -502,7 +503,7 @@ func (a *App) migrateLocalToolByJunction(tool env.LocalTool) error {
 	}
 
 	// 执行 junction 迁移
-	if err := env.MigrateLocalTool(tool, cfg.Core.XMDevDir); err != nil {
+	if err := localmigrate.MigrateLocalTool(tool, cfg.Core.XMDevDir); err != nil {
 		return err
 	}
 
@@ -528,7 +529,7 @@ func (a *App) migrateLocalToolByJunction(tool env.LocalTool) error {
 func (a *App) MigrateLocalToolByMove(toolJson string) error {
 	logInfo("[MigrateLocalToolByMove] 接收到迁移请求")
 
-	var tool env.LocalTool
+	var tool localmigrate.LocalTool
 	if err := json.Unmarshal([]byte(toolJson), &tool); err != nil {
 		return fmt.Errorf("解析工具信息失败: %v", err)
 	}
@@ -548,7 +549,7 @@ func (a *App) MigrateLocalToolByMove(toolJson string) error {
 }
 
 // migrateLocalToolByMove 以 move 方式迁移单个本地工具。
-func (a *App) migrateLocalToolByMove(tool env.LocalTool) error {
+func (a *App) migrateLocalToolByMove(tool localmigrate.LocalTool) error {
 	logInfo("[MigrateLocalToolByMove] 迁移 %s (版本: %s, 路径: %s)", tool.Name, tool.Version, tool.Path)
 
 	cfg := a.getCfg()
@@ -671,10 +672,10 @@ func (a *App) rollbackMove(targetPath, originalPath string, movedByRename bool) 
 }
 
 // scanLocalToolsForMigration 是 MigrateAllLocalTools 的扫描入口 seam
-// （票 22 守卫测试用）：生产恒为 env.ScanLocalTools（全盘扫描真实主机），
+// （票 22 守卫测试用）：生产恒为 localmigrate.ScanLocalTools（全盘扫描真实主机），
 // 仅测试替换为临时目录中的假工具集，以便在无副作用的前提下驱动批量迁移
 // 路径并断言「每批恰好刷新一次缓存」。非测试代码从不赋值 → 生产行为不变。
-var scanLocalToolsForMigration = env.ScanLocalTools
+var scanLocalToolsForMigration = localmigrate.ScanLocalTools
 
 // MigrateAllLocalTools 一键迁移所有扫描到的本地工具（并行执行）。
 // mode 指定迁移方式："junction" | "move"。
@@ -708,7 +709,7 @@ func (a *App) MigrateAllLocalTools(mode string) []MigrationResult {
 
 		wg.Add(1)
 		limiter <- struct{}{}
-		go func(idx int, t env.LocalTool) {
+		go func(idx int, t localmigrate.LocalTool) {
 			defer wg.Done()
 			defer func() { <-limiter }()
 
@@ -745,7 +746,7 @@ func (a *App) MigrateAllLocalTools(mode string) []MigrationResult {
 
 // migrateLocalToolOne 按指定迁移方式迁移单个本地工具。
 // mode: "junction" | "move"（其他值回退到 junction）。
-func (a *App) migrateLocalToolOne(tool env.LocalTool, mode string) error {
+func (a *App) migrateLocalToolOne(tool localmigrate.LocalTool, mode string) error {
 	if mode == "move" {
 		return a.migrateLocalToolByMove(tool)
 	}
@@ -753,7 +754,7 @@ func (a *App) migrateLocalToolOne(tool env.LocalTool, mode string) error {
 }
 
 // postMigrateSetup 迁移成功后的公共设置逻辑：创建 shim、设置环境变量
-func (a *App) postMigrateSetup(tool env.LocalTool, cfg *config.Config) {
+func (a *App) postMigrateSetup(tool localmigrate.LocalTool, cfg *config.Config) {
 	p, err := a.mustGetPlugin(tool.Name)
 	if err != nil {
 		return

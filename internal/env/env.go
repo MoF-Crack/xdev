@@ -225,23 +225,6 @@ func WindowsPathPrepend(path, shimDir string) string {
 	return strings.Join(out, sep)
 }
 
-// WriteEnvFragment writes a tiny shell-evaluable fragment for a tool
-// that sets the necessary env vars (JAVA_HOME, ANDROID_HOME, ...).
-//
-// The fragment is sourced by shim.Lookup before execing the real
-// binary.
-func WriteEnvFragment(envDir, tool, version string, vars map[string]string) error {
-	if err := os.MkdirAll(envDir, 0o755); err != nil {
-		return err
-	}
-	var b strings.Builder
-	for k, v := range vars {
-		fmt.Fprintf(&b, "export %s='%s'\n", k, shellSingleQuote(v))
-	}
-	path := filepath.Join(envDir, tool+".sh")
-	return os.WriteFile(path, []byte(b.String()), 0o644)
-}
-
 // ToolBinPaths 返回指定工具安装目录下需要加入 PATH 的子目录列表。
 // 不同工具有不同的 bin 目录结构：
 //   - java: bin/

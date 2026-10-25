@@ -234,6 +234,16 @@ func UseInMemoryUserPathForTesting(initial string) (get func() string, restore f
 // the real lock. Holders are identified by goroutine id + depth; a bare
 // sync.Mutex is NOT usable because a repeated Lock() from the same goroutine
 // self-deadlocks — precisely the failure mode A-11 reports.
+// WithUserPathLock 是 withUserPathLock 的导出形式，供 env 包外的调用方
+// （如 internal/localmigrate 的旧版目录清理）复用同一把用户 PATH 锁。
+//
+// 为什么需要导出：这把锁携带 A-11 的 goroutine 重入守卫与跨进程 RMW 语义，
+// 包外代码无法自行重建等价物。以前 localmigrate 的代码就在 env 包内，
+// 拆分后必须保留同一把锁，否则两条 PATH 修改路径会互相竞争。
+func WithUserPathLock(fn func() error) error {
+	return withUserPathLock(fn)
+}
+
 func withUserPathLock(fn func() error) error {
 	// Depth is consulted first: when this goroutine already holds the lock,
 	// userPathLockDepth is non-zero, so the fast path needs no extra state.

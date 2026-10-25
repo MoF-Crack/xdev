@@ -1,4 +1,4 @@
-package env
+﻿package localmigrate
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/hostscan"
 	"github.com/xmdemt/xdev/internal/toolmeta"
 	"github.com/xmdemt/xdev/internal/util"
@@ -115,7 +116,7 @@ func scanByEnvVars(rule toolScanRule, xdevDir string) *LocalTool {
 		}
 
 		version := getToolVersion(rule, installPath)
-		binPaths := ToolBinPaths(rule.name, installPath)
+		binPaths := env.ToolBinPaths(rule.name, installPath)
 		envVars := collectEnvVars(rule, installPath)
 
 		return &LocalTool{
@@ -153,7 +154,7 @@ func scanByPath(rule toolScanRule, xdevDir string) *LocalTool {
 		}
 
 		version := getToolVersion(rule, installPath)
-		binPaths := ToolBinPaths(rule.name, installPath)
+		binPaths := env.ToolBinPaths(rule.name, installPath)
 		envVars := collectEnvVars(rule, installPath)
 
 		return &LocalTool{
@@ -188,7 +189,7 @@ func scanByCommonDirs(rule toolScanRule, xdevDir string) *LocalTool {
 		}
 
 		version := getToolVersion(rule, installPath)
-		binPaths := ToolBinPaths(rule.name, installPath)
+		binPaths := env.ToolBinPaths(rule.name, installPath)
 		envVars := collectEnvVars(rule, installPath)
 
 		return &LocalTool{

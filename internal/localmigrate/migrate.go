@@ -1,4 +1,4 @@
-package env
+﻿package localmigrate
 
 import (
 	"fmt"
@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -176,15 +177,15 @@ func MigrateLegacyDir(legacyDir, newDir string) error {
 
 // cleanupLegacyPath 清理用户 PATH 中旧版 xmdevenvmt 目录相关的条目
 //
-// Ticket 10 (audit-fixes / P0-11)：读改写全程走 withUserPathLock。注意
-// 本文件无 build tag（全平台编译）而 withUserPathLock 只在 Windows 实现
+// Ticket 10 (audit-fixes / P0-11)：读改写全程走 env.WithUserPathLock。注意
+// 本文件无 build tag（全平台编译）而 env.WithUserPathLock 只在 Windows 实现
 // （win_path_other.go 提供直通 stub）——锁调用放在既有 GOOS guard 内，
 // stub 防未来跨平台漏网。
 func cleanupLegacyPath(legacyDir string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
-	_ = withUserPathLock(func() error {
+	_ = env.WithUserPathLock(func() error {
 		cleanupLegacyPathLocked(legacyDir)
 		return nil
 	})
@@ -192,7 +193,7 @@ func cleanupLegacyPath(legacyDir string) {
 
 func cleanupLegacyPathLocked(legacyDir string) {
 	// 读取当前用户 PATH
-	current, err := ReadUserPath()
+	current, err := env.ReadUserPath()
 	if err != nil {
 		return
 	}
@@ -229,8 +230,8 @@ func cleanupLegacyPathLocked(legacyDir string) {
 
 	if changed {
 		newPath := strings.Join(kept, ";")
-		if err := WriteUserPath(newPath); err == nil {
-			BroadcastEnvironmentChange()
+		if err := env.WriteUserPath(newPath); err == nil {
+			env.BroadcastEnvironmentChange()
 		}
 	}
 }

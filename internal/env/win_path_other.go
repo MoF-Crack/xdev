@@ -106,6 +106,11 @@ func CleanupUserPath(home, shimDir, pathMode string) (bool, error) {
 	return false, nil
 }
 
+// WithUserPathLock 是 withUserPathLock 的导出形式（见 Windows 侧同名函数）。
+func WithUserPathLock(fn func() error) error {
+	return withUserPathLock(fn)
+}
+
 // withUserPathLock is a pass-through on non-Windows platforms: the PATH
 // read-modify-write lock only guards the Windows registry-backed PATH.
 // The stub exists so cross-platform files (e.g. migrate.go, which has no

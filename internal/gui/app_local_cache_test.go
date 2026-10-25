@@ -1,4 +1,4 @@
-package gui
+﻿package gui
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/localmigrate"
 )
 
 // ──────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ func firstBytes(b []byte, n int) string {
 // 修复后：worker 不刷新，批量尾部 1 次、单工具入口 1 次。
 //
 // seam 说明（最小侵入、不改生产行为）：
-//   - scanLocalToolsForMigration：默认 env.ScanLocalTools（生产值）；测试替换为
+//   - scanLocalToolsForMigration：默认 localmigrate.ScanLocalTools（生产值）；测试替换为
 //     临时目录中的假工具集，避免触碰真实主机（否则会真的把用户 PATH 上的工具
 //     迁移进临时目录、并写用户环境变量）。
 //   - localCacheRefreshHook：仅用于计数，生产恒为 nil。
@@ -200,15 +200,15 @@ func TestMigrateAllLocalTools_RefreshOncePerBatch(t *testing.T) {
 	srcRoot := t.TempDir() // 迁移源必须是 xdev 主目录之外的目录
 	app := newTestAppWithDirs(t, home)
 
-	mkTools := func(names ...string) []env.LocalTool {
-		out := make([]env.LocalTool, 0, len(names))
+	mkTools := func(names ...string) []localmigrate.LocalTool {
+		out := make([]localmigrate.LocalTool, 0, len(names))
 		for _, n := range names {
 			dir := filepath.Join(srcRoot, n)
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatalf("创建假工具目录失败: %v", err)
 			}
 			// 预置版本号：避免迁移路径调用外部进程探测版本。
-			out = append(out, env.LocalTool{Name: n, Path: dir, Version: "1.0.0"})
+			out = append(out, localmigrate.LocalTool{Name: n, Path: dir, Version: "1.0.0"})
 		}
 		return out
 	}
@@ -216,7 +216,7 @@ func TestMigrateAllLocalTools_RefreshOncePerBatch(t *testing.T) {
 	batch := mkTools("faketool-a", "faketool-b", "faketool-c")
 
 	origScan := scanLocalToolsForMigration
-	scanLocalToolsForMigration = func(string) []env.LocalTool { return batch }
+	scanLocalToolsForMigration = func(string) []localmigrate.LocalTool { return batch }
 	defer func() { scanLocalToolsForMigration = origScan }()
 
 	origHook := localCacheRefreshHook
