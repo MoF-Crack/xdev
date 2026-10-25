@@ -59,6 +59,20 @@ type Task struct {
 	// 标志由 Pause 在锁内同步置位，不依赖任何进度回调，因此 chunked 响应、
 	// 以及「首个 200ms 节流窗口内就暂停」都能正确判为暂停。Cancel 会清掉它。
 	pauseRequested bool
+
+	// done 在 runDownload 退出时被 close，供 Cancel 等待「下载 goroutine
+	// 确实已退出」后再删除 .part。
+	//
+	// 为什么需要它（2026-10-25，CI flaky：TestF14_Control_CancelOnChunkedDownload_DeletesPart）：
+	// Cancel 取消 context 后**立即**调 discardPart 删除 .part，但此刻下载
+	// goroutine 可能仍持有写入句柄（context 取消是异步的，正在写盘的
+	// Write 调用还没返回）。Windows 上文件被占用时删除失败，留下 .part
+	// 残留，测试断言 GetPartialFileSize==0 就红了。
+	//
+	// 旧实现在 manager.go 里把该失败降级为 log（Ticket 21 / N-06 注释
+	// “on Windows the writer may still hold the handle”），属于已知缺口。
+	// 这里用 done 等待收口，而不是靠日志掩盖。
+	done chan struct{}
 }
 
 // Manager 管理所有下载任务
@@ -120,6 +134,7 @@ func (m *Manager) StartDownload(id, tool, ver string, opts Options) error {
 		ctx:     ctx,
 		cancel:  cancel,
 		opts:    opts,
+		done:    make(chan struct{}),
 	}
 	m.tasks[id] = task
 	m.mu.Unlock()
@@ -130,6 +145,11 @@ func (m *Manager) StartDownload(id, tool, ver string, opts Options) error {
 
 // runDownload 执行下载
 func (m *Manager) runDownload(task *Task) {
+	// 退出时关闭 done，让 Cancel 知道「写入句柄已释放、可以安全删 .part」。
+	// 必须在函数最开头 defer，保证任何 return 路径（含 superseded 分支）都关闭。
+	if task.done != nil {
+		defer close(task.done)
+	}
 	// 如果批量下载，在 ProgressDesc 前加 [N/M] 前缀
 	if task.BatchTotal > 0 {
 		task.opts.ProgressDesc = fmt.Sprintf("[%d/%d] %s", task.BatchIndex, task.BatchTotal, task.opts.ProgressDesc)
@@ -299,6 +319,10 @@ func (m *Manager) Resume(id string) error {
 	task.Status = StatusDownloading
 	task.pausedAt = 0
 	task.pauseRequested = false
+	// Resume 会为同一个 Task 启动**新一代** goroutine，必须重建 done，
+	// 否则新 goroutine 退出时会对已关闭的 channel 再 close → panic。
+	// （2026-10-25：首版修复未重建，TestPause_ImmediatelyResume_Works 捕获）
+	task.done = make(chan struct{})
 	task.mu.Unlock()
 
 	// Resume starts a NEW download goroutine generation while the paused one
@@ -345,6 +369,17 @@ func (m *Manager) Cancel(id string) error {
 
 	// 清理临时文件（F-12：按 URL 分代 —— 本 URL 的代 + 回退 URL 的代 +
 	// 历史未分代命名，全部删掉，否则会留下孤儿 .part 占着缓存目录）。
+	//
+	// 2026-10-25 修复（CI flaky）：必须先等下载 goroutine 真正退出，否则
+	// 它的写入句柄还没释放（context 取消是异步的），Windows 上删除会失败、
+	// 留下 .part 残留（旧实现只把这个失败降级为 log）。
+	if task.done != nil {
+		select {
+		case <-task.done:
+		case <-time.After(5 * time.Second):
+			log.Printf("[download] WARNING: 等待下载 goroutine 退出超时，仍尝试清理 %s", task.opts.Dest)
+		}
+	}
 	for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
 		// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
 		discardPart(partPath)
