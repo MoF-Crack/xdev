@@ -528,7 +528,23 @@ func (a *App) startup(ctx context.Context) {
 // domReady is called when the DOM is ready.
 func (a *App) domReady(ctx context.Context) {
 	logInfo("[domReady] Wails OnDomReady callback fired — calling WindowShow()")
+
+	// 修复（双击启动无反应）：`StartHidden: true` + `Frameless: true` 下，
+	// Wails 创建窗口时用 SW_HIDE 把它藏起来，位置落在屏幕外
+	// (-32000, -32000) 且处于最小化状态（实测 GetWindowRect / IsIconic）。
+	//
+	// 而 Wails 的 WindowShow() **只负责“显示”，不会恢复最小化、不会聚焦**
+	// （官方 issue #1193 与 runtime/window.go 实现均确认）。于是窗口虽然
+	// “已显示”，却留在屏幕外，用户看到的就是“双击后毫无反应”。
+	//
+	// 因此必须显式 Unminimise。顺序：Show → Unminimise → 再 Show，
+	// 确保窗口真正回到屏幕内可见。
 	wailsRuntime.WindowShow(ctx)
+	if wailsRuntime.WindowIsMinimised(ctx) {
+		logInfo("[domReady] window was minimised after WindowShow — calling WindowUnminimise()")
+		wailsRuntime.WindowUnminimise(ctx)
+		wailsRuntime.WindowShow(ctx)
+	}
 	logInfo("[domReady] WindowShow() completed, window should now be visible")
 
 	// 先尝试从缓存加载；命中后立刻 signalLocalReady，避免
