@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/envctx"
 )
 
 // 控制台判定所需的 Win32 API。
@@ -88,12 +89,18 @@ func childSysProcAttrFor(hide bool) *syscall.SysProcAttr {
 // MCP 服务等无窗口宿主调用）时，给子进程加 CREATE_NO_WINDOW + HideWindow，
 // 避免每个长驻工具（语言服务器、MCP server）都弹出一个关不掉的终端窗口。
 // 用户在终端里调用时 hasOwnConsole()==true，行为完全不变。
-func run(target string, args []string) error {
+func run(target string, args []string, ctx *envctx.Context) error {
 	cmd := exec.Command(target, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// 2026-10-25（P2）：先叠加注册表里已有的工具环境，再叠加本次解析的
+	// 进程级上下文。后者优先 —— 它对应「当前激活版本」，比注册表里的
+	// 全局值更新（多版本并存时尤其重要）。
 	cmd.Env = env.EnrichFromRegistry(os.Environ())
+	if ctx != nil && !ctx.Empty() {
+		cmd.Env = ctx.Apply(cmd.Env)
+	}
 
 	// 无可见控制台 ⇒ 被无窗口宿主 / IDE 集成终端调用 ⇒ 隐藏子进程窗口。
 	// 有可见控制台 ⇒ 用户交互场景 ⇒ 保持继承，不干扰 stdin/stdout。

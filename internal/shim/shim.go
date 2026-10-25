@@ -47,6 +47,9 @@ import (
 	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
+	"github.com/xmdemt/xdev/internal/envctx"
+	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -86,7 +89,7 @@ func MaybeExec(selfName string) (bool, error) {
 	// trimExeSuffix handles any casing of the suffix and
 	// normalizeShimAlias folds the alias into the index's case domain.
 	alias := base
-	target, _, args, err := Lookup(alias, os.Args[1:])
+	target, toolName, args, err := Lookup(alias, os.Args[1:])
 	if err != nil {
 		// PATH 透传（Spec 038）：shim 存在但工具未由 xdev 管理时，不能
 		// 遮蔽系统上已有的同名真实工具——在剔除 xdev 自身目录（shims/、
@@ -96,15 +99,61 @@ func MaybeExec(selfName string) (bool, error) {
 		if pathErr != nil || pathTarget == "" {
 			return true, err
 		}
-		if rerr := run(pathTarget, os.Args[1:]); rerr != nil {
+		// 透传目标不是 xdev 管理的工具，没有任何可注入的 env 上下文。
+		if rerr := run(pathTarget, os.Args[1:], nil); rerr != nil {
 			return true, rerr
 		}
 		return true, nil
 	}
-	if err := run(target, args); err != nil {
+
+	// 2026-10-25（P2）：解析该工具当前激活版本的环境上下文，注入给子进程。
+	//
+	// 这是「环境变量真正生效」的关键路径：以前 env 只写 Windows 注册表，
+	// 非 Windows 完全不生效，且全局单份无法支持多版本并存。
+	// 现在改为进程级注入 —— 与注册表写入并存，不相互替代。
+	//
+	// 解析失败（catalog 损坏、插件缺失）不得阻断用户命令：
+	// shim 是热路径，环境上下文是增强而非必要条件。
+	ectx := resolveEnvContext(toolName)
+
+	if err := run(target, args, ectx); err != nil {
 		return true, err
 	}
 	return true, nil
+}
+
+// resolveEnvContext 解析 toolName 当前激活版本的进程环境上下文。
+//
+// 任何一步失败都返回 nil（调用方据此跳过注入，保持原有行为）：
+// shim 必须在「拿不到 manifest / 插件」时依然能把命令跑起来。
+func resolveEnvContext(toolName string) *envctx.Context {
+	if toolName == "" {
+		return nil
+	}
+	cfg, err := config.Load("")
+	if err != nil {
+		return nil
+	}
+	// 用磁盘缓存版 catalog（manifest-cache.dat）：热路径不能每次重解析 YAML。
+	cat, err := manifest.LoadCatalogCached(cfg.Core.ManifestDir, cfg.Core.CacheDir)
+	if err != nil {
+		return nil
+	}
+	reg := plugin.NewRegistry()
+	for _, t := range cat.Tools() {
+		reg.Register(plugin.NewGeneric(t))
+	}
+	p, ok := reg.Get(toolName)
+	if !ok {
+		return nil
+	}
+	// installPath 用 current/<tool> 解析出的真实目录：
+	// 它指向当前激活版本的 install/<tool>/<ver>。
+	installPath := util.ActiveInstallPath(cfg.Core.XMDevDir, toolName)
+	if installPath == "" {
+		return nil
+	}
+	return envctx.Resolve(p, installPath)
 }
 
 // Lookup resolves a tool alias to the real underlying executable.
