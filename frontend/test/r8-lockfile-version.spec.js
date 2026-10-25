@@ -29,27 +29,32 @@ describe('R8-06 lockfile root version 必须与 package.json 一致（红→绿�
     expect(lock.packages[''].name).toBe(pkg.name);
   });
 
-  it('lock 的依赖树未被改动（只改了 version 字段）', () => {
+  it('lock 的依赖树结构保持完整（未因修复而损坏）', () => {
     const lock = readJson('frontend/package-lock.json');
-    // 依赖树完整性：lockfileVersion 与依赖条目数必须保持原状（实测 185 条：
-    // root + 184 个依赖条目）。修复只允许动两处 version 字段。
+    // 2026-10-25 更新：本断言原钉住「185 条 / tinyexec 0.3.3-rc.2」，
+    // 那是修 Dependabot 告警之前的快照。为消除 vitest→tinypool 的 RCE
+    // （critical），vitest 从 3.2.7 升到 5.0.5，npm 重建了依赖树：
+    //   条目数 185 -> 171（vitest 5 精简了依赖）
+    //   tinyexec 0.3.3-rc.2 -> 1.3.1
+    // 硬编码具体数字会让每次合法的依赖升级都要改测试，因此改为
+    // 断言**结构不变量**：lockfileVersion 正确、root 条目存在、依赖树非空。
     expect(lock.lockfileVersion).toBe(3);
-    expect(Object.keys(lock.packages).length).toBe(185);
-    // tinyexec 的真实依赖版本不受 root 版本同步影响（同形字符串，必须区分开）。
-    expect(lock.packages['node_modules/tinyexec'].version).toBe('0.3.3-rc.2');
+    expect(lock.packages['']).toBeDefined();
+    expect(Object.keys(lock.packages).length).toBeGreaterThan(100);
     // root 依赖的**键集**必须与 package.json 一致（未增删依赖）。
     const pkg = readJson('frontend/package.json');
     expect(Object.keys(lock.packages[''].dependencies).sort())
       .toEqual(Object.keys(pkg.dependencies).sort());
-    // 注意：lock 的 root 依赖**区间**仍停留在旧值（naive-ui ^2.38.0 / vue ^3.4.0），
-    // 与 package.json 的 ^2.44.0 / ^3.5.0 不一致。这是 R8-06 之前就存在的既有偏差，
-    // 修它需要 `npm install`（会重写整棵依赖树），超出本次「只改 version 字段」的范围，
-    // 故此处把现状钉住，避免被误认为本次改动引入。
-    expect(lock.packages[''].dependencies).toEqual({
-      '@vicons/ionicons5': '^0.12.0',
-      'naive-ui': '^2.38.0',
-      vue: '^3.4.0',
-    });
+    // 注意（2026-10-25 更新）：本断言原先钉住的是 lock 的 root 依赖区间
+    // 停留在旧值（naive-ui ^2.38.0 / vue ^3.4.0）这一**既有偏差**。
+    //
+    // 修复 GitHub Dependabot 告警时执行了 `npm audit fix`（修 vue XSS /
+    // source-map-js DoS 等），npm 重写了 lock 的 root 依赖区间，
+    // 使其与 package.json 一致 —— 那个既有偏差被顺带消除了。
+    //
+    // 因此断言从「钉住旧区间」改为「与 package.json 一致」，语义更强：
+    // lock 与 package.json 在**版本区间**层面也不得漂移。
+    expect(lock.packages[''].dependencies).toEqual(pkg.dependencies);
   });
 
   it('lock 中 root 版本不再出现旧值', () => {
