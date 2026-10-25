@@ -197,7 +197,16 @@ func HookOutput(shell string, binPaths []string, envVars map[string]string) stri
 	default: // bash, zsh, sh
 		if len(binPaths) > 0 {
 			pathStr := strings.Join(binPaths, ":")
-			fmt.Fprintf(&b, "export PATH='%s:$PATH'\n", shellSingleQuote(pathStr))
+			// 2026-10-25 修复（P0-1）：`$PATH` 必须**在单引号外**。
+			//
+			// 旧实现是 `export PATH='%s:$PATH'`，而 shellSingleQuote 只做
+			// `'` → `'\''` 的转义、**不会加外层引号** —— 于是整个表达式变成
+			// `export PATH='/a:/b:$PATH'`，单引号内的 `$PATH` 不展开，
+			// eval 后 PATH 直接变成字面量 `'/a:/b:$PATH'`，把用户原有
+			// PATH **彻底覆盖掉**（不是追加）。
+			//
+			// 正确写法：路径部分引号包裹（防空格/特殊字符），`:$PATH` 拼在引号外。
+			fmt.Fprintf(&b, "export PATH='%s':\"$PATH\"\n", shellSingleQuote(pathStr))
 		}
 		for k, v := range envVars {
 			if !util.IsValidEnvVarName(k) {

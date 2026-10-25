@@ -172,8 +172,11 @@ func renderShellBlock(shell, xmdeHome, shimDir string) string {
 			marker, psEscape(xmdeHome), psEscape(shimDir), endMarker,
 		)
 	default: // sh, bash, zsh
+		// 2026-10-25 修复（P0-1）：与 HookOutput 同源 bug。`$PATH` 必须在单引号外，
+		// 否则写进 RC 文件的那一行 eval 后会把 PATH 变成字面量 `'/a:/b:$PATH'`，
+		// 用户原有 PATH 被彻底覆盖（且每次开 shell 都错一次）。
 		return fmt.Sprintf(
-			"%s\nexport XMDEV_HOME='%s'\nexport PATH='%s:$PATH'\n%s\n",
+			"%s\nexport XMDEV_HOME='%s'\nexport PATH='%s':\"$PATH\"\n%s\n",
 			marker, shellSingleQuote(xmdeHome), shellSingleQuote(shimDir), endMarker,
 		)
 	}

@@ -1565,8 +1565,14 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	junctionCreated = true
 
 	// --- Step 2: PATH mode dispatch ---
+	//
+	// 2026-10-25（P0-4）：显式 switch 而不是 if == "direct"。
+	// 原写法把一切非 direct 值都当 shim（包括理论上不可能出现的 auto），
+	// 静默行为容易掩盖配置错误。GetPathMode 已经把 auto 降级为 shim，
+	// 这里再显式列出两个合法分支，未来加 auto 时不会漏。
 	pathsAdded := false
-	if i.cfg.GetPathMode() == "direct" {
+	switch i.cfg.GetPathMode() {
+	case "direct":
 		currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
 		binPaths := env.ToolBinPaths(p.Name(), currentDir)
 		if len(binPaths) > 0 {
@@ -1582,7 +1588,7 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 			}
 		}
 		log.Printf("[install] Direct mode: skipping shim creation, using PATH entries instead")
-	} else {
+	default: // "shim"（GetPathMode 已保证只可能是 shim 或 direct）
 		shimExe := i.ResolveShimExe()
 		log.Printf("[install] Creating shims in %s (exe=%s)", i.cfg.Core.ShimDir, shimExe)
 		// F-26: align with removeShims — an invalid shim NAME is skipped with
@@ -1848,6 +1854,22 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 	for name, value := range vars {
 		if name == "PATH" {
 			continue // PATH 由 shim 管理，不写入
+		}
+		// 2026-10-25 修复（P0-3）：写侧必须与删侧对齐白名单。
+		//
+		// 旧行为：写侧只靠 SetUserEnvVarTrusted 做语法/保护变量校验，**不过白名单**；
+		// 删侧（removeUserEnvVars:2386）却用 util.IsAllowedEnvVarName 过滤。
+		// 后果：manifest 声明了白名单外的变量（新工具/用户自定义 manifest/Lua 插件）时
+		//   写成功 → 卸载时被跳过 → 永久残留；
+		//   且 EnrichFromRegistry 也只合并白名单变量 → shim 子进程读不到。
+		// 表现为「变量写了但没用、删又删不掉」。
+		//
+		// 现改为写侧同样拒绝：显式报错（触发回滚）而不是静默写入一个永远删不掉的变量。
+		if !util.IsAllowedEnvVarName(name) {
+			log.Printf("[install] ERROR: refusing to write non-whitelisted env var %q "+
+				"(add it to util.AllowedEnvVarNames if it is intentional)", name)
+			firstErr = fmt.Errorf("env var %q is not in the allowed whitelist", name)
+			break
 		}
 		// Save current value for rollback
 		if cur, err := env.GetUserEnvVarTrusted(name); err == nil {

@@ -265,15 +265,25 @@ func (c *Config) Clone() *Config {
 }
 
 // GetPathMode returns the PATH management mode, defaulting to "shim".
-// Valid values: "shim" (single shim directory in PATH), "direct"
-// (each tool's current/<tool>/bin added to PATH directly), or "auto"
-// (cd hook + shim, automatically switches versions per-project).
+// Valid values: "shim" (single shim directory in PATH) or "direct"
+// (each tool's current/<tool>/bin added to PATH directly).
+//
+// 2026-10-25 修复（P0-4）：**不再接受 "auto"**。
+//
+// "auto" 曾承诺 "cd hook + shim，按项目自动切换版本"，但
+// internal/cli/hook.go 的 newHookCmd 一直是空实现（`return nil`），
+// 即 auto 与 shim 行为**完全一致**，用户无从知晓自己的选择无效。
+// 与其保留一个静默降级的假选项，不如在写入时就拒绝并说明原因；
+// 等项目级解析（P3）真正落地后再把 auto 加回来。
+//
+// 存量 config.yaml 里的 "auto" / "symlink" 由本函数静默降级为 "shim"，
+// 不破坏既有安装（用户不会因升级 xdev 而突然无法使用）。
 func (c *Config) GetPathMode() string {
 	if c.Path.Mode == "" {
 		return "shim"
 	}
 	switch c.Path.Mode {
-	case "shim", "direct", "auto":
+	case "shim", "direct":
 		return c.Path.Mode
 	default:
 		return "shim"
@@ -282,13 +292,22 @@ func (c *Config) GetPathMode() string {
 
 // SetPathMode updates the PATH management mode and saves the config.
 //
-// 票 33（P1-28 / E-09）：枚举单一化——只接受 shim | direct | auto。
-// "symlink" 是历史遗留值（无任何实现），此处与 cli/config.go setPathField
-// 同源拒绝；存量 config.yaml 里的 "symlink" 由 GetPathMode 静默降级为
-// "shim"（保持现状，不破坏既有安装）。
+// 票 33（P1-28 / E-09）：枚举单一化——只接受 shim | direct。
+//
+// 2026-10-25（P0-4）：把 "auto" 从接受列表里**移除**。原实现接受 auto，
+// 但 cli/hook.go 的 hook 命令是空实现，auto 与 shim 行为完全相同 ——
+// 一个永远不生效的选项比没有更坑人。此处拒绝并直接告知原因，
+// 存量 "symlink" / "auto" 由 GetPathMode 静默降级为 "shim"。
 func (c *Config) SetPathMode(mode string) error {
-	if mode != "shim" && mode != "direct" && mode != "auto" {
-		return fmt.Errorf("invalid path mode: %q", mode)
+	switch mode {
+	case "shim", "direct":
+		// ok
+	case "auto":
+		return fmt.Errorf("path mode %q is not supported yet: it would enable "+
+			"per-project switching via the cd hook, which is not implemented "+
+			"(use \"shim\" instead)", mode)
+	default:
+		return fmt.Errorf("invalid path mode: %q (must be 'shim' or 'direct')", mode)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

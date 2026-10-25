@@ -151,6 +151,13 @@ func (a *App) SetPathMode(mode string) error {
 		return nil
 	}
 	if mode != "shim" && mode != "direct" {
+		// 2026-10-25（P0-4）：与 config.SetPathMode 保持同一套拒绝语义。
+		// "auto" 单独给提示：它不是非法值，而是**尚未实现**，
+		// 笼统报 "invalid" 会让用户以为自己拼错了。
+		if mode == "auto" {
+			return fmt.Errorf("path mode 'auto' is not supported yet: " +
+				"per-project switching via the cd hook is not implemented (use 'shim')")
+		}
 		return fmt.Errorf("invalid path mode: %s (must be 'shim' or 'direct')", mode)
 	}
 

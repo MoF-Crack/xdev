@@ -60,7 +60,10 @@ func TestHookScript(t *testing.T) {
 func TestHookOutput(t *testing.T) {
 	t.Run("bash with paths and env", func(t *testing.T) {
 		got := HookOutput("bash", []string{"/usr/local/bin", "/opt/bin"}, map[string]string{"FOO": "bar"})
-		if !strings.Contains(got, `export PATH='/usr/local/bin:/opt/bin:$PATH'`) {
+		// 2026-10-25 修复（P0-1）：原断言是 `export PATH='/usr/local/bin:/opt/bin:$PATH'`
+		// —— 那正是 bug 本身（单引号内的 $PATH 不展开，eval 后 PATH 变成字面量，
+		// 用户原有 PATH 被覆盖）。现已改为引号外拼接。
+		if !strings.Contains(got, `export PATH='/usr/local/bin:/opt/bin':"$PATH"`) {
 			t.Errorf("missing PATH export, got:\n%s", got)
 		}
 		if !strings.Contains(got, `export FOO='bar'`) {
@@ -70,7 +73,8 @@ func TestHookOutput(t *testing.T) {
 
 	t.Run("zsh with paths and env", func(t *testing.T) {
 		got := HookOutput("zsh", []string{"/usr/local/bin"}, map[string]string{"BAZ": "qux"})
-		if !strings.Contains(got, `export PATH='/usr/local/bin:$PATH'`) {
+		// 同上：$PATH 必须在单引号外。
+		if !strings.Contains(got, `export PATH='/usr/local/bin':"$PATH"`) {
 			t.Errorf("missing PATH export, got:\n%s", got)
 		}
 		if !strings.Contains(got, `export BAZ='qux'`) {

@@ -8,8 +8,21 @@ shims:
     - ghci
     - cabal
     - stack
-env_vars:
-    GHC_HOME: '{{install}}'
+# 2026-10-25 修复（P0-5）：删除 GHC_HOME。
+#
+# GHC **没有** GHC_HOME 这个环境变量，它是 xdev 自造的（照 JAVA_HOME/
+# GOROOT 的模式类推出来的）。设了之后：
+#   - GHC 自身完全不读它，行为无任何变化；
+#   - 但会写进用户注册表，且占着白名单一个名额。
+#
+# 为什么不改设 GHC_PACKAGE_PATH：该变量会**替换** GHC 的默认包数据库栈
+# （而不是追加），一旦路径写错（归档 strip:1 后的实际布局随版本变化），
+# GHC 会找不到 base 等基础包，报 "cannot find package base"。
+# GHC 本身能从可执行文件位置向上自推导 lib/package.conf.d，无需外部指定。
+#
+# 若将来确实需要（例如同一台机器上多份 GHC 的包隔离），应先实测归档布局
+# 再写，且优先用 path_append 把 lib/bin 加进 PATH 而非改包栈。
+env_vars: {}
 versions:
     - version: 9.10.1
       stable: true

@@ -240,8 +240,12 @@ func newListCmd() *cobra.Command {
 					continue
 				}
 				active := ""
-				if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
-					active = filepath.Base(target)
+				// 2026-10-25 修复（P0-2）：改用 util.ActiveVersion —— 它要求目标真实
+				// 存在（os.Stat 跟随链接），悬空链接返回 ("", false)。
+				// 旧实现裸 os.Readlink 只证明链接存在，不证明目标在，
+				// 于是解压失败删掉 install/<tool>/<ver> 后仍会给幽灵版本打 ★（F-23）。
+				if v, ok := util.ActiveVersion(cfg.Core.XMDevDir, tool); ok {
+					active = v
 				}
 				vs := make([]string, 0, len(versions))
 				for _, v := range versions {
@@ -294,8 +298,9 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 		}
 		versions := m.Versions()
 		active := ""
-		if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
-			active = filepath.Base(target)
+		// 2026-10-25 修复（P0-2）：同前，悬空链接不得报为 active。
+		if v, ok := util.ActiveVersion(Cfg().Core.XMDevDir, tool); ok {
+			active = v
 		}
 		headers := []string{"Version", "Status"}
 		rows := make([][]string, 0, len(versions))
@@ -323,8 +328,9 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 		return err
 	}
 	active := ""
-	if target, err := os.Readlink(filepath.Join(currentRoot, tool)); err == nil {
-		active = filepath.Base(target)
+	// 2026-10-25 修复（P0-2）：同前，悬空链接不得报为 active。
+	if v, ok := util.ActiveVersion(Cfg().Core.XMDevDir, tool); ok {
+		active = v
 	}
 	headers := []string{"Version", "Status"}
 	rows := make([][]string, 0)
@@ -367,8 +373,14 @@ func newCurrentCmd() *cobra.Command {
 			}
 			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 			for _, e := range entries {
-				target, _ := os.Readlink(filepath.Join(currentRoot, e.Name()))
-				fmt.Printf("%-16s %s\n", e.Name(), filepath.Base(target))
+				// 2026-10-25 修复（P0-2）：悬空链接不应被打印成一个激活版本。
+				// 旧实现裸 os.Readlink 失败时 target 为空串，仍会 Printf 出
+				// `toolname  .` 这种无效行。
+				v, ok := util.ActiveVersion(Cfg().Core.XMDevDir, e.Name())
+				if !ok {
+					continue
+				}
+				fmt.Printf("%-16s %s\n", e.Name(), v)
 			}
 			return nil
 		},

@@ -305,7 +305,6 @@ var AllowedEnvVarNames = map[string]bool{
 	"PERL_HOME":              true,
 	"KOTLIN_HOME":            true,
 	"SCALA_HOME":             true,
-	"GHC_HOME":               true,
 	"ZIG_HOME":               true,
 	"GRADLE_HOME":            true,
 	"MAVEN_HOME":             true,
