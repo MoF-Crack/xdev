@@ -441,25 +441,27 @@ func fileSizeOrZero(path string) int64 {
 // F-14 — chunked（无 Content-Length）下载上的 Pause
 // ---------------------------------------------------------------------------
 
-// chunkedSlowServer 不设 Content-Length（Flush 强制 chunked），并按 100ms
-// 一块持续输出，给 Pause 留出窗口。
+// chunkedSlowServer 不设 Content-Length（Flush 强制 chunked），持续输出直到
+// 客户端断开，给 Pause/Cancel 留出确定性的窗口。
 //
-// 2026-10-25 修复（CI flaky：TestF14_Control_CancelOnChunkedDownload_DeletesPart
-// 报 `status = completed, want cancelled`）：
-// 原实现 60 块 × 100ms ≈ 6s 总时长，看似够慢。但 CI runner 负载高时，
-// 客户端可能在 waitForPart 返回后、Cancel 生效前就把剩余数据全部读完
-// （time.After 的 100ms 等待与网络读取是并行的，慢的是服务端而不是客户端）；
-// 一旦下载先完成，Manager.Cancel 对 StatusCompleted 直接返回 nil（设计如此），
-// 测试就拿到 completed。
+// 2026-10-25 修复（CI 反复失败：status = completed, want cancelled）：
 //
-// 改为：总时长拉到 ~30s（300 块 × 100ms），远大于任何合理的 Cancel 延迟，
-// 使「Cancel 时下载仍在进行」成为确定性前提。
+// 原实现是固定块数（最初 60 块 × 100ms ≈ 6s，后来拉到 300 块 ≈ 30s），
+// 思路是「足够慢就不会在 Cancel 前完成」。但实测表明这个假设不可靠：
+// httptest+TLS 在 Windows CI runner 上可能把响应体**预先缓冲**后一次性
+// 交给客户端，于是客户端在极短时间内就读完了全部字节 —— 无论服务端
+// 后续还要写多久。此时下载已经 completed，Manager.Cancel 对
+// StatusCompleted 直接返回 nil（设计如此），断言就拿到 completed。
+//
+// 改为**无限流**：不设总块数，只在 r.Context().Done()（客户端断开）时退出。
+// 这样“下载仍在进行”不再依赖时间猜测，而是确定性成立：只要客户端
+// 还连着，服务端就还会写，下载就不可能完成。
 func chunkedSlowServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fl, _ := w.(http.Flusher)
 		chunk := bytes.Repeat([]byte("c"), 1024)
-		for i := 0; i < 300; i++ {
+		for {
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}
@@ -469,7 +471,7 @@ func chunkedSlowServer(t *testing.T) *httptest.Server {
 			select {
 			case <-r.Context().Done():
 				return
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(50 * time.Millisecond):
 			}
 		}
 	}))
