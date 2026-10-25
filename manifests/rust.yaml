@@ -11,6 +11,10 @@ shims:
 env_vars:
     CARGO_HOME: '{{install}}\.cargo'
     RUSTUP_HOME: '{{install}}\.rustup'
+# 2026-10-25（P1）：`cargo install` 把可执行文件装到 $CARGO_HOME/bin。
+# 该目录不在安装根下，不追加的话 cargo install 装完的工具找不到。
+path_append:
+    - '{{CARGO_HOME}}\bin'
 versions:
     - version: 1.97.1
       stable: true

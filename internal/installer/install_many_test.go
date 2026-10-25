@@ -54,6 +54,9 @@ func (p *simplePlugin) Shims() []string                           { return []str
 func (p *simplePlugin) DefaultVersion() string                    { return "1.0.0" }
 func (p *simplePlugin) RequiredPlugin() []string                  { return nil }
 func (p *simplePlugin) EnvVars(string) map[string]string          { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (p *simplePlugin) PathAppend(string) []string { return nil }
 func (p *simplePlugin) PostInstall(context.Context, string) error { return nil }
 func (p *simplePlugin) Deactivate(string) error                   { return nil }
 

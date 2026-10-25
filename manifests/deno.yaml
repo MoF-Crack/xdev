@@ -6,7 +6,18 @@ category: language
 shims:
     - deno
 env_vars:
+    # 2026-10-25（P1）：补 DENO_DIR。
+    #
+    # 之前只设了 DENO_INSTALL —— 而那是**安装脚本**用的变量
+    # （官方原文："Override the install directory by setting the DENO_INSTALL
+    # environment variable before running the install script"），
+    # Deno 运行时**不读**它。运行时真正读的是 DENO_DIR（缓存目录），
+    # 默认落在 %LOCALAPPDATA%\deno，不归 xdev 管。
     DENO_INSTALL: '{{install}}'
+    DENO_DIR: '{{install}}\.deno-cache'
+# Deno 把 `deno install` 装的全局可执行文件放在 $DENO_INSTALL_ROOT/bin。
+path_append:
+    - '{{DENO_INSTALL}}\bin'
 versions:
     - version: 2.9.4
       stable: true

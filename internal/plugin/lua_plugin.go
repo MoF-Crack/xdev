@@ -154,6 +154,10 @@ func (p *luaBasePlugin) EnvVars(installPath string) map[string]string {
 func (p *luaBasePlugin) PostInstall(_ context.Context, _ string) error { return nil }
 func (p *luaBasePlugin) Deactivate(_ string) error                     { return nil }
 
+// PathAppend returns nil: Lua 插件格式尚未支持 path_append 声明。
+// 需要追加 PATH 的工具应改用 manifest 格式（Generic 插件）。
+func (p *luaBasePlugin) PathAppend(_ string) []string { return nil }
+
 // RequiredPlugin returns nil for Lua plugins; dependency management
 // is not yet supported for the Lua plugin format.
 func (p *luaBasePlugin) RequiredPlugin() []string { return nil }

@@ -37,6 +37,9 @@ func (g *guiFakePlugin) InstallDir(root, v string) (string, error) {
 }
 func (g *guiFakePlugin) Shims() []string                  { return g.shims }
 func (g *guiFakePlugin) EnvVars(string) map[string]string { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (g *guiFakePlugin) PathAppend(string) []string { return nil }
 func (g *guiFakePlugin) PostInstall(context.Context, string) error {
 	return nil
 }

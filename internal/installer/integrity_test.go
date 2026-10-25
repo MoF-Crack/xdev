@@ -37,6 +37,9 @@ func (s *shimPlugin) InstallDir(root, v string) (string, error) {
 	return filepath.Join(root, s.name, v), nil
 }
 func (s *shimPlugin) EnvVars(string) map[string]string { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (s *shimPlugin) PathAppend(string) []string { return nil }
 func (s *shimPlugin) PostInstall(context.Context, string) error {
 	return nil
 }

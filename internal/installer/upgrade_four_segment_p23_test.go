@@ -37,6 +37,9 @@ func (p *versionListPlugin) Category() string                          { return 
 func (p *versionListPlugin) Shims() []string                           { return []string{p.name} }
 func (p *versionListPlugin) RequiredPlugin() []string                  { return nil }
 func (p *versionListPlugin) EnvVars(string) map[string]string          { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (p *versionListPlugin) PathAppend(string) []string { return nil }
 func (p *versionListPlugin) PostInstall(context.Context, string) error { return nil }
 func (p *versionListPlugin) Deactivate(string) error                   { return nil }
 

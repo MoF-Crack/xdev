@@ -36,6 +36,9 @@ func (c *catFakePlugin) InstallDir(root, v string) (string, error) {
 }
 func (c *catFakePlugin) Shims() []string                  { return nil }
 func (c *catFakePlugin) EnvVars(string) map[string]string { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (c *catFakePlugin) PathAppend(string) []string { return nil }
 func (c *catFakePlugin) PostInstall(_ context.Context, _ string) error {
 	return nil
 }

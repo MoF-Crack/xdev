@@ -18,6 +18,13 @@ env_vars:
     # （{{install}}\..\gopath 解析为 install 根下的 gopath），
     # 与官方默认不同，属于有意为之的 xdev 托管行为，保持现状。
     GOPATH: '{{install}}\..\gopath'
+# 2026-10-25（P1）：`go install` 把可执行文件装到 $GOPATH/bin，该目录不在
+# 安装根下，靠 shim 只能找到 go 主程序。官方安装文档明确要求：
+#   export PATH="$PATH:$(go env GOPATH)/bin"
+# 不追加的话，`go install golang.org/x/tools/gopls@latest` 装完 gopls 会
+# command not found。这里用 {{GOPATH}} 引用上面的声明，避免两处重复推导。
+path_append:
+    - '{{GOPATH}}\bin'
 versions:
     # 升级（安全）：Go 1.26.5 存在中间信任漏洞，默认版本提升到 1.27.3。
     # SHA256 / size 均取自官方索引 https://go.dev/dl/?mode=json，非估算值。

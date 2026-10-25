@@ -1575,6 +1575,11 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	case "direct":
 		currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
 		binPaths := env.ToolBinPaths(p.Name(), currentDir)
+		// P1（2026-10-25）：合并 manifest 声明的 path_append。
+		// 这些是包管理器自己的 bin（$GOPATH/bin、$CARGO_HOME/bin 等），
+		// 不在 current/<tool>/bin 下，不追加的话 `go install` / `cargo install`
+		// 装完会 command not found。
+		binPaths = append(binPaths, p.PathAppend(installPath)...)
 		if len(binPaths) > 0 {
 			if i.noEnvWrite {
 				log.Printf("[install] Skipping AddCurrentBinPaths (noEnvWrite=true)")

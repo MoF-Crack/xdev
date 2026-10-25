@@ -31,6 +31,9 @@ func (p *depPlugin) Shims() []string                           { return []string
 func (p *depPlugin) DefaultVersion() string                    { return "1.0.0" }
 func (p *depPlugin) RequiredPlugin() []string                  { return p.requires }
 func (p *depPlugin) EnvVars(string) map[string]string          { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (p *depPlugin) PathAppend(string) []string { return nil }
 func (p *depPlugin) PostInstall(context.Context, string) error { return nil }
 func (p *depPlugin) Deactivate(string) error                   { return nil }
 

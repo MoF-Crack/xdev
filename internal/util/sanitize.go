@@ -292,6 +292,11 @@ var AllowedEnvVarNames = map[string]bool{
 	"JDK_HOME":               true,
 	"GOROOT":                 true,
 	"GOPATH":                 true,
+	// P1（2026-10-25）：包管理器与运行时实际读取的变量。
+	"DOTNET_ROOT_X64":       true, // .NET apphost 架构专用（优先于 DOTNET_ROOT）
+	"PYTHONUSERBASE":        true, // pip --user / user site 根（避免跨版本污染）
+	"PIP_CACHE_DIR":         true, // pip 下载缓存（避免散落到 ~/.cache）
+	"DENO_DIR":              true, // Deno 运行时真正的缓存目录（DENO_INSTALL 仅安装脚本用）
 	"NODE_HOME":              true,
 	"PYTHONHOME":             true,
 	"LLVM_HOME":              true,

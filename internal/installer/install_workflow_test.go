@@ -58,6 +58,9 @@ func (f *fakePlugin) InstallDir(root, version string) (string, error) {
 func (f *fakePlugin) Shims() []string                              { return f.shims }
 func (f *fakePlugin) EnvVars(installPath string) map[string]string { return nil }
 
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (f *fakePlugin) PathAppend(string) []string { return nil }
+
 func (f *fakePlugin) ArchiveFor(version string) (*manifest.Archive, error) {
 	a := *f.archive // return a copy so callers can't mutate the fixture
 	return &a, nil
@@ -411,6 +414,9 @@ func (e *errPlugin) InstallDir(root, v string) (string, error) {
 }
 func (e *errPlugin) Shims() []string                           { return nil }
 func (e *errPlugin) EnvVars(string) map[string]string          { return nil }
+
+// PathAppend 实现 plugin.Plugin（P1，2026-10-25）。
+func (e *errPlugin) PathAppend(string) []string { return nil }
 func (e *errPlugin) PostInstall(context.Context, string) error { return nil }
 func (e *errPlugin) Deactivate(string) error                   { return nil }
 func (e *errPlugin) RequiredPlugin() []string                  { return nil }

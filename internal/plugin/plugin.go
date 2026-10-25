@@ -116,6 +116,17 @@ type Plugin interface {
 	// Example: {"GOROOT": "{{install}}", "GOPATH": "{{install}}\\..\\gopath"}
 	EnvVars(installPath string) map[string]string
 
+	// PathAppend returns extra directories that must be prepended to
+	// PATH when this tool is active (P1，2026-10-25).
+	//
+	// 用于包管理器把可执行文件装到安装根之外的场景：
+	// Go 的 $GOPATH/bin、Rust 的 $CARGO_HOME/bin、Bun 的 $BUN_INSTALL/bin。
+	// 不追加的话，`go install` / `cargo install` 装完会 command not found。
+	//
+	// 返回项必须已插值且为绝对路径（未插值或非绝对路径应被过滤掉）。
+	// 无额外路径时返回 nil。
+	PathAppend(installPath string) []string
+
 	// PostInstall is called after a tool is extracted but before
 	// activation. It can perform setup tasks like npm install,
 	// pip bootstrap, etc. Return nil for a no-op.

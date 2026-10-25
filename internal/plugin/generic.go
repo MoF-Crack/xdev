@@ -276,6 +276,74 @@ func (g *Generic) EnvVars(installPath string) map[string]string {
 	return out
 }
 
+// PathAppend 返回激活时应追加到 PATH 的目录列表（P1，2026-10-25）。
+//
+// 为什么需要它：很多语言的包管理器把可执行文件装到自己的 bin 下，
+// 而那个目录**不在**安装根，靠 shim 只能找到工具主程序：
+//   - Go：  `go install`   → $GOPATH/bin
+//   - Rust：`cargo install`→ $CARGO_HOME/bin
+//   - Bun： 全局包         → $BUN_INSTALL/bin
+// 不追加，用户装完工具会得到 "command not found"。
+//
+// 模板支持：
+//   - {{install}} / {{version}} / {{tool}} —— 与 InstallArgs 同一套
+//   - {{<ENVNAME>}} —— 引用**本 manifest 内已定义**的 env_var（先按
+//     EnvVars 规则插值后再替换），例如 GOPATH 定义后写 `{{GOPATH}}\bin`，
+//     避免两处重复推导同一路径（也就避免了两处写错）
+//
+// 返回的每一项都保证是绝对路径（installPath 本身是绝对的），
+// 且去重 —— 同一目录被多个 manifest 条目引用时不重复追加。
+func (g *Generic) PathAppend(installPath string) []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if len(g.M.PathAppend) == 0 {
+		return nil
+	}
+
+	// 先算出本 manifest 的 env 变量（已插值），供 {{ENVNAME}} 引用。
+	resolvedEnv := make(map[string]string, len(g.M.EnvVars))
+	for k, v := range g.M.EnvVars {
+		v = strings.ReplaceAll(v, "{{install}}", installPath)
+		if strings.ContainsRune(v, '\\') {
+			v = filepath.FromSlash(strings.ReplaceAll(v, "\\", "/"))
+		}
+		resolvedEnv[k] = v
+	}
+
+	seen := make(map[string]bool, len(g.M.PathAppend))
+	out := make([]string, 0, len(g.M.PathAppend))
+	for _, raw := range g.M.PathAppend {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			continue
+		}
+		p = strings.ReplaceAll(p, "{{install}}", installPath)
+		p = strings.ReplaceAll(p, "{{tool}}", g.M.Name)
+		// {{ENVNAME}}：遍历本 manifest 已定义的变量逐个替换。
+		// 只支持单层引用（不递归），避免 {{A}} 引用 {{B}} 再引用 {{A}}
+		// 这种循环导致死循环。
+		for k, v := range resolvedEnv {
+			p = strings.ReplaceAll(p, "{{"+k+"}}", v)
+		}
+		// 剩余反斜杠按路径分隔符处理（与 EnvVars 同一约定）。
+		if strings.ContainsRune(p, '\\') {
+			p = filepath.FromSlash(strings.ReplaceAll(p, "\\", "/"))
+		}
+		p = filepath.Clean(p)
+		if !filepath.IsAbs(p) {
+			// 非绝对路径没有意义（PATH 里相对路径会随 CWD 变化），
+			// 跳过而不报错：一个写错的条目不应阻断整个安装。
+			continue
+		}
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
 // Ensure *Generic satisfies the Plugin interface at compile time.
 var _ Plugin = (*Generic)(nil)
 

@@ -89,6 +89,22 @@ type Tool struct {
 	FormFactor []string `yaml:"form_factor,omitempty"`
 	// GUIBinary GUI 主二进制（相对 install 根），form_factor 含 gui 时使用。
 	GUIBinary string `yaml:"gui_binary,omitempty"`
+	// PathAppend 声明激活时需追加到 PATH 的目录（P1，2026-10-25）。
+	//
+	// 背景：很多语言的包管理器会把可执行文件装到自己的 bin 下，
+	// 而这些目录**不在**安装根，靠 shim 只能找到工具主程序：
+	//   - Go：  `go install` → $GOPATH/bin（官方文档明确要求加入 PATH）
+	//   - Rust：`cargo install` → $CARGO_HOME/bin
+	//   - Bun： 全局包 → $BUN_INSTALL/bin
+	// 不追加这些目录，用户装完工具会得到 "command not found"。
+	//
+	// 值支持与 EnvVars 相同的模板：{{install}} / {{version}} / {{tool}}，
+	// 另外可用 {{<ENVNAME>}} 引用**本 manifest 内已定义**的 env_var，
+	// 例如 GOPATH 定义后写 `{{GOPATH}}\bin`（避免重复推导路径）。
+	//
+	// 注意：PATH 本身**不能**写进 EnvVars —— setUserEnvVars 会跳过 PATH，
+	// 且写注册表 PATH 会与 shim 机制打架。追加必须走本字段。
+	PathAppend []string `yaml:"path_append,omitempty"`
 	// Installable 是**派生**标记（不来自 YAML）：本平台上是否至少有一个可安装
 	// 版本（见 Version.Installable）。LoadCatalog 会为每个工具计算它，供
 	// GUI/CLI/doctor 把「看着有版本、其实装不了」的工具显式标出来（票 18 / P2-29）。

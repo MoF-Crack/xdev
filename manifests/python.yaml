@@ -11,7 +11,18 @@ shims:
 env_vars:
     # python-build-standalone 自带 python3xx._pth，PYTHONHOME 对其无效
     # （._pth 机制使该变量被忽略），因此不再设置 PYTHONHOME。
-    {}
+    #
+    # 2026-10-25（P1）：补两个**实际生效**的变量。
+    #
+    # PYTHONUSERBASE：`pip install --user` 与 `python -m site --user-*`
+    # 的根目录。不设时默认 ~/.local（Windows 为 %APPDATA%\Python），
+    # 多个 python 版本会**共用**同一个 user site —— 装 3.12 的包在 3.11 下
+    # 也会被看到，是跨版本污染的主要来源。指向本版本安装根可隔离。
+    #
+    # PIP_CACHE_DIR：pip 下载缓存。不设时默认 ~/.cache/pip，
+    # 同样与版本无关、不归 xdev 管；卸载后缓存残留。
+    PYTHONUSERBASE: '{{install}}\.userbase'
+    PIP_CACHE_DIR: '{{install}}\.pip-cache'
 versions:
     - version: 3.14.6
       stable: true

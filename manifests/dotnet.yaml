@@ -6,7 +6,17 @@ category: language
 shims:
     - dotnet
 env_vars:
+    # 2026-10-25（P1）：补架构后缀变量。
+    #
+    # 官方文档：这些变量**只被 apphost（生成的 .exe）使用**，且取值顺序为
+    #   DOTNET_ROOT_<ARCH>  >  DOTNET_ROOT(x86)  >  DOTNET_ROOT
+    # 旧 manifest 只写 DOTNET_ROOT，于是 x86 应用（apphost）找不到运行时 ——
+    # Windows 上 x86/x64 装在不同目录，native 架构的 apphost 读
+    # DOTNET_ROOT，非 native 的读 DOTNET_ROOT(x86)。
+    # 这里同时给出 DOTNET_ROOT 与 x64 变体（xdev 只分发 amd64 归档），
+    # 让 x64 apphost 走架构专用分支。
     DOTNET_ROOT: '{{install}}'
+    DOTNET_ROOT_X64: '{{install}}'
 versions:
     - version: 9.0.119
       stable: true
