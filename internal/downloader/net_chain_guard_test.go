@@ -443,12 +443,23 @@ func fileSizeOrZero(path string) int64 {
 
 // chunkedSlowServer 不设 Content-Length（Flush 强制 chunked），并按 100ms
 // 一块持续输出，给 Pause 留出窗口。
+//
+// 2026-10-25 修复（CI flaky：TestF14_Control_CancelOnChunkedDownload_DeletesPart
+// 报 `status = completed, want cancelled`）：
+// 原实现 60 块 × 100ms ≈ 6s 总时长，看似够慢。但 CI runner 负载高时，
+// 客户端可能在 waitForPart 返回后、Cancel 生效前就把剩余数据全部读完
+// （time.After 的 100ms 等待与网络读取是并行的，慢的是服务端而不是客户端）；
+// 一旦下载先完成，Manager.Cancel 对 StatusCompleted 直接返回 nil（设计如此），
+// 测试就拿到 completed。
+//
+// 改为：总时长拉到 ~30s（300 块 × 100ms），远大于任何合理的 Cancel 延迟，
+// 使「Cancel 时下载仍在进行」成为确定性前提。
 func chunkedSlowServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fl, _ := w.(http.Flusher)
 		chunk := bytes.Repeat([]byte("c"), 1024)
-		for i := 0; i < 60; i++ {
+		for i := 0; i < 300; i++ {
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}
@@ -515,6 +526,14 @@ func TestF14_Control_CancelOnChunkedDownload_DeletesPart(t *testing.T) {
 	m, id := managerFor(t, srv, dest)
 
 	waitForPart(t, dest)
+	// 防御性前置断言（2026-10-25）：本用例要验证的是「**取消进行中的下载**
+	// 会删 .part」。若在 Cancel 之前下载已经完成，Manager.Cancel 对
+	// StatusCompleted 直接返回 nil（这是设计），后续断言就失去意义。
+	// 先确认状态仍在下载中，把「测试前提不成立」与「代码真的有 bug」区分开。
+	if st := mustStatus(t, m, id); st == StatusCompleted {
+		t.Fatalf("测试前提不成立：Cancel 前下载已完成（status=%s）—— "+
+			"chunkedSlowServer 对该环境不够慢，需继续拉长总时长", st)
+	}
 	if err := m.Cancel(id); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
