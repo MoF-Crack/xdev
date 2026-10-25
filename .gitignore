@@ -104,3 +104,7 @@ build/local-*
 .opencode/images/
 .opencode/*.bak_*
 .opencode/*.json
+
+# 临时排查记录（一次性的环境问题诊断、本机故障处理步骤），
+# 不属于产品源码。需要长期保留的结论请写进 docs/audits/ 或 CONTEXT.md。
+docs/troubleshooting/
