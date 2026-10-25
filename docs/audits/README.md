@@ -42,3 +42,5 @@ docs/audits/YYYY-MM-DD-<audit-name>.md
 | 2026-10-21 | [2026-10-21-bugx-round11.md](2026/2026-10-21-bugx-round11.md) | — | BugX Round 11 报告（历史） |
 | 2026-10-21 | [2026-10-21-bugx-round12.md](2026/2026-10-21-bugx-round12.md) | — | BugX Round 12 报告（历史） |
 | 2026-10-21 | [2026-10-21-bugx-round13.md](2026/2026-10-21-bugx-round13.md) | — | BugX Round 13 报告（历史） |
+| 2026-10-24 | [2026-10-24-bugx-round16.md](2026/2026-10-24-bugx-round16.md) | `b8e981c` | Round 16：`.bugx` ACL 修复 + MCP 打通 + explore 多语言修复验证 + 85 个生产候选人工复核 |
+| 2026-10-24 | [2026-10-24-code-review.md](2026/2026-10-24-code-review.md) | `b8e981c` | 全库代码审查：13 项发现，修复 11 项（含 npm cmd 注入、PATH 吞错、SSRF 及其 fallback 绕过、shim panic 等）+ 新增回归测试 |

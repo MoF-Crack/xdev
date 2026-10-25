@@ -320,7 +320,7 @@ func TestInstallNPMPackage_ActivatesAndShims(t *testing.T) {
 }
 
 // TC-NPM8 npmRunner 分派：npm-cli.js 优先；缺 CLI 时 Windows .cmd 走
-// cmd /c 包装，Unix 直接执行。
+// cmd /c 包装（但含 cmd.exe 元字符的路径必须拒绝），Unix 直接执行。
 func TestNPMRunnerDispatch(t *testing.T) {
 	tc := nodeToolchain{nodeBin: "/x/node", npmCLI: "/x/node_modules/npm/bin/npm-cli.js"}
 	name, prefix, err := tc.npmRunner()
@@ -347,6 +347,64 @@ func TestNPMRunnerDispatch(t *testing.T) {
 	tc3 := nodeToolchain{nodeBin: "/x/node"}
 	if _, _, err3 := tc3.npmRunner(); err3 == nil {
 		t.Error("expected error when no npm is present")
+	}
+}
+
+// 审查 S-03 回归：`.cmd` 路径含 cmd.exe 元字符时必须拒绝，不得交给 cmd /c。
+//
+// 实测背景：`exec.Command("cmd", "/c", p)` 中 p 含 `&` 时，`&` 后的内容会被
+// 当作独立命令执行（已在 Windows 上用 Go 程序复现，marker 文件被改写）。
+func TestNPMRunnerRejectsShellMetaInCmdPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("cmd /c 包装仅存在于 Windows")
+	}
+
+	unsafePaths := []string{
+		`C:\dir&calc\npm.cmd`,          // 命令分隔
+		`C:\dir|whoami\npm.cmd`,        // 管道
+		`C:\dir^esc\npm.cmd`,           // 转义符
+		`C:\100%portable\npm.cmd`,      // 变量展开
+		`C:\dir"quoted\npm.cmd`,        // 引号破坏
+		"C:\\dir\r\nnpm.cmd",             // 换行注入
+		`C:\a<b>c\npm.cmd`,             // 重定向
+	}
+	for _, p := range unsafePaths {
+		tc := nodeToolchain{nodeBin: `C:\node\node.exe`, npmBin: p}
+		name, prefix, err := tc.npmRunner()
+		if err == nil {
+			t.Errorf("npmRunner(%q) 未拒绝：name=%q prefix=%v", p, name, prefix)
+		}
+	}
+
+	// 正常路径仍应放行
+	tc := nodeToolchain{nodeBin: `C:\node\node.exe`, npmBin: `C:\Program Files\nodejs\npm.cmd`}
+	name, prefix, err := tc.npmRunner()
+	if err != nil {
+		t.Fatalf("正常路径被误拒: %v", err)
+	}
+	if name != "cmd" || len(prefix) != 2 {
+		t.Errorf("正常路径分派异常: name=%q prefix=%v", name, prefix)
+	}
+
+	// 有 npm-cli.js 时永远走 node，不受元字符影响
+	tc2 := nodeToolchain{nodeBin: `C:\node\node.exe`, npmCLI: `C:\dir&calc\npm-cli.js`}
+	name2, _, err2 := tc2.npmRunner()
+	if err2 != nil || name2 != `C:\node\node.exe` {
+		t.Errorf("npmCLI 优先路径不应受影响: name=%q err=%v", name2, err2)
+	}
+}
+
+// cmdShimUnsafeChar 单元测试。
+func TestCmdShimUnsafeChar(t *testing.T) {
+	for _, bad := range []string{"a&b", "a|b", "a<b", "a>b", "a^b", "a%b", "a\"b", "a\nb", "a\rb"} {
+		if _, ok := cmdShimUnsafeChar(bad); !ok {
+			t.Errorf("cmdShimUnsafeChar(%q) = false, want true", bad)
+		}
+	}
+	for _, ok := range []string{`C:\Program Files\nodejs\npm.cmd`, `/usr/bin/npm`, `C:\node\npm.cmd`} {
+		if ch, bad := cmdShimUnsafeChar(ok); bad {
+			t.Errorf("cmdShimUnsafeChar(%q) = true (%q), want false", ok, ch)
+		}
 	}
 }
 

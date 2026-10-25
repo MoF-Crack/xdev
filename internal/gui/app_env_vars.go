@@ -640,9 +640,9 @@ func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
 			continue
 		}
 		if v.IsValid {
-			continue // valid �?nothing to do
+			continue // valid — nothing to do
 		}
-		// invalid or partial �?try cleaning
+		// invalid or partial — try cleaning
 		changed, err := a.cleanEnvVarPath(v.Name, level, exp)
 		if err != nil {
 			if strings.Contains(err.Error(), "admin") || strings.Contains(err.Error(), "ACCESS_DENIED") || strings.Contains(err.Error(), "error 5") {
@@ -792,6 +792,16 @@ func (a *App) SwitchToLocalVersion(toolName, localPath string) error {
 	}
 	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
 		return fmt.Errorf("local path is not an existing directory: %q", path)
+	}
+	// 审查 S-09（2026-10-24）：上方注释声称「cannot point a tool at an
+	// arbitrary location」，但实现只检查了绝对路径 + 存在 + 是目录，**没有**
+	// 受管树约束。对比同类方法 MigrateLocalTool（app_local_detect.go:365-367）
+	// 明确拒绝「源路径在 xdev home 内」。此处补齐同类检查，避免把
+	// current/<tool> junction 指向安装树内部的目录而形成回环/自我引用。
+	if cfg0 := a.getCfg(); cfg0 != nil && cfg0.Core.XMDevDir != "" {
+		if util.ValidateAbsPathUnder(cfg0.Core.XMDevDir, path) == nil {
+			return fmt.Errorf("local path is inside xdev home, refusing to switch: %s", path)
+		}
 	}
 
 	currentLink := a.currentLink(toolName)

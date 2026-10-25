@@ -95,6 +95,12 @@ type nodeToolchain struct {
 //     (this is exactly what npm.cmd does internally);
 //  2. the npm launcher binary; .cmd/.bat launchers on Windows are wrapped
 //     in `cmd /c` because CreateProcess cannot run batch files directly.
+//
+// 审查 S-03（2026-10-24）：`.cmd`/`.bat` 必须经 cmd.exe 二次解析，而 cmd.exe
+// 会把路径中的 `&` `|` `^` `%` 当作命令分隔符/变量展开——这会让含这些字符的
+// 安装目录变成命令注入面（与 Round 9 修过的 junction `cmd /c mklink` 同类）。
+// 这里对 .cmd/.bat 路径做拒绝式校验：宁可安装失败，也不把不可安全表达的
+// 路径交给 cmd.exe。标准 Node.js 布局总有 npm-cli.js，不会走到该分支。
 func (tc nodeToolchain) npmRunner() (string, []string, error) {
 	if tc.npmCLI != "" {
 		return tc.nodeBin, []string{tc.npmCLI}, nil
@@ -102,11 +108,30 @@ func (tc nodeToolchain) npmRunner() (string, []string, error) {
 	if tc.npmBin != "" {
 		lower := strings.ToLower(tc.npmBin)
 		if runtime.GOOS == "windows" && (strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".bat")) {
+			if bad, ok := cmdShimUnsafeChar(tc.npmBin); ok {
+				return "", nil, fmt.Errorf(
+					"npm launcher path %q contains %q, which cmd.exe would interpret — refusing to run it via cmd /c (install npm with an npm-cli.js next to node instead)",
+					tc.npmBin, bad)
+			}
 			return "cmd", []string{"/c", tc.npmBin}, nil
 		}
 		return tc.npmBin, nil, nil
 	}
 	return "", nil, fmt.Errorf("no npm found next to node %s", tc.nodeBin)
+}
+
+// cmdShimUnsafeChar 报告 path 中第一个会被 cmd.exe 二次解析的字符。
+//
+// 背景（审查 S-03）：`exec.Command("cmd", "/c", path)` 虽然不经过 shell，
+// 但 cmd.exe 会对自己收到的命令行再做一次解析，因此 `&` `|` `<` `>` `^`
+// 会拆出额外命令，`%` 会触发变量展开，双引号会破坏引号配对。
+// 已实测：路径含 `&` 时 `cmd /c` 会把 `&` 后的内容当命令执行。
+func cmdShimUnsafeChar(path string) (string, bool) {
+	const unsafe = "&|<>^%\"\r\n"
+	if i := strings.IndexAny(path, unsafe); i >= 0 {
+		return string(path[i]), true
+	}
+	return "", false
 }
 
 // resolveNodeToolchain locates Node.js + npm for an npm-kind install:

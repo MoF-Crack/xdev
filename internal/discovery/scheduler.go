@@ -859,6 +859,16 @@ func (s *Scheduler) LoadCache() (*SniffCache, error) {
 // SaveCache writes the sniff cache to disk using an atomic write
 // (FR-008, NFR-004).  It acquires an exclusive file lock to coordinate
 // with concurrent processes.
+//
+// 审查 S-01（2026-10-24）：旧实现在抢锁失败时 `if lockErr == nil { defer Release() }`
+// —— 锁不可得就静默继续写盘，与同文件 withCacheLock（第十轮 P2-1）的
+// 「抢不到锁绝不写盘」策略矛盾。SaveCache 是整份快照覆盖语义，两个进程
+// 并发时后写者会整份覆盖前写者（实测：预占锁后调用仍返回 nil 且文件被改写）。
+//
+// 现改为与 withCacheLock 对齐：锁不可得直接返回错误，**不写盘**。
+//
+// 注意：生产代码已全部改用 withCacheLock（见 :264/:638/:713/:813），
+// 本函数当前仅供测试与兼容保留；新代码请勿使用。
 func (s *Scheduler) SaveCache(c *SniffCache) error {
 	if c.Tools == nil {
 		c.Tools = make(map[string]ToolSniffResult)
@@ -881,12 +891,13 @@ func (s *Scheduler) SaveCache(c *SniffCache) error {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
 
-	// Acquire exclusive (write) lock — blocks up to 5 seconds.
+	// 审查 S-01：抢不到独占锁即拒绝写盘（与 withCacheLock 同一策略）。
 	lockPath := s.cachePath + ".lock"
 	lock, lockErr := util.AcquireFileLock(lockPath, 5*time.Second)
-	if lockErr == nil {
-		defer lock.Release()
+	if lockErr != nil {
+		return fmt.Errorf("acquire cache lock (refusing unlocked write): %w", lockErr)
 	}
+	defer lock.Release()
 
 	if err := util.AtomicWriteFile(s.cachePath, data, 0o644); err != nil {
 		return fmt.Errorf("write cache: %w", err)

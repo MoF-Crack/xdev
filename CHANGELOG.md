@@ -3,7 +3,7 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0-alpha.1] - 2026-10-24
 
 ### Added
 - Spec 039：dsh（DeepSeek Harness）安装管理——分类对齐 OpenCode（development_tools），默认 npm 托管安装（`install_kind: npm`：`npm install -g --prefix <installDir>/<version>`，npm 负责依赖树解析、registry 完整性校验与启动器生成）；安装前 npm 依赖预检（xdev 管理的 Node 优先，缺失/版本不足硬失败并提示 `xdev install node`）
@@ -12,6 +12,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ### Changed
 - 嗅探合并发现的稳定版本现在写入 `stable: true`（此前隐式 false）；npm-kind 版本豁免「归档 URL 未验证」确认弹窗（无归档下载，npm 自带完整性校验）
+
+### Fixed
+- 代码审查 13 项（详见 `docs/audits/2026/2026-10-24-code-review.md`），已修复 11 项：
+  - S-03（严重）npm `.cmd` 启动器路径经 `cmd /c` 二次解析可导致命令注入——含 `&|<>^%"` 等元字符的路径现被拒绝（与 Round 9 junction 同类缺陷）
+  - S-01 `SaveCache` 抢锁失败仍写盘（静默丢写）→ 改为拒绝无锁写
+  - S-02 `UpdateShimDirInUserPath` 吞掉写错误并无条件广播 → 失败时记日志且不广播
+  - S-04 `WriteSystemPath` 缺 32767 长度闸门（两处调用点漏检）→ 闸门下沉到函数内部
+  - S-05 `SetEnvVar` machine 分支不持 `userpath` 锁直写 → 纳入锁
+  - S-08 shim `defer release()` 在 panic 时清零 kill-on-close（产生孤儿）→ 改为正常返回后才释放
+  - S-09 `SwitchToLocalVersion` 缺受管树校验 → 补齐
+  - S-10 下载 URL 无 SSRF 私网拦截 → 新增校验（放行回环、DNS 失败放行）
+  - S-13（严重）fallback URL 绕过 SSRF 校验 → fallback 同样校验（S-10 的自身缺口）
+  - S-11 删除死代码 `_setxSetPath`；S-12 删除 `maxWinRegValueLen` 局部常量 shadow
 
 ## [0.4.0] - 2026-09-02
 

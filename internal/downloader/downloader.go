@@ -47,6 +47,7 @@ import (
 	"hash"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -202,8 +203,8 @@ func Download(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("invalid download URL: %w", err)
 	}
-	if parsedURL.Scheme != "https" {
-		return fmt.Errorf("download URL must use HTTPS, got %q (insecure connection rejected)", parsedURL.Scheme)
+	if err := validateDownloadURL(parsedURL); err != nil {
+		return err
 	}
 	if opts.Dest == "" {
 		return fmt.Errorf("empty destination")
@@ -230,6 +231,14 @@ func Download(ctx context.Context, opts Options) error {
 		fbParsed, err := url.Parse(fb)
 		if err != nil || fbParsed.Scheme != "https" {
 			log.Printf("[download] WARNING: skipping non-HTTPS fallback URL: %s", sanitizedURL(fb))
+			continue
+		}
+		// 审查 S-13（2026-10-24）：fallback URL 与主 URL 同样来自 manifest，
+		// 旧实现只检查了 scheme，没有走 validateDownloadURL —— 于是「主 URL 干净、
+		// fallback 指向内网」就能绕过 S-10 的 SSRF 防护（主 URL 只校验一次，
+		// 而 fallback 是真正会被发请求的候选之一）。
+		if verr := validateDownloadURL(fbParsed); verr != nil {
+			log.Printf("[download] WARNING: skipping unsafe fallback URL %s: %v", sanitizedURL(fb), verr)
 			continue
 		}
 		urls = append(urls, fb)
@@ -1614,6 +1623,50 @@ func sourceType(fromBytes int64) string {
 		return "resume"
 	}
 	return "download"
+}
+
+// validateDownloadURL 是下载前的 URL 安全校验（scheme + SSRF）。
+//
+// 审查 S-10（2026-10-24）：此前只检查 scheme，没有 SSRF 私网拦截，
+// 而 remote 包的 discoverJSON/discoverHTML 都调了 util.IsSafeExternalURL ——
+// 基线不一致。恶意第三方 manifest 可让 xdev 对内网 https 地址发起 GET 并落盘
+//（重定向目标已被 SecureRedirectCheck 逐跳覆盖，但首跳 URL 不打）。
+//
+// 两个刻意的不对称（与 util.IsSafeExternalURL 不同）：
+//  1. **放行回环地址**：本机服务（Ollama 等）与本地测试服务器都是合法下载源；
+//     真正要挡的是「manifest 把用户引向内网其它主机」（私有网段 / 链路本地）。
+//  2. **DNS 失败放行**：域名本来就要交给后续 HTTP 请求解析，离线/受限网络下
+//     把 DNS 失败当硬错误会拦死正常下载；交给实际请求报出真实错误。
+func validateDownloadURL(u *url.URL) error {
+	// Security (H-7): Enforce HTTPS for all downloads to prevent MITM attacks.
+	if u.Scheme != "https" {
+		return fmt.Errorf("download URL must use HTTPS, got %q (insecure connection rejected)", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" || util.IsLocalhost(host) {
+		return nil
+	}
+	ips, lookupErr := net.LookupIP(host)
+	if lookupErr != nil {
+		return nil
+	}
+	for _, ip := range ips {
+		if isPrivateNetworkIP(ip) {
+			return fmt.Errorf("download URL host %s resolves to private network IP %s — blocked (SSRF protection)", host, ip)
+		}
+	}
+	return nil
+}
+
+// isPrivateNetworkIP 报告 ip 是否属于「不应作为 manifest 下载目标」的内网地址段。
+//
+// 审查 S-10（2026-10-24）：与 util.IsPrivateOrReservedIP 的差别是**不包含回环**：
+// 本机服务（Ollama、本地缓存服务器）与测试用 httptest 服务都是合法的下载源，
+// 回环已在调用侧用 util.IsLocalhost 提前放行。这里只拦 RFC1918 私网、
+// 链路本地（含云元数据 169.254.169.254）、以及未指定/组播地址。
+func isPrivateNetworkIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() || ip.IsInterfaceLocalMulticast()
 }
 
 // proxyFromOptions returns a proxy function based on the ProxyURL in options.

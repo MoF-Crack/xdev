@@ -93,14 +93,20 @@ func detectWindowsShell() ShellInfo {
 	return ShellInfo{Shell: "cmd", RCFile: "", XMDevTag: marker}
 }
 
+// pwshProfile / psProfile 定位 PowerShell 会**真正加载**的 profile。
+//
+// Round 15（P2）：修复前硬编码 `%USERPROFILE%\Documents\...`。「文档」是
+// 可重定向的已知文件夹（OneDrive / 组策略 / 非英文系统），此机真实位置是
+// D:\documents —— xdev 却把块写进了 C:\Users\<user>\Documents 那份孤儿文件，
+// 于是 init/activate 报 ✔、doctor 报 ✔，而用户 shell 从来没加载过
+// XMDEV_HOME 与 cd hook。定位统一走 documentsDir()（见
+// profile_documents_windows.go）。
 func pwshProfile() string {
-	appdata := os.Getenv("USERPROFILE")
-	return filepath.Join(appdata, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+	return filepath.Join(documentsDir(), "PowerShell", "Microsoft.PowerShell_profile.ps1")
 }
 
 func psProfile() string {
-	appdata := os.Getenv("USERPROFILE")
-	return filepath.Join(appdata, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")
+	return filepath.Join(documentsDir(), "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")
 }
 
 // InjectShellRC appends (or replaces) the xdev block in the
@@ -181,9 +187,22 @@ func shellSingleQuote(s string) string {
 }
 
 // psEscape escapes a string for use in a PowerShell double-quoted string.
+//
+// Round 15（P2，实测注入）：`"` 必须用**反引号**转义。旧实现写成 `\"`，
+// 而反斜杠在 PowerShell 里是普通字符、转义字符是反引号 —— 于是取值里的
+// `"` 会**提前结束**双引号字符串，后半段被当作新语句执行：
+//
+//	psEscape(`a"; Write-Output PWNED; "b`)
+//	旧的 → a\"; Write-Output PWNED; \"b     （$env:X = "a\" ; Write-Output PWNED ; ...）
+//	新的 → a`"; Write-Output PWNED; `"b    （整段仍是一个字符串字面量）
+//
+// 取值来源是 manifest 的 env_vars 与 Lua 插件的 env_vars()（`xdev plugin
+// install` 可拉远端插件），消费点是 `xdev env <tool>@<ver> --shell powershell`
+// —— 其文档示例就是 `iex "$(xdev env …)"`。所以这是**可执行**的注入面，
+// 不只是显示问题。`$` 与反引号同样必须转义（否则取值会被展开/截断）。
 func psEscape(s string) string {
-	s = strings.ReplaceAll(s, `"`, `\"`)
 	s = strings.ReplaceAll(s, "`", "``")
+	s = strings.ReplaceAll(s, `"`, "`\"")
 	s = strings.ReplaceAll(s, "$", "`$")
 	return s
 }

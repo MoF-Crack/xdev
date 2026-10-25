@@ -52,7 +52,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1308,7 +1307,12 @@ func SetEnvVar(name, value, level string) error {
 			BroadcastEnvironmentChange()
 			return nil
 		case "machine":
-			if err := WriteSystemPath(value); err != nil {
+			// 审查 S-05（2026-10-24）：此分支原先直调 WriteSystemPath，**既无锁也
+			// 无长度检查**，与上方注释「apply the 32,767-char registry limit and
+			// the cross-process RMW lock」不符。而 TransformSystemPath 操作的是
+			// 同一个系统 PATH 且持锁——一个持锁一个不持锁，锁形同虚设。
+			// （长度检查已下沉到 WriteSystemPath 内部，见审查 S-04。）
+			if err := withUserPathLock(func() error { return WriteSystemPath(value) }); err != nil {
 				return err
 			}
 			BroadcastEnvironmentChange()
@@ -1329,7 +1333,9 @@ func SetEnvVar(name, value, level string) error {
 	if strings.ContainsRune(value, '\x00') {
 		return fmt.Errorf("env var %q value contains null bytes — refusing to write to registry", name)
 	}
-	const maxWinRegValueLen = 32767
+	// 审查 S-12（2026-10-24）：此处原有一个局部 `const maxWinRegValueLen = 32767`，
+	// shadow 了包级同名常量（:780），违反该处「单一判据、共用同一常量」的约定。
+	// 直接使用包级常量，避免未来改一处漏一处。
 	if len(value) > maxWinRegValueLen {
 		return fmt.Errorf("env var %s value length %d exceeds Windows registry limit of %d characters", name, len(value), maxWinRegValueLen)
 	}
@@ -1698,7 +1704,15 @@ func ReadSystemPath() (string, error) {
 
 // WriteSystemPath writes the "Path" value to HKLM\...\Environment as REG_EXPAND_SZ.
 // Requires admin privileges.
+//
+// 审查 S-04（2026-10-24）：长度闸门下沉到本函数内部。此前只有
+// TransformSystemPath 在调用前检查，cleanupSystemPathLocked 与
+// SetEnvVar(machine) 直调本函数时跳过了检查，超限值会被 CreateProcess
+// 静默截断。放在这里即成为单一判据，新增调用点自动受约束。
 func WriteSystemPath(path string) error {
+	if lerr := checkPathLength(path); lerr != nil {
+		return lerr
+	}
 	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：真实写尝试计数。
 	realUserRegistryMutationCount.Add(1)
 	var key uintptr
@@ -2108,7 +2122,16 @@ func updateShimDirInUserPathLocked(oldDir, newDir string) {
 
 	if changed {
 		newPath := strings.Join(parts, ";")
-		WriteUserPath(newPath)
+		// 审查 S-02（2026-10-24）：本函数是全文件唯一不检查 WriteUserPath
+		// 返回值、且无条件广播的 PATH mutator（其余 11 处均 if err != nil）。
+		// 旧实现在写失败时仍然 BroadcastEnvironmentChange，于是用户被告知
+		// 「已更新」而注册表里还是旧路径 —— 迁移场景下 shim 全部失效且无提示。
+		// 失败时只记日志不广播：日志是这里唯一可用的反馈通道（调用链
+		// config.migrateLegacyPathValue 返回 string，无法向上传递 error）。
+		if err := WriteUserPath(newPath); err != nil {
+			log.Printf("[env] WARNING: failed to update shim dir in user PATH (%v) — PATH still points to %s", err, oldShimDir)
+			return
+		}
 		BroadcastEnvironmentChange()
 	}
 }
@@ -2457,13 +2480,12 @@ func extractEnvRefs(s string) []string {
 	return refs
 }
 
-// setxSetPath is a fallback that uses the `setx` command to set the
-// user PATH.  It is not used by default (the registry API is
-// preferred) but is kept as documentation.
-func _setxSetPath(path string) error {
-	cmd := exec.Command("setx", "Path", path)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
+// 审查 S-11（2026-10-24）：此处原有 `_setxSetPath`（用 `setx` 命令写用户 PATH
+// 的后备实现），经全仓检索确认为**死代码（0 调用）**，已删除。
+//
+// 删除理由（不只是“没用”）：
+//   - 它把 path 直接作为 argv 交给 setx，而 setx 内部经 cmd 解析，路径含
+//     `&`/`%` 时会被二次解析（与 S-03 同类注入面）；
+//   - setx 有 1024 字节截断特性，且完全绕过 checkPathLength；
+//   - 保留它就等于留一个随时可能被“误启用”的隐患。
+// 现行实现全部走注册表 API（WriteUserPath / WriteSystemPath）。

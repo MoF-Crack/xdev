@@ -162,9 +162,30 @@ func (g *Generic) SetManifest(m *manifest.Tool) {
 
 // ResolveVersion translates a user spec ("latest", "3.12", "^3.11")
 // into a concrete version string that exists in the manifest.
+//
+// Round 15：**字面版本兜底**。`xdev install <tool>` 不传 @version 时调用方把
+// `DefaultVersion()`（即 manifest 的 latest 字面值）当作 spec 传给这里，
+// 而 resolver.Parse 只认 semver/约束/latest/lts。semver 形态的字面值碰巧也能
+// 被 Parse 认成 KindExact，所以 52 个工具都"刚好"能用；android-ndk 的字面值
+// 是 `r29`（字母开头，见随包 manifests/android-ndk.yaml），Parse 直接
+// `unrecognised version spec: "r29"` —— 那个工具**根本装不上**（实测纯净 home
+// 上 `xdev install android-ndk` exit 1）。
+//
+// 语义边界：只有在清单里**确实存在**同名字面版本时才放行（顺带兼容带/不带
+// "v" 前缀两侧）；未知字面值仍返回 Parse 的原始错误，垃圾输入不被放宽。
 func (g *Generic) ResolveVersion(spec string) (string, error) {
 	parsed, err := resolver.Parse(spec)
 	if err != nil {
+		g.mu.RLock()
+		defer g.mu.RUnlock()
+		if g.M != nil {
+			want := strings.TrimPrefix(spec, "v")
+			for _, v := range g.M.Versions() {
+				if v == spec || strings.TrimPrefix(v, "v") == want {
+					return v, nil
+				}
+			}
+		}
 		return "", err
 	}
 	g.mu.RLock()

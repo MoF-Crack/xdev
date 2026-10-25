@@ -188,13 +188,23 @@ func binaryCandidates(installPath, shim string) []string {
 	if runtime.GOOS == "windows" {
 		exeSuffix = ".exe"
 	}
+	// Round 15：根部的 `.cmd` / `.bat` 包装脚本也是合法入口。
+	//
+	// 实测（android-ndk r29 windows 包）：zip 根部只有 ndk-build.cmd /
+	// ndk-gdb.cmd / ndk-stack.cmd，**没有**无扩展名的 ndk-build；而 manifest
+	// 是 strip: 0，解包后它们位于 <install>/android-ndk-r29/*.cmd。旧候选表
+	// 只给 bin/ 与 sub/bin/ 配了 .cmd，于是完整的安装树被判 "missing binary"
+	// 并回滚——`xdev install android-ndk` 在 Windows 上 100% 失败。
 	cands := []string{
 		filepath.Join(installPath, shim),
 		filepath.Join(installPath, shim+".exe"),
+		filepath.Join(installPath, shim+".cmd"),
+		filepath.Join(installPath, shim+".bat"),
 		filepath.Join(installPath, shim+exeSuffix),
 		filepath.Join(installPath, "bin", shim),
 		filepath.Join(installPath, "bin", shim+".exe"),
 		filepath.Join(installPath, "bin", shim+".cmd"),
+		filepath.Join(installPath, "bin", shim+".bat"),
 	}
 
 	// One-level nested layout, e.g. <install>/<tool>/bin/<shim> and
@@ -209,8 +219,13 @@ func binaryCandidates(installPath, shim string) []string {
 				filepath.Join(sub, "bin", shim),
 				filepath.Join(sub, "bin", shim+".exe"),
 				filepath.Join(sub, "bin", shim+".cmd"),
+				filepath.Join(sub, "bin", shim+".bat"),
 				filepath.Join(sub, shim),
 				filepath.Join(sub, shim+".exe"),
+				// Round 15：一层子目录根部的 Windows 包装脚本
+				// （NDK 的 <install>/android-ndk-r29/ndk-build.cmd）。
+				filepath.Join(sub, shim+".cmd"),
+				filepath.Join(sub, shim+".bat"),
 			)
 		}
 	}

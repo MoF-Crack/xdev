@@ -308,9 +308,29 @@ func TestRunWindows_WiresJobBeforeStart(t *testing.T) {
 		t.Error("jobKillOnClose() 必须在 cmd.Run() **之前**调用 —— " +
 			"子进程只有在创建时才会继承 Job 归属；Start 之后再 assign 存在竞态")
 	}
-	if !strings.Contains(exec, "defer release()") {
-		t.Error("必须 defer release() —— 正常退出时要先清掉 kill-on-close，" +
-			"否则 `gradle --daemon` 这类故意 daemon 化的孙进程会被误杀")
+	// 审查 S-08（2026-10-24）：此处原先断言「必须出现 `defer release()`」。
+	// 那个判据把实现细节（defer 关键字）固化成了契约，而 defer 的语义本身有问题：
+	// release() 会清零 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE，defer 在 **panic 路径
+	// 也会执行** —— 而 panic 属「异常终止」，恰恰是 Job 应当连坐子树的场景，
+	// 却被提前关掉标志，孙进程反而变孤儿（与本文件的设计目标相反）。
+	//
+	// 现在真正的契约是两条，逐条断言：
+	//  1. release() 必须被调用（否则正常退出会误杀 daemon）；
+	//  2. release() 必须在 cmd.Run() **之后**（否则子进程运行期间就被清标志）。
+	// 两者合并即「正常退出不连坐」，且不再限定实现必须用 defer。
+	iRelease := strings.Index(exec, "release()")
+	if iRelease < 0 {
+		t.Error("run_windows.go 未调用 release() —— 正常退出时未清掉 kill-on-close，" +
+			"`gradle --daemon` 这类故意 daemon 化的孙进程会被误杀")
+	}
+	if iRelease >= 0 && iRelease < iRun {
+		t.Error("release() 必须在 cmd.Run() **之后**调用 —— 子进程运行期间清标志会" +
+			"让后续异常终止无法连坐孙进程")
+	}
+	// 反向守卫：不得用 defer 包 release（panic 路径会提前清标志，产生孤儿）。
+	if strings.Contains(exec, "defer release()") {
+		t.Error("release() 不得用 defer 调用 —— panic 时 defer 仍会执行并清掉 " +
+			"kill-on-close，导致异常终止时孙进程不被 Job 回收（审查 S-08）")
 	}
 }
 
