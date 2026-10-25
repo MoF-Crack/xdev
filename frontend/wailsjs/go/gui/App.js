@@ -82,8 +82,8 @@ export function DeleteCacheFile(arg1) {
   return window['go']['gui']['App']['DeleteCacheFile'](arg1);
 }
 
-export function DeleteEnvVar(arg1, arg2, arg3) {
-  return window['go']['gui']['App']['DeleteEnvVar'](arg1, arg2, arg3);
+export function DeleteEnvVar(arg1, arg2) {
+  return window['go']['gui']['App']['DeleteEnvVar'](arg1, arg2);
 }
 
 export function DeleteEnvVarEntry(arg1, arg2) {

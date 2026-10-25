@@ -132,8 +132,13 @@ versions:
           size: 65000000
           strip: 0
 remote:
-    type: github
-    url: golang/go
+    # 审查（Go 1.27 嗅探失败）：旧配置为 `type: github, url: golang/go`，但 Go 官方
+    # **不使用 GitHub Releases** 发布版本（实测 /repos/golang/go/releases 返回空数组），
+    # 只打 git tag；而 /tags 默认返回的是 2012 年的 weekly.* 旧 tag。
+    # 结果：新版本永远发现不了，一直停在下面写死的 latest。
+    # go.dev/dl/?mode=json 才是官方权威版本索引（返回 [{"version":"go1.27.3",...}]）。
+    type: golang
+    url: https://go.dev/dl/?mode=json
     path: ""
     pattern: go(\d+\.\d+\.\d+)$
 latest: 1.26.5

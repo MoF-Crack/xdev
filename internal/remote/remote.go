@@ -568,6 +568,8 @@ func DiscoverVersions(ctx context.Context, r manifest.RemoteSource) ([]string, e
 		return discoverHTML(ctx, r)
 	case "npm":
 		return discoverNPM(ctx, r)
+	case "golang":
+		return discoverGoLang(ctx, r)
 	case "none", "":
 		return nil, fmt.Errorf("remote discovery not configured (type=%q)", r.Type)
 	default:
@@ -1118,6 +1120,106 @@ func discoverGitHub(ctx context.Context, r manifest.RemoteSource, floor string) 
 		}
 	}
 	return nil, fmt.Errorf("github remote: giving up after retries: %w", lastErr)
+}
+
+// goDevDLURL 是 Go 官方版本索引的固定端点。
+//
+// 与 npmRegistryBase 同理：**默认常量值、非 manifest 可控**（SSRF 立场 ——
+// manifest 不得让 xdev GET 任意主机）；仅导出给测试的 setter 可改。
+//
+// 为什么需要独立的 golang 类型（审查：Go 1.27 嗅探失败）：
+// 旧配置是 `type: github, url: golang/go`，但 Go 官方**不使用 GitHub Releases**
+// 发布版本（实测 `/repos/golang/go/releases` 返回空数组），只打 git tag；
+// 而 `/tags` 默认按创建时间返回的是 2012 年的 weekly.* 旧 tag。结果就是
+// 新版本永远发现不了（停在 manifest 里写死的 latest）。
+// go.dev 的 `?mode=json` 才是官方权威版本索引。
+var goDevDLURL = "https://go.dev/dl/?mode=json"
+
+// goDevDLURLForTest overrides the go.dev endpoint for tests and returns the
+// previous value (caller restores with defer). 仅供测试使用。
+func goDevDLURLForTest(url string) string {
+	old := goDevDLURL
+	goDevDLURL = url
+	return old
+}
+
+// maxGoVersions 限制返回的 Go 版本数量（降序截断）。
+const maxGoVersions = 20
+
+// goDevRelease 是 go.dev/dl/?mode=json 的响应元素。
+type goDevRelease struct {
+	Version string `json:"version"` // 形如 "go1.27.3"
+	Stable  bool   `json:"stable"`
+}
+
+// discoverGoLang 从 go.dev 官方 JSON 索引发现 Go 版本。
+//
+// 响应形如 [{"version":"go1.27.3","stable":true,...}, ...]，
+// 顶层是数组，因此无法用 discoverJSON 的“点分对象路径”定位——这是本类型存在的第二个原因。
+func discoverGoLang(ctx context.Context, r manifest.RemoteSource) ([]string, error) {
+	if err := util.IsSafeExternalURL(goDevDLURL); err != nil {
+		return nil, fmt.Errorf("golang remote: unsafe URL %q: %w",
+			util.SanitizeURL(goDevDLURL), errors.New(sanitizedReason(err.Error())))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, goDevDLURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("golang remote: build request: %w", err)
+	}
+
+	resp, err := doWithProxyFallback(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("golang remote: fetch %s: %w",
+			util.SanitizeURL(goDevDLURL), errors.New(sanitizedReason(err.Error())))
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("golang remote: API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var releases []goDevRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, jsonBodyLimit)).Decode(&releases); err != nil {
+		return nil, fmt.Errorf("golang remote: decode JSON: %w", err)
+	}
+
+	// manifest 的 pattern（如 `go(\d+\.\d+\.\d+)$`）用于从 "go1.27.3" 提取 "1.27.3"。
+	// 未配置时回退到“剥掉 go 前缀”。
+	var re *regexp.Regexp
+	if r.Pattern != "" {
+		re, err = regexp.Compile(r.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("golang remote: bad pattern %q: %w", r.Pattern, err)
+		}
+	}
+
+	versions := make([]string, 0, len(releases))
+	for _, rel := range releases {
+		raw := strings.TrimSpace(rel.Version)
+		if raw == "" {
+			continue
+		}
+		ver := raw
+		if re != nil {
+			m := re.FindStringSubmatch(raw)
+			if len(m) < 2 {
+				continue
+			}
+			ver = m[1]
+		} else {
+			ver = strings.TrimPrefix(raw, "go")
+		}
+		versions = append(versions, ver)
+		if len(versions) >= maxGoVersions {
+			break
+		}
+	}
+
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("golang remote: no versions matched pattern %q", r.Pattern)
+	}
+	return versions, nil
 }
 
 // discoverJSON HTTP-GETs r.URL, parses the JSON response and extracts

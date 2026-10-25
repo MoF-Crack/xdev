@@ -43,7 +43,7 @@ export function DeactivateHook():Promise<void>;
 
 export function DeleteCacheFile(arg1:string):Promise<void>;
 
-export function DeleteEnvVar(arg1:string,arg2:string,arg3:string):Promise<void>;
+export function DeleteEnvVar(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteEnvVarEntry(arg1:string,arg2:string):Promise<void>;
 
@@ -179,7 +179,7 @@ export function MigratePackageManager(arg1:string):Promise<void>;
 
 export function PauseDownload(arg1:string):Promise<void>;
 
-export function PreviewCustomToolVersions(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
+export function PreviewCustomToolVersions(arg1:string,arg2:string,arg3:string):Promise<gui.CustomToolResult>;
 
 export function PreviewInstall(arg1:string,arg2:string):Promise<gui.InstallPreview>;
 
