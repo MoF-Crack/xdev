@@ -1,0 +1,170 @@
+# 包管理器定义（xdev 的 pm 能力数据源）
+#
+# 为什么这些定义在数据文件而不是 Go 代码常量：
+#
+#   其中 5 个带**会被直接执行的命令**（scoop/brew/choco 的 install_command，
+#   yarn/pnpm 的 enable_command 与 install_methods）。放在代码里时，
+#   改一行就能改掉用户机器上会执行的命令，而 manifests 的 Ed25519 签名链
+#   完全看不到它们。搬到这里后，它们与 manifests/*.yaml 一起分发、
+#   一起进入签名覆盖范围。
+#
+# 字段说明：
+#   name            唯一标识，也是 CLI `xdev pm install <name>` 的入参
+#   display_name    展示名
+#   detect_cmd      检测该包管理器是否存在的命令（走 exec.LookPath）
+#   detect_args     取版本号用的参数
+#   tool_name       xdev 工具名（空 = 不能通过 xdev 安装，只能 script install）
+#   install_hint    不可自动安装时给用户的提示
+#   install_command 非空时走 script install（后台执行官方安装命令）
+#   requires_admin  是否需要管理员权限
+#   execution_env   "powershell" | "bash" —— install_command 的执行环境
+#   platform        "windows" | "darwin" | "linux" | "any" | "unix"
+#   enable_command  非空时该工具是「可启用附属工具」（如 corepack enable yarn）
+#   parent_tool     父工具名，用于检测父工具是否已安装
+#   install_methods 可选安装方式列表（空 = 单一方式或不可安装）
+#
+# 注意：internal/pm/builtin.go 有与本文内容一致的内置回退，
+# 两者由 TestBuiltinMatchesYAML 守卫一致性 —— 改这里也要改那里。
+
+package_managers:
+  - name: npx
+    display_name: NPX
+    description: Node 包执行器 - 运行 npm 包
+    detect_cmd: npx
+    detect_args: ["--version"]
+    tool_name: node
+    install_hint: 随 Node.js 自动安装
+
+  - name: npm
+    display_name: NPM
+    description: Node 包管理器
+    detect_cmd: npm
+    detect_args: ["--version"]
+    tool_name: node
+    install_hint: 随 Node.js 自动安装
+
+  # yarn / pnpm 是附属工具，通过 corepack enable 启用。
+  # enable_command 非空时，检测会查 parent_tool（node）是否已安装，
+  # 动态设置 CanInstall + InstallHint。
+  - name: yarn
+    display_name: Yarn
+    description: 快速、可靠的依赖管理工具
+    detect_cmd: yarn
+    detect_args: ["--version"]
+    tool_name: node
+    install_hint: 需先安装 Node.js，然后通过 corepack enable 或 npm install -g yarn 安装
+    enable_command: corepack enable yarn
+    parent_tool: node
+    install_methods:
+      - name: corepack
+        command: corepack enable yarn
+        detect_cmd: corepack
+      - name: npm
+        command: npm install -g yarn
+        detect_cmd: npm
+
+  - name: pnpm
+    display_name: PNPM
+    description: 快速、节省磁盘的包管理器
+    detect_cmd: pnpm
+    detect_args: ["--version"]
+    tool_name: node
+    install_hint: 需先安装 Node.js，然后通过 corepack enable 或 npm install -g pnpm 安装
+    enable_command: corepack enable pnpm
+    parent_tool: node
+    install_methods:
+      - name: corepack
+        command: corepack enable pnpm
+        detect_cmd: corepack
+      - name: npm
+        command: npm install -g pnpm
+        detect_cmd: npm
+
+  - name: uvx
+    display_name: UVX
+    description: 通过 UV 运行 Python 工具
+    detect_cmd: uvx
+    detect_args: ["--version"]
+    tool_name: uv
+
+  - name: uv
+    display_name: UV
+    description: 极速 Python 包安装器
+    detect_cmd: uv
+    detect_args: ["--version"]
+    tool_name: uv
+
+  - name: pip
+    display_name: PIP
+    description: Python 包安装器
+    detect_cmd: pip
+    detect_args: ["--version"]
+    tool_name: python
+    install_hint: 随 Python 自动安装
+
+  # pipx 可通过 pip 或 uv 安装。install_methods 非空时，检测会查每个
+  # method 的 detect_cmd 是否可用，动态设置 CanInstall + InstallHint。
+  - name: pipx
+    display_name: PIPX
+    description: 在隔离环境中安装运行 Python 应用
+    detect_cmd: pipx
+    detect_args: ["--version"]
+    install_hint: 通过 pip install pipx 或 uv tool install pipx 安装
+    install_methods:
+      - name: pip
+        command: pip install pipx
+        detect_cmd: pip
+      - name: uv
+        command: uv tool install pipx
+        detect_cmd: uv
+
+  - name: cargo
+    display_name: Cargo
+    description: Rust 包管理器
+    detect_cmd: cargo
+    detect_args: ["--version"]
+    tool_name: rust
+    install_hint: 随 Rust 自动安装
+
+  - name: maven
+    display_name: Maven
+    description: Java 构建自动化工具
+    detect_cmd: mvn
+    detect_args: ["--version"]
+    tool_name: maven
+    install_hint: 随 Maven 自动安装
+
+  - name: brew
+    display_name: Homebrew
+    description: macOS/Linux 包管理器
+    detect_cmd: brew
+    detect_args: ["--version"]
+    install_hint: 访问 https://brew.sh 安装
+    install_command: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    requires_admin: false
+    execution_env: bash
+    platform: unix # darwin/linux/WSL，非 windows
+
+  - name: scoop
+    display_name: Scoop
+    description: Windows 命令行安装器
+    detect_cmd: scoop
+    detect_args: ["--version"]
+    install_hint: 访问 https://scoop.sh 安装
+    install_command: irm get.scoop.sh | iex
+    requires_admin: false
+    execution_env: powershell
+    platform: windows
+
+  - name: choco
+    display_name: Chocolatey
+    description: Windows 包管理器
+    detect_cmd: choco
+    detect_args: ["--version"]
+    install_hint: 访问 https://chocolatey.org 安装
+    install_command: >-
+      Set-ExecutionPolicy Bypass -Scope Process -Force;
+      iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    requires_admin: true
+    execution_env: powershell
+    platform: windows

@@ -430,37 +430,6 @@ func (a *App) MigrateLocalTool(toolName, localPath string) error {
 	return nil
 }
 
-// pmDef defines a package manager for detection.
-type pmDef struct {
-	name, displayName, description string
-	detectCmd                      string
-	detectArgs                     []string
-	toolName                       string // xdev tool name (empty = not installable via xdev)
-	installHint                    string // hint when not installable
-	// Spec 025: 包管理器自动安装支持。
-	// installCommand 非空时，InstallPackageManager 走 script install 路径
-	// （后台执行官方安装命令，而非 xdev download→extract→activate 管线）。
-	installCommand string // 官方安装命令（空 = 不可自动安装，保持现有行为）
-	requiresAdmin  bool   // 是否需要管理员权限（Windows 下检测，非管理员时提示）
-	executionEnv   string // "powershell" | "bash" — 执行环境
-	platform       string // "windows" | "darwin" | "linux" | "any" — 限定平台
-	// Spec 026: 附属工具动态安装支持。
-	// enableCommand 非空时，该工具是"可启用附属工具"（如 yarn/pnpm 通过
-	// corepack enable 启用）。CanInstall 在父工具（parentTool）已安装时为 true。
-	enableCommand string // 启用命令（如 "corepack enable yarn"），空 = 非附属工具
-	parentTool    string // 父工具名（如 "node"），用于检测父工具是否已安装
-	// installMethods 列出可选安装方式（如 pipx 可通过 pip 或 uv 安装）。
-	// 非空时，安装流程根据可用方法动态选择/弹选项。
-	installMethods []installMethod // 空 = 单一安装方式或不可安装
-}
-
-// installMethod 描述附属工具的一种安装方式（Spec 026）。
-// 例如 pipx 可通过 pip install pipx 或 uv tool install pipx 安装。
-type installMethod struct {
-	name      string // 方法标识（如 "pip" / "uv"），前端用于选项对话框
-	command   string // 执行命令（如 "pip install pipx"）
-	detectCmd string // 检测该方法前置工具是否可用的命令名（如 "pip" / "uv"）
-}
 
 // GetPackageManagers returns available package managers with their status.
 // Spec 026: 两阶段检测——第一阶段并发检测所有 pmDef 的基础状态，
@@ -1434,51 +1403,6 @@ func inferIndependentPMRoot(pm pmDef, exePath string) (string, error) {
 	}
 }
 
-// packageManagerDefs 返回包管理器定义列表（GetPackageManagers 共享）。
-// 抽出为独立函数以便 findPMDefByName 在 InstallPackageManager 中复用。
-func packageManagerDefs() []pmDef {
-	return []pmDef{
-		{"npx", "NPX", "Node 包执行器 - 运行 npm 包", "npx", []string{"--version"}, "node", "随 Node.js 自动安装", "", false, "", "", "", "", nil},
-		{"npm", "NPM", "Node 包管理器", "npm", []string{"--version"}, "node", "随 Node.js 自动安装", "", false, "", "", "", "", nil},
-		// Spec 026: yarn/pnpm 是附属工具，通过 corepack enable 启用。
-		// enableCommand 非空时，detectPackageManager 两阶段检测会查 parentTool
-		// （node）是否已安装，动态设置 CanInstall + InstallHint。
-		{name: "yarn", displayName: "Yarn", description: "快速、可靠的依赖管理工具", detectCmd: "yarn", detectArgs: []string{"--version"}, toolName: "node", installHint: "需先安装 Node.js，然后通过 corepack enable 或 npm install -g yarn 安装",
-			enableCommand: "corepack enable yarn", parentTool: "node",
-			installMethods: []installMethod{
-				{name: "corepack", command: "corepack enable yarn", detectCmd: "corepack"},
-				{name: "npm", command: "npm install -g yarn", detectCmd: "npm"},
-			}},
-		{name: "pnpm", displayName: "PNPM", description: "快速、节省磁盘的包管理器", detectCmd: "pnpm", detectArgs: []string{"--version"}, toolName: "node", installHint: "需先安装 Node.js，然后通过 corepack enable 或 npm install -g pnpm 安装",
-			enableCommand: "corepack enable pnpm", parentTool: "node",
-			installMethods: []installMethod{
-				{name: "corepack", command: "corepack enable pnpm", detectCmd: "corepack"},
-				{name: "npm", command: "npm install -g pnpm", detectCmd: "npm"},
-			}},
-		{"uvx", "UVX", "通过 UV 运行 Python 工具", "uvx", []string{"--version"}, "uv", "", "", false, "", "", "", "", nil},
-		{"uv", "UV", "极速 Python 包安装器", "uv", []string{"--version"}, "uv", "", "", false, "", "", "", "", nil},
-		{"pip", "PIP", "Python 包安装器", "pip", []string{"--version"}, "python", "随 Python 自动安装", "", false, "", "", "", "", nil},
-		// Spec 026: pipx 可通过 pip 或 uv 安装。installMethods 非空时，
-		// detectPackageManager 两阶段检测会查每个 method 的 detectCmd 是否
-		// 可用，动态设置 CanInstall + InstallHint + InstallMethods。
-		{name: "pipx", displayName: "PIPX", description: "在隔离环境中安装运行 Python 应用", detectCmd: "pipx", detectArgs: []string{"--version"}, toolName: "", installHint: "通过 pip install pipx 或 uv tool install pipx 安装",
-			installMethods: []installMethod{
-				{name: "pip", command: "pip install pipx", detectCmd: "pip"},
-				{name: "uv", command: "uv tool install pipx", detectCmd: "uv"},
-			}},
-		{"cargo", "Cargo", "Rust 包管理器", "cargo", []string{"--version"}, "rust", "随 Rust 自动安装", "", false, "", "", "", "", nil},
-		{"maven", "Maven", "Java 构建自动化工具", "mvn", []string{"--version"}, "maven", "随 Maven 自动安装", "", false, "", "", "", "", nil},
-		{name: "brew", displayName: "Homebrew", description: "macOS/Linux 包管理器", detectCmd: "brew", detectArgs: []string{"--version"}, installHint: "访问 https://brew.sh 安装",
-			installCommand: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`,
-			requiresAdmin:  false, executionEnv: "bash", platform: "unix"}, // darwin/linux/WSL，非 windows
-		{name: "scoop", displayName: "Scoop", description: "Windows 命令行安装器", detectCmd: "scoop", detectArgs: []string{"--version"}, installHint: "访问 https://scoop.sh 安装",
-			installCommand: "irm get.scoop.sh | iex",
-			requiresAdmin:  false, executionEnv: "powershell", platform: "windows"},
-		{name: "choco", displayName: "Chocolatey", description: "Windows 包管理器", detectCmd: "choco", detectArgs: []string{"--version"}, installHint: "访问 https://chocolatey.org 安装",
-			installCommand: `Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`,
-			requiresAdmin:  true, executionEnv: "powershell", platform: "windows"},
-	}
-}
 
 // installPackageManagerViaScript 执行包管理器的官方安装命令（Spec 025）。
 // 后台执行 + 捕获输出到 GUI log + cmd.Wait() 防僵尸。

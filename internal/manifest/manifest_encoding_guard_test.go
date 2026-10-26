@@ -30,6 +30,10 @@ const gbkMojibakeMarkers = "鈥鍘瀹淇锛銆鏈鏃绾鍣甯鐩閿垎钖灏鎸�
 // 不参与 name/gui_binary 结构守卫（TC-B3/B4），但仍参与编码守卫（TC-B1/B2）。
 var nonToolManifests = map[string]bool{
 	"index.yaml": true,
+	// package-managers.yaml 是包管理器定义（internal/pm 加载），
+	// 顶层键是 package_managers 而非单个工具的 name，不是 Tool manifest。
+	// 它有自己的一致性守卫：internal/pm.TestBuiltinMatchesYAML。
+	"package-managers.yaml": true,
 }
 
 // guiBinaryExceptions 是 form_factor 含 gui 但有意不声明 gui_binary 的工具

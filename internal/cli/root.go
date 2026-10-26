@@ -168,6 +168,9 @@ Short aliases you can add to your shell rc:
 		newPluginCmd(),
 		// Manifest management
 		newManifestCmd(),
+		// Package managers (2026-10-25：定义已数据化到
+		// manifests/package-managers.yaml，CLI 与 GUI 共享同一数据源)
+		newPMCmd(),
 		// Version
 		newVersionCmd(),
 		// Shell completion
