@@ -163,56 +163,16 @@ func TestUse_SwitchesBetweenVersions(t *testing.T) {
 	}
 }
 
-// INST-L1: chmodded: a project dir with .xdev.toml; `xdev install` (or any
-// install) on a known-absent tool is not required here — instead verify the
-// lockfile round-trip shell: write .xdev.lock by hand, then `xdev install
-// --locked` rejects a known-missing tool gracefully rather than crashing.
+// INST-L1 / INST-L2 已删除（2026-10-26）。
 //
-// This isolates the --locked code path without network. We seed a lockfile
-// with a real tool name but a version that is definitely not installed and
-// cannot be downloaded offline; the locked installer reports "unsupported
-// tool" or a download error but must not panic.
-func TestInstall_Locked_MissingToolHandlesGracefully(t *testing.T) {
-	bin := buildBin(t)
-	home := initHome(t, bin)
-	// nosh is not a registered tool; lockfile references it.
-	proj := t.TempDir()
-	if err := os.WriteFile(filepath.Join(proj, ".xdev.lock"), []byte(
-		`version = 1
-[tools.nosh]
-version = "1.0.0"
-resolved = "1.0.0"
-sha256 = "0"
-url = "https://invalid.example/nosh-1.0.0.zip"
-install_path = ""
-`), 0o644); err != nil {
-		t.Fatalf("write lockfile: %v", err)
-	}
-
-	out, code := run(t, bin, home, proj, "install", "--locked")
-	// The locked installer skips tools that aren't registered (e.g. a typo
-	// in the lockfile) with a warning rather than failing the whole run.
-	// The contract we enforce: NO panic, and the unsupported tool is named.
-	notContains(t, out, "panic:", "install --locked graceful")
-	contains(t, out, "unsupported tool", "install --locked names the bad tool")
-	_ = code // exit 0 (skip-and-continue) is acceptable here
-}
-
-// INST-L2: --from-local with a .xdev.toml listing an unsupported tool
-// reports a clear error rather than crashing. Exercises installFromLocal's
-// project-config-driven path without needing real archives.
-func TestInstall_FromLocal_UnsupportedToolClearError(t *testing.T) {
-	bin := buildBin(t)
-	home := initHome(t, bin)
-	proj := t.TempDir()
-	if err := os.WriteFile(filepath.Join(proj, ".xdev.toml"),
-		[]byte("[tools]\nnosh = '1.0.0'\n"), 0o644); err != nil {
-		t.Fatalf("write toml: %v", err)
-	}
-	out, code := run(t, bin, home, proj, "install", "--from-local")
-	// The from-local installer skips unregistered tools with a warning
-	// rather than aborting. Contract: no panic, and the bad tool is named.
-	notContains(t, out, "panic:", "install --from-local graceful")
-	contains(t, out, "unsupported tool", "install --from-local names the bad tool")
-	_ = code
-}
+// 它们测的是 `xdev install --locked` 与 `--from-local` 两个标志，而这两个
+// 标志在当前实现里**根本不存在**：
+//   - internal/cli/install.go 只注册了 4 个 flag；
+//   - `internal/lockfile` 已在 Spec 012 删除（见 docs/architecture.md）。
+//
+// 实测：`error: unknown flag: --locked` / `error: unknown flag: --from-local`。
+// 这两个用例此前一直是 SKIP（integration job 缺 go build），漂移从未被发现；
+// CI 修好后立刻暴露为失败。
+//
+// 相关文档也需清理（docs/usage-manual.md 仍文档化这两个标志），
+// 属同一批"文档 / 测试 / 代码"三方漂移。

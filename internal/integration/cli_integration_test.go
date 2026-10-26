@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -101,60 +100,17 @@ func TestConfig_RoundTrip(t *testing.T) {
 	contains(t, list, "https://example.org/py", "config list reflects set")
 }
 
-// CLI-07: local <tool>@<ver> writes .xdev.toml in the cwd and shows it.
-func TestLocal_SetAndShow(t *testing.T) {
-	bin := buildBin(t)
-	home := initHome(t, bin)
-	// Run from a project dir so .xdev.toml lands there, not in home.
-	proj := t.TempDir()
-
-	out, code := run(t, bin, home, proj, "local", "node@20")
-	assertCode(t, 0, code, "local set")
-	contains(t, out, "set node", "local set")
-
-	tomlPath := filepath.Join(proj, ".xdev.toml")
-	if !fileExists(tomlPath) {
-		t.Fatalf(".xdev.toml not created in %s", proj)
-	}
-	data, err := os.ReadFile(tomlPath)
-	if err != nil {
-		t.Fatalf("read toml: %v", err)
-	}
-	if !strings.Contains(string(data), "node") {
-		t.Errorf(".xdev.toml missing node: %s", data)
-	}
-	if !strings.Contains(string(data), "20") {
-		t.Errorf(".xdev.toml missing version 20: %s", data)
-	}
-
-	show, code := run(t, bin, home, proj, "local", "--show")
-	assertCode(t, 0, code, "local --show")
-	contains(t, show, "node", "local --show")
-}
-
-// CLI-08: local --unset removes a tool from .xdev.toml.
-func TestLocal_Unset(t *testing.T) {
-	bin := buildBin(t)
-	home := initHome(t, bin)
-	proj := t.TempDir()
-
-	_, code := run(t, bin, home, proj, "local", "python@3.12")
-	assertCode(t, 0, code, "local set python")
-
-	out, code := run(t, bin, home, proj, "local", "--unset", "python")
-	assertCode(t, 0, code, "local --unset")
-	contains(t, out, "removed python", "local --unset")
-
-	data, _ := os.ReadFile(filepath.Join(proj, ".xdev.toml"))
-	// The tool name must be gone from the [tools] table. (Empty [tools]
-	// header may remain, which is expected — only the entry is removed.)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "python") {
-			t.Errorf("python still present in .xdev.toml after unset: %s", data)
-		}
-	}
-}
+// CLI-07 / CLI-08 已删除（2026-10-26）。
+//
+// 它们测的 `xdev local` 命令与 `.xdev.toml` 配置格式都已不存在：
+//   - `xdev local` 不再是注册的子命令（实测 `error: unknown command "local"`）；
+//   - 项目级配置改为 `.xdev.yaml`（见 internal/project），不是 TOML。
+//
+// 这两个用例此前一直是 SKIP 状态（integration job 缺 go build，二进制不存在
+// 导致 buildBin 跳过），所以漂移从未被发现。CI 修好后它们立刻暴露为失败 ——
+// 删掉而不是改写，是因为要对齐的是「当前实现」，而不是恢复一个已被移除的命令。
+//
+// 项目级版本的真实覆盖在 internal/project 的单元测试里。
 
 // CLI-09: hook --shell bash with no .xdev.toml produces empty output and exit 0.
 func TestHook_NoProjectEmptyOutput(t *testing.T) {
@@ -169,16 +125,13 @@ func TestHook_NoProjectEmptyOutput(t *testing.T) {
 	}
 }
 
-// CLI-10: task list with no .xdev.toml prints a friendly hint and exits 0.
-func TestTaskList_NoProject(t *testing.T) {
-	bin := buildBin(t)
-	home := initHome(t, bin)
-	empty := t.TempDir()
-
-	out, code := run(t, bin, home, empty, "task", "list")
-	assertCode(t, 0, code, "task list (no project)")
-	contains(t, out, "No tasks", "task list no-project hint")
-}
+// CLI-10 已删除（2026-10-26）。
+//
+// 它测的 `xdev task` 命令已不存在（实测 `error: unknown command "task"`）。
+// 同样此前一直是 SKIP，CI 修好后暴露为失败。
+//
+// 顺带：docs/usage-manual.md 里也有 task 相关的 TOML 示例，属同一批文档漂移
+// （见 docs/backlog.md 的待清理项）。
 
 // CLI-11: installing an unknown tool fails with a clear error and exit 1.
 func TestInstall_UnknownTool(t *testing.T) {
