@@ -241,6 +241,10 @@ func newManifestUpdateCmd() *cobra.Command {
 				return nil
 			}
 
+			// 统计用于结尾汇总：修复前无论成败都打印「Update complete」，
+			// 且写失败时也只打印「✔ updated」。现在失败会计入并返回错误。
+			updated, failed := 0, 0
+
 			for _, repoURL := range repos {
 				fmt.Printf("Updating manifests from %s ...\n", repoURL)
 				// Security (M-13): Validate git clone URL to prevent ext:: protocol attacks
@@ -263,6 +267,10 @@ func newManifestUpdateCmd() *cobra.Command {
 				}
 
 				destDir := thirdPartyManifestDir()
+				if err := os.MkdirAll(destDir, 0o755); err != nil {
+					fmt.Fprintf(stderr(), "⚠ create %s: %v\n", destDir, err)
+					continue
+				}
 				// Copy YAML files from root and manifests/ subdirectory
 				for _, searchDir := range []string{tmpDir, filepath.Join(tmpDir, "manifests")} {
 					entries, err := os.ReadDir(searchDir)
@@ -274,16 +282,34 @@ func newManifestUpdateCmd() *cobra.Command {
 							src := filepath.Join(searchDir, e.Name())
 							data, err := os.ReadFile(src)
 							if err != nil {
+								fmt.Fprintf(stderr(), "  ⚠ read %s: %v\n", e.Name(), err)
+								failed++
 								continue
 							}
+							// 2026-10-26（架构评估修复）：修复前这里丢弃了
+							// os.WriteFile 的返回值，然后无条件打印「✔ updated」。
+							// 磁盘满 / 权限不足 / 路径被占用时，用户看到成功
+							// 而实际什么都没写。现在失败必报且计入统计。
 							dest := filepath.Join(destDir, e.Name())
-							os.WriteFile(dest, data, 0o644)
+							if werr := os.WriteFile(dest, data, 0o644); werr != nil {
+								fmt.Fprintf(stderr(), "  ⚠ write %s: %v\n", e.Name(), werr)
+								failed++
+								continue
+							}
 							fmt.Printf("  ✔ updated %s\n", e.Name())
+							updated++
 						}
 					}
 				}
 			}
-			fmt.Println("Update complete")
+			fmt.Printf("Update complete: %d updated", updated)
+			if failed > 0 {
+				fmt.Printf(", %d failed", failed)
+			}
+			fmt.Println()
+			if failed > 0 {
+				return fmt.Errorf("%d manifest file(s) failed to update", failed)
+			}
 			return nil
 		},
 	}

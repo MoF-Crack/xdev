@@ -367,7 +367,18 @@ func TestShouldUpdateLatest_NeverDowngrades(t *testing.T) {
 	}
 	for _, tc := range cases {
 		// 构造只含这两个版本串的列表（无 Release 日期）。
-		versions := []manifest.Version{{Version: tc.current}, {Version: tc.candidate}}
+		//
+		// 2026-10-26（架构评估修复）：每个条目必须带**完整 archive** ——
+		// 新的统一判据（manifest.CanPromoteLatest）会拒绝无 archives 的
+		// 占位版本。本用例测的是**版本比较语义**，与可安装性无关，
+		// 因此统一给一个可用的 archive 把它隔离在外。
+		mk := func(v string) manifest.Version {
+			return manifest.Version{
+				Version:  v,
+				Archives: []manifest.Archive{{OS: "any", Arch: "any", URL: "https://e.test/" + v + ".zip", Format: "zip"}},
+			}
+		}
+		versions := []manifest.Version{mk(tc.current), mk(tc.candidate)}
 		if got := shouldUpdateLatest(versions, tc.candidate, tc.current); got != tc.want {
 			t.Errorf("shouldUpdateLatest(%q, %q) = %v, want %v", tc.candidate, tc.current, got, tc.want)
 		}
@@ -383,9 +394,19 @@ func TestShouldUpdateLatest_NeverDowngrades(t *testing.T) {
 // `2026.2` vs `2026.2.0.1`。
 func TestShouldUpdateLatest_UsesSameTotalOrderAsNewestVersion(t *testing.T) {
 	// 数字段相同、日期不同的两个版本（真实语料形态）。
+	//
+	// 2026-10-26：每个条目带完整 archive，把「可安装性」隔离在外 ——
+	// 本用例测的是**全序一致性**（R8-2），不测 archives 门。
+	mkV := func(v, rel string) manifest.Version {
+		return manifest.Version{
+			Version:  v,
+			Release:  rel,
+			Archives: []manifest.Archive{{OS: "any", Arch: "any", URL: "https://e.test/" + v + ".zip", Format: "zip"}},
+		}
+	}
 	versions := []manifest.Version{
-		{Version: "2026.2", Release: "2026-07-16"},
-		{Version: "2026.2.0.1", Release: "2026-07-23"},
+		mkV("2026.2", "2026-07-16"),
+		mkV("2026.2.0.1", "2026-07-23"),
 	}
 
 	// newestVersion 挑出的是带更晚日期的那个。

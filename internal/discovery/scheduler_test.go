@@ -352,6 +352,10 @@ func TestMergeIntoManifest_EmptyDiscovered(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMergeIntoManifest_UpdateLatest(t *testing.T) {
+	// 2026-10-26：本用例测的是 **latest 语义**（哪个版本该成为 latest），
+	// 与「候选是否可安装」无关。构造的 DiscoveredVersion 不带 archives，
+	// 因此在测试期间关闭 archives 门，把两者隔离。
+	defer WithRequireArchivesForPromotion(false)()
 	dir := t.TempDir()
 
 	// Existing manifest with latest=2.47.0.
@@ -387,6 +391,10 @@ func TestMergeIntoManifest_UpdateLatest(t *testing.T) {
 }
 
 func TestMergeIntoManifest_NoDowngrade(t *testing.T) {
+	// 2026-10-26：本用例测的是 **latest 语义**（哪个版本该成为 latest），
+	// 与「候选是否可安装」无关。构造的 DiscoveredVersion 不带 archives，
+	// 因此在测试期间关闭 archives 门，把两者隔离。
+	defer WithRequireArchivesForPromotion(false)()
 	dir := t.TempDir()
 
 	// T2B.2: existing latest=2.55.0, discovered 2.47.0 (older) → latest unchanged.
@@ -421,6 +429,10 @@ func TestMergeIntoManifest_NoDowngrade(t *testing.T) {
 }
 
 func TestMergeIntoManifest_UpdateLatestMultiple(t *testing.T) {
+	// 2026-10-26：本用例测的是 **latest 语义**（哪个版本该成为 latest），
+	// 与「候选是否可安装」无关。构造的 DiscoveredVersion 不带 archives，
+	// 因此在测试期间关闭 archives 门，把两者隔离。
+	defer WithRequireArchivesForPromotion(false)()
 	dir := t.TempDir()
 
 	// T2B.3: discovered [1.26.5, 1.25.3], existing latest=1.23.2 → latest=1.26.5.
@@ -462,6 +474,10 @@ func TestMergeIntoManifest_UpdateLatestMultiple(t *testing.T) {
 // "-" 的版本串恒 false 导致 rc-only 流 latest 永不前进的问题。异通道
 // （alpha）候选不参与提升。
 func TestMergeIntoManifest_PrereleaseAdvancesPrereleaseLatest(t *testing.T) {
+	// 2026-10-26：本用例测的是 **latest 语义**（哪个版本该成为 latest），
+	// 与「候选是否可安装」无关。构造的 DiscoveredVersion 不带 archives，
+	// 因此在测试期间关闭 archives 门，把两者隔离。
+	defer WithRequireArchivesForPromotion(false)()
 	dir := t.TempDir()
 
 	tool := &manifest.Tool{
@@ -658,6 +674,10 @@ func TestMergeIntoManifest_SkipNonSemver(t *testing.T) {
 }
 
 func TestMergeIntoManifest_UpdateLatestPureNumeric(t *testing.T) {
+	// 2026-10-26：本用例测的是 **latest 语义**（哪个版本该成为 latest），
+	// 与「候选是否可安装」无关。构造的 DiscoveredVersion 不带 archives，
+	// 因此在测试期间关闭 archives 门，把两者隔离。
+	defer WithRequireArchivesForPromotion(false)()
 	dir := t.TempDir()
 
 	// T2B.5: discovered [26], existing latest=25 → latest=26.

@@ -113,6 +113,26 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 
 	log.Printf("[update] Downloading update: %s (%d bytes)", asset.Name, asset.Size)
 
+	// 票 32 / P1-25（E-06）自愈必须**先于** EvalSymlinks。
+	//
+	// 2026-10-26（架构评估修复）：修复前 restoreFromBackup 只在
+	// replaceBinaryWindows 内部被调（约 :461），而 EvalSymlinks 在
+	// **下载之前**（下面几行）就执行并 return。崩溃态的特征是
+	// currentExe 已被 rename 成 .old、新二进制尚未就位 —— 此时
+	// EvalSymlinks(exePath) 必然失败（目标不存在），函数直接返回
+	// "resolve symlinks: ..."，自愈代码永远到不了。
+	//
+	// 后果：工具「坏了修不回来」，而且用户看到的错误是
+	// 「resolve symlinks」这种完全指向错误方向的提示。
+	//
+	// 现在先尝试自愈，再解析符号链接。自愈本身幂等（活二进制在位就
+	// 什么都不做），所以正常情况下无额外开销。
+	if healed, herr := healInterruptedUpdate(exePath); herr != nil {
+		log.Printf("[update] WARNING: pre-resolve self-heal for %s: %v", exePath, herr)
+	} else if healed {
+		log.Printf("[update] recovered %s from an interrupted previous update (before symlink resolution)", exePath)
+	}
+
 	exe, err := filepath.EvalSymlinks(exePath)
 	if err != nil {
 		return fmt.Errorf("resolve symlinks: %w", err)
@@ -493,6 +513,57 @@ func replaceBinaryWindows(currentExe, newBinary string) error {
 	}()
 
 	return nil
+}
+
+// healInterruptedUpdate 尝试修复「上一次更新中断」留下的状态：
+// currentExe 缺失而 currentExe+”.old“ 完好。
+//
+// 票 32 / P1-25（E-06）。本函数与 restoreFromBackup 的区别：
+//
+//   - restoreFromBackup 在**已解析出的**真实路径上工作（replaceBinaryWindows
+//     内部用），假定路径已存在且可解析；
+//   - 本函数在**原始 exePath** 上工作，用于「路径可能已不可解析」的崩溃态。
+//
+// 为什么不能直接复用 restoreFromBackup：崩溃态下 exePath 可能是 junction /
+// symlink（如从 current\xdev 调用），此时 EvalSymlinks 已失败，但我们仍然
+// 应该尝试在**字面路径**上把 .old 换回来——恢复后路径就可解析了。
+//
+// 幂等：活二进制在位时立即返回 (false, nil)。
+func healInterruptedUpdate(exePath string) (bool, error) {
+	if exePath == "" {
+		return false, nil
+	}
+	// 活二进制存在：无需自愈。
+	//
+	// 注意用 Lstat 而非 Stat：若 exePath 是悬空符号链接，Stat 会失败但
+	// 那正是需要处理的情形之一；悬空链接的修复交给下面的 .old 检查。
+	if fi, err := os.Lstat(exePath); err == nil && !fi.IsDir() {
+		return false, nil
+	}
+
+	// 先试字面路径，再试解析后的路径（若 exePath 本身是链接，.old 可能
+	// 与解析目标同目录）。
+	candidates := []string{exePath}
+	if resolved, rerr := filepath.EvalSymlinks(filepath.Dir(exePath)); rerr == nil {
+		if alt := filepath.Join(resolved, filepath.Base(exePath)); alt != exePath {
+			candidates = append(candidates, alt)
+		}
+	}
+
+	var firstErr error
+	for _, c := range candidates {
+		healed, err := restoreFromBackup(c)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if healed {
+			return true, nil
+		}
+	}
+	return false, firstErr
 }
 
 // restoreFromBackup renames currentExe+".old" back to currentExe when the live

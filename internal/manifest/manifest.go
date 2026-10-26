@@ -484,55 +484,55 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 	// 后按目录顺序串行写入 disk map（重复 Tool.Name 后胜出——与原串行一致）。
 	disk := &Catalog{tools: map[string]*Tool{}}
 	if _, statErr := os.Stat(dir); statErr == nil {
-		if entries, readErr := os.ReadDir(dir); readErr == nil {
-			var yamlNames []string
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-					continue
+		// 2026-10-26（架构评估修复）：收集逻辑已抽到 collectManifestRefs，
+		// 与 loadFromDir 共用同一份 —— 两个加载出口各自实现一次正是
+		// 本缺陷的成因（修了一个、漏了另一个）。
+		refs, collectErr := collectManifestRefs(dir)
+		if collectErr != nil {
+			return nil, collectErr
+		}
+
+		n := len(refs)
+		results := make([]*Tool, n)
+		g, _ := errgroup.WithContext(context.Background())
+		sem := make(chan struct{}, parallelLoadConcurrency)
+		for i := range refs {
+			i := i
+			sem <- struct{}{}
+			g.Go(func() error {
+				defer func() { <-sem }()
+				name := refs[i].name
+				path := filepath.Join(refs[i].dir, name)
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					// D-06（审计 P1-11）：容错语义保留（坏的单条跳过，
+					// 不影响整体加载），但必须可见——静默跳过时坏
+					// manifest 完全查不出原因（用户只看到工具"不见了"）。
+					// log 包自带互斥，可安全用于这里的并行 goroutine。
+					log.Printf("[manifest] WARNING: skip unreadable %s: %v", name, readErr)
+					return nil // 单文件读失败跳过（与原 continue 一致）
 				}
-				yamlNames = append(yamlNames, e.Name())
-			}
-			n := len(yamlNames)
-			results := make([]*Tool, n)
-			g, _ := errgroup.WithContext(context.Background())
-			sem := make(chan struct{}, parallelLoadConcurrency)
-			for i, name := range yamlNames {
-				i, name := i, name
-				sem <- struct{}{}
-				g.Go(func() error {
-					defer func() { <-sem }()
-					path := filepath.Join(dir, name)
-					data, readErr := os.ReadFile(path)
-					if readErr != nil {
-						// D-06（审计 P1-11）：容错语义保留（坏的单条跳过，
-						// 不影响整体加载），但必须可见——静默跳过时坏
-						// manifest 完全查不出原因（用户只看到工具"不见了"）。
-						// log 包自带互斥，可安全用于这里的并行 goroutine。
-						log.Printf("[manifest] WARNING: skip unreadable %s: %v", name, readErr)
-						return nil // 单文件读失败跳过（与原 continue 一致）
-					}
-					var t Tool
-					if err := yaml.Unmarshal(data, &t); err != nil {
-						// D-06（审计 P1-11）：同上，解析失败也只跳过该条 +
-						// 告警，不回退为整体加载失败。
-						log.Printf("[manifest] WARNING: skip unparseable %s: %v", name, err)
-						return nil // 单文件解析失败跳过（与原 continue 一致）
-					}
-					if t.Name == "" {
-						t.Name = strings.TrimSuffix(name, ".yaml")
-					}
-					t.ValidateDepends()
-					t.ValidateFormFactor()
-					results[i] = &t
-					return nil
-				})
-			}
-			_ = g.Wait() // 错误忽略（单文件失败跳过，与原 continue 语义一致）
-			// 按目录顺序串行写入（重复名后胜出，与原串行一致）
-			for i := 0; i < n; i++ {
-				if results[i] != nil {
-					disk.tools[results[i].Name] = results[i]
+				var t Tool
+				if err := yaml.Unmarshal(data, &t); err != nil {
+					// D-06（审计 P1-11）：同上，解析失败也只跳过该条 +
+					// 告警，不回退为整体加载失败。
+					log.Printf("[manifest] WARNING: skip unparseable %s: %v", name, err)
+					return nil // 单文件解析失败跳过（与原 continue 一致）
 				}
+				if t.Name == "" {
+					t.Name = strings.TrimSuffix(name, ".yaml")
+				}
+				t.ValidateDepends()
+				t.ValidateFormFactor()
+				results[i] = &t
+				return nil
+			})
+		}
+		_ = g.Wait() // 错误忽略（单文件失败跳过，与原 continue 语义一致）
+		// 按收集顺序串行写入（重复名后胜出：顶层先、third-party 后）。
+		for i := 0; i < n; i++ {
+			if results[i] != nil {
+				disk.tools[results[i].Name] = results[i]
 			}
 		}
 	}
@@ -614,32 +614,25 @@ const parallelLoadConcurrency = 8
 //   - 不在首个错误时 cancel 其他 goroutine：manifest 为小体积本地文件，
 //     全量解析成本可接受，确定性优先于提前取消。
 func loadFromDir(dir string) (*Catalog, error) {
-	entries, err := os.ReadDir(dir)
+	refs, err := collectManifestRefs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read manifest dir %s: %w", dir, err)
+		return nil, err
 	}
 
-	var yamlNames []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		yamlNames = append(yamlNames, e.Name())
-	}
-
-	n := len(yamlNames)
+	n := len(refs)
 	results := make([]*Tool, n)
 	errs := make([]error, n)
 
 	g, _ := errgroup.WithContext(context.Background())
 	sem := make(chan struct{}, parallelLoadConcurrency)
 
-	for i, name := range yamlNames {
-		i, name := i, name
+	for i := range refs {
+		i := i
 		sem <- struct{}{}
 		g.Go(func() error {
 			defer func() { <-sem }()
-			path := filepath.Join(dir, name)
+			name := refs[i].name
+			path := filepath.Join(refs[i].dir, name)
 			t, perr := loadOneFile(name, func() ([]byte, error) {
 				return os.ReadFile(path)
 			})
@@ -653,7 +646,7 @@ func loadFromDir(dir string) (*Catalog, error) {
 	}
 	_ = g.Wait()
 
-	// 按目录顺序处理：返回第一个遇到的错误；否则写入 map（重复名后胜出）。
+	// 按收集顺序处理：返回第一个遇到的错误；否则写入 map（重复名后胜出）。
 	c := &Catalog{tools: map[string]*Tool{}}
 	for i := 0; i < n; i++ {
 		if errs[i] != nil {
@@ -666,6 +659,71 @@ func loadFromDir(dir string) (*Catalog, error) {
 	c.markInstallability()
 	return c, nil
 }
+
+// manifestRef 是一个待加载的清单文件位置。
+type manifestRef struct{ dir, name string }
+
+// collectManifestRefs 收集 dir 下要加载的清单文件：
+//
+//  1. dir 顶层的 *.yaml；
+//  2. dir/third-party/ 子目录的 *.yaml（**仅**这个子目录，不递归）。
+//
+// # 为什么必须包含 third-party/（2026-10-26 架构评估修复）
+//
+// `xdev manifest add` / `manifest update` 把第三方清单写进
+// <ManifestDir>/third-party/（见 cli.thirdPartyManifestDir）。
+// 修复前两个加载出口（loadFromDir / loadMergedCatalog）都只读顶层并
+// `if e.IsDir() { continue }` 跳过全部子目录，于是「✔ added manifest」
+// 的清单**永远不会出现在 catalog 里** —— 用户加了工具却发现不存在，
+// 且没有任何错误提示。
+//
+// # 为什么只认 third-party/ 而不递归
+//
+// manifest 目录是用户可写的。若递归所有子目录，用户在 manifests/ 下
+// 建个备份目录或仓库副本，就会把重复/过期的工具定义一起加载进来。
+// 只认这一个约定目录，语义明确且可控。
+//
+// # 收集顺序
+//
+// 顶层先、third-party 后。同名工具时**后收集者胜出**（调用方按顺序
+// 写入 map），因此用户显式添加的第三方清单可以覆盖同名磁盘清单。
+func collectManifestRefs(dir string) ([]manifestRef, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read manifest dir %s: %w", dir, err)
+	}
+
+	var refs []manifestRef
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		refs = append(refs, manifestRef{dir: dir, name: e.Name()})
+	}
+
+	thirdPartyDir := filepath.Join(dir, thirdPartySubdir)
+	if fi, statErr := os.Stat(thirdPartyDir); statErr == nil && fi.IsDir() {
+		if tpEntries, readErr := os.ReadDir(thirdPartyDir); readErr == nil {
+			for _, e := range tpEntries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+					continue
+				}
+				refs = append(refs, manifestRef{dir: thirdPartyDir, name: e.Name()})
+			}
+		} else {
+			// 子目录不可读不致命（可能权限/瞬时错误），但要可见。
+			log.Printf("[manifest] WARNING: cannot read %s: %v", thirdPartyDir, readErr)
+		}
+	}
+
+	return refs, nil
+}
+
+// thirdPartySubdir 是第三方清单的约定子目录名。
+//
+// 必须与 cli.thirdPartyManifestDir() 保持一致 —— 那里是写入侧，
+// 这里是读取侧，两边分叉就会重现「报成功但不生效」的缺陷。
+const thirdPartySubdir = "third-party"
 
 // markInstallability 计算**派生**标记 Tool.Installable：当前平台上是否至少有一个
 // 可安装版本（票 18 / P2-29）。

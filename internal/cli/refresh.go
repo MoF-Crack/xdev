@@ -10,6 +10,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/discovery"
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
 func newRefreshCmd() *cobra.Command {
@@ -151,38 +152,24 @@ func newestVersion(versions []manifest.Version) string {
 
 // shouldUpdateLatest 报告 candidate 是否应当**替换**当前的 latest 值。
 //
-// F-29（P1）：只在严格更高时才写回。两个作用：
-//  1. 杜绝静默降级（候选低于现值时保持现值）；
-//  2. 候选与现值相同时也不写回——顺便保住 manifest 的注释：
-//     写回走的是文本级外科写，少写一次就少一次无谓的文件改动。
+// 2026-10-26（架构评估修复）：本函数改为委托 manifest.CanPromoteLatest ——
+// 与 discovery/scheduler.go 共用**同一个**判据。修复前两处各写一套：
+// 这里是 VersionReleaseNewer 全序，scheduler 是 util.CompareSemver，
+// 而且两边都**不检查候选是否可安装**。
 //
-// 第八轮审计 R8-2：比较必须用 `manifest.VersionReleaseNewer` —— 与
-// `newestVersion` 挑选候选时**完全相同**的全序（semver → 发布日期 → 原串）。
-// 旧实现用 `util.CompareSemver`（只比三段数字，忽略日期次键），造成两套排序分裂：
-// `2026.2` vs `2026.2.0.1` 这类「数字段相同、发布日期不同」的升级会被永久挡掉
-// （真实语料 clion/goland/webstorm 命中）。
+// 新增的关键条件：候选必须带结构完整的 archive。否则嗅探发现的占位版本
+// （只有版本号、无 archives）会被推成 latest，而 `xdev install <tool>`
+// 默认就装 latest —— 直接失败。实测命中 android-ndk（r29 → "30"）。
+//
+// 保留原有语义：候选等于现值时不写回（少一次无谓的文件改动，
+// 也就少一次抹掉注释的机会）。
 func shouldUpdateLatest(versions []manifest.Version, candidate, current string) bool {
-	if candidate == "" {
-		return false
-	}
-	if current == "" {
-		return true
-	}
-	if candidate == current {
-		return false
-	}
-	return manifest.VersionReleaseNewer(releaseOf(versions, candidate), releaseOf(versions, current))
-}
-
-// releaseOf 按版本串查出对应条目（含 Release 日期）；查不到时返回只带 Version 的
-// 条目（该侧视为「无日期」，与全序里缺日期的语义一致）。
-func releaseOf(versions []manifest.Version, v string) manifest.Version {
-	for _, item := range versions {
-		if item.Version == v {
-			return item
-		}
-	}
-	return manifest.Version{Version: v}
+	// refresh 的候选来自“已发现版本”列表，预发布处理与 scheduler 一致：
+	// 稳定 latest 不被预发布劫持，同一预发布通道内允许推进。
+	allowPre := current == "" ||
+		(manifest.IsPrerelease(current) &&
+			util.PrereleaseChannel(candidate) == util.PrereleaseChannel(current))
+	return manifest.CanPromoteLatest(versions, candidate, current, allowPre)
 }
 
 func refreshAll(cmd *cobra.Command) error {

@@ -196,6 +196,33 @@ jobs:
           npm ci
           npm run build
 
+      # 2026-10-26（架构评估）：integration 测试需要编译好的二进制。
+      #
+      # 修复前本作业**没有任何 Go 编译步骤**，而
+      # internal/integration/client_test.go 的 buildBin() 找不到
+      # build/bin/xdev(.exe) 就 t.Skipf —— 于是 19 个 integration 用例
+      # 全部 SKIP，而 `go test` 仍报 `ok`。整个 gate 是空转的。
+      #
+      # 产物路径必须与 buildBin() 的候选表一致（build/bin/xdev[.exe]），
+      # 因此显式 -o 到该路径，不依赖默认输出位置。
+      - name: Build xdev binary for integration tests
+        shell: bash
+        run: |
+          EXT=""
+          if [ "${{ runner.os }}" = "Windows" ]; then EXT=".exe"; fi
+          mkdir -p build/bin
+          go build -tags desktop,production -o "build/bin/xdev${EXT}" .
+
+      - name: Verify integration binary exists
+        shell: bash
+        # 防回归：若上面的构建产物路径与 buildBin() 不一致，
+        # 这里硬失败而不是让测试静默 SKIP。
+        run: |
+          EXT=""
+          if [ "${{ runner.os }}" = "Windows" ]; then EXT=".exe"; fi
+          test -f "build/bin/xdev${EXT}" || { echo "::error::build/bin/xdev${EXT} missing — integration tests would silently skip"; exit 1; }
+          ls -la "build/bin/xdev${EXT}"
+
       - name: Run integration tests
         # -v removed: verbose output inflates log storage with no gate value
         run: go test -tags=integration ./... -count=1 -timeout 25m

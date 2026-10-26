@@ -480,7 +480,7 @@ func (s *Scheduler) sniffNowTool(ctx context.Context, t *manifest.Tool, force bo
 
 	log.Printf("[discovery] sniff %q: found %d new version(s) in %v", name, len(versions), elapsed)
 
-	if err := mergeIntoManifest(t, versions, s.manifestDir); err != nil {
+	if err := mergeIntoManifestOpts(t, versions, s.manifestDir, s.cfg.AutoArchiveFill); err != nil {
 		log.Printf("[discovery] sniff %q: merge into manifest failed: %v", name, err)
 		result.Error = err.Error()
 		s.mu.Lock()
@@ -980,8 +980,38 @@ func (rl *rateLimiter) refill() {
 // mergeIntoManifest
 // ---------------------------------------------------------------------------
 
+// requireArchivesForPromotion 是「晋升 latest 时是否要求候选带 archive」的开关，
+// 由 AutoArchiveFill 配置推导。
+//
+// 为什么用包级变量而不是给 mergeIntoManifest 加参数：
+// mergeIntoManifest 有 20 处调用（含大量测试），加参数会制造一次
+// 高噪声的机械改动。本仓库的既有 seam 风格就是包级 var（参见
+// archiveFillerFn / sniffFn 等），保持一致。
+//
+// 语义：
+//   - 开启（默认）：发现的版本会被补上可用占位 archive，因此「无 archives」
+//     是真实缺陷，必须拦。
+//   - 关闭：用户明确选择不生成占位，此时所有发现版本都没 archives，
+//     仍然强制要求会让 latest 永远推不动，整个嗅探功能失效。
+var requireArchivesForPromotion = true
+
+// WithRequireArchivesForPromotion 临时修改开关，返回恢复函数（测试用）。
+func WithRequireArchivesForPromotion(v bool) func() {
+	prev := requireArchivesForPromotion
+	requireArchivesForPromotion = v
+	return func() { requireArchivesForPromotion = prev }
+}
+
 func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifestDir string) error {
-	if len(discovered) == 0 {
+	return mergeIntoManifestOpts(t, discovered, manifestDir, requireArchivesForPromotion)
+}
+
+// mergeIntoManifestOpts 是带显式开关的形式。
+//
+// requireArchives 语义见 requireArchivesForPromotion 的注释。
+// 生产路径（SniffAll）传 s.cfg.AutoArchiveFill；测试与旧调用点
+// 走 mergeIntoManifest（默认 true）。
+func mergeIntoManifestOpts(t *manifest.Tool, discovered []DiscoveredVersion, manifestDir string, requireArchives bool) error {	if len(discovered) == 0 {
 		return nil
 	}
 
@@ -1098,20 +1128,51 @@ func mergeIntoManifest(t *manifest.Tool, discovered []DiscoveredVersion, manifes
 	latestIsPre := util.IsPrereleaseVersion(existing.Latest)
 	latestChannel := util.PrereleaseChannel(existing.Latest)
 	for _, dv := range discovered {
-		if existing.Latest != "" && util.IsPrereleaseVersion(dv.Version) {
-			if !latestIsPre {
-				continue // stable latest is never hijacked by a pre-release
-			}
-			if util.PrereleaseChannel(dv.Version) != latestChannel {
-				continue // different pre-release channel (alpha vs rc) never promotes
-			}
+		// 2026-10-26（架构评估修复）：晋升判据统一到 manifest.CanPromoteLatest。
+		//
+		// 修复前这里是本文件自己的一套（只比 CompareSemver），
+		// 而 cli/refresh.go 是另一套（VersionReleaseNewer 全序），
+		// 且两边**都不检查候选是否可安装**。
+		//
+		// 实测后果：android-ndk 的 latest 从 r29（有 archives）
+		// 被嗅探推到 "30"（无 archives 的占位条目），于是
+		// `xdev install android-ndk`（默认装 latest）直接失败。
+		//
+		// allowPrerelease 传入的语义：
+		//   - latest 为空 → 允许（首次确定 latest）
+		//   - latest 是预发布且候选同一通道 → 允许（rc→rc、alpha→alpha）
+		//   - latest 是稳定版 → 不允许（稳定 latest 不被 alpha/rc 劫持）
+		allowPre := existing.Latest == "" ||
+			(latestIsPre && util.PrereleaseChannel(dv.Version) == latestChannel)
+
+		// 把候选并入一个临时列表，供 CanPromoteLatest 查它的 archives。
+		// （discovered 里的条目还没追加到 VersionList。）
+		candVersion := manifest.Version{
+			Version:  dv.Version,
+			Release:  dv.ReleaseDate,
+			Archives: dv.Archives,
 		}
-		if util.CompareSemver(dv.Version, existing.Latest) > 0 {
-			existing.Latest = dv.Version
-			latestUpdated = true
-			latestIsPre = util.IsPrereleaseVersion(existing.Latest)
-			latestChannel = util.PrereleaseChannel(existing.Latest)
+		// requireArchives 的含义：
+		//
+		//   - auto_archive_fill 开启（默认）：发现的版本会被补上**可用的**
+		//     占位 archive（url+format，SHA 全零走 TOFU），因此「无 archives」
+		//     是真实缺陷（android-ndk 被推到无 archives 的 "30"），必须拦。
+		//   - auto_archive_fill 关闭：用户明确选择不生成占位，此时所有
+		//     发现版本都没有 archives —— 若仍然强制要求，latest 永远推不动，
+		//     整个嗅探功能失效。这种配置下退回「只看版本高低」的旧语义。
+		if !manifest.CanPromoteLatestWithOptions(
+			append(existing.VersionList, candVersion), dv.Version, existing.Latest,
+			manifest.PromoteOptions{
+				AllowPrerelease: allowPre,
+				RequireArchives: requireArchives,
+			},
+		) {
+			continue
 		}
+		existing.Latest = dv.Version
+		latestUpdated = true
+		latestIsPre = util.IsPrereleaseVersion(existing.Latest)
+		latestChannel = util.PrereleaseChannel(existing.Latest)
 	}
 
 	if appended == 0 && patched == 0 && !latestUpdated {
