@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：0.3.2** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-alpha.2** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -11,6 +11,8 @@
 - **零依赖** —— 单一可执行文件，无需安装运行时
 - **跨平台** —— Windows 10/11（主要）、macOS 12+、Ubuntu 20.04+
 - **多版本管理** —— 同时安装同一工具的多个版本，一键切换
+- **项目级版本** —— `.xdev.yaml` 声明项目所需版本，shim 按当前目录自动解析（无需来回 `xdev use`）
+- **环境变量注入** —— 激活版本的工具环境变量注入子进程，Windows / macOS / Linux 一致生效
 - **自动检测** —— Host-scan 扫描 PATH 上的全部本地实例（跳过 xdev shim）
 - **本地迁移** —— 将本机已装工具迁移到 xdev 管理，包管理器可在 xdev / 本地实例间切换
 - **Shim 调度** —— 单二进制多入口，PATH 中只需一个条目；Windows 优先硬链接
@@ -20,6 +22,7 @@
 - **三级环境变量** —— XDev 级 / 用户级 / 系统级统一管理
 - **远程嗅探** —— GitHub / JSON / HTML / ArchivePattern 四种嗅探器发现新版本
 - **形态区分** —— CLI / TUI / GUI 多包工具安装前选择形态
+- **包管理器管理** —— `xdev pm list/install`，定义数据化到签名覆盖的 `manifests/package-managers.yaml`
 - **易扩展** —— 新增工具只需一份 YAML manifest，Generic 插件自动注册
 
 ## 快速开始
@@ -56,13 +59,16 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 | 产物 | 说明 |
 |------|------|
-| `xdev-windows-amd64-v0.3.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-*-v0.3.2.tar.gz` | Linux 单二进制（amd64 / arm64） |
-| `xdev-darwin-*-v0.3.2.tar.gz` / `.dmg` | macOS 单二进制 |
-| `xdev-0.3.2-linux-*.deb` / `.rpm` | Linux 软件包 |
+| `xdev-windows-amd64-v1.0.0-alpha.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-amd64-v1.0.0-alpha.2.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-1.0.0-alpha.2-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-alpha.2-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-alpha.2.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-alpha.2-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
+| `SHA256SUMS` / `SHA256SUMS-darwin` | 校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
-本地构建产物位于 `build/bin/xdev-0.3.2.exe`（或 `build/bin/xdev`）。
+本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）。
 
 ## 命令总览
 
@@ -100,9 +106,11 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 | 命令 | 说明 |
 |------|------|
-| `xdev hook --shell bash` | 输出当前目录的环境变量（供 cd hook eval） |
+| `xdev hook --shell bash` | 输出当前目录的环境变量（供 cd hook eval；按 `.xdev.yaml` 解析） |
 | `xdev activate [shell]` | 注入 cd hook 到 Shell RC |
 | `xdev deactivate` | 移除 cd hook |
+| `xdev pm list [--all]` | 列出包管理器及状态（installed / installable / 需 xdev install） |
+| `xdev pm install <name> [--dry-run]` | 执行包管理器官方安装脚本（scoop / brew / choco） |
 | `xdev isolate setup / teardown / exec` | 环境隔离（none / container / nix） |
 | `xdev remote create / list / connect / destroy` | 远程开发环境（docker / ssh） |
 | `xdev plugin list / install / create / remove` | 插件管理（内置 Generic + Lua + vfox 兼容） |
@@ -131,6 +139,35 @@ sniff:
 ```
 
 嗅探发现的新版本带 `unverified` 标记；安装前提示确认。占位 SHA-256（全零）跳过已签名清单的哈希核对，走 TOFU；已签名的真实哈希仍强制校验。
+
+## 项目级版本（`.xdev.yaml`）
+
+在项目根放一份 `.xdev.yaml`，声明该项目需要的工具版本：
+
+```yaml
+# 项目根/.xdev.yaml
+tools:
+  python: "3.11"
+  node: "^20"
+  go: latest
+```
+
+从当前目录逐级向上查找（最多 64 层），`shim` 优先按它解析版本：
+
+```bash
+cd ~/proj-a && python --version   # 3.11.x（项目声明）
+cd ~/proj-b && python --version   # 3.12.x（另一个项目的声明）
+```
+
+要点：
+
+- 版本规格复用下方「版本规范」的语义（`latest` / `lts` / `3.12` / `^3.12` / `~3.11`）
+- **只在本机已安装集合上解析**，不联网——不会因为你执行 `python script.py` 就突然开始下载
+- 声明的版本未安装时，回落全局 `current` 并在 stderr 提示一次
+- **无项目配置时行为与之前完全一致**（静默回落，无额外开销）
+
+配合 `path.mode: auto` 或 `xdev activate` 使用 cd hook 时，`xdev hook` 会输出
+项目环境的 PATH 与环境变量供 shell eval。
 
 ## 版本规范
 
@@ -200,7 +237,7 @@ core:
   manifest_dir: E:\XDev\manifests
 
 path:
-  mode: shim                       # shim | direct
+  mode: shim                       # shim | direct | auto（auto = shim + cd hook 项目级切换）
   inject_to_windows_path: true
 
 mirror:
@@ -221,7 +258,7 @@ proxy:
 
 ## 从源码构建
 
-需要 Go 1.25、Node 22（GUI 前端）和 [Wails v2](https://wails.io/) CLI。
+需要 Go 1.27+、Node 22（GUI 前端）和 [Wails v2](https://wails.io/) CLI。
 
 ```bash
 git clone https://github.com/MoF-Crack/xdev.git
@@ -260,9 +297,19 @@ wails build -o build/bin/xdev.exe
 
 Lua / vfox 插件放到 `$XMDEV_HOME/plugins/`，无需改 Go 代码。
 
-## 0.3.2 要点
+## 1.0.0-alpha.2 要点
 
-相对 0.3.1：嗅探安装不再把占位 SHA 当成篡改；忽略列表测试不再污染生产缓存；安装确认不再卡 3 秒以上；包管理器多实例（D: leftover + E: xdev）同时列出并可切换；yarn/pnpm 优先走 xdev Node；详情抽屉统一安装/启用/更新入口。完整列表见 [`CHANGELOG.md`](CHANGELOG.md)。
+本版是架构优化与环境变量体系重建的合集：
+
+- **项目级多版本**：`.xdev.yaml` 声明项目所需版本，shim 按 CWD 自动解析，未命中回落全局
+- **环境变量首次在非 Windows 生效**：env 从「写注册表」改为「注入子进程环境」（`internal/envctx`）
+- **`path_append`**：修复 `go install` / `cargo install` 装完找不到工具
+- **`xdev pm`**：包管理器列表与安装，定义数据化到签名覆盖的 YAML
+- **安装编排单一化**：GUI 不再自写一套，统一走 `installer.InstallWithProgress`
+- **`Activate` plan/apply**：修复已失效的回滚记账（`_ = junctionCreated` 类死变量）
+- 修复 POSIX PATH 单引号导致 `$PATH` 被覆盖、shim 频繁弹终端窗口、`ANDROID_HOME` 指向错误等
+
+完整列表见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 开发路线
 

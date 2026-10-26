@@ -3,6 +3,87 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-alpha.2] - 2026-10-25
+
+本版是架构优化 + 环境变量体系重建的合集。四个阶段：P0（缺陷）、P1（path_append）、
+P2（进程级 env 注入）、P3（项目级多版本），随后是三项架构优化与包管理器数据化。
+
+### Added
+
+- **项目级多版本（`.xdev.yaml`）**：从 CWD 逐级向上查找项目配置，`shim.Lookup` 优先
+  按它解析版本（未命中静默回落全局 `current`）。终于可以 A 项目用 python 3.11、
+  B 项目用 3.12 而无需来回 `xdev use`。版本规格复用既有 resolver 语义
+  （`latest` / `lts` / `3.12` / `^3.12` / `~3.11`），且只在本机**已安装**集合上解析
+  （不联网，避免执行命令时突然触发下载）
+- **环境变量首次在非 Windows 生效**：新增 `internal/envctx`，把工具 env 从「写注册表」
+  改为「注入子进程环境」。此前 `setUserEnvVars` 开头就 `if runtime.GOOS != "windows" { return nil }`，
+  macOS/Linux 上 JAVA_HOME / GOROOT 从未被设置，Maven/Gradle 系工具链直接不可用
+- **manifest 新增 `path_append` 字段**：声明激活时要加入 PATH 的目录，模板支持
+  `{{install}}` / `{{version}}` / `{{tool}}` 与 `{{<ENVNAME>}}`（引用同 manifest 内已定义的变量）。
+  修复「`go install` / `cargo install` 装完找不到工具」——官方文档明确要求把
+  `$GOPATH/bin`、`$CARGO_HOME/bin` 加入 PATH
+- **`xdev pm` 命令族**：`pm list [--all]` 列出包管理器及状态，
+  `pm install <name> [--dry-run]` 执行官方安装脚本。此前该能力只在 GUI 里，
+  CLI/TUI 完全看不到
+- **`xdev hook` 恢复实际输出**：按 `.xdev.yaml` 输出 PATH 与环境变量（此前是 `return nil`
+  空实现，而 `xdev activate` 仍会装一个调用它的 cd hook）
+- **`ProgressPhase.String()`**：UI 层可直接当展示文案用，不再与 installer 的阶段枚举两份真相
+
+### Changed
+
+- **包管理器定义数据化**：13 个定义从 `gui/app_local_detect.go` 的 Go 常量搬到
+  `manifests/package-managers.yaml`，随 manifest 一起进入 Ed25519 签名覆盖范围。
+  其中 5 个带**会被直接执行的命令**（scoop/brew/choco 的 install_command，
+  yarn/pnpm 的 enable_command）——放在代码里时改一行就能改掉用户机器上会执行的命令
+- **GUI 安装编排收敛到 installer**：`app_install.go` 的 330 行自建编排替换为一次
+  `InstallWithProgress` 调用（新增 `InstallOptions.DownloadFunc` 钩子注入
+  `downloader.Manager`，保留 pause/resume/cancel）。这消除了唯一**已经造成过数据损坏**的
+  重复实现——F-05：GUI 旧代码在下载之前就 `os.RemoveAll`，下载失败会摧毁完好安装
+- **`Activate` 拆为 plan/apply**：新增 `activationPlan` 承载「要做什么」与「做到了哪一步」，
+  `rollback` 据此逐项撤销。修复前函数结尾是 `_ = junctionCreated` / `_ = envVarsWritten`
+  ——两个变量被显式丢弃，说明回滚记账已死，任何新增激活步骤都会静默漏回滚
+- **catalog 装配统一**：新增 `plugin.BuildRegistry` 作为唯一入口。此前四处各写一遍且语义
+  分叉——`hook` 与 `shim` 只做 `NewGeneric`，**拿不到 Lua/vfox 插件**，导致插件型工具的
+  env 注入与项目级版本切换完全失效
+- **`env` 包职责收敛**：`scan_local.go` + `migrate.go` 搬到新包 `internal/localmigrate`。
+  此前 `env` 反向依赖 `hostscan` 与 `toolmeta`
+- **`path.mode` 重新接受 `auto`**：P3 恢复 hook 后 auto 才名副其实（此前因 hook 是空壳而拒绝）
+- Go 构建工具链 1.25.0 → 1.27.0；分发默认版本 1.26.5 → 1.27.3（1.26.5 存在中间信任漏洞）
+
+### Fixed
+
+- **POSIX PATH 单引号导致 `$PATH` 不展开（严重）**：`export PATH='%s:$PATH'` 中单引号内的
+  `$PATH` 不展开，eval 后 PATH 变成字面量，用户原有 PATH 被**彻底覆盖**。
+  `env.go` 那处写进 shell RC 文件，每次开 shell 都错一次。
+  同时改正 `hook_test.go` 中把坏字符串断言成正确行为的测试
+- **shim 频繁弹出终端窗口**：shim 是 GUI 子系统二进制，被 IDE 无窗口调用时 Windows 会
+  分配控制台，子进程继承后窗口可见；语言服务器是长驻进程所以关不掉、重建后又在。
+  新增 `hasVisibleConsole()`（同时查窗口可见性——IDE 集成终端的 `GetConsoleWindow`
+  返回非 0 但 `IsWindowVisible` 为 false），无可见控制台时给子进程加 `CREATE_NO_WINDOW`
+- **4 处裸 `os.Readlink` 未校验目标存在**：悬空链接仍给幽灵版本打 ★，
+  `xdev current` 还会打印无效行。改用 `util.ActiveVersion`
+- **env 白名单写删不对称**：写侧不过白名单、删侧过，导致白名单外的变量写了删不掉，
+  且 `EnrichFromRegistry` 也读不到。写侧同步校验并显式报错
+- **`ANDROID_HOME` 指向错误**：6 个 Android 组件都设 `install_root: android-sdk`，
+  故 SDK 根是 `{{install}}\..\..`；ndk / platform-tools / platform 三个写成 `..`（组件自己目录），
+  导致 Gradle Android 插件与 sdkmanager 找不到同级组件
+- **Haskell 的 `GHC_HOME` 是不存在的变量**：GHC 没有这个变量，是照 JAVA_HOME 类推出来的
+- **Flutter 缺 `FLUTTER_ROOT`**、**Java 缺 `JDK_HOME`**、**Deno 缺 `DENO_DIR`**
+  （`DENO_INSTALL` 只是安装脚本用的，运行时读的是 `DENO_DIR`）
+- **PHP / .NET / Python 变量补全**：.NET 补 `DOTNET_ROOT_X64`（官方有架构后缀优先级）、
+  Python 补 `PYTHONUSERBASE` 与 `PIP_CACHE_DIR`（避免跨版本污染）
+- 删除死代码 `env.WriteEnvFragment`（全仓无调用方）与 `installer.removeEnvFragment`
+  （删一个从未被写过的文件）
+- 前端依赖漏洞 7 → 0（含 2 个 critical：tinypool 的 Prototype Pollution → RCE）
+
+### Infrastructure
+
+- CI 的 Go 版本同步到 1.27；交叉编译门禁不再拉入 CGO 后端；
+  release job 不再交叉编译 linux-arm64（交由原生 arm64 runner）
+- macOS 构建显式开启 CGO（arm64 runner 上 `GOARCH=amd64` 会关闭 CGO）
+- 修复 `TestF14` 对照组在 CI 上的时序假设失效（chunkedSlowServer 改为无限流，
+  使「Cancel 时下载仍在进行」成为确定性前提而非时间猜测）
+
 ## [1.0.0-alpha.1] - 2026-10-24
 
 ### Added
