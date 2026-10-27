@@ -224,8 +224,15 @@ jobs:
       #   Package 'webkit2gtk-4.0' not found
       # 本文件其余 11 处 Wails 构建全部带此 tag（见 build / release job）。
       # Windows/macOS 上该 tag 无副作用（构建约束只影响 Linux CGO 路径）。
+      #
+      # ⚠ macOS 必须补 UniformTypeIdentifiers framework（2026-10-27 修复）：
+      # Wails v2 的 darwin cgo LDFLAGS 未包含它，macOS 26 SDK 下链接报
+      #   _OBJC_CLASS_$_UTType undefined（arm64）
+      # 与 build job 的 matrix.cgo_ldflags 同源，此处按 runner.os 直接给值。
       - name: Build xdev binary for integration tests
         shell: bash
+        env:
+          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-framework UniformTypeIdentifiers' || '' }}
         run: |
           EXT=""
           if [ "${{ runner.os }}" = "Windows" ]; then EXT=".exe"; fi
