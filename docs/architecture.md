@@ -193,7 +193,7 @@ shims/go.exe build ./...
   │   └── eval "$(xdev hook --shell bash)"
   │
   └── xdev hook --shell bash
-      ├── 查找最近 .xdev.toml
+      ├── 查找最近 .xdev.yaml
       ├── 解析工具版本和路径
       └── 输出: export PATH=...; export GOROOT=...
 ```
@@ -350,7 +350,7 @@ manifest.LoadCatalogCached()
 
 **内置 manifest**（随二进制发布）：强制 Ed25519 签名验证。公钥通过 `-ldflags` 注入二进制，下载时验证 `.yaml.sig` 签名。签名失败或缺失时拒绝下载。
 
-**第三方 manifest**（`xdev manifest add` 或 `xdev lock` 中的 tools）：使用 TOFU（Trust On First Use）模型。首次下载时记录 SHA-256 到 sidecar 文件，后续下载时比对。签名验证为可选——有 `.yaml.sig` 则验证，无则走 TOFU。
+**第三方 manifest**（`xdev manifest add` 添加的清单）：使用 TOFU（Trust On First Use）模型。首次下载时记录 SHA-256 到 sidecar 文件，后续下载时比对。签名验证为可选——有 `.yaml.sig` 则验证，无则走 TOFU。
 
 **代码路径**：`internal/downloader/downloader.go:108-114` 中 `opts.IsThirdParty` 标志决定拒绝还是降级。`internal/installer/installer.go:290-317` 检测 manifest 来源（内置 vs 第三方目录）并设置标志。
 
@@ -455,7 +455,13 @@ func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) [
 
 **工作流程**：遍历 items → `reg.Get(toolName)`（不存在→unsupported）→ 检查 installPath 已存在（已装→跳过）→ `InstallWithProgress`（安装→成功/失败）。
 
-**调用方**：`installFromLocal`（.xdev.toml 批量安装）、`installLocked`（.lock 文件批量安装）、`profile import`（配置导入）。
+**调用方**：仅 `cli/profile.go` 的 `profile import`（配置导入）。
+
+> 2026-10-26 修正：此前本节列出 `installFromLocal`（.xdev.toml 批量安装）
+> 与 `installLocked`（.lock 文件批量安装）作为调用方，两者均已不存在：
+> `internal/lockfile` 在 Spec 012 删除（见 12.x 的说明），`installFromLocal`
+> 也随之移除。项目级配置现为 `.xdev.yaml`（`internal/project`），
+> 但它的批量安装走的是另一条路径，不经 `InstallMany`。
 
 ### 13.2 依赖检查接口
 

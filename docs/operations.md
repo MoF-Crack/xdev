@@ -97,32 +97,36 @@ xdev install node@20
 # 安装但不激活
 xdev install go@1.21.0 --no-activate
 
-# 从项目配置安装所有工具
-xdev install --from-local
-
-# 从锁文件精确安装（可复现构建）
-xdev install --locked
+# 强制重装（先下载+校验成功，再删旧安装）
+xdev install go@1.21.0 --force
 ```
 
-### 2.4 重新生成 Lockfile
+> 2026-10-26：`--from-local`（按项目配置批量安装）与 `--locked`
+> （按 lockfile 精确安装）两个标志**不存在**（未在 `internal/cli/install.go`
+> 注册）。按项目配置安装请逐个钉版本：`xdev install go@1.27.3 python@3.11`。
 
-```bash
-# 从 .xdev.toml 重新生成 .xdev.lock
-xdev lock
+### 2.4 Lockfile 相关命令（已删除）
 
-# 仅重新生成指定工具的 lock 条目
-xdev lock go python
-```
-
-### 2.5 校验 Lockfile 一致性
-
-```bash
-# 校验 .xdev.lock 与 .xdev.toml 是否一致
-xdev lock --check
-
-# JSON 格式输出（适合 CI/CD）
-xdev lock --check --json
-```
+> **2026-10-26 修订**：本节此前记录 `xdev lock`、`xdev lock --check`、
+> `xdev lock --json` 与 `xdev install --locked` 等命令。这些**全部不存在**：
+> `internal/lockfile` 已在 Spec 012 删除，对应 CLI 命令与 `--locked` 标志
+> 也一并移除。
+>
+> 当前实现中「可复现安装」只能靠**显式钉版本**：
+>
+> ```bash
+> # 项目里用 .xdev.yaml 声明版本（yaml 格式，非 toml）
+> cat .xdev.yaml
+> # tools:
+> #   go: "1.27.3"
+> #   python: "3.11"
+>
+> # 安装时显式钉版本（不依赖 lockfile）
+> xdev install go@1.27.3 python@3.11
+> ```
+>
+> 已安装版本清单可用 `xdev list` 查看，需跨机器同步时用
+> `xdev profile export` / `import`。
 
 ### 2.2 切换版本
 
@@ -196,89 +200,85 @@ xdev refresh --all
 
 ## 3. 项目级版本管理
 
-### 3.1 .xdev.toml 配置
+> **2026-10-26 修订**：本节此前描述 `.xdev.toml`（含 `[env]` / `[tasks]` 段）、
+> `xdev local` 命令族、`.xdev.lock` 锁文件三套机制。核查源码后确认
+> **三者都不存在于当前实现**：
+>
+> | 旧描述 | 当前实现 |
+> |---|---|
+> | `.xdev.toml`（TOML） | `.xdev.yaml`（YAML），且**只支持 `tools` 段** |
+> | `[env]` 项目级环境变量 | 不支持 |
+> | `[tasks.*]` 任务编排 | 不存在（无 `xdev task` / `xdev run` 命令）|
+> | `xdev local <tool>@<ver>` | 不存在 |
+> | `xdev install --from-local` | 不存在（标志未注册）|
+> | `.xdev.lock` + `xdev lock` | Spec 012 已删除 |
+>
+> 下面的内容已按当前实现重写。
 
-在项目根目录创建 `.xdev.toml`：
+### 3.1 项目配置 `.xdev.yaml`
 
-```toml
-[tools]
-go = "1.22"          # 前缀匹配，使用 1.22.x 最新
-python = "^3.12"     # 兼容 3.12.x
-node = "20"          # 主版本匹配
-java = "21.0.3"      # 精确版本
+在项目根目录创建 `.xdev.yaml` 声明工具版本：
 
-[env]
-DATABASE_URL = "postgres://localhost/mydb"
-LOG_LEVEL = "debug"
-
-[tasks.build]
-run = "go build ./..."
-desc = "Build the project"
-
-[tasks.test]
-run = "go test ./..."
-desc = "Run tests"
-depends_on = ["build"]
-
-[tasks.dev]
-run = "air -c .air.toml"
-desc = "Start dev server with hot reload"
+```yaml
+tools:
+  go: "1.27.3"        # 精确版本
+  python: "^3.12"     # semver 范围（兼容 3.12.x）
+  node: "20"          # 主版本匹配
+  java: latest        # 最新版
 ```
 
-### 3.2 项目级命令
+支持的版本语义与 `xdev install` 一致：`latest` / `lts` / `1.27.3` /
+`^3.12` / `~3.11`。
+
+**查找与生效**：从 CWD 逐级向上查找（也接受 `.xdev.yml`，最多 64 层）。
+`shim` 优先按它解析，未命中回落全局 `current`。
+
+**重要约束**：
+
+- 只解析**本机已安装**的版本，不联网
+- 声明的版本未安装时回落全局 `current`，并在 stderr 提示一次
+- 无法在项目配置中声明环境变量或任务 —— 需要时用 `xdev isolate` 或
+  Shell 层面的方案（如 direnv）
+
+### 3.2 生效方式
+
+项目配置由 `shim` 在**每次执行工具时**按 CWD 读取，因此无需显式"切换"：
 
 ```bash
-# 设置项目工具版本
-xdev local go@1.22
-xdev local python@3.12
-
-# 查看项目配置
-xdev local --show
-
-# 移除项目工具
-xdev local --unset go
-
-# 从项目配置安装
-xdev install --from-local
+cd ~/proj-a && go version    # 按 proj-a/.xdev.yaml
+cd ~/proj-b && go version    # 按 proj-b/.xdev.yaml
 ```
 
-### 3.3 .xdev.lock 锁文件
-
-安装后自动生成 `.xdev.lock`（TOML 格式），锁定精确版本：
-
-```toml
-version = 1
-created_at = 2026-07-04T10:30:00Z
-
-[tools.go]
-version = "1.22"
-resolved = "1.22.5"
-sha256 = "abc123..."
-url = "https://go.dev/dl/go1.22.5.windows-amd64.zip"
-install_path = "E:\\XDev\\install\\go\\1.22.5"
-```
-
-**可复现安装**：
-```bash
-# 在新机器上从锁文件精确安装
-xdev install --locked
-```
-
-### 3.4 Shell Hook（自动切换）
+若希望 `PATH` 与环境变量也随 `cd` 变化（而不只是 shim 解析），
+需启用 cd hook：
 
 ```bash
-# 安装 cd hook（每次 cd 自动切换工具版本）
-xdev activate bash     # bash
-xdev activate zsh      # zsh
-xdev activate fish     # fish
-xdev activate pwsh     # PowerShell
-
-# 移除 cd hook
-xdev deactivate
-
-# 手动触发环境设置
-eval "$(xdev hook --shell bash)"
+eval "$(xdev hook --shell bash)"   # 手动加载（当前 shell）
+xdev activate bash                 # 注入到 Shell RC（永久）
+xdev deactivate                    # 移除
 ```
+
+### 3.3 可复现安装的现状
+
+`.xdev.lock` / `xdev lock` 已在 Spec 012 删除。当前推荐做法：
+
+```bash
+# 1. 项目里钉精确版本（写进 .xdev.yaml 并提交）
+#    tools:
+#      go: "1.27.3"
+#      python: "3.11.9"
+
+# 2. 新机器上按清单显式安装
+xdev install go@1.27.3 python@3.11.9
+
+# 3. 或整体导出/导入环境
+xdev profile export > env.json      # 旧机器
+xdev profile import < env.json      # 新机器
+```
+
+`xdev profile` 包含工具、版本、环境变量、代理与镜像源配置，是目前
+最接近"环境可复现"的能力。
+
 
 ## 4. 环境管理
 
@@ -769,54 +769,21 @@ xdev completion fish > ~/.config/fish/completions/xdev.fish
 xdev completion powershell > XDev-completion.ps1
 ```
 
-## 16. 任务运行器
+## 16. 任务运行器（不存在）
 
-### 16.1 定义任务
+> **2026-10-26 修订**：本节此前描述 `.xdev.toml` 的 `[tasks.*]` 配置与
+> `xdev task list` / `xdev task run` / `xdev run` 三条命令。
+>
+> 核查确认**这些能力都不存在于当前实现**：
+> - `.xdev.yaml` 的 `internal/project` 只解析 `tools` 段，无 `tasks`
+> - `xdev task` / `xdev run` 不是注册的子命令（实测
+>   `error: unknown command "task" for "xdev"`）
+>
+> 这里的节号保留为空节，是为了不打乱后续章节编号（第 17 节起为 GUI/全局标志）。
+>
+> **替代方案**：任务编排请用 Make / Task / just / npm scripts 等专用工具；
+> xdev 的职责边界是「管理工具版本」，不承担构建编排。
 
-在 `.xdev.toml` 中：
-
-```toml
-[tasks.build]
-run = "go build -o bin/app ./cmd/app"
-desc = "Build the application"
-
-[tasks.test]
-run = "go test -race ./..."
-desc = "Run tests with race detector"
-depends_on = ["build"]
-
-[tasks.lint]
-run = "golangci-lint run"
-desc = "Run linter"
-
-[tasks.dev]
-run = "air -c .air.toml"
-desc = "Start development server"
-dir = "cmd/app"
-
-[tasks.clean]
-run = "rm -rf bin/"
-desc = "Clean build artifacts"
-```
-
-### 16.2 运行任务
-
-```bash
-# 列出可用任务
-xdev task list
-
-# JSON 格式输出
-xdev task list --json
-
-# 运行任务
-xdev task run build
-
-# 快捷方式
-xdev run build
-
-# 干跑（仅打印命令）
-xdev run build --dry-run
-```
 
 ## 17. GUI 操作
 

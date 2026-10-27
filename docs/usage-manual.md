@@ -62,8 +62,8 @@ xdev install python@3.12.0        # 安装指定版本
 xdev install node@latest          # 安装最新版
 xdev install go@lts               # 安装 LTS 版
 xdev install java@^17             # semver 范围匹配
-xdev install --from-local         # 从 .xdev.toml 批量安装
-xdev install --locked             # 仅按 .xdev.lock 精确安装
+xdev install --force              # 强制重装（先下载校验成功，再删旧安装）
+xdev install --reinstall          # 重装同版本
 ```
 
 安装过程中：
@@ -264,83 +264,67 @@ xdev use python@3.13   # 切换到 3.13
 
 ---
 
-## 项目级配置与 Lockfile
+## 项目级配置
 
-### 项目配置 `.xdev.toml`
+> **2026-10-26 修订**：本节此前描述 `.xdev.toml`、`xdev local`、`xdev lock`、
+> `.xdev.lock`、`xdev task` / `xdev run` 五套机制。核查后确认**它们都不存在**：
+> 配置格式是 `.xdev.yaml`，且没有 `local` / `lock` / `task` / `run` 子命令。
+> 原文属历史遗留（`internal/lockfile` 在 Spec 012 删除，`internal/project`
+> 后来以 YAML 重新实现）。本节已按当前实现重写。
 
-在项目根目录创建 `.xdev.toml` 声明工具版本和环境变量：
+### 项目配置 `.xdev.yaml`
 
-```toml
-[tools]
-python = "3.12"
-node = "20"
-java = "17"
+在项目根目录创建 `.xdev.yaml` 声明该项目的工具版本：
 
-[env]
-PYTHONPATH = "./src"
-JAVA_HOME = "{{.installDir}}"
-
-[tasks.build]
-run = "npm run build"
-desc = "构建项目"
-
-[tasks.test]
-run = "pytest"
-dir = "./tests"
-
-[tasks.lint]
-run = "golangci-lint run"
-sources = ["*.go", "internal/**/*.go"]
+```yaml
+# 项目根/.xdev.yaml
+tools:
+  python: "3.11"
+  node: "^20"
+  go: latest
 ```
 
-### 项目管理命令
+版本值直接复用「版本规范」的语义（`latest` / `lts` / `3.12` /
+`^3.12` / `~3.11`）。
+
+**查找规则**：从当前目录逐级向上查找（也接受 `.xdev.yml`），最多 64 层。
+`shim` 优先按它解析版本，未命中时回落到全局 `current`。
+
+**行为约定**：
+
+- 解析在**本机已安装集合**上做，**不联网** —— 不会因为你执行 `python script.py`
+  就突然开始下载
+- 声明的版本未安装时，回落全局 `current` 并在 stderr 提示一次
+- **无项目配置时行为与之前完全一致**（静默回落，无额外开销）
 
 ```bash
-# 设置项目级工具版本
-xdev local python@3.12
-xdev local node@20
+cd ~/proj-a && python --version   # 3.11.x（按 proj-a/.xdev.yaml）
+cd ~/proj-b && python --version   # 3.12.x（按 proj-b/.xdev.yaml）
+```
 
-# 查看项目配置
-xdev local
-xdev local --show
+### cd 自动钩子
 
-# 移除项目级版本
-xdev local --unset node
+配合 `path.mode: auto` 或手动注入，进入目录时自动切换版本：
 
-# 在当前目录运行项目任务
-xdev run build
-xdev run test
-xdev task list
-xdev task run lint
+```bash
+# 输出当前目录的 cd hook 脚本（供 shell eval）
+eval "$(xdev hook --shell bash)"
 
-# cd 自动钩子：进入目录时自动切换版本
-eval "$(xdev hook --shell bash)"     # 输出 cd hook 脚本
-xdev activate bash                   # 注入 cd hook 到 Shell RC
+# 注入 cd hook 到 Shell RC（永久生效）
+xdev activate bash
 xdev deactivate                      # 移除 cd hook
 ```
 
-### Lockfile `.xdev.lock`
+`xdev hook` 会读取当前目录的 `.xdev.yaml`，输出对应的 PATH 与环境变量。
 
-Lockfile 记录精确版本号和校验和，确保团队环境可复现：
+### 关于 Lockfile 与任务运行
 
-```bash
-# 生成 lockfile（从 .xdev.toml 解析版本）
-xdev lock
-
-# 检查 lockfile 是否与 .xdev.toml 一致
-xdev lock --check
-
-# JSON 格式输出
-xdev lock --json
-
-# 从 lockfile 精确安装
-xdev install --locked
-
-# 仅锁定特定工具
-xdev lock python node
-```
+`xdev lock` / `.xdev.lock` / `internal/lockfile` 已在 Spec 012 删除，
+`xdev task` / `xdev run`（项目任务编排）也从未在当前实现中存在。
+可复现安装的后续方案见 `roadmap.md`。
 
 ---
+
 
 ## Profile 导入导出
 
@@ -411,13 +395,14 @@ xdev 管理三级环境变量：
 
 ### 项目级环境变量
 
-在 `.xdev.toml` 的 `[env]` 段中定义：
+**当前不支持在项目配置中声明环境变量**。`.xdev.yaml` 只解析 `tools`
+（工具→版本映射），没有 `env` 段。
 
-```toml
-[env]
-PYTHONPATH = "./src"
-MY_CUSTOM_VAR = "value"
-```
+需要按项目隔离环境变量时，用隔离模式（`xdev isolate`）或 Shell 层面
+的方案（direnv 等）。
+
+> 2026-10-26：本节此前演示 `.xdev.toml` 的 `[env]` 段，但该格式与
+> `internal/project` 的实现不符（后者只解析 `tools`）。已改为如实描述。
 
 ### 用户级环境变量
 

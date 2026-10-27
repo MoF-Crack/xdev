@@ -12,6 +12,32 @@
 > **目标**：在现有单元测试之上，补齐**集成测试**与**端到端（E2E）验收测试**两层，形成「单元 → 集成 → 验收」三层覆盖
 > **平台**：Windows 10/11（主），macOS/Linux 跨平台为后续专项（本方案标注但不执行）
 
+## ⚠ 2026-10-26 修订说明（必读）
+
+本文档部分用例描述的是**已删除的能力**。核查源码后，以下条目**不再适用**：
+
+| 条目 | 涉及的已删除能力 |
+|---|---|
+| 第⑩ 类（项目级）| `project` / `lockfile` / `task` 三个包均已不在（`lockfile`、`task` 随 Spec 012 删除）|
+| `cli/install.go` `updateLockfile` | 该函数不存在，`install` 不再写 lockfile |
+| CLI-07 / CLI-08 | `xdev local` 命令不存在；配置格式是 `.xdev.yaml` 不是 `.xdev.toml` |
+| CLI-09 | 仍有效，但文件应改为 `.xdev.yaml` |
+| CLI-10 | `xdev task list` 命令不存在 |
+| INST-06 / INST-07 | `.xdev.lock` 不再生成；`--locked` 标志未注册 |
+| LOCK-02 / LOCK-03 | 同上 |
+| PROJ-01 | `.tool-versions` 兼容转换不存在 |
+
+**已在代码中移除的对应测试**：`TestLocal_SetAndShow`、`TestLocal_Unset`、
+`TestTaskList_NoProject`、`TestInstall_Locked_MissingToolHandlesGracefully`、
+`TestInstall_FromLocal_UnsupportedToolClearError`（integration）与
+`TestEPIC3_LockfileCollaboration`（e2e）。
+
+**当前项目级能力的真实覆盖**：`internal/project` 的单测（`.xdev.yaml` 向上查找
+与版本解析）。
+
+本文档其余部分（CLI 基本命令、Shim 调度、嗅探、缓存等）仍具参考价值，
+但其中的**数量统计已过时**（见下方勘误）。
+
 ---
 
 ## 一、测试分层总览
@@ -43,7 +69,7 @@
 | ⑦ Shim 调度 | `shim` | （隐式） | `argv[0]` 分发、索引失效、跨工具扫描 |
 | ⑧ 版本切换 | `installer.Activate` | `use` | Junction 创建/删除、PATH 清理 |
 | ⑨ 环境变量 | `env` | `env` | 注册表写入、广播、覆盖语义 |
-| ⑩ 项目级 | `project` `lockfile` `task` | `local` `hook` `install --locked` `task` | `.xdev.toml` 向上查找、spec≠resolved |
+| ⑩ 项目级 | `project`（仅 `.xdev.yaml` 的 `tools` 段）| `hook` | `.xdev.yaml` 向上查找、版本回退；`lockfile`/`task` 包已删除 |
 | ⑪ 插件 | `plugin` (+Lua/vfox) | `plugin` | Lua 沙箱、vfox 兼容、Generic 委托 |
 | ⑫ 服务编排 | `service` | `service` | 进程启动/停止、`.xdev-service` 标记发现 |
 | ⑬ 隔离 | `isolator` | `isolate` | none/container/nix、Docker 可用性探测 |
@@ -63,7 +89,7 @@
 | 缺口 | 建议测试 | 优先级 |
 |------|---------|:------:|
 | `installer` Install 主流程无 happy-path 测试 | 用 fake Plugin（实现接口）跑通 resolve→extract→activate，断言 `InstallResult{Spec,URL,SHA256}` | 🔴 |
-| `cli/install.go` `updateLockfile` | 构造 tmpdir + `.xdev.toml`，断言写入的 `.xdev.lock` 含 URL/SHA256 | 🔴 |
+| ~~`cli/install.go` `updateLockfile`~~ | **已删除**：该函数与 `.xdev.lock` 均不存在 | — |
 | `shim.Lookup` 跨工具扫描（npm→node） | 构造 current/ 目录树，断言别名解析 | 🟡 |
 | `mirror.Apply` 边界（Adoptium/GitHub 跳过） | 表驱动：上游 vs 镜像 vs 跳过 | 🟡 |
 | `extractor` Zip Slip 拒绝 | 构造恶意 zip（`../` 路径），断言报错 | 🟡 |
@@ -87,10 +113,10 @@
 | CLI-04 | `xdev search python` | 返回 python 相关；`search zzz` 返回空 |
 | CLI-05 | `xdev doctor`（空环境） | 退出 0；报告无安装 |
 | CLI-06 | `xdev config get/set/list` 往返 | set 后 get 一致 |
-| CLI-07 | `xdev local node@20` 生成 `.xdev.toml` | 文件存在；`local --show` 输出含 node |
-| CLI-08 | `xdev local --unset node` | 文件中 node 移除 |
-| CLI-09 | `xdev hook --shell bash`（无 .xdev.toml） | 空输出，退出 0 |
-| CLI-10 | `xdev task list`（无 .xdev.toml） | 友好提示，退出 0 |
+| ~~CLI-07~~ | **已删除**：`xdev local` 命令不存在 | — |
+| ~~CLI-08~~ | **已删除**：同上 | — |
+| CLI-09 | `xdev hook --shell bash`（无 `.xdev.yaml`） | 空输出，退出 0 |
+| ~~CLI-10~~ | **已删除**：`xdev task list` 命令不存在 | — |
 | CLI-11 | 未知工具 `xdev install foo@1` | 非零退出 + 错误信息 |
 
 ### 4.2 安装工作流集成（`install_integration_test.go`）
@@ -104,9 +130,9 @@
 | INST-03 | `xdev uninstall` | integration | install 目录删除；current 移除 |
 | INST-04 | `--no-activate` 安装 | integration | install 存在但无 current |
 | INST-05 | 已安装版本重复 install | integration | 直接激活，不重复下载 |
-| INST-06 | 安装后 `.xdev.lock` 生成（有 .xdev.toml） | integration | lock 含 resolved+url+sha256 |
-| INST-07 | `xdev install --locked` 从 lockfile | integration | 用 resolved 精确版本，不解析 |
-| INST-08 | `xdev install --from-local` 批量 | integration | 多工具安装 |
+| ~~INST-06~~ | **已删除**：`.xdev.lock` 不再生成 | — | — |
+| ~~INST-07~~ | **已删除**：`--locked` 标志未注册 | — | — |
+| ~~INST-08~~ | **已删除**：`--from-local` 标志未注册 | — | — |
 | INST-09 | 真实下载 node@lts | online | SHA-256 校验通过 |
 | INST-10 | PostInstall 钩子触发 | integration | 钩子执行标志置位 |
 
@@ -126,14 +152,14 @@
 |---------|------|------|
 | LOCK-01 | install 生成 → 读取 → 内容一致 | spec≠resolved；url/sha256 非空 |
 | LOCK-02 | 多次 install 累加工具 | tools map 增长 |
-| LOCK-03 | `--locked` 缺 lockfile | 报错信息友好 |
+| ~~LOCK-03~~ | **已删除**：`--locked` 与 lockfile 均不存在 | — |
 | LOCK-04 | FindConfigDir 向上查找 | 子目录能找到父级 lock |
 
 ### 4.5 项目级配置集成（`project_integration_test.go`）
 
 | 用例 ID | 场景 | 断言 |
 |---------|------|------|
-| PROJ-01 | `.xdev.toml` + `.tool-versions` 共存优先级 | `.xdev.toml` 优先 |
+| PROJ-01 | `.xdev.yaml` 向上查找与版本回退 | 声明版本未安装时回落 `current` 并提示 |
 | PROJ-02 | `xdev hook` 输出 PATH/env | bash 输出含 export PATH |
 | PROJ-03 | cd hook 脚本生成（不实际注入 RC） | 输出含 marker |
 | PROJ-04 | task run 执行命令 | 退出码透传 |
@@ -163,8 +189,8 @@
 2. **断言**：current/<tool> Junction 目标变化；JAVA_HOME 更新
 
 ### 故事 EPIC-3：团队 Lockfile 协作
-1. 项目 A：`xdev local node@20` + `xdev install --from-local` → 生成 `.xdev.lock`
-2. 模拟项目 B（拷贝 .xdev.lock）：`xdev install --locked` → 版本一致
+1. 项目 A：在 `.xdev.yaml` 声明 `go: "1.27.3"` + `xdev install go@1.27.3`
+2. 项目 B（同样放入 `.xdev.yaml`）：`go version` 按声明解析（须已安装）
 3. **断言**：两环境 resolved 版本相同
 
 ### 故事 EPIC-4：迁移本地工具
@@ -193,7 +219,7 @@
 - [ ] `local` 来源工具有视觉标记
 
 ### 6.3 项目配置面板（project 视图）
-- [ ] 无 `.xdev.toml` 显示空状态提示
+- [ ] 无 `.xdev.yaml` 显示空状态提示
 - [ ] tools/env/tasks 三个子卡片渲染
 - [ ] Lockfile 卡片：刷新、install_all 按钮、SHA256 截断显示
 - [ ] 添加/移除项目级工具

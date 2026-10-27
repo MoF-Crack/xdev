@@ -858,7 +858,7 @@ xmdevenvmt/
 │   ├── shim/                  # 单二进制多入口调度器
 │   ├── resolver/              # Semver 版本解析
 │   ├── remote/                # 远程版本发现
-│   ├── project/              # 项目级配置 (.xdev.toml)
+│   ├── project/              # 项目级配置 (.xdev.yaml)
 │   ├── lockfile/             # Lockfile 机制 (.xdev.lock)
 │   ├── task/                 # Task runner
 │   ├── service/              # 服务编排
@@ -1004,91 +1004,95 @@ installer.Activate(java, "E:\XDev\install\java\17", "17")
 
 ---
 
-## 14. 项目配置与 Lockfile
+## 14. 项目配置
 
-### .xdev.toml 项目配置
+> **2026-10-26 修订**：本节此前描述 `.xdev.toml`（`ProjectConfig` 含
+> `Tools` / `Env` / `Tasks` 三段）、`Task` 类型、`.xdev.lock`
+> （`Lockfile` / `LockedTool` 类型）与 `updateLockfile()` 流程。
+>
+> 核查后确认**这些类型与流程都不存在**：
+> - `internal/project` 用 YAML，只解析 `tools`，无 `Env` / `Tasks`
+> - `internal/lockfile` / `internal/task` 包已随 Spec 012 删除
+> - `install` 流程不再调用 `updateLockfile`
+>
+> 下面的内容已按当前实现重写。
 
-项目级配置文件 `.xdev.toml` 管理项目特定的工具版本、环境变量和任务：
-
-```go
-type ProjectConfig struct {
-    Tools map[string]string  `toml:"tools"`   // 工具名 → 版本 spec
-    Env   map[string]string  `toml:"env"`     // 环境变量
-    Tasks map[string]Task    `toml:"tasks"`   // 任务名 → Task
-}
-
-type Task struct {
-    Run  string `toml:"run"`            // 要执行的命令
-    Desc string `toml:"desc,omitempty"` // 描述
-    Dir  string `toml:"dir,omitempty"`  // 工作目录
-}
-```
-
-- `FindConfig(dir)` 从给定目录向上搜索 `.xdev.toml`
-- `SetTool(dir, tool, version)` 设置项目级工具版本
-- 兼容 `.tool-versions`（asdf 格式）自动转换
-
-### cd hook 机制
-
-Shell 集成通过 `xdev activate` 注入 shell RC 文件：
-
-```
-cd → hook → xdev hook <shell> → 读取 .xdev.toml → 输出 export 语句
-```
-
-支持 bash、zsh、fish、pwsh 四种 shell。
-
-### Lockfile 机制
-
-`.xdev.lock` 锁定精确版本，确保团队环境可复现：
+### 14.1 `.xdev.yaml` 项目配置
 
 ```go
-type Lockfile struct {
-    Version   int                    `toml:"version"`
-    CreatedAt time.Time              `toml:"created_at"`
-    Tools     map[string]LockedTool  `toml:"tools"`
-}
+// internal/project/project.go
+const ConfigFileName = ".xdev.yaml"
 
-type LockedTool struct {
-    Version     string `toml:"version"`      // 原始 spec
-    Resolved    string `toml:"resolved"`     // 精确版本
-    SHA256      string `toml:"sha256"`       // 归档校验和
-    URL         string `toml:"url"`          // 归档 URL
-    InstallPath string `toml:"install_path"` // 安装路径
-}
+// altConfigFileNames 是同样接受的别名
+var altConfigFileNames = []string{".xdev.yml"}
+
+// 配置结构（YAML）
+//   tools:
+//     python: "3.11"
+//     node: "^20"
+//     go: latest
 ```
 
-安装流程自动更新 lockfile：
+**核心 API**：
+
+| 函数 | 作用 |
+|---|---|
+| `Load(dir)` | 从给定目录向上查找并解析配置 |
+| `Resolve(tool)` | 取某工具声明的版本 spec |
+| `Tools()` | 返回全部声明（排序后）|
+
+**查找规则**：从 CWD 逐级向上，最多 `maxWalkDepth`（64）层。
+
+**为什么不支持 `env` / `tasks`**：项目配置只影响**版本选择**，
+不引入任何新的代码执行路径。这是刻意的安全边界——
+一个可执行的 `tasks` 段意味着 `cd` 进目录就可能跑任意命令。
+
+### 14.2 cd hook 机制
 
 ```
-xdev install node@20
-    │
-    ├── InstallWithProgress() → InstallResult{Spec, Version, URL, SHA256}
-    │
-    └── updateLockfile() → .xdev.lock 写入:
-        [tools.node]
-        version = "20"           ← 原始 spec
-        resolved = "20.18.0"     ← 精确版本
-        sha256 = "abc123..."     ← 校验和
-        url = "https://..."      ← 下载 URL
+cd → hook → xdev hook <shell> → 读取 .xdev.yaml → 输出 export 语句
 ```
 
-`xdev install --locked` 从 lockfile 安装，使用 `Resolved` 字段确保精确版本。
+`xdev hook --shell <bash|zsh|fish|powershell>` 输出可 eval 的脚本：
+PATH 条目 + 工具环境变量（由 `internal/envctx` 解析）。
 
----
+启用方式：
+```bash
+eval "$(xdev hook --shell bash)"   # 手动，当前 shell
+xdev activate bash                 # 注入 Shell RC，永久生效
+xdev deactivate                    # 移除
+```
+
+### 14.3 可复现安装（Lockfile 已删除）
+
+`.xdev.lock` / `internal/lockfile` 已在 Spec 012 删除，`install`
+流程也不再写 lockfile。当前做法：
+
+```bash
+# 在 .xdev.yaml 里钉精确版本并提交到仓库
+#   tools:
+#     go: "1.27.3"
+#     python: "3.11.9"
+
+# 新机器上显式安装
+xdev install go@1.27.3 python@3.11.9
+
+# 或整体导出/导入
+xdev profile export > env.json
+xdev profile import < env.json
+```
+
 
 ## 15. 服务编排与环境隔离
 
-### 服务编排
+### 服务编排（不存在）
 
-`service.Manager` 管理长期运行的后台进程（数据库、Web 服务器等）：
-
-```go
-type Manager struct { cfg *config.Config }
-func (m *Manager) List() []ServiceInfo
-func (m *Manager) Start(name string) error
-func (m *Manager) Stop(name string) error
-```
+> **2026-10-26 修订**：本节此前描述 `service.Manager`（`List` / `Start` /
+> `Stop`）与 `ServiceInfo` 类型。核查确认 `internal/service` 包**已随
+> Spec 012 删除**，管理长期运行后台进程的能力不在当前实现中。
+>
+> 需要这类能力时请用专用工具（systemd / supervisord / docker compose /
+> pm2 等）。xdev 的职责边界是版本管理，不承担进程监督。
 
 ### 环境隔离
 
@@ -1121,37 +1125,18 @@ func (m *Manager) Stop(name string) error
 
 ## 16. Lockfile 命令
 
-### `xdev lock` — 重新生成 Lockfile
+### `xdev lock` — 不存在（已删除）
 
-```bash
-xdev lock [tool...]          # 重新生成整个或部分 lockfile
-xdev lock --check            # 校验 lockfile 与 .xdev.toml 一致性
-xdev lock --check --json     # JSON 格式输出
-```
-
-**工作流程**（`internal/cli/lock.go`）：
-
-1. `lockfile.FindConfigDir(".")` 查找项目根目录
-2. `project.FindConfig(dir)` 读取 `.xdev.toml`
-3. `loadCatalogAndRegistry()` 加载 catalog 和 registry
-4. 对每个 tool：`reg.Get(toolName)` → `ResolveVersion(spec)` → `ArchiveFor(ver)` → `lockfile.AddTool()`
-5. `lockfile.Save(dir, lf)` 写入 `.xdev.lock`
-
-**漂移检测**（`--check`）：
-
-| 检测项 | 说明 |
-|--------|------|
-| Spec 漂移 | `.xdev.toml` 中 go="1.22" 但 `.xdev.lock` 中 version="1.21" |
-| 缺失条目 | toml 有工具但 lock 没有 |
-| 过期条目 | lock 有工具但 toml 没有 |
-
-### `xdev lock` 与 `xdev install --locked` 的关系
-
-| 命令 | 用途 |
-|------|------|
-| `xdev lock` | 从 `.xdev.toml` **生成** `.xdev.lock` |
-| `xdev install --locked` | 从 `.xdev.lock` **精确安装**（不解析版本） |
-| `xdev install` | 正常安装 + 自动更新 `.xdev.lock` |
+> **2026-10-26 修订**：本节此前描述 `xdev lock` / `xdev lock --check` /
+> `xdev lock --check --json` 与 `xdev install --locked` 两套命令，并列出
+> 其与漂移检测的关系。
+>
+> 核查确认：`internal/lockfile` 已随 Spec 012 删除，`xdev lock` 不是注册的
+> 子命令，`--locked` 标志也未在 `internal/cli/install.go` 注册。全部不存在。
+>
+> 当前「可复现安装」的做法：在 `.xdev.yaml` 里钉精确版本并提交，
+> 新机器上用 `xdev install <tool>@<exact-version>` 或
+> `xdev profile export/import` 同步环境。
 
 ---
 
