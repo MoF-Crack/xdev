@@ -23,7 +23,16 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 2026-10-27：macOS 暂时移出必过矩阵。
+        #
+        # 原因：macos-latest 是 arm64 runner，免费额度下经常排队超
+        # 15 分钟而被自动取消（runner_name 为空、steps 全空），
+        # 导致整个 build / integration-tests 矩阵连带失败、release 被 skip。
+        # 实测 tag v1.0.0-alpha.3 连续两轮都撞上。
+        #
+        # macOS 编译验证仍由 release-macos job 覆盖（交叉编译 + cgo）；
+        # 需要恢复时把 macos-latest 加回 os 列表即可（include 块保留）。
+        os: [ubuntu-latest, windows-latest]
         include:
           - os: ubuntu-latest
             goos: linux
@@ -39,7 +48,7 @@ jobs:
             goos: darwin
             goarch: arm64
             ext: ""
-            # Wails v2.12 的 darwin cgo LDFLAGS 未包含
+            # Wails v2 的 darwin cgo LDFLAGS 未包含
             # UniformTypeIdentifiers；macOS 26 SDK 下必须显式补上，
             # 否则链接报 _OBJC_CLASS_$_UTType undefined。
             cgo_ldflags: "-framework UniformTypeIdentifiers"
@@ -159,7 +168,10 @@ jobs:
     # Spec 002: Run integration tests with -tags=integration
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 2026-10-27：同 build job，暂时移出 macOS（arm64 runner 排队超时
+        # 会被自动取消，连带整个矩阵失败）。include 块里保留 macOS 条目，
+        # 需要恢复时把 macos-latest 加回 os 列表即可。
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
