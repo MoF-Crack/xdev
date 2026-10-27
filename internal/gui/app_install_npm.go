@@ -20,8 +20,6 @@ package gui
 import (
 	"context"
 
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/plugin"
 )
@@ -34,14 +32,16 @@ import (
 func (a *App) installNPMPackage(taskID string, p plugin.Plugin, arch *manifest.Archive, ver, installPath string) error {
 	go func() {
 		toolName := p.Name()
+		// 2026-10-26：改用统一的 emitInstallProgress/emitInstallError。
+		//
+		// 修复前这里自己构造 EventsEmit，**没有 a.ctx nil 保护** —— 而 Wails
+		// 的 EventsEmit 对 nil context 会 log.Fatalf 直接杀进程（历史上让
+		// 测试进程静默退出、连 FAIL 行都不打印，见 app_profile.go 的注释）。
+		//
+		// 统一到辅助函数还带来两个好处：事件载荷只在一处构造（taskID 不会
+		// 漏），且与下载管线的事件契约完全一致。
 		emitProgress := func(phase string, pct float64) {
-			wailsRuntime.EventsEmit(a.ctx, "installProgress", InstallProgress{
-				TaskID:  taskID,
-				Tool:    toolName,
-				Version: ver,
-				Phase:   phase,
-				Percent: pct,
-			})
+			a.emitInstallProgress(taskID, toolName, ver, phase, pct, "", "")
 		}
 		emitProgress("Installing...", -1)
 
@@ -52,12 +52,7 @@ func (a *App) installNPMPackage(taskID string, p plugin.Plugin, arch *manifest.A
 		res, err := ins.InstallNPMPackage(ctx, p, arch, ver, installPath)
 		if err != nil {
 			logWarn("[install] npm install failed for %s@%s: %v", toolName, ver, err)
-			wailsRuntime.EventsEmit(a.ctx, "installError", map[string]string{
-				"taskId":  taskID,
-				"tool":    toolName,
-				"version": ver,
-				"error":   err.Error(),
-			})
+			a.emitInstallError(taskID, toolName, ver, err.Error())
 			a.InvalidateToolsCache()
 			return
 		}
@@ -66,11 +61,7 @@ func (a *App) installNPMPackage(taskID string, p plugin.Plugin, arch *manifest.A
 		if res != nil && !res.Activated && res.ActivationError != "" {
 			// Version installed but not switched (locked binary etc.) —
 			// same soft-warning contract as the download pipeline.
-			wailsRuntime.EventsEmit(a.ctx, "xdev:activation-warning", map[string]string{
-				"tool":    toolName,
-				"version": ver,
-				"message": res.ActivationError,
-			})
+			a.emitActivationWarning(toolName, ver, res.ActivationError)
 		}
 
 		a.invalidateDashboardCache()

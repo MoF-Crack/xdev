@@ -146,6 +146,33 @@ func (a *App) emitInstallError(taskID, tool, version, msg string) {
 	})
 }
 
+// emitActivationWarning 上报一次「版本已装好但未激活成功」的软警告。
+//
+// 同受 a.ctx nil 保护。修复前三处各自手写这整段 EventsEmit，
+// 其中两处漏了保护（Wails 对 nil ctx 会 log.Fatalf 杀进程）。
+func (a *App) emitActivationWarning(tool, version, msg string) {
+	if a.ctx == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(a.ctx, "xdev:activation-warning", map[string]string{
+		"tool":    tool,
+		"version": version,
+		"message": msg,
+	})
+}
+
+// emitTOFUWarning 上报一次 TOFU（占位 SHA-256 首次信任）提示。
+func (a *App) emitTOFUWarning(tool, version, msg string) {
+	if a.ctx == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(a.ctx, "xdev:tofu-warning", map[string]string{
+		"tool":    tool,
+		"version": version,
+		"message": msg,
+	})
+}
+
 // 编译期确认：guiDownloadFunc 的返回类型与 installer.DownloadFunc 一致。
 var _ installer.DownloadFunc = (&App{}).guiDownloadFunc("", "", "")
 

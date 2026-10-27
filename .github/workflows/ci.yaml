@@ -227,6 +227,56 @@ jobs:
         # -v removed: verbose output inflates log storage with no gate value
         run: go test -tags=integration ./... -count=1 -timeout 25m
 
+  e2e:
+    # 2026-10-26：e2e（//go:build online）首次进 CI。
+    #
+    # 修复前它**从未在任何工作流里执行过** —— CI 从来不传 -tags=online，
+    # 所以 internal/e2e 的端到端用例一直是死代码。摸底时本地跑了一次，
+    # 立即发现 epic3 测的是已删除的 lockfile 协作（.xdev.toml / .xdev.lock /
+    # --locked 三层均不存在），已删除该文件。
+    #
+    # 为什么单独一个 job 且 continue-on-error：
+    #   - 它需要**真实网络下载工具**（epic1 装一个真工具，约 60-80s），
+    #     放在必过 gate 里会变成 flaky 源；
+    #   - 但完全不跑就等于没有 —— 所以进 CI，只允许失败不阻断合并。
+    #
+    # 为什么只跑 ubuntu：跨三平台会放大网络抖动面，而 epic 验的是
+    # 产品流程而非平台差异（平台差异已有 integration + build 矩阵覆盖）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: gobuild-e2e-${{ hashFiles('go.sum') }}
+          restore-keys: gobuild-e2e-
+
+      - name: Build xdev binary for e2e
+        shell: bash
+        run: |
+          mkdir -p build/bin
+          go build -tags desktop,production -o build/bin/xdev .
+
+      - name: Verify e2e binary exists
+        shell: bash
+        run: |
+          test -f build/bin/xdev || { echo "::error::build/bin/xdev missing — e2e tests would silently skip"; exit 1; }
+
+      - name: Run e2e tests (online)
+        run: go test -tags=online ./internal/e2e/ -count=1 -timeout 15m
+
   release:
     needs: [build, integration-tests]
     if: startsWith(github.ref, 'refs/tags/v')

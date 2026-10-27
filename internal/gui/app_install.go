@@ -137,6 +137,12 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 	// TOFU 完成后通过 Wails 事件通知前端展示警告对话框（Spec 021 D7：
 	// 复用 installer 的 TOFUArchiveIfNeeded 与回调机制，避免 GUI 内联重复实现）。
 	ins.SetTOFUWarningCallback(func(tool, version, osName, arch, sha256 string) {
+		// 2026-10-26：补 a.ctx nil 保护。Wails 的 EventsEmit 对 nil context
+		// 会 log.Fatalf 直接杀进程 —— 测试环境（无 Wails runtime）跑到这里
+		// 会静默退出、连 FAIL 行都不打印。
+		if a.ctx == nil {
+			return
+		}
 		wailsRuntime.EventsEmit(a.ctx, "xdev:tofu-warning", map[string]string{
 			"tool":    tool,
 			"version": version,
@@ -221,13 +227,7 @@ func (a *App) installWithOptions(toolName, version string, confirmed, force bool
 		// 成功，或「版本已装好但激活失败」（激活失败降级为软警告）。
 		a.emitInstallProgress(taskID, toolName, version, "Completed", 100, "", "")
 		if res != nil && res.ActivationError != "" {
-			if a.ctx != nil {
-				wailsRuntime.EventsEmit(a.ctx, "xdev:activation-warning", map[string]string{
-					"tool":    toolName,
-					"version": version,
-					"message": res.ActivationError,
-				})
-			}
+			a.emitActivationWarning(toolName, version, res.ActivationError)
 		}
 
 		// 缓存失效与归档保留：安装已改变磁盘状态，必须让 UI 立刻反映。
