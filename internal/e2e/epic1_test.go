@@ -18,18 +18,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 )
-
-// hideWindow returns a Windows SysProcAttr that hides the child console,
-// or nil on other platforms.
-func hideWindow() *syscall.SysProcAttr {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-	return &syscall.SysProcAttr{HideWindow: true}
-}
 
 // buildBin locates the compiled xdev binary under test.
 func buildBin(t *testing.T) string {
