@@ -205,13 +205,20 @@ jobs:
       #
       # 产物路径必须与 buildBin() 的候选表一致（build/bin/xdev[.exe]），
       # 因此显式 -o 到该路径，不依赖默认输出位置。
+      #
+      # ⚠ 必须带 webkit2_41（2026-10-27 修复）：
+      # ubuntu-latest（24.04）只提供 webkit2gtk-4.1，而 Wails v2 默认
+      # 链接 webkit2gtk-4.0。漏掉这个 tag 会报
+      #   Package 'webkit2gtk-4.0' not found
+      # 本文件其余 11 处 Wails 构建全部带此 tag（见 build / release job）。
+      # Windows/macOS 上该 tag 无副作用（构建约束只影响 Linux CGO 路径）。
       - name: Build xdev binary for integration tests
         shell: bash
         run: |
           EXT=""
           if [ "${{ runner.os }}" = "Windows" ]; then EXT=".exe"; fi
           mkdir -p build/bin
-          go build -tags desktop,production -o "build/bin/xdev${EXT}" .
+          go build -tags desktop,production,webkit2_41 -o "build/bin/xdev${EXT}" .
 
       - name: Verify integration binary exists
         shell: bash
@@ -265,9 +272,10 @@ jobs:
 
       - name: Build xdev binary for e2e
         shell: bash
+        # 同样必须带 webkit2_41（ubuntu runner 只有 webkit2gtk-4.1）。
         run: |
           mkdir -p build/bin
-          go build -tags desktop,production -o build/bin/xdev .
+          go build -tags desktop,production,webkit2_41 -o build/bin/xdev .
 
       - name: Verify e2e binary exists
         shell: bash
