@@ -8,6 +8,8 @@
 # Build output
 bin/
 build/bin/
+dist/
+.wails/
 build/download-audit-*.json
 build/download-audit-*.md
 build/linkaudit-cache/

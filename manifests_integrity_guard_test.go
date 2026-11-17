@@ -306,6 +306,9 @@ func TestManifestSignatureCoverage(t *testing.T) {
 		}
 	}
 	if len(unsigned) > 0 {
+		if os.Getenv("XDEV_REQUIRE_SIGNATURE_COVERAGE") == "1" {
+			t.Fatalf("release signature coverage incomplete: %d/%d signable manifests missing signatures: %v", len(unsigned), len(signable), unsigned)
+		}
 		t.Skipf("票 17 数据线未完成：%d/%d 个可签工具 manifest 尚无 .sig（待重签）—— 缺失示例 %v；无哈希豁免 %d 个；重签后本守卫自动生效",
 			len(unsigned), len(signable), firstN(unsigned, 5), len(hashless))
 	}

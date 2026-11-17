@@ -41,11 +41,11 @@ function realSessionFactory(row) {
 function makeBatch() {
   const completions = [];
   const app = {
-    InstallToolConfirmed: vi.fn(async (tool, version) => {
-      completions.push(() => window.__wailsEmit('installProgress', {
-        taskId: `${tool}@${version}`, tool, version, phase: 'Completed', percent: 100,
+    StartInstall: vi.fn(async ({ tool, version, sessionId }) => {
+      completions.push(() => window.__wailsEmit('installSession', {
+        sessionId, status: 'completed', tool, version, phase: 'Completed', percent: 100,
       }));
-      return null;
+      return sessionId;
     }),
     InstallToolWithForm: vi.fn(async () => null),
   };
@@ -65,14 +65,14 @@ describe('useParallelBatch session lifecycle (ticket 12)', () => {
     const { parallelBatch, app, completeAll } = makeBatch();
 
     const first = parallelBatch.run([{ tool: 'node', version: '22.0.0' }, { tool: 'go', version: '1.26.0' }]);
-    await vi.waitFor(() => expect(app.InstallToolConfirmed).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(app.StartInstall).toHaveBeenCalledTimes(2));
     const duringFirst = window.runtime.__subscriptions();
-    expect(duringFirst.active).toBe(4); // 2 live sessions × 2 events
+    expect(duringFirst.active).toBe(2); // 2 live sessions × 1 authoritative snapshot stream
     completeAll();
     await first;
 
     const afterFirst = window.runtime.__subscriptions();
-    expect(afterFirst.total).toBe(4);
+    expect(afterFirst.total).toBe(2);
     expect(afterFirst.active, `subscriptions leaked after run 1: ${JSON.stringify(afterFirst)}`).toBe(0);
 
     const row = parallelBatch.items[0];
@@ -91,7 +91,7 @@ describe('useParallelBatch session lifecycle (ticket 12)', () => {
     expect(row.phase, 'leaked mirror watcher still syncing a disposed session').toBe(phaseAfterBatch);
 
     const second = parallelBatch.run([{ tool: 'node', version: '22.0.0' }, { tool: 'go', version: '1.26.0' }]);
-    await vi.waitFor(() => expect(app.InstallToolConfirmed).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(app.StartInstall).toHaveBeenCalledTimes(4));
     completeAll();
     await second;
 
@@ -104,7 +104,7 @@ describe('useParallelBatch session lifecycle (ticket 12)', () => {
   it('B-1b: clear() also releases the live subscriptions', async () => {
     const { parallelBatch, app, completeAll } = makeBatch();
     const p = parallelBatch.run([{ tool: 'node', version: '22.0.0' }]);
-    await vi.waitFor(() => expect(app.InstallToolConfirmed).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(app.StartInstall).toHaveBeenCalledTimes(1));
     completeAll();
     await p;
 
@@ -117,7 +117,7 @@ describe('useParallelBatch session lifecycle (ticket 12)', () => {
     const { parallelBatch, app, completeAll } = makeBatch();
     // First run stays active (completion is manual and not yet fired).
     const first = parallelBatch.run([{ tool: 'node', version: '22.0.0' }]);
-    await vi.waitFor(() => expect(app.InstallToolConfirmed).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(app.StartInstall).toHaveBeenCalledTimes(1));
     expect(parallelBatch.items[0].active).toBe(true);
 
     const summary = await parallelBatch.run([{ tool: 'go', version: '1.26.0' }]);
@@ -125,7 +125,7 @@ describe('useParallelBatch session lifecycle (ticket 12)', () => {
     // The live row survived untouched (a second batch did NOT start).
     expect(parallelBatch.items.length).toBe(1);
     expect(parallelBatch.items[0].tool).toBe('node');
-    expect(app.InstallToolConfirmed).toHaveBeenCalledTimes(1);
+    expect(app.StartInstall).toHaveBeenCalledTimes(1);
 
     // Let the original batch finish cleanly.
     completeAll();

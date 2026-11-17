@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/xmdemt/xdev/internal/isolator"
 	"github.com/xmdemt/xdev/internal/orchestrator"
 	"github.com/xmdemt/xdev/internal/util"
@@ -275,15 +274,7 @@ func (a *App) BrowseFile(title, filters string) string {
 	if a.ctx == nil {
 		return ""
 	}
-	opts := wailsRuntime.OpenDialogOptions{
-		Title: title,
-	}
-	if filters != "" {
-		opts.Filters = []wailsRuntime.FileFilter{
-			{DisplayName: "Key Files", Pattern: filters},
-		}
-	}
-	path, err := wailsRuntime.OpenFileDialog(a.ctx, opts)
+	path, err := a.chooseFile(title, filters)
 	if err != nil {
 		logWarn("[BrowseFile] file dialog failed: %v", err)
 		return ""
@@ -324,6 +315,9 @@ func (a *App) ExecRemoteInstance(adapter, id string, cmd []string) (string, erro
 
 // ActivateHook 激活 cd hook。shell 必须是已知 shell 名，防止任意参数注入。
 func (a *App) ActivateHook(shell string) error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(shell)) {
 	case "powershell", "pwsh", "cmd", "bash", "zsh", "fish", "nu":
 	default:
@@ -333,7 +327,7 @@ func (a *App) ActivateHook(shell string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "activate", shell)
+	cmd := exec.Command(exe, "--xmdevenv-dir", a.getCfg().Core.XMDevDir, "activate", shell)
 	util.HideWindow(cmd)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -341,11 +335,14 @@ func (a *App) ActivateHook(shell string) error {
 
 // DeactivateHook 停用 cd hook
 func (a *App) DeactivateHook() error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "deactivate")
+	cmd := exec.Command(exe, "--xmdevenv-dir", a.getCfg().Core.XMDevDir, "deactivate")
 	util.HideWindow(cmd)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

@@ -61,11 +61,11 @@ GitHub Release 使用 `generate_release_notes: true` 自动生成基于 PR/commi
 2. 确保 main 分支 CI + Governance 全绿
 3. `git tag v<x.y.z> && git push origin v<x.y.z>`
 4. GitHub Actions 自动构建 + 发布 release
-5. 增量构建：只补齐 release 中缺失的产物
+5. Spec 040 起先生成共同签名输入，再构建全部平台，聚合完整校验和；先暂存 draft，验证完整后发布。已发布同名 release 不允许用重跑静默改写。
 
 ### 免费额度保护
 
 - **不要频繁打 tag**：每个 tag 触发 5+ 个 job（build×3 + integration-tests×3 + release×3）
 - **不要为测试打 tag**：如需测试 release 流程，使用 `dry-run` 或本地模拟
-- **增量构建**：重新打同版本 tag 时，已有产物会被跳过，减少编译量
+- **重跑**：失败的 draft 可重跑构建并重新聚合完整资产；已发布版本必须使用新版本/tag，不重用旧 tag 替换用户已取得的二进制。
 - **跟踪 CI**：打 tag 后用 `gh run watch` 跟踪进度，如发现失败及时修复避免浪费后续 job

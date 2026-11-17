@@ -114,9 +114,12 @@ func TestApplySubToolDynamicStateEnable(t *testing.T) {
 			break
 		}
 	}
-	// Simulate: parent (npm) installed = true
+	// Use the real detector's parent mapping. npm is a Node sub-tool; its
+	// ToolName identifies Node even when neither node nor corepack is on PATH.
+	// This exercises the parent-present fallback without host installations.
+	t.Setenv("PATH", t.TempDir())
 	results := []PackageManagerInfo{
-		{Name: "npm", Installed: true},
+		{Name: "npm", ToolName: "node", Installed: true},
 		{Name: "yarn", Installed: false},
 	}
 	detectedByName := map[string]bool{"npm": true}
@@ -132,8 +135,8 @@ func TestApplySubToolDynamicStateEnable(t *testing.T) {
 	}
 	// When both corepack and npm are detectable, the UI should offer methods
 	// instead of a single enable button.
-	if len(updated.InstallMethods) == 0 && updated.EnableCommand == "" {
-		t.Error("yarn should expose EnableCommand or InstallMethods when node is installed")
+	if len(updated.InstallMethods) != 0 || updated.EnableCommand != yarnPm.enableCommand {
+		t.Errorf("parent-present fallback without PATH methods: methods=%v enable=%q", updated.InstallMethods, updated.EnableCommand)
 	}
 }
 

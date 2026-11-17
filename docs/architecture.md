@@ -1,489 +1,237 @@
 > **文档类型**：长期参考文档
 > **状态**：Living
-> **来源**：docs/architecture.md
-> **P4B 迁移目标**：原位保留
-> **替代文档**：无
-> **治理记录**：P4A 元数据治理，2026-07-16
+> **更新范围**：Spec 040，2026-11-17
 
 # XDev 架构文档
 
-> 版本: 0.4.0 | 最后更新: 2026-10-21
+## 1. 产品与运行入口
 
-## 1. 项目概览
+XDev 是使用 Go 的跨平台开发环境版本管理器，提供 Cobra CLI、Bubble Tea TUI 和 Wails v3.1.0 + Vue 3 GUI。Go 最低版本以 go.mod 为准，当前为 1.27.0。
 
-XDev 是一个跨平台开发环境版本管理器，用 Go 1.25 编写。它提供三种交互模式：
+正式分发保持单二进制：`xdev[.exe]` 同时承担 CLI、TUI、GUI 和托管工具 shim。零参数调用先检查 shim 身份；真实工具别名进入工具进程，XDev 自身才进入 GUI。`xdev tui` 与 `xdev gui` 是同一程序的子命令。
 
-- **CLI** — 基于 Cobra 的命令行界面
-- **TUI** — 基于 Bubble Tea 的终端用户界面
-- **GUI** — 基于 Wails v2 + Vue 3 的桌面图形界面
+构建形态明确分开：
 
-核心设计理念：**单二进制多入口**（Shim Dispatch）—— `xdev` 同时充当 CLI/TUI/GUI 和所有托管工具的 shim。GUI 需要 Wails 的 `desktop,production` 构建标签（`wails build` 自动带上；手工 `go build` 必须显式传入，否则 GUI 启动会弹“without the correct build tags”）；`bindings` 标签仅用于生成 Wails 绑定（见 ADR-0006；ADR-0002 的 Wails 选型仍然有效）。
-
-## 2. 目录结构
-
-```
-xmdevenvmt/
-├── main.go / main_gui.go / main_bindings.go  # 单二进制入口（默认 !bindings：CLI/TUI/GUI/shim；bindings 仅生成 Wails 绑定，ADR-0006）
-├── internal/                 # 内部包（不可外部导入）
-│   ├── cli/                  # CLI 命令定义 (Cobra)
-│   ├── config/               # 配置加载/保存/迁移
-│   ├── discovery/            # 工具版本嗅探（SniffAll 单次 catalog，Spec 030）
-│   ├── downloader/           # HTTP 下载器 (带进度/断点续传)
-│   ├── env/                  # 环境变量操作 (Windows 注册表/Shell RC)
-│   ├── extractor/            # 归档解压 (zip/tar.gz/7z/zstd；\\?\ 长路径，Spec 032)
-│   ├── gui/                  # GUI 后端 (Wails App adapter；GetBootstrapState 合并 IPC，Spec 032)
-│   ├── hostscan/             # Host-scan：PATH 上全部实例（每目录一次 ReadDir，Spec 031）
-│   ├── installer/            # 安装/激活/卸载核心工作流（Activate/Uninstall 跨进程锁，Spec 032）
-│   ├── integration/          # L2 集成测试
-│   ├── isolator/             # 环境隔离 (none/container/nix；会话持久化，Spec 032)
-│   ├── manifest/             # 工具清单 YAML 加载/缓存
-│   ├── mirror/               # 镜像源配置与选择
-│   ├── orchestrator/         # 远程编排 (Docker/SSH；ConnectInteractive TTY，Spec 032)
-│   ├── plugin/               # 插件接口 + Generic/Lua/Vfox（Lua VM 复用，Spec 032）
-│   ├── plugins/java/         # Java 插件 (自定义 ArchiveFor)
-│   ├── remote/               # 远程版本发现
-│   ├── resolver/             # 版本规范解析 (^, ~, >=)
-│   ├── shim/                 # Shim 调度与安装（Unix execve；磁盘 shim 索引，Spec 032）
-│   ├── signer/               # Ed25519 清单签名验证
-│   ├── tui/                  # TUI 界面 (Bubble Tea)
-│   ├── update/               # 自更新机制（MoF-Crack 归档，Spec 030）
-│   ├── util/                 # 通用工具函数（原生 junction，Spec 032）
-│   └── version/              # 版本常量
-├── manifests/                # 工具清单 YAML 文件
-│   ├── index.yaml            # 分类索引
-│   ├── python.yaml           # Python 清单
-│   ├── go.yaml               # Go 清单
-│   └── ...                   # 40+ 工具清单
-├── frontend/                 # Vue 3 前端 (Wails GUI)
-│   └── src/
-│       ├── App.vue           # 根组件
-│       ├── AppContent.vue    # 桌面 shell（路由 + 对话框）；session 在 composables/
-│       └── SetupWizard.vue   # 首次运行向导
-├── docs/                     # 文档
-├── build.sh                  # Unix 构建脚本
-├── build.ps1                 # Windows 构建脚本
-└── wails.json                # Wails 配置
-```
-
-## 3. 包依赖图
-
-### 层级架构
-
-```
-┌─────────────────────────────────────────────┐
-│  main.go / main_gui.go  (入口点)             │
-├─────────────────────────────────────────────┤
-│  cli  │  gui  │  tui                        │  ← 表示层
-├─────────────────────────────────────────────┤
-│  installer  │  isolator  │  update          │  ← 业务逻辑层
-├─────────────────────────────────────────────┤
-│  plugin  │  manifest  │  config  │  discovery │  ← 核心抽象层
-├─────────────────────────────────────────────┤
-│  downloader │ extractor │ env │ shim │ hostscan │ mirror│  ← 基础设施层
-├─────────────────────────────────────────────┤
-│  util  │  version  │  resolver  │  signer    │  ← 工具层
-└─────────────────────────────────────────────┘
-```
-
-### 关键依赖关系
-
-| 包 | 依赖的内部包 | 角色 |
+| 构建条件 | 用途 | 前端资源 |
 |---|---|---|
-| `cli` | config, env, gui, installer, isolator, lockfile, manifest, orchestrator, plugin, project, remote, service, shim, signer, task, tui, update, util, version | 命令路由与编排 |
-| `installer` | config, downloader, env, extractor, manifest, mirror, plugin, shim, signer, util, version | 安装工作流核心 |
-| `gui` | config, downloader, env, extractor, installer, isolator, lockfile, manifest, orchestrator, plugin, project, remote, discovery, hostscan, shim, update, util, version | Wails desktop adapter：catalog / install-session / host-scan / prefs（约 120 个导出方法，现有绑定不增） |
-| `hostscan` | — | PATH 全量扫描（跳过 shimDir）；GUI 探测委托它 |
-| `plugin` | manifest, resolver | 插件抽象 |
-| `config` | env, util | 配置管理 |
-| `shim` | config, project, util | Shim 调度 |
+| `desktop,production` | Windows/macOS 正式桌面单二进制 | 嵌入真实 dist |
+| `desktop,production,gtk3` | Linux 正式桌面单二进制 | 嵌入真实 dist |
+| 不带 `desktop` | 开发测试、维护命令、CLI/TUI/shim | 不依赖 dist；GUI 返回明确错误 |
+| `desktop,bindings`，Linux 可另加 `gtk3` | 静态生成 Wails 绑定 | 使用空资源 stub，不启动 GUI |
 
-### 叶子包（无内部依赖）
+维护构建不是完整桌面发布产物。绑定生成标签不得进入正式发布构建。Wails 3 决策与用户授权来源见 [ADR-0007](adr/0007-wails3-desktop-runtime.md)；历史 ADR 保留当时的背景。
 
-`e2e`, `extractor`, `hostscan`, `i18n`, `integration`, `manifest`, `resolver`, `signer`, `util`, `version`
+## 2. 目录与模块边界
 
-## 4. 启动流程
-
-### CLI 启动
-
-```
-main.go:init()
-  └── manifest.InitEmbedded(manifestFS)  // 嵌入清单 YAML
-
-main.go:main()                         // tag !bindings
-  ├── 无参数
-  │   ├── shim.MaybeExec(basename)     // Shim 调度 (优先!)
-  │   │   ├── 是 xdev/xdev-* → 返回 false, 继续 GUI
-  │   │   └── 是工具别名 → Lookup + run (Unix: unix.Exec)
-  │   └── runGUI()                     // 进程内启动 GUI（ADR-0006）
-  └── 有参数
-      └── cli.NewRootCommand()
-          ├── cobra.OnInitialize → initContext()
-          │   └── config.Load(xmdeDir) // 加载配置；嗅探 OnStartup 异步
-          ├── xdev tui → TUI
-          ├── xdev gui → cli.SetGUILauncher → runGUI()
-          └── 其余 → CLI 子命令
-```
-
-### GUI 启动
-
-```
-main_gui.go:main()                     // tag gui && !bindings
-  └── runGUI()
-      ├── config.Load("")
-      ├── manifest.LoadCatalogCached()
-      ├── plugin.RegisterAll()
-      └── gui.Run(app, webviewDir)
-          └── wails.Run()
-              ├── App.startup(ctx)
-              └── App.domReady()              // WindowShow(), 刷新缓存
+```text
+main.go / main_gui.go       单二进制分派与 GUI 启动器
+main_bindings.go            bindings 条件下的无副作用入口
+internal/
+  cli/                     命令路由、配置上下文、GUI 启动回调注入
+  gui/                     App 服务 facade、会话与桌面适配
+  installer/               下载、校验、安装、激活、卸载
+  manifest/                YAML、Catalog、缓存与 latest 规则
+  plugin/                  Generic/Lua/Vfox 与注册表
+  plugins/java/            Java 特定归档解析
+  hostscan/                PATH 快照扫描与 basename 索引
+  discovery/ / remote/     嗅探调度与远程版本发现
+  downloader/ / extractor/ 下载及归档解包
+  env/ / shim/             环境写入与工具分派
+  config/ / project/       全局配置与 .xdev.yaml 项目配置
+  isolator/ / orchestrator/隔离环境与远程实例
+  signer/ / update/        清单信任与自更新
+  util/ / resolver/        路径/进程工具与版本解析
+frontend/
+  bindings/                正式生成的 Wails v3 TypeScript 绑定
+  src/desktop/             事件、窗口与兼容 namespace 适配
+  src/composables/         安装会话、批量执行与页面状态
+  src/AppContent.vue       桌面布局、导航与交互接线
+scripts/build.mjs          本地及 CI 共用构建入口
+scripts/release/           更新归档及平台包生成
+build.ps1 / build.sh       薄构建入口
 ```
 
-## 5. 核心工作流
+主要依赖方向为入口 → 表示层 → 业务模块 → 基础设施。下表是关键生产依赖，不是所有 import 的穷举：
 
-### 5.1 安装流程 (`xdev install go@1.22.0`)
+| 包 | 主要内部依赖 | 职责 |
+|---|---|---|
+| cli | config、discovery、env、installer、manifest、plugin、project、pm、orchestrator、shim、signer、tui、update | 命令编排；通过回调进入 GUI，不直接依赖 gui |
+| gui | config、installer、manifest、plugin、hostscan、localmigrate、toolmeta、downloader、env、discovery、isolator、orchestrator、update | 绑定 facade 与桌面业务状态 |
+| installer | config、downloader、extractor、manifest、plugin、mirror、env、shim、signer、util | 核心安装和激活流程 |
+| manifest | util | 清单集合、排序、合并、校验及缓存 |
+| plugin | manifest、resolver、util | 工具元数据与工具专有行为 |
+| hostscan | 标准库 | PATH 全量扫描，跳过 shim 目录 |
 
-```
-CLI: newInstallCmd()
-  │
-  ├── splitToolVer("go@1.22.0") → ("go", "1.22.0")
-  ├── loadCatalogAndRegistry() → (catalog, registry)
-  ├── registry.Get("go") → plugin.Plugin
-  │
-  └── installer.New(cfg, reg).InstallWithProgress(ctx, p, "1.22.0")
-      │
-      ├── 1. p.ResolveVersion("1.22.0")    // 版本解析
-      ├── 2. p.ArchiveFor(ver)             // 选择归档 (OS/Arch 匹配)
-      ├── 3. 计算安装路径 install/go/1.22.0
-      ├── 4. 检查是否已安装 (os.Stat)
-      ├── 5. downloadWithProgress()         // 下载 (含镜像/SHA256/断点续传)
-      ├── 6. extractor.Extract()            // 解压 (zip/tar.gz/7z)
-      ├── 7. p.PostInstall()               // 后安装钩子
-      ├── 8. Activate(p, installPath, ver)  // 激活
-      │   ├── 创建 current/go junction → install/go/1.22.0
-      │   ├── 创建 shims/go.exe (复制 xdev 二进制)
-      │   ├── setUserEnvVars({GOROOT, GOPATH})  // Windows 注册表
-      │   └── BroadcastEnvironmentChange()      // WM_SETTINGCHANGE
-      └── 8. Activate 完成（Spec 012 移除 lockfile 步骤）
-```
+`internal/lockfile` 及旧 service/task 模块不属于当前依赖图。项目配置使用 `.xdev.yaml`；不要以旧绑定列表推断仍有 `GetLockfile`、`RunProjectTask` 或服务管理方法。
 
-### 5.2 Shim 调度流程
+## 3. 启动与生命周期
 
-当用户执行 `go build ./...` 时，实际执行的是 `shims/go.exe`（xdev 二进制的副本）：
-
-```
-shims/go.exe build ./...
-  │
-  ├── main.go → cli.NewRootCommand()
-  │   └── shim.MaybeExec("go")
-  │       └── shim.Lookup("go", args)
-  │           ├── 1. 查找 current/go/ 下的可执行文件
-  │           └── 2. 跨工具扫描 (shim 反向索引，如 npm→node)
-  │
-  └── run(realGo, args)
-      ├── Unix: unix.Exec（进程覆盖）
-      └── Windows: exec.Command + EnrichFromRegistry（一次 HKCU 枚举）
+```text
+main.init
+  → 注册内嵌 manifests 与签名
+main
+  → 无参数：shim.MaybeExec 优先；未匹配则 runGUI
+  → 有参数：注册 SetConfiguredGUILauncher(runGUIWithConfig)
+             → Cobra 解析显式 home 与 --no-path-fix
+             → CLI / TUI / GUI 子命令
+runGUIWithConfig(cfg, noEnvWrite)
+  → LoadCatalogCached → cli.LoadRegistry
+  → NewAppWithOptions(cfg, catalog, registry, RunOptions)
+  → gui.Run
+      → application.New + application.NewService(app)
+      → 创建隐藏窗口、设置 desktopRuntime
+      → ServiceStartup(ctx) → startup → root context
+      → WindowRuntimeReady → domReady → 显示窗口、加载/刷新本地缓存
+      → ServiceShutdown → shutdown → 取消后台工作、清理下载
 ```
 
-### 5.3 Shell Hook 流程
+无参数 GUI 自行加载默认配置；`xdev --xmdevenv-dir <home> --no-path-fix gui` 使用 CLI 已解析的配置及策略，不重新调用默认配置加载覆盖显式 home。WebView 数据目录位于该 home 下。
 
+`desktopRuntime` 集中事件、窗口显示、文件/目录选择和确认框。后台业务不使用框架 context 发事件。异步确认等待通过 buffered one-shot 回调与 context 管理；安装确认需要响应相应会话取消。
+
+## 4. 安装会话与核心工作流
+
+### 4.1 会话协议
+
+`StartInstall(InstallSpec)` 只返回受理身份；成功受理不代表安装完成。InstallSpec 包含 sessionId、tool、version、form、confirmed、force、kind、method。
+
+每个 InstallSession 保存唯一 sessionId、资源 key、状态、phase、progress、控制能力和递增 revision。前端先订阅 `installSession` 再启动，随后用 `GetInstallSession` 补齐快速完成或响应不确定的情况；旧身份及旧 revision 不能污染重试。
+
+| 状态 | 含义 |
+|---|---|
+| accepted | 已登记，尚未完成 |
+| downloading | 下载阶段，暂停能力以 canPause 为准 |
+| cancelling | 取消已受理，等待 worker 返回和清理 |
+| committing | 已越过提交门，用户取消不再可用 |
+| completed | 安装流程返回成功 |
+| error | 失败终态 |
+| cancelled | 已确认取消的终态 |
+| needs-repair | 发现已有残缺安装，需要显式修复 |
+
+`BeforeCommit` 与取消请求共用会话锁：取消先赢则禁止安装树写入/激活，提交先赢则拒绝用户取消。`CancelInstall` 是受理确认，前端必须继续等待终态。资源在 worker 返回前保持占用；终态只发布一次。安装相关查询缓存在终态事件发出前失效。
+
+Legacy `InstallTool*`、`RepairInstall`、`InstallPackageManager`、`InstallSubTool` 保留接口并等待实际会话完成。新前端使用 StartInstall；同一 coordinator 覆盖单装、修复、PM 和批量的预检/确认阶段。批量拥有一个前端 lease，每项拥有独立后端会话。
+
+### 4.2 安装器职责
+
+```text
+依赖完整性检查 → ResolveVersion → 按平台及 Form 选择 archive
+  → 校验工具/版本/安装路径
+  → 检查已有安装完整性
+  → 下载、镜像回退、SHA/签名检查
+  → 工具安装锁 + BeforeCommit
+  → force 替换 / 按 archive、executable、script、npm 安装
+  → 完整性检查、PostInstall
+  → 释放安装锁 → Activate（自行取得工具锁）
 ```
-用户 cd /path/to/project
-  │
-  ├── bash: alias cd → _xdev_original_cd → _xdev_cd_hook
-  │   └── eval "$(xdev hook --shell bash)"
-  │
-  └── xdev hook --shell bash
-      ├── 查找最近 .xdev.yaml
-      ├── 解析工具版本和路径
-      └── 输出: export PATH=...; export GOROOT=...
-```
 
-## 6. 核心接口
+Force 不应在下载与验证前删除旧安装。形态选择传到实际归档解析；已有安装及缓存身份必须与所选归档保持一致，相关行为由安装器回归测试验证。安装完成但激活失败可返回带 ActivationError 的结果，由 GUI 发出激活警告。
 
-### 6.1 Plugin 接口
+Kind 为 tool、package-manager、sub-tool。corepack/npm 的资源归属为 node，pip 为 python；不能仅以 UI 中的 yarn/pnpm 别名判断是否冲突。官方脚本和 sub-tool 命令进入提交阶段后不提供用户取消；应用退出的 context 生命周期仍需贯穿实际子进程。
+
+### 4.3 Shim 与 shell hook
+
+Shim 依据可执行文件 basename 查找 `current/<tool>`，必要时通过反向索引查找 npm→node 等映射。Unix 使用 `unix.Exec` 覆盖进程，Windows 转发 stdin/stdout/stderr 和退出码。Windows 优先 hard link、Unix 使用 symlink，复制为兼容回退。
+
+Shell hook 在进入目录时查找最近的 `.xdev.yaml`，输出适合当前 shell 的环境修改。`--no-path-fix` 禁止宿主持久化环境写入；GUI 安装器、环境编辑、PATH 模式、hook、profile 和初始化/迁移副作用遵守传入策略。
+
+## 5. Plugin 契约
 
 ```go
 type Plugin interface {
-    // 元数据
-    Name() string                           // "go"
-    DisplayName() string                    // "Go"
-    Description() string                    // "The Go programming language..."
-    Homepage() string                       // "https://go.dev"
-    Category() string                       // "language"
-    Manifest() *manifest.Tool               // 关联的 YAML 清单
-
-    // 版本解析
-    ResolveVersion(spec string) (string, error)  // "^1.22" → "1.22.5"
-    DefaultVersion() string                       // "1.23.2"
-
-    // 归档选择
-    ArchiveFor(version string) (*manifest.Archive, error)  // OS/Arch 匹配
-
-    // 安装路径
-    InstallDir(root, version string) string  // "E:/XDev/install/go/1.22.0"
-
-    // Shim 和环境变量
-    Shims() []string                        // ["go", "gofmt", "godoc"]
-    EnvVars(installPath string) map[string]string  // {"GOROOT": "E:/XDev/install/go/1.22.0"}
-
-    // 生命周期钩子
+    Name() string
+    DisplayName() string
+    Description() string
+    Homepage() string
+    Category() string
+    Manifest() *manifest.Tool
+    ResolveVersion(spec string) (string, error)
+    DefaultVersion() string
+    ArchiveFor(version string) (*manifest.Archive, error)
+    InstallDir(root, version string) (string, error)
+    Shims() []string
+    EnvVars(installPath string) map[string]string
+    PathAppend(installPath string) []string
     PostInstall(ctx context.Context, installPath string) error
     Deactivate(installPath string) error
+    RequiredPlugin() []string
 }
 ```
 
-### 6.2 插件实现
+Generic 使用 YAML；Java 覆盖特定归档解析；Lua 与 Vfox 提供扩展行为。插件提供元数据和钩子，安装器拥有下载、校验、解包及激活。InstallDir 的错误必须传播，不能把不安全路径替换成一个伪目录继续安装。
 
-| 类型 | 文件 | 特点 |
-|------|------|------|
-| **Generic** | `plugin/generic.go` | 行为完全由 YAML 清单驱动；PostInstall/Deactivate 为空操作 |
-| **Java** | `plugins/java/java.go` | 嵌入 Generic 但覆盖 ArchiveFor；动态生成 Oracle/Adoptium URL |
-| **LuaPlugin** | `plugin/lua_plugin.go` | 通过 Lua 函数 (available/archive/env_vars) 定义行为 |
-| **VfoxPlugin** | `plugin/vfox_compat.go` | 兼容 version-fox 格式的 Lua 插件 |
+## 6. 配置与 Catalog
 
-## 7. 配置系统
+配置保留现有 `core`、`path`、`proxy`、`mirror` 等分区及 install/current/shims/cache/downloads/env/manifests 目录布局。显式 `--xmdevenv-dir` 优先于环境变量和默认 home 探测。切换 home 时必须清空派生路径并重新 ResolvePaths，不能只修改根字段。
 
-### 7.1 配置文件结构 (`config.yaml`)
+清单定义 name、versions、archives、latest、shims、env_vars、remote、form_factor 等字段。归档 SHA-256 的全零值是占位符，不能称为已验证；下载策略依据来源、签名和 TOFU 规则处理。
 
-```yaml
-core:
-  xmdevenv_dir: "E:\\XDev"           # 根目录
-  download_dir: "E:\\XDev\\downloads"  # 下载缓存
-  install_dir: "E:\\XDev\\install"     # 工具安装
-  shim_dir: "E:\\XDev\\shims"          # Shim 目录
-  cache_dir: "E:\\XDev\\cache"         # 清单缓存
-  env_dir: "E:\\XDev\\env"             # 环境片段
-  manifest_dir: "E:\\XDev\\manifests"  # 清单文件
-path:
-  mode: "shim"                         # shim | direct | auto
-  inject_to_shell_rc: true
-  inject_to_windows_path: true
-proxy:
-  http: ""
-  https: ""
-  no_proxy: ""
-  enabled: false
-mirror:                                 # 镜像源
-  python: "https://mirrors.aliyun.com/python"
-  node: "https://npmmirror.com/mirrors/node"
-ai:
-  ollama_url: ""
-  model: ""
-  timeout: ""
+Catalog 加载与缓存共用顶层和 `third-party/` 来源集合，不递归其他子目录。同名磁盘工具按顶层先、third-party 后处理。没有内嵌清单时，缺失或无清单的目录可以回退到开发仓库 manifests；仅含 third-party 清单不触发空目录回退。
+
+存在内嵌清单时执行 embedded-first 合并：内嵌同版本 archive/hash 等字段保留，磁盘新版本追加。磁盘 latest 只有在合并结果中存在、可安装且更高时才能推进；稳定默认不跳预发布，同通道预发布可以推进，无法可靠排序的任意标签不用于自动晋升。原有效默认（含 LTS/首项回退）不能被追加排序意外改变。
+
+缓存指纹包括来源根、相对路径、mtime 和 size，因此冷热缓存具有相同集合及同名优先级。它不逐文件计算内容 hash；保留大小及时间戳的外部修改不在该元数据模型的保证范围内。
+
+## 7. 桌面前端与绑定
+
+前端继续使用 Vue 3 Composition API 与 Naive UI。正式生成目录为 `frontend/bindings`，运行时依赖固定为 `@wailsio/runtime` 3.1.0。`frontend/src/main.js` 装载生成绑定和 desktop bridge 后挂载 Vue。
+
+`frontend/src/desktop/bridge.js` 将 v3 `Events.On` 的 event.data 转为页面已有 payload 形式，并负责订阅释放；窗口动作经同目录 adapter 调用。兼容 `window.go.gui.App` / `window.runtime` namespace 是页面迁移边界，不是自行实现一套 RPC。
+
+当前主要绑定分组如下（完整签名以生成文件为准）：
+
+| 分组 | 代表方法 |
+|---|---|
+| 查询 | GetCategories、GetToolsByCategory、GetInstalledVersions、GetAvailableVersions、PreviewInstall |
+| 会话 | StartInstall、GetInstallSession、CancelInstall、InstallTool、RepairInstall |
+| 激活/下载 | UseVersion、UninstallVersion、PauseDownload、ResumeDownload |
+| 配置/环境 | GetConfig、SetPathMode、GetEnvVars、SetEnvVar、CleanAllInvalidEnvVars |
+| 本地迁移 | ScanLocalEnvironments、MigrateLocalTool、MigrateAllLocalTools |
+| 隔离/远程 | GetIsolateStatus、IsolateExec、ListRemoteInstances、CreateRemoteInstance |
+| 初始化/profile | IsInitialized、InitConfig、GetDrives、ExportProfile、ImportProfile |
+
+## 8. 安全与发布
+
+- 归档解包进行目标路径约束，拒绝路径穿越及危险成员；失败清理残缺目录。
+- 环境写入区分显式编辑与 manifest 提供的值；名称/受保护键和路径值分别校验，不把所有环境接口描述成同一白名单。
+- Lua 扩展限制宿主文件、进程及模块加载能力；上下文和执行预算由插件实现控制。
+- 内置清单使用 Ed25519 签名和版本/平台 hash 覆盖检查；第三方来源按签名/TOFU 策略处理。任意磁盘同名清单不能替换内嵌同版本可信归档。
+- 发布签名目录由一个签名 job 产生，包含 manifests、签名和公钥，全部平台下载相同输入再构建。
+- `--release` 构建要求公钥且强制签名覆盖；缺签不得通过 skip。私钥仅用于签名步骤，不能进入发布产物。
+- 更新归档成员为根目录 `xdev` 或 `xdev.exe`。打包后由 updater consumer 验证解包，汇总完整平台归档后生成 SHA256SUMS。
+
+## 9. 构建与验证
+
+安装固定生成器：
+
+```sh
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 ```
 
-### 7.2 Home 目录解析优先级
+Wails v3 配置为 `wails.yaml`，旧版 `wails.json` 不再作为构建依据。该配置提供原生开发所需元数据；本轮未验证直接运行 `wails3 dev`。直接 `wails3 build` 也不保证与项目的公钥注入、签名覆盖和发布打包流程等价。
 
-1. `--xmdevenv-dir` CLI 标志
-2. `$XMDEV_HOME` 环境变量
-3. `last_selection.json` (用户之前的选择)
-4. **Windows 智能回退**: 扫描 D:-J: 盘，选择空闲空间 ≥ 20 GiB 的最大盘
-5. 现有安装扫描
-6. 平台默认值 (Windows: `~/.xdev`, macOS: `~/Library/XDev`, Linux: `~/.local/share/xdev`)
+受支持的本地及发布构建入口统一到 `node scripts/build.mjs`：
 
-## 8. 清单系统
-
-### 8.1 清单 YAML 结构
-
-```yaml
-name: go
-display_name: Go
-description: The Go programming language toolchain.
-homepage: https://go.dev/
-category: language
-shims: [go, gofmt, godoc]
-env_vars:
-  GOROOT: "{{install}}"           # 模板变量，安装时替换
-  GOPATH: "{{install}}\\..\\gopath"
-latest: "1.23.2"
-versions:
-  - version: "1.23.2"
-    stable: true
-    release: "2024-10-08"
-    archives:
-      - os: windows
-        arch: amd64
-        format: zip
-        url: https://go.dev/dl/go1.23.2.windows-amd64.zip
-        mirror_url: https://mirrors.aliyun.com/golang/...
-        sha256: "0000..."          # 全零 = 占位符，跳过验证
-        strip: 0                   # 解压时去除的前导路径层数
-remote:
-  type: github
-  url: "golang/go"
-  pattern: "go(\\d+\\.\\d+\\.\\d+)$"
-```
-
-### 8.2 清单加载流程
-
-```
-manifest.LoadCatalogCached()
-  ├── 嵌入 FS 存在? → loadFromEmbedded()
-  ├── 磁盘目录存在? → loadFromDir()
-  └── 回退到仓库相对路径 manifests/
-```
-
-## 9. 安全机制
-
-### 9.1 Zip Slip / Tar Slip 防护
-
-- `extractZip` / `extractTarFromReader`: 每个文件路径写入前检查 `isSafePath()`
-- `extract7z`: 解压后 `validateExtraction()` 验证所有文件在目标目录内
-- 失败时自动 `os.RemoveAll(dst)` 清理
-- Windows 大小写不敏感路径比较 (`EqualFold`)
-- 检测硬链接、设备文件、命名管道等特殊文件
-
-### 9.2 注册表环境变量白名单
-
-`SetUserEnvVar`/`DeleteUserEnvVar`/`SetEnvVar`/`DeleteEnvVar` 仅允许写入预定义的变量名（JAVA_HOME, GOROOT, GOPATH, NODE_HOME 等），拒绝任意变量名。白名单统一由 `util.IsAllowedEnvVarName` 管理，`util.IsProtectedSystemEnvVar` 保护系统关键变量不被删除/修改。
-
-### 9.3 Service exec 路径验证
-
-`parseServiceMarker` 验证 `exec` 和 `datadir` 字段不包含 `..` 路径穿越。
-
-### 9.4 Lua 沙箱
-
-- 禁止 `io` 和 `os` 库
-- `package.loaders` 限制为仅预加载搜索器，阻止加载任意文件或 C 模块
-
-### 9.5 清单签名验证（分层信任模型）
-
-**内置 manifest**（随二进制发布）：强制 Ed25519 签名验证。公钥通过 `-ldflags` 注入二进制，下载时验证 `.yaml.sig` 签名。签名失败或缺失时拒绝下载。
-
-**第三方 manifest**（`xdev manifest add` 添加的清单）：使用 TOFU（Trust On First Use）模型。首次下载时记录 SHA-256 到 sidecar 文件，后续下载时比对。签名验证为可选——有 `.yaml.sig` 则验证，无则走 TOFU。
-
-**代码路径**：`internal/downloader/downloader.go:108-114` 中 `opts.IsThirdParty` 标志决定拒绝还是降级。`internal/installer/installer.go:290-317` 检测 manifest 来源（内置 vs 第三方目录）并设置标志。
-
-### 9.6 新增安全机制（本次会话）
-
-| 机制 | 文件 | 说明 |
-|------|------|------|
-| SSRF 防护 | `util/url_safety.go` | `IsSafeExternalURL` 强制 HTTPS + 拒绝内网 IP |
-| HMAC 常量时间比较 | `util/hmac_key.go:81` | 改用 `crypto/hmac.Equal` |
-| 标准库 HMAC | `util/hmac_key.go:86` | 改用 `crypto/hmac` 替代自定义实现 |
-| RequiredPlugin 依赖检查 | `installer.go:224-236` | 安装时验证依赖已安装 |
-| RequiredPlugin 反向保护 | `installer.go:751-761` | 卸载时检查是否被其他工具依赖 |
-| 配置完整性回退 | `config.go:227-237` | HMAC 校验失败时回退敏感字段到安全默认值 |
-
-## 10. 测试架构
-
-### 10.1 测试层级
-
-| 层级 | 构建标签 | 位置 | 范围 |
-|------|----------|------|------|
-| L1 单元测试 | (默认) | `*_test.go` | 单个函数/方法，使用 fake/mock |
-| L2 集成测试 | `integration` | `internal/integration/` | 驱动真实 xdev 二进制，隔离临时目录 |
-| L3 E2E 测试 | `online` | `internal/e2e/` | 真实网络下载，验证完整用户流程 |
-
-### 10.2 测试隔离
-
-- L2 测试使用 `t.TempDir()` + `--xmdevenv-dir` + `--no-path-fix`
-- `--no-path-fix` 同时阻止注册表环境变量写入和 PATH 修改
-- L3 测试在下载失败时 `t.Skipf` 而非 `t.Fatal`
-
-## 11. 构建系统
-
-### 11.1 构建命令
-
-```bash
-# Unix
+```sh
+# Linux / macOS
 ./build.sh
-
 # Windows PowerShell
-.\build.ps1                 # 完整构建
-.\build.ps1 -SkipBuild      # 跳过编译（仅做审计）
-.\build.ps1 -SkipAudit      # 跳过下载源审计
+.\build.ps1
+.\build.ps1 -SkipBuild  # 只执行下载源审计，跳过构建
+.\build.ps1 -SkipAudit  # 跳过下载源审计，继续构建
 ```
 
-### 11.2 Ldflags
+PowerShell 包装脚本只声明 `-SkipBuild` 和 `-SkipAudit`。Node 入口负责生成绑定、安装前端依赖、构建资源、注入版本/公钥并编译；可通过 GO、NPM、WAILS3 指定真实工具路径。Linux 构建需要 GTK3 与 WebKitGTK 4.1 开发依赖，macOS 需要相应 Xcode Command Line Tools。
 
-```
--s -w                                    # 剥离调试信息
--X github.com/xmdemt/xdev/internal/version.BuildDate=<timestamp>
-```
-
-### 11.3 输出
-
-- `build/bin/xdev.exe` — 单二进制（CLI/TUI/GUI/shim；默认 `go build`，嵌入前端资源；ADR-0006）
-- `build/bin/xdev-<version>.exe` — 同一产物的版本化副本
-
-## 12. GUI 架构
-
-### 12.1 前端技术栈
-
-- **Vue 3** + Composition API
-- **Naive UI** 组件库 (自定义深色主题)
-- **Wails v2** 桥接层
-
-### 12.2 后端导出方法 (65+)
-
-| 分类 | 方法 | 文件 |
-|------|------|------|
-| 工具查询 | GetCategories, GetToolsByCategory, GetInstalledVersions, GetAvailableVersions | app_tool_query.go |
-| 安装管理 | InstallTool, UseVersion, UninstallVersion, PauseDownload, ResumeDownload, CancelDownload | app_install.go |
-| 本地检测 | ScanLocalEnvironments, ScanLocalTools, MigrateLocalTool, MigrateAllLocalTools | app_local_detect.go, app_migration.go |
-| 配置 | GetConfig, GetMirrorConfig, SetMirrorConfig, GetPathMode, SetPathMode, GetProxyConfig, SetProxyConfig | app_config.go |
-| 环境变量 | GetEnvVars, SetEnvVar, DeleteEnvVar, GetAllEnvVars | app_env_vars.go |
-| 项目 | GetProjectConfig, SetProjectTool, RunProjectTask, GetLockfile | app_project.go |
-| 服务/插件/AI | ListServices, StartService, StopService, ListPlugins, GetAIStatus, AISuggest | app_project.go |
-| 隔离/远程 | GetIsolateStatus, IsolateExec, ListRemoteInstances, CreateRemoteInstance | app_project.go |
-| 收藏 | GetFavorites, AddFavorite, RemoveFavorite | app_favorites.go |
-| 自定义工具 | GetCustomTools, AddCustomTool, RemoveCustomTool, InstallCustomTool | app_custom_tools.go |
-| 配置文件 | ExportProfile, ImportProfile | app_profile.go |
-| 初始化 | IsInitialized, InitConfig, GetDrives, SaveLastSelection | app_migration.go |
-
-## 13. 新增核心接口（本次会话）
-
-### 13.1 批量安装接口
-
-```go
-type BatchInstallItem struct {
-    ToolName string
-    Version  string // 空则使用 DefaultVersion
-}
-
-type BatchInstallResult struct {
-    Tool        string
-    Version     string
-    InstallPath string
-    Status      string // "installed" | "already_installed" | "unsupported" | "failed"
-    Error       error
-}
-
-func (i *Installer) InstallMany(ctx context.Context, items []BatchInstallItem) []BatchInstallResult
+```sh
+# 维护构建无需前端 dist
+go build -o xdev-maintenance .
+# 独立生成绑定；Linux 加 gtk3
+wails3 generate bindings -f '-tags desktop,bindings' -ts -d frontend/bindings ./internal/gui
 ```
 
-**工作流程**：遍历 items → `reg.Get(toolName)`（不存在→unsupported）→ 检查 installPath 已存在（已装→跳过）→ `InstallWithProgress`（安装→成功/失败）。
+默认产物为 `build/bin/xdev.exe`（Windows）或 `build/bin/xdev`（Unix），同时生成版本化副本。正式构建默认标签包含 desktop；不可用维护构建替换发布流程。
 
-**调用方**：仅 `cli/profile.go` 的 `profile import`（配置导入）。
+验证分层包括默认 Go 单测/vet、desktop 标签编译及 GUI 测试、前端 unit/smoke/production build、隔离 HOME 的 integration 测试、可用宿主上的 CLI/shim 和原生窗口验证。新增会话测试需检查真实终态而非只检查受理返回。
 
-> 2026-10-26 修正：此前本节列出 `installFromLocal`（.xdev.toml 批量安装）
-> 与 `installLocked`（.lock 文件批量安装）作为调用方，两者均已不存在：
-> `internal/lockfile` 在 Spec 012 删除（见 12.x 的说明），`installFromLocal`
-> 也随之移除。项目级配置现为 `.xdev.yaml`（`internal/project`），
-> 但它的批量安装走的是另一条路径，不经 `InstallMany`。
-
-### 13.2 依赖检查接口
-
-```go
-// Plugin 接口方法
-RequiredPlugin() []string // 返回依赖的工具名列表
-```
-
-**安装时检查**：`InstallWithProgress` 入口处调用 `p.RequiredPlugin()` → 对每个依赖调用 `reg.Get` 并检查 installPath 是否存在。不满足则返回 error，安装中止。
-
-**卸载时检查**：`Uninstall` 入口遍历 `reg.All()` → 检查是否有其他工具依赖当前工具且已安装。被依赖则返回 error，卸载中止。
-
-**manifest YAML 声明示例**：
-```yaml
-name: flutter
-required_plugins: [java, android-sdk-tools]
-```
-
-### 13.3 ~~Lockfile 命令接口~~（Spec 012 已移除）
-
-`xdev lock` / `.xdev.lock` / `internal/lockfile` 已在 Spec 012 删除。本节保留为历史说明。可复现安装的后续方案见 roadmap。
-
----
-
-> **文档版本**: 2026-08-21 | **覆盖代码版本**: Spec 030/031/032（CLI/GUI 分离 + host-scan/Naive 性能 + shim/extractor/isolate/remote 收口）
+截至 2026-11-17，集成负责人报告的实际验证范围：Windows desktop 构建、原生 WebView2 GUI 渲染、生成绑定调用、GetConfig 保持临时 home 和正常退出均通过；Linux 的 manifest/plugin/gui/installer 全包测试及 `desktop,production,gtk3` 构建通过。macOS 尚未实机运行；Linux 构建通过也不等于已完成原生窗口交互验证。具体命令与完整验收结果由 Spec 040 验收记录维护。

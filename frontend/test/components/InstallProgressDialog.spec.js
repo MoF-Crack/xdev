@@ -6,7 +6,7 @@ const t = (key) => key;
 afterEach(() => { document.body.innerHTML = ''; });
 describe('InstallProgressDialog', () => {
   it('shows localized phase, percent, bytes, speed and controls while preventing active close', async () => {
-    const wrapper = mount(InstallProgressDialog, { global: { stubs: { teleport: true } }, props: { show: true, active: true, paused: false, phase: 'Downloading', progress: { percent: 42, bytes: 420, totalBytes: 1000, speed: '2 MB/s' }, t } });
+    const wrapper = mount(InstallProgressDialog, { global: { stubs: { teleport: true } }, props: { show: true, active: true, paused: false, canCancel: true, canPause: true, phase: 'Downloading', progress: { percent: 42, bytes: 420, totalBytes: 1000, speed: '2 MB/s' }, t } });
     expect(wrapper.text()).toContain('installing_downloading');
     expect(wrapper.text()).toContain('42%');
     expect(wrapper.text()).toContain('420 B / 1000 B');
@@ -17,6 +17,16 @@ describe('InstallProgressDialog', () => {
     await wrapper.get('[data-action="cancel"]').trigger('click');
     expect(wrapper.emitted('pause')).toHaveLength(1);
     expect(wrapper.emitted('cancel')).toHaveLength(1);
+  });
+
+  it('disables cancellation and pause after commit even while active', async () => {
+    const wrapper = mount(InstallProgressDialog, { props: { show: true, active: true, canCancel: false, canPause: false, phase: 'Installing', t } });
+    for (const action of ['pause', 'resume', 'cancel']) {
+      expect(wrapper.get(`[data-action="${action}"]`).element.disabled).toBe(true);
+      await wrapper.get(`[data-action="${action}"]`).trigger('click');
+      expect(wrapper.emitted(action)).toBeUndefined();
+    }
+    wrapper.unmount();
   });
 
   it('renders the error message as text and offers a copy action', async () => {
@@ -46,7 +56,7 @@ describe('InstallProgressDialog', () => {
   // The counter only exists in multi-item (batch) mode.
   it('counts only settled-success rows in the (N/M) batch counter', async () => {
     const rows = [
-      { tool: 'node', version: '20.18.0', active: false, percent: 100 },
+      { tool: 'node', version: '20.18.0', status: 'completed', active: false, percent: 100 },
       { tool: 'go', version: '1.24.0', active: false, error: { message: 'HTTP 503' } },
       { tool: 'lua', version: '5.4.8', active: true, phase: 'Installing', percent: 40 },
     ];
@@ -66,7 +76,7 @@ describe('InstallProgressDialog', () => {
     const trigger = document.createElement('button');
     document.body.append(trigger);
     trigger.focus();
-    const wrapper = mount(InstallProgressDialog, { attachTo: document.body, props: { show: false, active: true, paused: false, t } });
+    const wrapper = mount(InstallProgressDialog, { attachTo: document.body, props: { show: false, active: true, paused: false, canCancel: true, canPause: true, t } });
     await wrapper.setProps({ show: true });
     const pause = wrapper.get('[data-action="pause"]');
     const background = wrapper.get('[data-action="background"]');

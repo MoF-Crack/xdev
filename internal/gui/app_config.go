@@ -145,6 +145,9 @@ func (a *App) SetMigrationMode(mode string) error {
 
 // SetPathMode switches the PATH management mode and migrates the PATH entries.
 func (a *App) SetPathMode(mode string) error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	cfg := a.getCfg()
 	oldMode := cfg.GetPathMode()
 	if mode == oldMode {

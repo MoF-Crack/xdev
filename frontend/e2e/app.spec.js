@@ -76,9 +76,20 @@ async function expectVisibleDialogAccessible(page) {
   expect(results.violations.filter(({ impact }) => impact === 'critical' || impact === 'serious')).toEqual([]);
 }
 
-test.afterEach(async ({}, testInfo) => {
+test.afterEach(async ({ page }, testInfo) => {
   expect(testInfo.pageErrors ?? []).toEqual([]);
+  expect(await page.evaluate(() => window.__wailsUnexpected || [])).toEqual([]);
 });
+
+async function sessionId(page, tool, count = 1) {
+  await expect.poll(() => page.evaluate(name => window.__wailsCalls.StartInstall.filter(s => s.tool === name).length, tool)).toBe(count);
+  return page.evaluate(name => window.__wailsCalls.StartInstall.filter(s => s.tool === name).at(-1).sessionId, tool);
+}
+async function progressSession(page, tool, patch) {
+  const id = await sessionId(page, tool);
+  await page.evaluate(({ id, patch }) => window.__wailsSession(id, patch), { id, patch });
+  return id;
+}
 
 test('setup wizard visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.setup, false);
@@ -142,13 +153,16 @@ test('package manager and favorite actions reach the correct Wails APIs', async 
   await page.locator('[data-action="package-manager"]').click();
   await expectVisibleDialogAccessible(page);
   await page.getByRole('dialog').last().getByRole('button', { name: 'Install', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.__wailsCalls.InstallPackageManager)).toBe(1);
+  const pmId = await sessionId(page, 'npm');
+  expect(await page.evaluate(() => window.__wailsCalls.StartInstall[0])).toMatchObject({ tool: 'npm', kind: 'package-manager' });
+  await page.evaluate(id => window.__wailsSession(id, { status: 'completed', phase: 'Completed' }), pmId);
   await page.keyboard.press('Escape');
   await expect(page.locator('.n-drawer-mask')).toHaveCount(0);
   await page.locator('[data-action="detail"][data-tool="pnpm"]').click();
   await expect(page.locator('[data-action="package-manager-update"]')).toBeVisible();
   await page.locator('[data-action="package-manager-update"]').click();
-  await expect.poll(() => page.evaluate(() => window.__wailsCalls.UpdatePackageManager)).toBe(1);
+  await progressSession(page, 'pnpm', { status: 'completed', phase: 'Completed' });
+  expect(await page.evaluate(() => window.__wailsCalls.StartInstall.at(-1))).toMatchObject({ tool: 'pnpm', confirmed: true, version: '22.14.0' });
   await page.keyboard.press('Escape');
   await expect(page.locator('.n-drawer-mask')).toHaveCount(0);
   await page.getByRole('row').filter({ has: page.getByText('npm', { exact: true }) }).getByRole('button', { name: 'Favorite', exact: true }).click();
@@ -313,10 +327,8 @@ test('installation progress visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
   await openToolCatalog(page);
   await page.getByText('Node.js', { exact: true }).click();
-  await page.getByRole('button', { name: '安装' }).locator(':not([disabled])').first().click();
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    tool: 'node', version: '22.14.0', percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s',
-  }));
+  await page.getByRole('button', { name: '安装', exact: true }).filter({ visible: true }).first().click();
+  await progressSession(page, 'node', { status: 'downloading', canCancel: true, canPause: true, percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s' });
   await expect(page.locator('.n-modal')).toBeVisible();
   await expectDocumentContained(page);
   await expectInViewport(page.locator('.n-modal'), cases.progress.viewport);
@@ -337,10 +349,8 @@ test('backgrounded install shows a toolbar progress indicator that reopens the d
   await openApp(page, testInfo, cases.progress);
   await openToolCatalog(page);
   await page.getByText('Node.js', { exact: true }).click();
-  await page.getByRole('button', { name: '安装' }).locator(':not([disabled])').first().click();
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    tool: 'node', version: '22.14.0', percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s',
-  }));
+  await page.getByRole('button', { name: '安装', exact: true }).filter({ visible: true }).first().click();
+  await progressSession(page, 'node', { status: 'downloading', canCancel: true, canPause: true, percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s' });
   await expect(page.locator('.n-modal')).toBeVisible();
   // Send the install to the background — the modal closes but stays active.
   await page.getByRole('button', { name: '后台运行' }).click();
@@ -350,9 +360,7 @@ test('backgrounded install shows a toolbar progress indicator that reopens the d
   await expect(indicator).toBeVisible();
   await expect(indicator).toContainText('42%');
   // Live progress keeps flowing into the indicator while backgrounded.
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    tool: 'node', version: '22.14.0', percent: 77, phase: 'Downloading', speed: '9 MB/s', eta: '3s',
-  }));
+  await progressSession(page, 'node', { status: 'downloading', canCancel: true, canPause: true, percent: 77, phase: 'Downloading', speed: '9 MB/s', eta: '3s' });
   await expect(indicator).toContainText('77%');
   // Clicking the indicator reopens the progress dialog with live state.
   await indicator.click();
@@ -376,20 +384,23 @@ test('installation pause resume and cancel use the active task and protect the d
   await expect(page.locator('.n-modal')).toBeVisible();
   await page.locator('.n-modal-mask').click({ position: { x: 2, y: 2 } });
   await expect(page.locator('.n-modal')).toBeVisible();
+  const id = await progressSession(page, 'node', { status: 'downloading', phase: 'Downloading', canCancel: true, canPause: true });
   await page.getByRole('button', { name: '暂停' }).click();
-  await expect.poll(() => page.evaluate(() => window.__wailsCalls.PauseDownload)).toEqual([['node@22.14.0']]);
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.PauseDownload)).toEqual([[id]]);
   await expect(page.getByRole('button', { name: '继续' })).toBeEnabled();
   await page.getByRole('button', { name: '继续' }).click();
-  await expect.poll(() => page.evaluate(() => window.__wailsCalls.ResumeDownload)).toEqual([['node@22.14.0']]);
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.ResumeDownload)).toEqual([[id]]);
   await page.getByRole('button', { name: '取消' }).click();
-  await expect.poll(() => page.evaluate(() => window.__wailsCalls.CancelDownload)).toEqual([['node@22.14.0']]);
+  await expect.poll(() => page.evaluate(() => window.__wailsCalls.CancelInstall)).toEqual([[id]]);
+  await expect(page.locator('.n-modal')).toBeVisible(); // cancellation ACK is not completion
+  await page.evaluate(id => window.__wailsSession(id, { status: 'cancelled', phase: 'Cancelled' }), id);
   await expect(page.locator('.n-modal')).toBeHidden();
   await expect(detailTrigger).toBeFocused();
 });
 
 // Spec 037 阶段 1 e2e 基线：批量「全部更新」并行执行——多项进度框渲染
 // 每项独立行（tool@version + 各自进度 + 逐项取消），确认对话框逐项串行，
-// 全部完成后真实汇总。后端 mock 的 InstallToolConfirmed 记录启动调用。
+// 全部完成后真实汇总。后端 mock 的 StartInstall 记录启动调用。
 test('batch update runs items in parallel with a multi-item progress dialog', async ({ page }, testInfo) => {
   // Inject the updates list BEFORE the app mounts (init scripts run in
   // order; this one must precede openApp's goto).
@@ -409,13 +420,10 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
   await page.getByRole('button', { name: /更新|Update/i }).last().click();
 
   // Both items started in parallel — the two sessions each called
-  // InstallToolConfirmed before either Completed event arrives.
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    taskId: 'node@22.14.0', tool: 'node', version: '22.14.0', phase: 'Downloading', percent: 40,
-  }));
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    taskId: 'go@1.26.0', tool: 'go', version: '1.26.0', phase: 'Downloading', percent: 60,
-  }));
+  // StartInstall before either Completed event arrives.
+  const nodeId = await progressSession(page, 'node', { status: 'downloading', phase: 'Downloading', percent: 40, canCancel: true, canPause: true });
+  const goId = await progressSession(page, 'go', { status: 'downloading', phase: 'Downloading', percent: 60, canCancel: true, canPause: true });
+  expect(nodeId).not.toBe(goId);
 
   // Multi-item dialog: one row per item with independent progress.
   // (The Naive confirm dialog also uses .n-modal while animating out —
@@ -428,7 +436,7 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
   await expect(page.getByRole('button', { name: /取消 go|Cancel go/i })).toBeVisible();
 
   // The parallel property: both installs launched before any completion.
-  expect(await page.evaluate(() => window.__wailsCalls.InstallToolConfirmed.length)).toBe(2);
+  expect(await page.evaluate(() => window.__wailsCalls.StartInstall.length)).toBe(2);
 
   // Ticket 12 / B-7 (G-02): while the batch runs, re-entry is blocked at
   // the UI level — the dashboard's "Update All" button is disabled even
@@ -445,12 +453,8 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
 
   // Complete both — the batch resolves, reports the truthful summary,
   // and the finally net closes the progress dialog.
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    taskId: 'node@22.14.0', tool: 'node', version: '22.14.0', phase: 'Completed', percent: 100,
-  }));
-  await page.evaluate(() => window.__wailsEmit('installProgress', {
-    taskId: 'go@1.26.0', tool: 'go', version: '1.26.0', phase: 'Completed', percent: 100,
-  }));
+  await page.evaluate(id => window.__wailsSession(id, { status: 'completed', phase: 'Completed', percent: 100 }), nodeId);
+  await page.evaluate(id => window.__wailsSession(id, { status: 'completed', phase: 'Completed', percent: 100 }), goId);
   await expect(modal).toBeHidden();
   // The batch settled → the button is usable again.
   await expect(installAll).toBeEnabled();

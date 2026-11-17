@@ -25,8 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"github.com/xmdemt/xdev/internal/hostscan"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/toolmeta"
@@ -225,7 +223,7 @@ func (a *App) refreshDashboardStats() {
 
 	// 通知前端数据已更新
 	if a.ctx != nil {
-		wailsRuntime.EventsEmit(a.ctx, "dashboardStatsUpdated")
+		a.emitEvent("dashboardStatsUpdated", nil)
 	}
 
 	// 重置 in-flight 标志，允许下次刷新
@@ -429,7 +427,6 @@ func (a *App) MigrateLocalTool(toolName, localPath string) error {
 	logInfo("[MigrateLocalTool] %s migrated successfully as version %s", toolName, ver)
 	return nil
 }
-
 
 // GetPackageManagers returns available package managers with their status.
 // Spec 026: 两阶段检测——第一阶段并发检测所有 pmDef 的基础状态，
@@ -943,6 +940,10 @@ func (a *App) InstallSubTool(toolName, method string) error {
 }
 
 func (a *App) installSubTool(spec InstallSpec) error {
+	return a.installSubToolContext(a.rootContext(), spec)
+}
+
+func (a *App) installSubToolContext(parent context.Context, spec InstallSpec) error {
 	toolName := spec.Tool
 	method := spec.Method
 	logInfo("[InstallSubTool] %s method=%q", toolName, method)
@@ -974,11 +975,11 @@ func (a *App) installSubTool(spec InstallSpec) error {
 					method, pm.displayName, formatMethodNames(pm.installMethods))
 			}
 		}
-		return a.installSubToolViaMethod(pm, *selected)
+		return a.installSubToolViaMethodContext(parent, pm, *selected)
 	}
 
 	if pm.enableCommand != "" {
-		return a.installSubToolViaEnable(pm)
+		return a.installSubToolViaEnableContext(parent, pm)
 	}
 
 	return fmt.Errorf("%q is not a sub-tool (no enableCommand or installMethods)", toolName)
@@ -987,6 +988,10 @@ func (a *App) installSubTool(spec InstallSpec) error {
 // installSubToolViaEnable 执行 corepack enable 命令（yarn/pnpm）。
 // 在 PATH 含 node 的环境中执行。
 func (a *App) installSubToolViaEnable(pm pmDef) error {
+	return a.installSubToolViaEnableContext(a.rootContext(), pm)
+}
+
+func (a *App) installSubToolViaEnableContext(parent context.Context, pm pmDef) error {
 	logInfo("[InstallSubTool] enable: %s", pm.enableCommand)
 	// corepack enable yarn → args = ["enable", "yarn"]
 	parts := strings.Fields(pm.enableCommand)
@@ -994,7 +999,7 @@ func (a *App) installSubToolViaEnable(pm pmDef) error {
 		return fmt.Errorf("invalid enableCommand %q for %s", pm.enableCommand, pm.name)
 	}
 	// parts[0] = "corepack", parts[1:] = ["enable", "yarn"]
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	bin := parts[0]
 	if xdevCorepack, ok := a.findXdevManagedCorepack(); ok {
@@ -1005,6 +1010,8 @@ func (a *App) installSubToolViaEnable(pm pmDef) error {
 	// 仅装了 xdev Node 时系统 PATH 可能没有 corepack；前置 shim 目录。
 	cmd.Env = a.envWithXdevShims(os.Environ())
 	util.HideWindow(cmd)
+	util.TrackProcessGroup(cmd)
+	cmd.WaitDelay = 5 * time.Second
 	output, err := cmd.CombinedOutput()
 	logInfo("[InstallSubTool] %s enable output:\n%s", pm.name, string(output))
 	if err != nil {
@@ -1019,6 +1026,10 @@ func (a *App) installSubToolViaEnable(pm pmDef) error {
 // Spec 026 增量：当 method 用 pip 安装时，优先用 xdev 管理的 Python 的 pip，
 // 而非 PATH 中的系统 pip——确保 pipx 安装到 xdev 管理的目录。
 func (a *App) installSubToolViaMethod(pm pmDef, m installMethod) error {
+	return a.installSubToolViaMethodContext(a.rootContext(), pm, m)
+}
+
+func (a *App) installSubToolViaMethodContext(parent context.Context, pm pmDef, m installMethod) error {
 	logInfo("[InstallSubTool] method %s: %s", m.name, m.command)
 	parts := strings.Fields(m.command)
 	if len(parts) == 0 {
@@ -1046,12 +1057,14 @@ func (a *App) installSubToolViaMethod(pm pmDef, m installMethod) error {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	// 确保 PATH 含 xdev 的 shim 目录（这样 pip 能找到 xdev 管理的 python）。
 	cmd.Env = a.envWithXdevShims(os.Environ())
 	util.HideWindow(cmd)
+	util.TrackProcessGroup(cmd)
+	cmd.WaitDelay = 5 * time.Second
 	output, err := cmd.CombinedOutput()
 	logInfo("[InstallSubTool] %s via %s output:\n%s", pm.name, m.name, string(output))
 	if err != nil {
@@ -1403,10 +1416,17 @@ func inferIndependentPMRoot(pm pmDef, exePath string) (string, error) {
 	}
 }
 
-
 // installPackageManagerViaScript 执行包管理器的官方安装命令（Spec 025）。
 // 后台执行 + 捕获输出到 GUI log + cmd.Wait() 防僵尸。
 func (a *App) installPackageManagerViaScript(pm pmDef) error {
+	return a.installPackageManagerViaScriptContext(a.rootContext(), pm)
+}
+
+func (a *App) installPackageManagerViaScriptContext(parent context.Context, pm pmDef) error {
+	// Official installers may change the user's shell/profile outside XDev.
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	logInfo("[InstallPackageManager] script install: %s (env=%s, admin=%v)", pm.name, pm.executionEnv, pm.requiresAdmin)
 
 	// 平台检查
@@ -1423,7 +1443,7 @@ func (a *App) installPackageManagerViaScript(pm pmDef) error {
 
 	// 构造 exec.Command
 	var cmd *exec.Cmd
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 
 	switch pm.executionEnv {
@@ -1440,6 +1460,8 @@ func (a *App) installPackageManagerViaScript(pm pmDef) error {
 	}
 
 	util.HideWindow(cmd)
+	util.TrackProcessGroup(cmd)
+	cmd.WaitDelay = 5 * time.Second
 	output, err := cmd.CombinedOutput()
 	logInfo("[InstallPackageManager] %s output:\n%s", pm.name, string(output))
 	if err != nil {

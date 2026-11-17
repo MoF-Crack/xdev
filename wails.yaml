@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://v3.wails.io/schemas/wails.v3.json
+version: 3
+project:
+  name: XDev
+  product_name: XDev
+  identifier: io.github.xmdemt.xdev
+  version: 1.0.0-alpha.2
+  binary_name: xdev
+  description: Development Environment Manager
+  icon: build/appicon.png
+frontend:
+  directory: frontend
+  install: [npm, ci, --ignore-scripts]
+  build: [npm, run, build]
+  dev: [npm, run, dev]
+  output: frontend/dist
+build:
+  output: build/bin
+  tags: [desktop]
+dev:
+  tags: [desktop]
+  watch: ['**/*.go', frontend/src/**, wails.yaml]
+  exclude: [.scratch, build/bin, frontend/node_modules, .git]
+  use_git_ignore: true

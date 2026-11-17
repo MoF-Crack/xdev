@@ -66,7 +66,7 @@ func main() {
 
 	// `xdev gui` 子命令需要进程内启动 GUI 的句柄（cli 包不依赖 gui 包，
 	// 通过注入避免 CLI 链接语义被破坏——Spec 030 守卫仍成立）。
-	cli.SetGUILauncher(runGUI)
+	cli.SetConfiguredGUILauncher(runGUIWithConfig)
 
 	root := cli.NewRootCommand(toolName, toolDesc)
 

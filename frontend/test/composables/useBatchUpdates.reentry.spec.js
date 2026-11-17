@@ -27,11 +27,11 @@ const UPDATES = [
 function setup() {
   const completions = [];
   const app = {
-    InstallToolConfirmed: vi.fn(async (tool, version) => {
-      completions.push(() => window.__wailsEmit('installProgress', {
-        taskId: `${tool}@${version}`, tool, version, phase: 'Completed', percent: 100,
+    StartInstall: vi.fn(async ({ tool, version, sessionId }) => {
+      completions.push(() => window.__wailsEmit('installSession', {
+        sessionId, status: 'completed', tool, version, phase: 'Completed', percent: 100,
       }));
-      return null;
+      return sessionId;
     }),
     // unverified:false → no per-item confirmation dialogs (isolates the
     // batch-dialog re-entry window).
@@ -78,7 +78,7 @@ describe('useBatchUpdates re-entry guards (ticket 12)', () => {
 
     expect(ctx.message.warning).toHaveBeenCalledWith('install.busy');
     expect(ctx.dialog.warning).not.toHaveBeenCalled(); // no confirm dialog either
-    expect(ctx.app.InstallToolConfirmed).not.toHaveBeenCalled();
+    expect(ctx.app.StartInstall).not.toHaveBeenCalled();
     // The guard must not touch the running batch's state.
     expect(ctx.batchActive.value).toBe(true);
   });
@@ -90,24 +90,25 @@ describe('useBatchUpdates re-entry guards (ticket 12)', () => {
     // and park on their own confirmation dialogs.
     const first = ctx.batch.installAllUpdates();
     const second = ctx.batch.installAllUpdates();
-    await vi.waitFor(() => expect(ctx.dialog.warning).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(ctx.dialog.warning).toHaveBeenCalledTimes(1));
+    expect(ctx.batchActive.value).toBe(true); // ownership begins before confirmation
 
     // Confirm the FIRST batch — it takes ownership and starts installing.
     ctx.dialog.warning.mock.calls[0][0].onPositiveClick();
-    await vi.waitFor(() => expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(UPDATES.length));
+    await vi.waitFor(() => expect(ctx.app.StartInstall).toHaveBeenCalledTimes(UPDATES.length));
     expect(ctx.batchActive.value).toBe(true);
     expect(ctx.setShowProgress).toHaveBeenLastCalledWith(true);
 
     // The SECOND dialog is confirmed while the first batch is live: the
     // post-dialog re-check must reject it.
-    ctx.dialog.warning.mock.calls[1][0].onPositiveClick();
+    expect(ctx.dialog.warning).toHaveBeenCalledOnce(); // duplicate never creates a second confirmation
     await second;
     expect(ctx.message.warning).toHaveBeenCalledWith('install.busy');
     // Ownership: the rejected invocation did NOT clear the live batch state.
     expect(ctx.batchActive.value).toBe(true);
     expect(ctx.setShowProgress).toHaveBeenLastCalledWith(true);
     // …and it started no additional installs.
-    expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(UPDATES.length);
+    expect(ctx.app.StartInstall).toHaveBeenCalledTimes(UPDATES.length);
 
     // The owning batch finishes normally and cleans up.
     ctx.completeAll();
@@ -120,13 +121,16 @@ describe('useBatchUpdates re-entry guards (ticket 12)', () => {
     const ctx = setup();
     const first = ctx.batch.installAllUpdates();
     const second = ctx.batch.installAllUpdates();
-    await vi.waitFor(() => expect(ctx.dialog.warning).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(ctx.dialog.warning).toHaveBeenCalledTimes(1));
+    expect(ctx.batchActive.value).toBe(true); // ownership begins before confirmation
 
     ctx.dialog.warning.mock.calls[0][0].onPositiveClick();
-    await vi.waitFor(() => expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(UPDATES.length));
-    ctx.dialog.warning.mock.calls[1][0].onNegativeClick();
+    await vi.waitFor(() => expect(ctx.app.StartInstall).toHaveBeenCalledTimes(UPDATES.length));
+    expect(ctx.dialog.warning).toHaveBeenCalledOnce();
+    // Even a duplicate dismissal callback from the first dialog cannot settle twice.
+    ctx.dialog.warning.mock.calls[0][0].onNegativeClick();
     await second;
-    expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(UPDATES.length);
+    expect(ctx.app.StartInstall).toHaveBeenCalledTimes(UPDATES.length);
 
     ctx.completeAll();
     await first;

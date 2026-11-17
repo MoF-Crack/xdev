@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/xmdemt/xdev/internal/update"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // selfUpdateEvent 是前端监听的自检事件名（单一通道，payload.action 区分场景）。
@@ -69,7 +67,7 @@ func (a *App) emitSelfUpdate(action string, res *update.CheckResult) {
 	if a.ctx == nil || res == nil {
 		return
 	}
-	wailsRuntime.EventsEmit(a.ctx, selfUpdateEvent, map[string]interface{}{
+	a.emitEvent(selfUpdateEvent, map[string]interface{}{
 		"action":  action,
 		"current": res.CurrentVersion,
 		"latest":  res.LatestVersion,

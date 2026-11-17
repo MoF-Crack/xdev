@@ -238,9 +238,16 @@ func newTuiCmd() *cobra.Command {
 // guiLauncher 由 main 包注入（单二进制模型：xdev gui 在进程内启动 GUI，
 // 不再 exec 独立 xdev-gui 二进制）。cli 包不依赖 internal/gui（Spec 030 守卫）。
 var guiLauncher func()
+var configuredGUILauncher func(*config.Config, bool) error
 
-// SetGUILauncher 注册 GUI 启动器（main.go 注入 runGUI）。
-func SetGUILauncher(fn func()) { guiLauncher = fn }
+// SetGUILauncher keeps compatibility with embedded callers using the old hook.
+func SetGUILauncher(fn func()) { guiLauncher = fn; configuredGUILauncher = nil }
+
+// SetConfiguredGUILauncher passes the already-resolved home and write policy.
+func SetConfiguredGUILauncher(fn func(*config.Config, bool) error) {
+	configuredGUILauncher = fn
+	guiLauncher = nil
+}
 
 func newGuiCmd() *cobra.Command {
 	return &cobra.Command{
@@ -251,8 +258,11 @@ func newGuiCmd() *cobra.Command {
 			if err := runSelfCheck(false); err != nil {
 				return err
 			}
+			if configuredGUILauncher != nil {
+				return configuredGUILauncher(Cfg(), NoPathFix())
+			}
 			if guiLauncher == nil {
-				return fmt.Errorf("GUI 未编译进本二进制；直接运行 xdev（无参数）可启动 GUI")
+				return fmt.Errorf("GUI launcher is not configured")
 			}
 			guiLauncher()
 			return nil

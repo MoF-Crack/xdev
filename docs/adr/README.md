@@ -54,3 +54,5 @@ docs/adr/NNNN-short-title.md
 | 0003 | Windows 主平台 + 跨平台分层验证 | ✅ 已创建 |
 | 0004 | Go cobra CLI 框架 | ✅ 已创建 |
 | 0005 | hostsnapshot 套件级测试隔离 | ✅ 已创建 |
+| 0006 | 单二进制分发（CLI/TUI/GUI/shim） | ✅ 已创建 |
+| 0007 | Wails 3 桌面运行时与单二进制构建边界 | ✅ 已创建 |

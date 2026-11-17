@@ -15,7 +15,7 @@
 //
 // 单装路径不受影响（仍走 AppContent 的单会话）。
 
-import { computed, effectScope, reactive } from 'vue';
+import { computed, effectScope, markRaw, reactive } from 'vue';
 
 export function useParallelBatch({ sessionFactory, message, t }) {
   const items = reactive([]);
@@ -74,11 +74,12 @@ export function useParallelBatch({ sessionFactory, message, t }) {
       const scope = effectScope();
       const session = scope.run(() => sessionFactory(row));
       row._scope = scope;
-      row.session = session;
+      row.session = markRaw(session);
 
       // Start the install; capture the completion waiter.
       row._started = (async () => {
-        const started = await session.installConfirmed(entry.tool, entry.version, entry.formFilter || '');
+        try {
+        const started = await (entry.force ? session.repair : session.installConfirmed)(entry.tool, entry.version, entry.formFilter || '');
         if (!started) {
           // Start failure is already surfaced by the session's error path.
           row.active = false;
@@ -89,7 +90,13 @@ export function useParallelBatch({ sessionFactory, message, t }) {
         // session's callbacks already did (mocked sessions may not).
         row.active = false;
         row.paused = false;
-        return result; // 'completed' | 'error' | 'cancelled' | 'disposed' | 'idle'
+        row.status = result;
+        return result;
+        } catch (error) {
+          row.error = { message: String(error?.message || error) };
+          row.status = 'error';
+          return 'error';
+        } finally { row.active = false; row.paused = false; row.canCancel = false; }
       })();
 
       return row._started;

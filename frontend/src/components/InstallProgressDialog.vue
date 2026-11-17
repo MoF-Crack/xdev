@@ -9,7 +9,7 @@
           <div class="install-row__head">
             <span class="install-row__name xdev-mono">{{ row.tool }}@{{ row.version }}</span>
             <span class="install-row__phase">{{ localizedRowPhase(row) }}</span>
-            <n-button v-if="row.active" size="tiny" type="error" data-action="cancel-item" :aria-label="t('download_cancel') + ' ' + row.tool" @click="$emit('cancel-item', row)">{{ t('download_cancel') }}</n-button>
+            <n-button v-if="row.active" :disabled="!row.canCancel" size="tiny" type="error" data-action="cancel-item" :aria-label="t('download_cancel') + ' ' + row.tool" @click="$emit('cancel-item', row)">{{ t('download_cancel') }}</n-button>
             <n-text v-else-if="row.error" class="install-row__err" :title="row.error.message">{{ row.error.message }}</n-text>
             <n-text v-else class="install-row__done">✔</n-text>
           </div>
@@ -17,7 +17,7 @@
         </div>
         <n-button v-if="anyActive" data-action="background" @click="runInBackground">{{ t('install.background') }}</n-button>
         <div class="dialog-actions">
-          <n-button v-if="anyActive" data-action="cancel-all" type="error" @click="$emit('cancel-all')">{{ t('download_cancel') }}</n-button>
+          <n-button v-if="anyActive" data-action="cancel-all" :disabled="!multiItems.some(row => row.active && row.canCancel)" type="error" @click="$emit('cancel-all')">{{ t('download_cancel') }}</n-button>
           <n-button data-action="close" :disabled="anyActive" @click="requestClose(false)">{{ t('btn.close') }}</n-button>
         </div>
       </n-space>
@@ -33,9 +33,9 @@
         <n-alert v-if="error" class="install-error" type="error"><div class="install-error__message">{{ error.message }}</div>
         </n-alert>
         <n-space v-if="active">
-          <n-button ref="pauseButton" data-action="pause" :disabled="paused" @click="$emit('pause')">{{ t('download_pause') }}</n-button>
-          <n-button data-action="resume" :disabled="!paused" @click="$emit('resume')">{{ t('download_resume') }}</n-button>
-          <n-button data-action="cancel" type="error" @click="$emit('cancel')">{{ t('download_cancel') }}</n-button>
+          <n-button ref="pauseButton" data-action="pause" :disabled="!canPause || paused" @click="$emit('pause')">{{ t('download_pause') }}</n-button>
+          <n-button data-action="resume" :disabled="!canPause || !paused" @click="$emit('resume')">{{ t('download_resume') }}</n-button>
+          <n-button data-action="cancel" :disabled="!canCancel" type="error" @click="$emit('cancel')">{{ t('download_cancel') }}</n-button>
         </n-space>
         <n-button v-if="active" data-action="background" @click="runInBackground">{{ t('install.background') }}</n-button>
         <div class="dialog-actions">
@@ -52,13 +52,13 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { NAlert, NButton, NProgress, NSpace, NText } from 'naive-ui';
 import { formatBytes } from '../utils/format.js';
 
-const props = defineProps({ show: Boolean, active: Boolean, paused: Boolean, phase: { type: String, default: '' }, progress: { type: Object, default: () => ({}) }, error: Object, returnFocusTo: Object, t: { type: Function, required: true }, items: { type: Array, default: () => [] } });
+const props = defineProps({ show: Boolean, active: Boolean, paused: Boolean, canCancel: Boolean, canPause: Boolean, phase: { type: String, default: '' }, progress: { type: Object, default: () => ({}) }, error: Object, returnFocusTo: Object, t: { type: Function, required: true }, items: { type: Array, default: () => [] } });
 const emit = defineEmits(['update:show', 'pause', 'resume', 'cancel', 'cancel-item', 'cancel-all']);
 // Spec 037 阶段 1：多项模式派生态。
 const multiItems = computed(() => (Array.isArray(props.items) ? props.items : []));
 const anyActive = computed(() => multiItems.value.some((r) => r.active));
 // P2-24：失败行不算「已完成」——否则「5/5」会与同屏的红色 error 行自相矛盾。
-const completedCount = computed(() => multiItems.value.filter((r) => !r.active && !r.error).length);
+const completedCount = computed(() => multiItems.value.filter((r) => r.status === 'completed').length);
 function localizedRowPhase(row) {
   const key = phaseKeyMap[row.phase];
   return key ? props.t(key) : row.phase || '';

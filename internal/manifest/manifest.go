@@ -44,6 +44,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -424,11 +425,11 @@ type Catalog struct {
 //
 // When embedded manifests are available (via InitEmbedded), this function
 // returns a merged catalog: embedded as the base, overlaid with on-disk
-// manifests from dir.  For tools that exist in both sources, the on-disk
-// version takes priority (includes discovery-merged versions).  For tools
-// only in embedded, the embedded version is used.  This ensures that
-// sniff-discovered versions written to the on-disk manifest are visible
-// to the installer (SC-001).
+// manifests from dir (top-level and third-party/). For tools in both
+// sources, embedded versions retain their trusted fields and new disk
+// versions are appended. A valid, installable disk latest advances the
+// default only when newer and in the allowed release channel. Tools found
+// only in one source are retained as declared.
 //
 // If the requested directory does not exist OR is empty, we
 // transparently fall back to the repo-relative manifests/ directory
@@ -439,40 +440,13 @@ func LoadCatalog(dir string) (*Catalog, error) {
 		return loadMergedCatalog(dir)
 	}
 
-	c := &Catalog{tools: map[string]*Tool{}}
-
-	needsFallback := false
+	// Loading and caching must choose the same source, including a directory
+	// containing only third-party manifests (which is not an empty source).
+	dir = resolveManifestDir(dir)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		needsFallback = true
-	} else {
-		// Directory exists - is it empty?
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("read manifest dir %s: %w", dir, err)
-		}
-		hasYAML := false
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
-				hasYAML = true
-				break
-			}
-		}
-		if !hasYAML {
-			needsFallback = true
-		}
+		// No manifests anywhere: keep first-run commands usable.
+		return &Catalog{tools: map[string]*Tool{}}, nil
 	}
-
-	if needsFallback {
-		if alt, ok := repoManifestDir(); ok {
-			dir = alt
-		} else {
-			// No manifests anywhere - return an empty catalog so
-			// the rest of the program still works (e.g. `available`
-			// prints an empty table rather than crashing).
-			return c, nil
-		}
-	}
-
 	return loadFromDir(dir)
 }
 
@@ -575,6 +549,13 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 				}
 			}
 			SortVersionsByRelease(merged.VersionList)
+			// Pin the embedded effective default before sorting appended versions:
+			// DefaultVersion also falls back to LTS / the first list entry.
+			current := embeddedTool.DefaultVersion()
+			merged.Latest = current
+			if canPromoteCatalogLatest(merged.VersionList, diskTool.Latest, current) {
+				merged.Latest = diskTool.Latest
+			}
 			// 形态字段按 disk-override 策略合并（Spec 023 T-A6，B2-A6-04）：
 			// 运行时覆盖内置 manifest 时，磁盘声明的 form_factor / gui_binary
 			// 必须生效（与 DisplayName 等其他字段的覆盖语义一致）。
@@ -1351,30 +1332,15 @@ func LoadCatalogCached(manifestDir string, cacheDir string) (*Catalog, error) {
 	return cat, nil
 }
 
-// resolveManifestDir returns the actual directory from which manifests
-// will be loaded, mirroring the fallback logic in LoadCatalog without
-// actually reading the files.
+// resolveManifestDir selects the disk source for both loading and caching.
+// Only a missing directory or an empty manifest source permits fallback;
+// other read errors must reach the loader instead of hiding broken sources.
 func resolveManifestDir(dir string) string {
-	needsFallback := false
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		needsFallback = true
-	} else {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return dir
-		}
-		hasYAML := false
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
-				hasYAML = true
-				break
-			}
-		}
-		if !hasYAML {
-			needsFallback = true
-		}
+	refs, err := collectManifestRefs(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return dir
 	}
-	if needsFallback {
+	if len(refs) == 0 {
 		if alt, ok := repoManifestDir(); ok {
 			return alt
 		}
@@ -1451,9 +1417,8 @@ func loadFromEmbedded() (*Catalog, error) {
 	return c, nil
 }
 
-// fingerprintDir computes a short hash that changes whenever the set of
-// .yaml files or their contents change.  It uses file name + mod time +
-// size so we don't need to read every file.
+// fingerprintDir hashes the selected source paths, modification times and
+// sizes without re-reading YAML contents. File changes must update metadata.
 func fingerprintDir(dir string) string { return computeFingerprint(dir) }
 
 // fingerprintDiskDir is like fingerprintDir but returns an empty string
@@ -1468,31 +1433,36 @@ func fingerprintDiskDir(dir string) (string, error) {
 
 // computeFingerprint is the shared implementation.
 func computeFingerprint(dir string) string {
-	entries, err := os.ReadDir(dir)
+	// Use the loader's exact source set and precedence, not a second directory
+	// walk that can silently omit third-party additions, updates or removals.
+	refs, err := collectManifestRefs(dir)
 	if err != nil {
 		// If we can't read the dir, the fingerprint will be unique
 		// each time, effectively disabling the cache.
 		return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
 	}
 
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
-			names = append(names, e.Name())
-		}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
 	}
-	sort.Strings(names)
-
 	var sb strings.Builder
-	for _, name := range names {
-		info, err := os.Stat(filepath.Join(dir, name))
+	// Version the fingerprint so caches written by the top-level-only loader
+	// are invalidated even when no third-party file has been added yet.
+	fmt.Fprintf(&sb, "catalog-v2:%q\n", root)
+	for _, ref := range refs {
+		path := filepath.Join(ref.dir, ref.name)
+		info, err := os.Stat(path)
 		if err != nil {
-			sb.WriteString(name)
-			sb.WriteString("err")
-			continue
+			return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
 		}
-		sb.WriteString(name)
-		sb.WriteString(fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size()))
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
+		}
+		// Include the relative directory: foo.yaml and third-party/foo.yaml
+		// are distinct sources even with identical names, mtimes and sizes.
+		fmt.Fprintf(&sb, "%q:%d:%d\n", filepath.ToSlash(rel), info.ModTime().UnixNano(), info.Size())
 	}
 
 	h := sha256.Sum256([]byte(sb.String()))
