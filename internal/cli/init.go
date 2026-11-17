@@ -173,6 +173,11 @@ func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, f
 	ins.SetNoEnvWrite(NoPathFix())
 
 	for {
+		// --yes 表示"完全非交互"（不只是跳过 Windows 盘符选择）。修复前
+		// Linux 上仍会读 stdin 做语言选择；stdin 是管道时会误消费内容。
+		if flagYes {
+			break
+		}
 		fmt.Println("\nAvailable languages:")
 		for i, t := range tools {
 			fmt.Printf("  %d. %s\n", i+1, t.displayName)
@@ -223,15 +228,22 @@ func runInitWizard(cmd *cobra.Command, flagDownloadDir, flagInstallDir string, f
 	// 票 31（E-04）：与 :169/:254 同源——读 root 持久 flag（NoPathFix()），
 	// 不再读会被遮蔽的局部 flag。
 	if !NoPathFix() {
-		fmt.Print("\nInject into shell RC? (Y/n): ")
-		inject, _ := reader.ReadString('\n')
-		if !strings.EqualFold(strings.TrimSpace(inject), "n") {
+		inject := true
+		if !flagYes {
+			fmt.Print("\nInject into shell RC? (Y/n): ")
+			ans, _ := reader.ReadString('\n')
+			inject = !strings.EqualFold(strings.TrimSpace(ans), "n")
+		}
+		if inject {
 			info := env.DetectShell()
-			if info.RCFile != "" {
+			targets := info.RCTargets()
+			if len(targets) > 0 {
 				if err := env.InjectShellRC(info, cfg.Core.XMDevDir, cfg.Core.ShimDir); err != nil {
 					fmt.Printf("⚠ failed to inject shell RC: %v\n", err)
 				} else {
-					fmt.Printf("✔ injected into %s\n", info.RCFile)
+					for _, p := range targets {
+						fmt.Printf("✔ injected into %s\n", p)
+					}
 				}
 			} else {
 				fmt.Println("⚠ no shell RC file detected; PATH mode will be used instead")

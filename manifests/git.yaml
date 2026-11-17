@@ -9,6 +9,10 @@ shims:
     - git-gui
 env_vars:
     GIT_HOME: '{{install}}'
+# Linux/macOS：上游只发布源码 tar.gz（kernel.org），xdev 的安装器不做源码
+# 构建，因此这两个平台不提供 git 归档；请使用系统 git
+# （apt install git / xcode-select --install）。
+# Windows 使用 Git for Windows 的 MinGit 预编译包。
 versions:
     - version: 2.55.0
       stable: true
@@ -23,22 +27,6 @@ versions:
           size: 60000000
           strip: 1
           requires_proxy: true
-        - os: linux
-          arch: x86_64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.55.0.tar.gz
-          sha256: ""
-          size: 11000000
-          strip: 1
-        - os: darwin
-          arch: arm64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.55.0.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.55.0.tar.gz
-          sha256: ""
-          size: 11000000
-          strip: 1
     - version: 2.47.0
       stable: true
       release: "2024-10-01"
@@ -52,22 +40,6 @@ versions:
           size: 60000000
           strip: 1
           requires_proxy: true
-        - os: linux
-          arch: x86_64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.47.0.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.47.0.tar.gz
-          sha256: d9c5ef7b7b977e7809d49c13aa27ed41b4cda7ad78bc65caebc960847c353b82
-          size: 11000000
-          strip: 1
-        - os: darwin
-          arch: arm64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.47.0.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.47.0.tar.gz
-          sha256: 4e62e9cb5e9fdf25910093aa66060c516ad38a42e05663a02de070cddc2d1b71
-          size: 11000000
-          strip: 1
     - version: 2.45.2
       stable: true
       release: "2024-06-01"
@@ -81,22 +53,6 @@ versions:
           size: 58000000
           strip: 1
           requires_proxy: true
-        - os: linux
-          arch: x86_64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.45.2.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.45.2.tar.gz
-          sha256: 9b6cf16dab204b0795149cab54320551aa81e067bc9ff10c4eb906f465f36c8f
-          size: 10500000
-          strip: 1
-        - os: darwin
-          arch: arm64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.45.2.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.45.2.tar.gz
-          sha256: 72eb1d4a5205ad0f64a66cfe936c837a04bca59946a5c7d887760b9895bc7b76
-          size: 10500000
-          strip: 1
     - version: 2.43.0
       stable: true
       release: "2023-11-01"
@@ -110,22 +66,6 @@ versions:
           size: 55000000
           strip: 1
           requires_proxy: true
-        - os: linux
-          arch: x86_64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.43.0.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.43.0.tar.gz
-          sha256: caab4f7bef86de3740e28ccc7bcfcae79cd93254f8c2db5e0ad262703e2193cd
-          size: 10000000
-          strip: 1
-        - os: darwin
-          arch: arm64
-          format: tar.gz
-          url: https://www.kernel.org/pub/software/scm/git/git-2.43.0.tar.gz
-          mirror_url: https://mirrors.aliyun.com/kernel/software/scm/git/git-2.43.0.tar.gz
-          sha256: d79c612f1faab049956ad519a79b2357dbdd2edae3990d22d49187c90d342b77
-          size: 10000000
-          strip: 1
 remote:
     type: github
     url: git/git

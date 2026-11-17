@@ -122,6 +122,8 @@ func (osExecRunner) Run(ctx context.Context, name string, args []string, env []s
 	// 隐藏子进程的控制台窗口（Windows），避免 rustup 等安装器弹出
 	// 独立命令行窗口打断用户操作（与 getVersion 等其他调用一致）。
 	util.HideWindow(cmd)
+	// Unix：独立进程组 + 取消时整组 SIGKILL（Windows 为 no-op，Job Object 兜底）。
+	util.TrackProcessGroup(cmd)
 	return cmd.Run()
 }
 
@@ -1660,8 +1662,6 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 		}
 	}
 
-
-
 	log.Printf("[install] Activation complete: %s@%s (%d shims)", p.Name(), ver, len(p.Shims()))
 	shim.InvalidateShimIndex()
 	// 第十二轮审计（Round 11 报告 §七-④）：**激活成功后顺带回收 `.stale-*` 残留**。
@@ -2526,10 +2526,12 @@ func ensureSelfJunction(cfg *config.Config, installDir string) {
 
 	currentLink := filepath.Join(currentDir, "xdev")
 
-	// 安全检查：验证目标路径在 XDev 目录内
-	normalizedInstall := strings.ToLower(filepath.Clean(installDir))
-	normalizedXDev := strings.ToLower(filepath.Clean(cfg.Core.XMDevDir))
-	if !strings.HasPrefix(normalizedInstall, normalizedXDev) {
+	// 安全检查：验证目标路径在 XDev 目录内。
+	//
+	// 2026-10-30（WSL 实测 L12）：旧实现用 ToLower + HasPrefix，在 Linux 上
+	// 既把大小写不同的路径视为相同，又把 /home/u/xdev-evil 当成
+	// /home/u/xdev 的子目录。改为按路径分量判断（Windows 才折叠大小写）。
+	if !isWithinDir(installDir, cfg.Core.XMDevDir) {
 		log.Printf("[self] WARNING: install dir %s is outside XDev home %s, skipping junction", installDir, cfg.Core.XMDevDir)
 		return
 	}
@@ -2558,4 +2560,28 @@ func ensureSelfJunction(cfg *config.Config, installDir string) {
 		_ = os.Symlink(installDir, currentLink)
 	}
 	log.Printf("[self] current/xdev -> %s", installDir)
+}
+
+// isWithinDir reports whether child is parent itself or lies inside it, using
+// path-component boundaries rather than a raw string prefix. Case folding is
+// applied only on Windows (case-insensitive filesystem); on Unix
+// "/home/u/xdev-evil" must not count as inside "/home/u/xdev".
+func isWithinDir(child, parent string) bool {
+	c := filepath.Clean(child)
+	p := filepath.Clean(parent)
+	if runtime.GOOS == "windows" {
+		c = strings.ToLower(c)
+		p = strings.ToLower(p)
+	}
+	rel, err := filepath.Rel(p, c)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if filepath.IsAbs(rel) || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

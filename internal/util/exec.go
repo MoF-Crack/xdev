@@ -31,6 +31,7 @@ func ExitCode(err error) int {
 func RunCommand(ctx context.Context, name string, args ...string) (ExecResult, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	HideWindow(cmd)
+	TrackProcessGroup(cmd)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

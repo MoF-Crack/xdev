@@ -302,14 +302,29 @@ func (a Archive) Installable() bool {
 	return strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.Format) != ""
 }
 
+// CanonicalArch normalizes a CPU-arch spelling so that comparisons survive
+// both conventions in play. Manifests normally declare "x86_64" for
+// Linux/macOS and "amd64" for Windows (the same convention plugin.HostArch
+// implements), while runtime.GOARCH is always "amd64". Comparing verbatim made
+// every linux/amd64 archive look foreign: only 1 of 54 tools was reported
+// installable on Linux instead of 48. Normalizing both sides also keeps
+// fixtures/manifests that spell linux as "amd64" working.
+func CanonicalArch(goos, goarch string) string {
+	if goarch == "amd64" && (goos == "linux" || goos == "darwin") {
+		return "x86_64"
+	}
+	return goarch
+}
+
 // Installable reports whether this version can be installed on the given
 // platform (os/arch matching follows the manifest convention: "any" matches).
 func (v Version) Installable(goos, goarch string) bool {
+	wantArch := CanonicalArch(goos, goarch)
 	for _, a := range v.Archives {
 		if a.OS != goos && a.OS != "any" {
 			continue
 		}
-		if a.Arch != goarch && a.Arch != "any" {
+		if a.Arch != "any" && CanonicalArch(goos, a.Arch) != wantArch {
 			continue
 		}
 		if a.Installable() {

@@ -58,6 +58,11 @@ func TestHookScript(t *testing.T) {
 }
 
 func TestHookOutput(t *testing.T) {
+	// HookOutput now skips directories already on PATH (repeated `cd` must not
+	// grow PATH). Pin a minimal PATH so the fixed test paths below are treated
+	// as missing on every host (Linux CI has /usr/local/bin in PATH).
+	t.Setenv("PATH", "/usr/bin:/bin")
+
 	t.Run("bash with paths and env", func(t *testing.T) {
 		got := HookOutput("bash", []string{"/usr/local/bin", "/opt/bin"}, map[string]string{"FOO": "bar"})
 		// 2026-10-25 修复（P0-1）：原断言是 `export PATH='/usr/local/bin:/opt/bin:$PATH'`

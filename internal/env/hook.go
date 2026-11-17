@@ -30,6 +30,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/xmdemt/xdev/internal/util"
@@ -157,6 +158,12 @@ func xdevBin(xmdeHome string) string {
 // safe identifiers before interpolation into shell output, preventing
 // shell injection via malicious keys.
 func HookOutput(shell string, binPaths []string, envVars map[string]string) string {
+	// Deduplicate against the caller's live PATH: `xdev hook` runs on every
+	// cd, so the child sees the shell's current PATH. Repeated evaluation in
+	// the same project must be a no-op instead of growing PATH by one entry
+	// per cd (WSL/Linux-only defect: the cd hook is not installed on Windows,
+	// whose PATH is registry-backed).
+	binPaths = filterAbsentPathDirs(binPaths)
 	if len(binPaths) == 0 && len(envVars) == 0 {
 		return ""
 	}
@@ -180,7 +187,7 @@ func HookOutput(shell string, binPaths []string, envVars map[string]string) stri
 				log.Printf("[hook] WARNING: skipping invalid env var name %q in fish output", k)
 				continue
 			}
-			fmt.Fprintf(&b, "set -gx %s '%s'\n", k, shellSingleQuote(v))
+			fmt.Fprintf(&b, "set -gx %s %s\n", k, fishQuote(v))
 		}
 	case "powershell", "pwsh":
 		if len(binPaths) > 0 {
@@ -227,4 +234,40 @@ func fishQuote(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `'`, `\'`)
 	return "'" + s + "'"
+}
+
+// filterAbsentPathDirs drops directories already present in the current
+// process PATH (and duplicates inside the input), so hook output only adds
+// entries that are genuinely missing.
+func filterAbsentPathDirs(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	sep := string(os.PathListSeparator)
+	present := make(map[string]bool)
+	for _, p := range strings.Split(os.Getenv("PATH"), sep) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if runtime.GOOS == "windows" {
+			present[strings.ToLower(filepath.Clean(p))] = true
+		} else {
+			present[filepath.Clean(p)] = true
+		}
+	}
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		key := filepath.Clean(p)
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if present[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, p)
+	}
+	return out
 }

@@ -73,7 +73,8 @@ Quick start:
   xdev use python@3.12.0
   xdev doctor
 
-Running xdev without arguments launches the interactive TUI.
+Running xdev without arguments launches the desktop GUI (use "xdev tui" for the
+terminal UI, "xdev gui" to start the GUI explicitly).
 
 Short aliases you can add to your shell rc:
   alias xdev='xdev'`,
@@ -83,8 +84,8 @@ Short aliases you can add to your shell rc:
 		Version:           version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// No subcommand specified — launch TUI by default
-			// Spec 034: 交互入口启动自检（静默降级，不阻塞）
-			if err := runSelfCheck(); err != nil {
+			// Spec 034: 交互入口启动自检（TUI 入口不弹 stdin 提示）
+			if err := runSelfCheck(false); err != nil {
 				return err
 			}
 			cat, reg := loadCatalogAndRegistry()
@@ -128,6 +129,8 @@ Short aliases you can add to your shell rc:
 	// 零参 GUI（main.go 的 len(os.Args)<=1 → runGUI）不走 Cobra，保持无嗅探。
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		if isInteractiveEntry(cmd) {
+			// 启动嗅探在后台运行，其逐工具日志不能盖住 TUI；先重定向到日志文件。
+			redirectInteractiveLogs()
 			mountStartupSniff()
 		}
 		return nil

@@ -23,12 +23,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
+	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/tui"
 	"github.com/xmdemt/xdev/internal/update"
 	"github.com/xmdemt/xdev/internal/util"
@@ -157,6 +159,21 @@ func runSelfInstall(cfg *config.Config) error {
 		fmt.Printf("xdev@%s already installed at %s\n", version.Version, path)
 	}
 
+	// `xdev init` only puts <home>/shims on PATH; without an `xdev` dispatcher
+	// there, the command itself is not resolvable from a fresh shell
+	// (WSL/Linux 实测 L18；Windows 同样受益)。
+	exeName := "xdev"
+	if runtime.GOOS == "windows" {
+		exeName = "xdev.exe"
+	}
+	if cfg.Core.ShimDir != "" {
+		if err := shim.InstallShim(cfg.Core.ShimDir, "xdev", filepath.Join(path, exeName)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not install xdev shim: %v\n", err)
+		} else {
+			fmt.Printf("shim/xdev -> %s\n", filepath.Join(path, exeName))
+		}
+	}
+
 	// ensureSelfJunction 是 best-effort（日志告警、不返回错误）。这里如实回读
 	// current/xdev，避免在 junction 切换失败时向用户报告成功。
 	active, ok := util.ActiveVersion(cfg.Core.XMDevDir, "xdev")
@@ -205,8 +222,8 @@ func newTuiCmd() *cobra.Command {
 		Use:   "tui",
 		Short: "Launch the interactive terminal UI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Spec 034: 交互入口启动自检（静默降级，不阻塞）
-			if err := runSelfCheck(); err != nil {
+			// Spec 034: 交互入口启动自检（TUI 不弹 stdin 提示）
+			if err := runSelfCheck(false); err != nil {
 				return err
 			}
 			cat, reg := loadCatalogAndRegistry()
@@ -230,8 +247,8 @@ func newGuiCmd() *cobra.Command {
 		Use:   "gui",
 		Short: "Launch the cross-platform desktop GUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Spec 034: 交互入口启动自检（静默降级，不阻塞）
-			if err := runSelfCheck(); err != nil {
+			// Spec 034: 交互入口启动自检（GUI 不弹 stdin 提示）
+			if err := runSelfCheck(false); err != nil {
 				return err
 			}
 			if guiLauncher == nil {

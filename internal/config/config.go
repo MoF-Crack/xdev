@@ -690,7 +690,10 @@ func (c *Config) saveLocked() error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	path := filepath.Join(c.Core.XMDevDir, "config.yaml")
-	if err := util.AtomicWriteFile(path, data, 0o644); err != nil {
+	// 0600 on POSIX: the file may contain proxy credentials / mirror
+	// preferences. Windows ignores the mode bits (ACLs apply instead), so
+	// this is harmless there while closing a Linux-only read exposure.
+	if err := util.AtomicWriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 	return nil

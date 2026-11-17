@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -24,6 +25,12 @@ func (m Model) viewDetail(width, height int) string {
 		contentWidth = 1
 	}
 
+	// Install progress replaces the tool detail inside this (third) pane; the
+	// three-column layout stays visible instead of a full-screen overlay.
+	if m.installState != nil {
+		return m.viewInstallPanel(width, height)
+	}
+
 	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
 		content := lipgloss.NewStyle().Width(contentWidth).Height(contentHeight).Render(StyleDim.Render("  Select a tool"))
 		return style.Width(width).Height(height - 2).Render(content)
@@ -36,12 +43,14 @@ func (m Model) viewDetail(width, height int) string {
 	b.WriteString(StyleBold.Render(p.DisplayName()) + "\n")
 	b.WriteString(StyleDim.Render(p.Description()) + "\n")
 
-	// Tab indicator
+	// Tab indicator (with counts so users can see the installable list exists)
+	installedLabel := fmt.Sprintf("Installed %d", len(m.installedVersions))
+	remoteLabel := fmt.Sprintf("Remote %d", len(m.remoteVersions))
 	tabLine := ""
 	if m.detailTab == TabInstalled {
-		tabLine = StyleActive.Render("[Installed]") + "  " + StyleDim.Render("Remote")
+		tabLine = StyleActive.Render("["+installedLabel+"]") + "  " + StyleDim.Render(remoteLabel)
 	} else {
-		tabLine = StyleDim.Render("Installed") + "  " + StyleActive.Render("[Remote]")
+		tabLine = StyleDim.Render(installedLabel) + "  " + StyleActive.Render("["+remoteLabel+"]")
 	}
 	b.WriteString(tabLine + "\n")
 
@@ -57,7 +66,7 @@ func (m Model) viewDetail(width, height int) string {
 		if m.detailTab == TabInstalled {
 			b.WriteString(StyleDim.Render("  (not installed)\n"))
 		} else {
-			b.WriteString(StyleDim.Render("  (press r to refresh)\n"))
+			b.WriteString(StyleDim.Render("  (no installable versions)\n"))
 		}
 	} else if m.expandVersions {
 		// Expanded mode: show all versions without viewport limit

@@ -37,10 +37,12 @@
 package shim
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -118,6 +120,16 @@ func MaybeExec(selfName string) (bool, error) {
 	ectx := resolveEnvContext(toolName)
 
 	if err := run(target, args, ectx); err != nil {
+		// Spec 038 的补充（WSL/Linux 实测 L8）：候选文件存在但不可执行时
+		// （典型来源：zip 解包未带执行位），不能把 permission denied 直接
+		// 抛给用户、更不能遮蔽系统上已有的同名工具 —— 回退到 PATH 透传。
+		if errors.Is(err, os.ErrPermission) {
+			if pathTarget, pathErr := LookupOnPath(alias); pathErr == nil && pathTarget != "" && pathTarget != target {
+				if rerr := run(pathTarget, args, nil); rerr == nil {
+					return true, nil
+				}
+			}
+		}
 		return true, err
 	}
 	return true, nil
@@ -307,12 +319,8 @@ func FindInDir(dir, alias string) (string, bool) {
 		filepath.Join(dir, alias+".cmd"),
 		filepath.Join(dir, alias+".bat"),
 	}
-	for _, c := range candidates {
-		if fi, err := os.Stat(c); err == nil {
-			if !fi.IsDir() {
-				return c, true
-			}
-		}
+	if p, ok := findInCandidates(candidates); ok {
+		return p, true
 	}
 	// Nested subdirectory scan: handle strip:0 layouts where the
 	// archive extracts to dir/<toolname>/bin/<alias> instead of
@@ -325,7 +333,7 @@ func FindInDir(dir, alias string) (string, bool) {
 			}
 			sub := filepath.Join(dir, e.Name())
 			// Check sub/bin/<alias> variants first, then sub/<alias>.
-			for _, c := range []string{
+			if p, ok := findInCandidates([]string{
 				filepath.Join(sub, "bin", alias),
 				filepath.Join(sub, "bin", alias+exeSuffix()),
 				filepath.Join(sub, "bin", alias+".cmd"),
@@ -334,14 +342,71 @@ func FindInDir(dir, alias string) (string, bool) {
 				filepath.Join(sub, alias+exeSuffix()),
 				filepath.Join(sub, alias+".cmd"),
 				filepath.Join(sub, alias+".bat"),
-			} {
-				if fi, err := os.Stat(c); err == nil {
-					if !fi.IsDir() {
-						return c, true
-					}
-				}
+			}); ok {
+				return p, true
 			}
 		}
+	}
+	// Single-file layouts (AppImage and similar): the payload keeps its
+	// upstream file name, e.g. "Cursor-3.14.7-x86_64.AppImage". Accept a
+	// top-level file whose lowercased name starts with the alias followed by
+	// a separator, so a `shims/cursor` dispatcher can find it.
+	if entries, err := os.ReadDir(dir); err == nil {
+		want := strings.ToLower(alias)
+		var extra []string
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			lower := strings.ToLower(e.Name())
+			if len(lower) <= len(want) || !strings.HasPrefix(lower, want) {
+				continue
+			}
+			// Require a version-like suffix right after the separator:
+			// "cursor-3.14.7-x86_64.AppImage" or "tool-v1.2.3". Source trees
+			// also contain alias-prefixed helpers (git's GIT-VERSION-GEN);
+			// dispatching those as the tool binary produced a bogus
+			// "GIT-VERSION-GEN <SOURCE_DIR>" usage error for `git -v`.
+			rest := lower[len(want)+1:]
+			versionLike := rest != "" &&
+				((rest[0] >= '0' && rest[0] <= '9') ||
+					(rest[0] == 'v' && len(rest) > 1 && rest[1] >= '0' && rest[1] <= '9'))
+			if !versionLike {
+				continue
+			}
+			switch lower[len(want)] {
+			case '-', '_', '.', ' ':
+				extra = append(extra, filepath.Join(dir, e.Name()))
+			}
+		}
+		if p, ok := findInCandidates(extra); ok {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// findInCandidates returns the first runnable candidate, preferring a file
+// with an execute bit on Unix. A non-executable match is returned only as a
+// last resort so old layouts/tests keep working; callers that actually exec
+// will surface a permission error and fall through to the system PATH
+// (Spec 038) instead of shadowing a real tool.
+func findInCandidates(candidates []string) (string, bool) {
+	var fallback string
+	for _, c := range candidates {
+		fi, err := os.Stat(c)
+		if err != nil || fi.IsDir() {
+			continue
+		}
+		if runtime.GOOS == "windows" || fi.Mode().Perm()&0o111 != 0 {
+			return c, true
+		}
+		if fallback == "" {
+			fallback = c
+		}
+	}
+	if fallback != "" {
+		return fallback, true
 	}
 	return "", false
 }
@@ -407,7 +472,7 @@ func writeDiskShimIndex(xmdeHome string) {
 		return
 	}
 	var sb strings.Builder
-	sb.WriteString("xdev-shim-index\tv1\n")
+	sb.WriteString("xdev-shim-index\tv2\n")
 	names := make([]string, 0, len(idx))
 	for k := range idx {
 		names = append(names, k)
@@ -415,11 +480,11 @@ func writeDiskShimIndex(xmdeHome string) {
 	sort.Strings(names)
 	for _, k := range names {
 		e := idx[k]
-		sb.WriteString(k)
+		sb.WriteString(encodeIndexField(k))
 		sb.WriteByte('\t')
-		sb.WriteString(e.toolName)
+		sb.WriteString(encodeIndexField(e.toolName))
 		sb.WriteByte('\t')
-		sb.WriteString(e.path)
+		sb.WriteString(encodeIndexField(e.path))
 		sb.WriteByte('\n')
 	}
 	if err := util.AtomicWriteFile(path, []byte(sb.String()), 0o644); err != nil {
@@ -435,7 +500,13 @@ func loadDiskShimIndex(xmdeHome string) map[string]shimEntry {
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
-	if len(lines) == 0 || !strings.HasPrefix(lines[0], "xdev-shim-index\tv1") {
+	if len(lines) == 0 {
+		return nil
+	}
+	// v2 escapes TAB/newline/backslash in every field (Linux filenames may
+	// contain them); v1 is read raw for backward compatibility.
+	isV2 := strings.HasPrefix(lines[0], "xdev-shim-index\tv2")
+	if !isV2 && !strings.HasPrefix(lines[0], "xdev-shim-index\tv1") {
 		return nil
 	}
 	idx := make(map[string]shimEntry, len(lines)-1)
@@ -447,12 +518,67 @@ func loadDiskShimIndex(xmdeHome string) map[string]shimEntry {
 		if len(parts) != 3 {
 			continue
 		}
+		alias, toolName, p := parts[0], parts[1], parts[2]
+		if isV2 {
+			alias = decodeIndexField(alias)
+			toolName = decodeIndexField(toolName)
+			p = decodeIndexField(p)
+		}
 		// 读取侧同域折叠（缺陷票 shim-alias-case-bug）：旧版索引可能保留
 		// 磁盘文件名大小写（构建端折叠前的落盘产物），与折叠后的查找输入
 		// 无法命中；normalizeShimAlias 对 Unix 是恒等，不影响精确大小写语义。
-		idx[normalizeShimAlias(parts[0])] = shimEntry{toolName: parts[1], path: parts[2]}
+		idx[normalizeShimAlias(alias)] = shimEntry{toolName: toolName, path: p}
 	}
 	return idx
+}
+
+// encodeIndexField escapes the characters that would break the TSV index.
+// Linux permits TAB/newline inside file names, so a raw write could corrupt
+// every following record.
+func encodeIndexField(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			b.WriteString(`\\`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+func decodeIndexField(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case '\\':
+			b.WriteByte('\\')
+		default:
+			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 // buildShimIndex reads all current/* directories and their

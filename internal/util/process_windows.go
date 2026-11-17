@@ -32,3 +32,7 @@ func DetachConsole(cmd *exec.Cmd) {
 func ExeName(name string) string {
 	return name + ".exe"
 }
+
+// TrackProcessGroup is a no-op on Windows: Job Objects already guarantee the
+// whole child tree is torn down with the owning process.
+func TrackProcessGroup(cmd *exec.Cmd) {}

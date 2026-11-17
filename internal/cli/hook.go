@@ -269,6 +269,12 @@ func injectHookRC(info env.ShellInfo, cfg *config.Config) error {
 	// Remove any existing hook block
 	text = removeBlock(text, hookMarker, hookEndMarker)
 
+	// A hand-edited RC often lacks a trailing newline; without this separator
+	// the marker would be glued onto the user's last line and break the file.
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+
 	// Generate the hook script
 	hookScript := env.HookScript(info.Shell, cfg.Core.XMDevDir)
 	block := fmt.Sprintf("%s\n%s\n%s\n", hookMarker, hookScript, hookEndMarker)
@@ -312,14 +318,19 @@ func stripAllXdevRCBlocks(info env.ShellInfo) error {
 	return removeHookRC(info)
 }
 
+// removeBlock deletes every hook block and consumes the newline that followed
+// each one, making inject/remove cycles byte-exact (see env.removeBlock).
 func removeBlock(s, start, end string) string {
-	i := strings.Index(s, start)
-	if i < 0 {
-		return s
+	for {
+		i := strings.Index(s, start)
+		if i < 0 {
+			return s
+		}
+		j := strings.Index(s[i:], end)
+		if j < 0 {
+			return s
+		}
+		rest := strings.TrimPrefix(s[i+j+len(end):], "\n")
+		s = s[:i] + rest
 	}
-	j := strings.Index(s[i:], end)
-	if j < 0 {
-		return s
-	}
-	return s[:i] + s[i+j+len(end):]
 }

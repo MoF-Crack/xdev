@@ -42,6 +42,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -173,7 +174,7 @@ func NewModel(cfg *config.Config, cat *manifest.Catalog, reg *plugin.Registry) M
 	si.Placeholder = "Search tools..."
 	si.CharLimit = 50
 
-	return Model{
+	m := Model{
 		width:         80,
 		height:        24,
 		focus:         FocusTools,
@@ -187,6 +188,8 @@ func NewModel(cfg *config.Config, cat *manifest.Catalog, reg *plugin.Registry) M
 		searchInput:   si,
 		detailTab:     TabInstalled,
 	}
+	m.loadInstalledVersions()
+	return m
 }
 
 // NewProgram creates a Bubble Tea program ready to run.
@@ -416,10 +419,8 @@ func (m Model) View() string {
 		output = lipgloss.JoinVertical(lipgloss.Top, output, errBar)
 	}
 
-	// Overlays (replace the entire view)
-	if m.installState != nil {
-		output = m.viewInstallOverlay(output)
-	}
+	// Overlays (replace the entire view). Install progress is NOT an overlay:
+	// viewDetail renders it inside the third pane so the layout stays intact.
 	if m.uninstallConfirm {
 		output = m.viewUninstallOverlay(output)
 	}
@@ -484,12 +485,17 @@ func (m Model) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case KeyInstall:
-		return m.startInstall()
+		return m.focusInstallList()
 
 	case KeyUninstall:
 		return m.startUninstall()
 
 	case KeyEnter:
+		// In the Remote tab Enter installs the highlighted version; in the
+		// Installed tab it activates the highlighted version.
+		if m.focus == FocusDetail && m.detailTab == TabRemote {
+			return m.installSelectedRemoteVersion()
+		}
 		return m.activateVersion()
 
 	case KeyRefresh:
@@ -602,6 +608,7 @@ func (m *Model) applyCategoryFilterPure() []plugin.Plugin {
 func (m *Model) loadInstalledVersions() {
 	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
 		m.installedVersions = nil
+		m.remoteVersions = nil
 		m.activeVersion = ""
 		return
 	}
@@ -610,21 +617,25 @@ func (m *Model) loadInstalledVersions() {
 	entries, err := os.ReadDir(installDir)
 	if err != nil {
 		m.installedVersions = nil
-		m.activeVersion = ""
-		return
-	}
-	// Use os.Stat for junction compatibility on Windows
-	var versions []string
-	for _, e := range entries {
-		full := filepath.Join(installDir, e.Name())
-		info, err := os.Stat(full)
-		if err != nil || !info.IsDir() {
-			continue
+	} else {
+		// Use os.Stat for junction compatibility on Windows
+		var versions []string
+		for _, e := range entries {
+			full := filepath.Join(installDir, e.Name())
+			info, err := os.Stat(full)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			versions = append(versions, e.Name())
 		}
-		versions = append(versions, e.Name())
+		sort.Strings(versions)
+		m.installedVersions = versions
 	}
-	sort.Strings(versions)
-	m.installedVersions = versions
+
+	// Available/installable versions come from the manifest and are loaded
+	// eagerly so the Remote tab is never empty just because the user did not
+	// know about the undocumented 'r' refresh key.
+	m.remoteVersions = availableVersionsFor(p)
 
 	// Determine active version
 	currentLink := filepath.Join(m.config.Core.XMDevDir, "current", p.Name())
@@ -633,6 +644,33 @@ func (m *Model) loadInstalledVersions() {
 	} else {
 		m.activeVersion = ""
 	}
+}
+
+// availableVersionsFor returns the installable versions declared by a plugin's
+// manifest, falling back to ResolveVersion("latest") for manifest-less plugins
+// (Lua/vfox). Versions with no archive for the current OS/arch are excluded so
+// the picker only offers versions that can actually be installed here.
+func availableVersionsFor(p plugin.Plugin) []string {
+	mf := p.Manifest()
+	if mf == nil {
+		if v, err := p.ResolveVersion("latest"); err == nil && v != "" {
+			return []string{v}
+		}
+		return nil
+	}
+	all := mf.Versions()
+	var installable []string
+	for _, v := range mf.VersionList {
+		if v.Installable(runtime.GOOS, runtime.GOARCH) {
+			installable = append(installable, v.Version)
+		}
+	}
+	// Manifests without archive metadata (tests, third-party stubs) fall back
+	// to the declared list rather than showing an empty picker.
+	if len(installable) == 0 {
+		return all
+	}
+	return installable
 }
 
 func (m *Model) detailVersions() []string {
@@ -671,15 +709,7 @@ func (m Model) fetchRemoteVersions() tea.Cmd {
 		// 会对 nil 解引用 panic —— 任何装了 Lua 插件的机器选中该工具按 r 刷新
 		// 远程版本即崩溃。与 CLI 侧 listTool 的修复同语义：manifest 为 nil 时
 		// 不崩溃，改为回落到 ResolveVersion("latest") 给出的单个可安装版本。
-		mf := p.Manifest()
-		if mf == nil {
-			versions := []string{}
-			if v, err := p.ResolveVersion("latest"); err == nil && v != "" {
-				versions = append(versions, v)
-			}
-			return RemoteVersionsMsg{Tool: p.Name(), Versions: versions}
-		}
-		return RemoteVersionsMsg{Tool: p.Name(), Versions: mf.Versions()}
+		return RemoteVersionsMsg{Tool: p.Name(), Versions: availableVersionsFor(p)}
 	}
 }
 
@@ -704,6 +734,58 @@ func (m Model) startInstall() (tea.Model, tea.Cmd) {
 	ver := p.DefaultVersion()
 	if ver == "" {
 		m.errMsg = fmt.Sprintf("no default version for %s", p.Name())
+		return m, nil
+	}
+	return m.installVersion(p, ver)
+}
+
+// focusInstallList moves keyboard focus into the third (detail) pane's Remote
+// tab, which lists every installable version for the selected tool. The user
+// picks with ↑/↓ and presses Enter to install. No separate popup is rendered.
+func (m Model) focusInstallList() (tea.Model, tea.Cmd) {
+	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
+		return m, nil
+	}
+	p := m.filteredTools[m.toolIdx]
+	versions := m.remoteVersions
+	if len(versions) == 0 {
+		versions = availableVersionsFor(p)
+	}
+	if len(versions) == 0 {
+		m.errMsg = fmt.Sprintf("no installable versions for %s", p.Name())
+		return m, nil
+	}
+	m.remoteVersions = versions
+	m.focus = FocusDetail
+	m.detailTab = TabRemote
+	if def := p.DefaultVersion(); def != "" {
+		for i, v := range versions {
+			if v == def {
+				m.versionIdx = i
+				break
+			}
+		}
+	}
+	return m, nil
+}
+
+// installSelectedRemoteVersion installs the version highlighted in the Remote
+// tab (Enter on that tab).
+func (m Model) installSelectedRemoteVersion() (tea.Model, tea.Cmd) {
+	if len(m.filteredTools) == 0 || m.toolIdx >= len(m.filteredTools) {
+		return m, nil
+	}
+	versions := m.remoteVersions
+	if m.versionIdx >= len(versions) {
+		return m, nil
+	}
+	return m.installVersion(m.filteredTools[m.toolIdx], versions[m.versionIdx])
+}
+
+// installVersion starts the asynchronous install of an explicit version.
+func (m Model) installVersion(p plugin.Plugin, ver string) (tea.Model, tea.Cmd) {
+	if ver == "" {
+		m.errMsg = fmt.Sprintf("no version selected for %s", p.Name())
 		return m, nil
 	}
 	// Set installState so the progress overlay is displayed
