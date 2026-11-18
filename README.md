@@ -55,12 +55,13 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 下载对应平台的产物。软件版本为 `1.0.0-beta.2`，发布 Tag 为 `v1.0.0-beta.2`；下表为该 Tag 的预期资产名，实际可用产物以发布页为准：
+从 [1.0.0-beta.2 Release](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.2) 下载对应平台产物。发布 Tag 为 `v1.0.0-beta.2`；Windows、Linux amd64/arm64、macOS Intel/Apple Silicon 的构建与打包均已成功，[CI 记录](https://github.com/MoF-Crack/xdev/actions/runs/44376749298)可查。Release 提供 11 项资产（含校验和）：
 
 | 产物 | 说明 |
 |------|------|
 | `xdev-windows-amd64-v1.0.0-beta.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-beta.2.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-linux-amd64-v1.0.0-beta.2.tar.gz` / `xdev-linux-arm64-v1.0.0-beta.2.tar.gz` | Linux 单二进制（amd64 / arm64） |
+| `xdev-darwin-amd64-v1.0.0-beta.2.tar.gz` / `xdev-darwin-arm64-v1.0.0-beta.2.tar.gz` | macOS 单二进制（Intel / Apple Silicon） |
 | `xdev-1.0.0-beta.2-x86_64.AppImage` | Linux AppImage（amd64） |
 | `xdev-1.0.0-beta.2-aarch64.AppImage` | Linux AppImage（arm64） |
 | `xdev-darwin-arm64-v1.0.0-beta.2.dmg` | macOS（Apple Silicon） |
@@ -82,7 +83,7 @@ F2 字标由一个流弧 **x** 与 **dev** 一体组成，不再叠加独立 X �
 - **经典主题兼容**：午夜、极夜、余烬仍可选择，保留已有主题偏好。
 - **响应式工作区**：宽度 ≥ 1280 px 时，工具列表与非遮挡详情面板并排；更窄窗口使用详情抽屉。
 - **操作契约不变**：当前工具链、工具目录筛选 tabs（全部 / 已安装 / 本地）与安装会话契约沿用既有行为。
-- **原生图标接入**：Windows 构建将多尺寸 ICO 实际嵌入可执行文件；macOS DMG 包装为带 ICNS 的 `XDev.app`；Linux 桌面入口使用应用图标。此处说明已实施的构建接入，不代表各平台最终产物已完成验收。
+- **原生图标接入**：Windows 构建将多尺寸 ICO 实际嵌入可执行文件；macOS DMG 包装为带 ICNS 的 `XDev.app`；Linux 桌面入口使用应用图标。对应平台 CI 打包已通过；macOS/Linux 真机 GUI 启动尚未执行，不以打包成功代替真机体验验证。
 
 以下截图均使用**测试示例数据**，不代表用户真实环境、已安装工具或本机路径。
 
