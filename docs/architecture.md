@@ -205,7 +205,10 @@ Catalog 加载与缓存共用顶层和 `third-party/` 来源集合，不递归�
 安装固定生成器：
 
 ```sh
+# Windows / macOS
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+# Linux（使用项目已选定的 GTK3 后端）
+go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 ```
 
 Wails v3 配置为 `wails.yaml`，旧版 `wails.json` 不再作为构建依据。该配置提供原生开发所需元数据；本轮未验证直接运行 `wails3 dev`。直接 `wails3 build` 也不保证与项目的公钥注入、签名覆盖和发布打包流程等价。

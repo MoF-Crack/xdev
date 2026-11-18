@@ -16,8 +16,14 @@ describe('Wails 3 distribution contract',()=>{
   expect(build).toContain("'-tags', tags");
   expect(ci).toContain('Require complete signature coverage');
   expect(ci).toContain("XDEV_REQUIRE_SIGNATURE_COVERAGE: '1'");
+   expect(ci).toContain("prerelease: ${{ contains(github.ref_name, '-') }}");
  });
- it('local entry points delegate to the same build module',()=>{
+ it('the Linux generator uses the same GTK3 backend as the desktop build',()=>{
+   const ci=read('.github/workflows/ci.yaml');
+   expect(ci).toContain('go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0');
+   expect(ci).toContain('libgtk-3-dev libwebkit2gtk-4.1-dev');
+  });
+  it('local entry points delegate to the same build module',()=>{
   expect(read('build.ps1')).toContain('scripts\\build.mjs');
   expect(read('build.sh')).toContain('scripts/build.mjs');
   expect(read('scripts/build.bat')).toContain('build.mjs');

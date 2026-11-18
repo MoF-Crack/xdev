@@ -73,7 +73,13 @@ jobs:
       - name: Verify desktop bindings
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+          # The generator CLI also links a Linux GUI backend. Match the
+          # project's GTK3 libraries instead of its default GTK4 backend.
+          if [[ "$RUNNER_OS" == 'Linux' ]]; then
+            go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+          else
+            go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+          fi
           wails3 generate bindings -f '-tags ${{ matrix.tags }},bindings' -ts -d frontend/bindings ./internal/gui
           git diff --exit-code -- frontend/bindings
       # Separate native commands: PowerShell must not let a later successful
@@ -284,6 +290,7 @@ jobs:
         with:
           files: dist/*
           draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
       - name: Publish validated release

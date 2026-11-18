@@ -91,7 +91,10 @@ hdiutil detach /Volumes/XDev
 - 固定版本 Wails 3 绑定生成器：
 
 ```sh
+# Windows / macOS
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+# Linux：先安装下面的 GTK3 / WebKitGTK 4.1 开发库
+go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 ```
 
 确保 `wails3` 在 PATH 中，或用 `WAILS3` 环境变量指定路径。`GO`、`NPM` 同样可指定真实工具路径，避免调用 XDev shim 造成构建工具选择不明确。

@@ -65,7 +65,7 @@ xdev gui        # 显式启动 GUI（等价无参数）
 | `xdev-1.0.0-beta.1-aarch64.AppImage` | Linux AppImage（arm64） |
 | `xdev-darwin-arm64-v1.0.0-beta.1.dmg` | macOS（Apple Silicon） |
 | `xdev-1.0.0-beta.1-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
-| `SHA256SUMS` / `SHA256SUMS-darwin` | 校验和 |
+| `SHA256SUMS` | 汇总所有平台资产的完整校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
 本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）。
@@ -261,7 +261,10 @@ proxy:
 需要 Go 1.27+、Node 22+（GUI 前端）和固定版本的 [Wails 3](https://wails.io/) CLI：
 
 ```bash
+# Windows / macOS
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+# Linux：先安装 GTK3 / WebKitGTK 4.1 开发库，再编译生成器
+go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 ```
 
 Linux 桌面构建使用 GTK3 + WebKitGTK 4.1 开发库；桌面运行依赖系统 WebView。
