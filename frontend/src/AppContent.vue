@@ -1,5 +1,5 @@
 <template>
-  <AppShell :selected-view="selectedView" :navigation-groups="localizedNavigationGroups" :t="t"
+  <AppShell :inspector-open="dockDetail" :selected-view="selectedView" :navigation-groups="localizedNavigationGroups" :t="t"
     :minimize="minimizeWindow" :toggle-maximize="toggleMaximize" :close="closeWindow"
     :minimize-label="t('window.minimize')" :maximize-label="isMaximized ? t('window.restore') : t('window.maximize')" :close-label="t('window.close')"
     @select-view="onMenuSelect" @open-command-palette="openCommandPalette" @escape="() => { /* G-05: Escape 只归命令面板所有——无条件调用 setCommandPaletteVisible(false) 会把焦点抢到 Ctrl+K 触发器上，破坏自行处理 Escape 的抽屉/对话框的焦点返还契约。 */ if (showCommandPalette) setCommandPaletteVisible(false); }">
@@ -16,6 +16,7 @@
             <template #icon><n-icon aria-hidden="true"><cloud-download-outline /></n-icon></template>
             {{ t('install.background_progress') }} · {{ installProgress.percent || 0 }}%
           </n-button>
+          <QuickThemeSwitch :theme="themeName" :t="t" @select="setTheme" />
           <UpdateBadge :t="t" :count="availableUpdates.length" :updates="availableUpdates" :loading="updatesLoading" :sniffing="sniffOperating" :installing="updateInstalling" @refresh="loadUpdates" @install="installUpdate" @ignore="ignoreUpdate" @sniff-all="sniffAll" />
           <NotificationCenter :t="t" :notifications="notifications" @clear="clearNotifications" @dismiss="dismissNotification" />
           <n-button ref="commandPaletteTrigger" size="small" secondary :aria-label="t('command_palette.open')" @click="openCommandPalette">
@@ -42,10 +43,13 @@
         <AboutPage v-else-if="selectedView === 'about'" :t="t" :info="aboutInfo" @check-update="checkUpdate" />
 
         <!-- Tool list (table style) -->
-        <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :loading="toolsLoading" :error="toolsError" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
+        <ToolCatalogPage v-else :tools="filteredTools" :category="activeCategory" :selected-name="showDrawer ? selectedTool?.name : ''" :loading="toolsLoading" :error="toolsError" v-model:search-query="searchQuery" v-model:hide-unavailable="hideUnavailable" :t="t" @open-detail="openDetail" @toggle-favorite="toggleCatalogFavorite" @retry="retryTools" />
+    <template #inspector>
+  <ToolDetailDrawer v-if="dockDetail" embedded :show="showDrawer" @update:show="setInspectorVisible" :tool="selectedTool" :path-mode="pathMode" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
+    </template>
   </AppShell>
 
-  <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
+  <ToolDetailDrawer v-if="!dockDetail" v-model:show="showDrawer" :tool="selectedTool" :path-mode="pathMode" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :can-cancel="installCanCancel" :can-pause="installCanPause" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
@@ -100,6 +104,7 @@ import { useWindowChrome } from './composables/useWindowChrome.js';
 import { useSniffSession } from './composables/useSniffSession.js';
 import AppShell from './layouts/AppShell.vue';
 import PageToolbar from './layouts/PageToolbar.vue';
+import QuickThemeSwitch from './components/QuickThemeSwitch.vue';
 import { commandPaletteEntries, createNavigationGroups, findPageDefinition } from './navigation/navigation.js';
 import { DEFAULT_THEME, isKnownTheme, THEMES } from './theme/themes.js';
 import { sameEnvIdentity } from './pages/envIdentity.js';
@@ -253,7 +258,19 @@ onMounted(() => {
 });
 const selectedTool = ref(null);
 const showDrawer = ref(false);
+const wideInspector = ref(false);
+let inspectorMedia;
+onMounted(() => { inspectorMedia = window.matchMedia('(min-width: 1280px)'); wideInspector.value = inspectorMedia.matches; inspectorMedia.addEventListener('change', updateInspectorWidth); });
+onUnmounted(() => inspectorMedia?.removeEventListener('change', updateInspectorWidth));
+function updateInspectorWidth(event) { wideInspector.value = event.matches; }
 const drawerTrigger = ref(null);
+async function setInspectorVisible(show) {
+  showDrawer.value = show;
+  if (!show) {
+    await nextTick();
+    if (!showProgress.value && !showCommandPalette.value && drawerTrigger.value?.isConnected) drawerTrigger.value.focus?.();
+  }
+}
 // Spec 023: 当前工具详情页的依赖环境检查结果（CheckToolDependencies）。
 const toolDeps = ref([]);
 const installedVersions = ref([]);
@@ -780,6 +797,8 @@ const localizedNavigationGroups = computed(() => mergedNavigationGroups.value.ma
   items: group.items.map((page) => ({ ...page, label: page.label ?? t(page.labelKey) })),
 })));
 const currentPage = computed(() => findPageDefinition(selectedView.value, localizedNavigationGroups.value));
+const catalogView = computed(() => Boolean(currentPage.value?.searchable));
+const dockDetail = computed(() => wideInspector.value && catalogView.value && showDrawer.value && Boolean(selectedTool.value));
 const headerTitle = computed(() => currentPage.value?.label ?? selectedView.value);
 const commandPaletteOptions = computed(() => [
   ...commandPaletteEntries(localizedNavigationGroups.value, t),
@@ -800,7 +819,9 @@ async function onCommandSelect(key) {
   await onMenuSelect(key);
 }
 
+let navigationId = 0;
 async function onMenuSelect(key) {
+  const navigation = ++navigationId;
   if ((selectedView.value === 'settings' || selectedView.value === 'env-vars') && key !== 'settings' && key !== 'env-vars') {
     editingEnvVar.value = null;
     showEnvEditor.value = false;
@@ -811,6 +832,8 @@ async function onMenuSelect(key) {
     allEnvVars.value = [];
     envValidationStats.value = null;
   }
+  showDrawer.value = false;
+  selectedTool.value = null;
   selectedView.value = key;
   if (key === 'dashboard') {
     await loadDashboard();
@@ -830,12 +853,15 @@ async function onMenuSelect(key) {
   } else if (key === 'remote') {
     await loadRemoteInstances();
   } else {
-    await onCategorySelect(key);
+    showDrawer.value = false;
+    selectedTool.value = null;
+    const applied = await onCategorySelect(key);
+    if (applied && navigation === navigationId && selectedView.value === key && activeCategory.value === key && wideInspector.value && filteredTools.value.length) await openDetail(filteredTools.value[0]);
   }
 }
 
 async function onCategorySelect(key) {
-  await loadTools(key);
+  return loadTools(key);
 }
 
 async function loadDashboard() {
@@ -934,6 +960,8 @@ async function openDetail(tool) {
   selectedTool.value = tool;
   showDrawer.value = true;
   showCount.value = 10;
+  installedVersions.value = [];
+  availableVersions.value = [];
   // Spec 023: 竞态防护——打开前立即清空旧依赖，避免闪烁显示上一工具的数据。
   toolDeps.value = [];
   await loadVersions(tool.name);
@@ -1784,7 +1812,11 @@ async function browseEnvDir() {
 async function refreshTools() {
   if (selectedView.value && selectedView.value !== 'dashboard' && selectedView.value !== 'settings') {
     try {
-      await loadTools(selectedView.value);
+      const applied = await loadTools(selectedView.value);
+      if (applied && catalogView.value && selectedTool.value) {
+        const refreshed = tools.value.find(tool => tool.name === selectedTool.value.name);
+        if (refreshed) selectedTool.value = refreshed;
+      }
     } catch (e) {
       console.error('Refresh failed:', e);
     }

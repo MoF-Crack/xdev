@@ -5,7 +5,7 @@
       <AppSidebar :groups="navigationGroups" :selected-view="selectedView" :compact="compact" :narrow="narrow" :t="t" @select="$emit('select-view', $event)" @toggle-compact="userCompact = !userCompact" />
       <div class="app-shell__main">
         <slot name="toolbar" />
-        <div class="app-shell__content"><slot /></div>
+        <div class="app-shell__workspace" :class="{ 'app-shell__workspace--split': inspectorOpen }"><div class="app-shell__content"><slot /></div><div v-if="inspectorOpen" class="app-shell__inspector"><slot name="inspector" /></div></div>
       </div>
     </div>
   </div>
@@ -17,6 +17,7 @@ import AppSidebar from './AppSidebar.vue';
 import AppTitleBar from './AppTitleBar.vue';
 
 const props = defineProps({
+  inspectorOpen: Boolean,
   selectedView: { type: String, required: true }, navigationGroups: { type: Array, required: true },
   t: { type: Function, required: true },
   minimize: { type: Function, required: true }, toggleMaximize: { type: Function, required: true }, close: { type: Function, required: true },
@@ -49,6 +50,9 @@ onUnmounted(() => {
 .app-shell { height: 100vh; overflow: hidden; background: var(--xdev-bg-app); }
 .app-shell__body { height: calc(100vh - 34px); display: flex; min-width: 0; }
 .app-shell__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.app-shell__workspace { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.app-shell__inspector { width: 350px; flex: 0 0 350px; min-height: 0; margin: var(--xdev-page-top-space) var(--xdev-content-padding) 24px 0; overflow: auto; border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-lg); background: var(--xdev-bg-card); }
+.app-shell__workspace--split .app-shell__content { padding-right: 20px; }
 .app-shell__content { flex: 1; min-width: 0; overflow: auto; padding: var(--xdev-page-top-space) var(--xdev-content-padding) 56px; scrollbar-gutter: stable; }
 @media (max-width: 799px) { .app-shell__content { padding: var(--xdev-space-5) var(--xdev-space-4) 40px; } }
 </style>

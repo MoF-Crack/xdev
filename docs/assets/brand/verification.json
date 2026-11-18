@@ -1,0 +1,204 @@
+{
+  "design": "F2 single flowing x + dev",
+  "inputs": [
+    {
+      "name": "F2-single-x-light.svg",
+      "sha256": "08f35b002f85abf59f3d004b28568467af8846d4ebc00b92e10e0037b9fdb8c2"
+    },
+    {
+      "name": "F2-app-icon.svg",
+      "sha256": "0accc84b2e849e5dce1788f2de7418b3982a16c396a81baf29f71e8efd966d59"
+    }
+  ],
+  "outputs": [
+    {
+      "path": "frontend/src/components/XDevLogo.vue",
+      "bytes": 1517,
+      "sha256": "724a3ceca0dd17e253d83909e6831ff8f85e6c317f670c85c4a797f2d5441a7a"
+    },
+    {
+      "path": "frontend/src/brand/f2.js",
+      "bytes": 882,
+      "sha256": "291bf53cc0b638d08e1d5dbb1c5e35f8c8ceca91a863f3ed456ed855cee72729"
+    },
+    {
+      "path": "frontend/src/assets/logo.svg",
+      "bytes": 951,
+      "sha256": "258828cf7a5ed143a10f07d2496b6ec99a793b8f5d49d5f6c4b6be99b192ad73"
+    },
+    {
+      "path": "frontend/src/assets/logo-small.svg",
+      "bytes": 565,
+      "sha256": "4a2115032c38f3b27caef34492dfee6f5250ae3d81773187b9025b41f01faa3b"
+    },
+    {
+      "path": "frontend/public/favicon.svg",
+      "bytes": 565,
+      "sha256": "4a2115032c38f3b27caef34492dfee6f5250ae3d81773187b9025b41f01faa3b"
+    },
+    {
+      "path": "build/appicon.png",
+      "bytes": 13953,
+      "sha256": "6ba3af4b1984767412f497b7a0c54defc5fc809c0a22ccb3401b9f04508b05e8"
+    },
+    {
+      "path": "build/windows/icon.ico",
+      "bytes": 28921,
+      "sha256": "7944d73e12e5905845dcd272fa48931e79d1f428afa35199ac9290dc2baee343"
+    },
+    {
+      "path": "frontend/test/XDevLogo.spec.js",
+      "bytes": 8007,
+      "sha256": "43c1c6ef06a002969fbf097a7f1f2f965b38349d7e8daaca1cbd7f6e24e5dd97"
+    },
+    {
+      "path": "docs/assets/brand/xdev-wordmark.svg",
+      "bytes": 951,
+      "sha256": "258828cf7a5ed143a10f07d2496b6ec99a793b8f5d49d5f6c4b6be99b192ad73"
+    },
+    {
+      "path": "docs/assets/brand/xdev-symbol.svg",
+      "bytes": 486,
+      "sha256": "6543866680892d75145774f96142d79b98512d5345c5891ef596cfc8a4ccd55b"
+    },
+    {
+      "path": "docs/assets/brand/xdev-app-icon.svg",
+      "bytes": 565,
+      "sha256": "4a2115032c38f3b27caef34492dfee6f5250ae3d81773187b9025b41f01faa3b"
+    },
+    {
+      "path": "docs/assets/brand/xdev-wordmark.png",
+      "bytes": 23774,
+      "sha256": "1bb58cef25f0653de334f8e57df1f7bcbf94ccf088b8b2cd2bd97913b7376e98"
+    },
+    {
+      "path": "docs/assets/brand/xdev-app-icon.png",
+      "bytes": 14194,
+      "sha256": "029e41265696e85fe93bafe6d50164da942f76e2c0fc2bb7b605c686c5bd808d"
+    },
+    {
+      "path": "docs/assets/brand/component-wordmark.png",
+      "bytes": 23774,
+      "sha256": "1bb58cef25f0653de334f8e57df1f7bcbf94ccf088b8b2cd2bd97913b7376e98"
+    },
+    {
+      "path": "docs/assets/brand/approved-wordmark-reference.png",
+      "bytes": 23774,
+      "sha256": "1bb58cef25f0653de334f8e57df1f7bcbf94ccf088b8b2cd2bd97913b7376e98"
+    },
+    {
+      "path": "docs/assets/brand/approved-app-icon-reference.png",
+      "bytes": 13953,
+      "sha256": "6ba3af4b1984767412f497b7a0c54defc5fc809c0a22ccb3401b9f04508b05e8"
+    }
+  ],
+  "pixel_comparisons": [
+    {
+      "candidate": "build/appicon.png",
+      "reference": "docs/assets/brand/approved-app-icon-reference.png",
+      "size": [
+        512,
+        512
+      ],
+      "changed_pixels": 0,
+      "comparison": "Pillow ImageChops.difference RGBA; getbbox(alpha_only=False)"
+    },
+    {
+      "candidate": "docs/assets/brand/xdev-wordmark.png",
+      "reference": "docs/assets/brand/approved-wordmark-reference.png",
+      "size": [
+        1076,
+        364
+      ],
+      "changed_pixels": 0,
+      "comparison": "Pillow ImageChops.difference RGBA; getbbox(alpha_only=False)"
+    },
+    {
+      "candidate": "docs/assets/brand/component-wordmark.png",
+      "reference": "docs/assets/brand/approved-wordmark-reference.png",
+      "size": [
+        1076,
+        364
+      ],
+      "changed_pixels": 0,
+      "comparison": "Pillow ImageChops.difference RGBA; getbbox(alpha_only=False)"
+    }
+  ],
+  "png": {
+    "mode": "RGBA",
+    "size": [
+      512,
+      512
+    ],
+    "corner_alpha": 0,
+    "indigo_rgb": [
+      86,
+      85,
+      205
+    ]
+  },
+  "ico": {
+    "sizes": [
+      [
+        16,
+        16
+      ],
+      [
+        24,
+        24
+      ],
+      [
+        32,
+        32
+      ],
+      [
+        48,
+        48
+      ],
+      [
+        64,
+        64
+      ],
+      [
+        128,
+        128
+      ],
+      [
+        256,
+        256
+      ]
+    ],
+    "mode": "RGBA",
+    "frames": 7
+  },
+  "browser_colors": {
+    "light": {
+      "symbol": "rgb(86, 85, 205)",
+      "dev": "rgb(37, 44, 68)"
+    },
+    "dark_probe": {
+      "symbol": "rgb(123, 134, 232)",
+      "dev": "rgb(232, 236, 243)"
+    },
+    "no_tokens": {
+      "symbol": "rgb(86, 85, 205)",
+      "dev": "rgb(18, 52, 86)",
+      "parent_currentColor": "#123456"
+    }
+  },
+  "tools": {
+    "chromium": "existing Playwright chromium-1228, explicit executablePath, headless",
+    "pillow": "12.3.0",
+    "packages_installed": false
+  },
+  "tests": {
+    "command": "node node_modules/vitest/vitest.mjs run test/XDevLogo.spec.js test/AppShell.spec.js",
+    "cwd": "frontend",
+    "files_passed": 2,
+    "tests_passed": 23,
+    "tests_failed": 0,
+    "brand_tests": 15,
+    "red_green_evidence": "Before generation ICO test failed: expected directory count 7, received 1; after generation passed."
+  },
+  "scope": "Only assigned branding paths edited by beta2-brand; layouts, themes, AppContent, index.html and other changes belong to integration agents."
+}

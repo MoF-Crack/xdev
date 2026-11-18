@@ -12,6 +12,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	buildassets "github.com/xmdemt/xdev/build"
 	"github.com/xmdemt/xdev/frontend"
 )
 
@@ -60,6 +61,7 @@ func Run(app *App, webviewDir string) error {
 	}
 	native := application.New(application.Options{
 		Name:        "XDev",
+		Icon:        buildassets.AppIcon,
 		Description: "Development Environment Manager",
 		Services:    []application.Service{application.NewService(app)},
 		Assets:      application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
@@ -68,9 +70,10 @@ func Run(app *App, webviewDir string) error {
 	})
 	window := native.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name: "main", Title: "XDev - Development Environment Manager",
-		Width: 1024, Height: 768, MinWidth: 800, MinHeight: 600,
-		BackgroundColour: application.RGBA{Red: 10, Green: 22, Blue: 40, Alpha: 255},
+		Width: 1440, Height: 900, MinWidth: 800, MinHeight: 600,
+		BackgroundColour: application.RGBA{Red: 16, Green: 21, Blue: 34, Alpha: 255},
 		Frameless:        true, Hidden: true,
+		Linux: application.LinuxWindow{Icon: buildassets.AppIcon},
 	})
 	app.desktop = &wailsDesktop{app: native, window: window}
 	var ready sync.Once

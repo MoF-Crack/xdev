@@ -63,6 +63,15 @@ build/baseline-*
 
 # Signing keys (public key may be committed; private key never)
 keys/priv.key
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+# Native resource compiler staging is machine-local.
+*.syso
+build/.xdev-native-*/
 
 # Manifest cross-process lock files (票 23 / 本批复核实测：AcquireFileLock 会在 manifest 旁
 # 留下 0 字节的 <tool>.yaml.lock，且不会自动删除。它们是运行时锁产物、不是内容——
