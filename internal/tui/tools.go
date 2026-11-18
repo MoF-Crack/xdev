@@ -49,8 +49,12 @@ func (m Model) viewTools(width, height int) string {
 		version := StyleDim.Render("—")
 		if m.hasInstalled(p.Name()) {
 			status = "●"
-			if m.activeVersion != "" {
-				version = StyleActive.Render(m.activeVersion)
+			// Per-tool active version. Using m.activeVersion here is wrong: it
+			// belongs to the currently selected tool, which made every installed
+			// row show the selected tool's version (go/python displayed node's
+			// 26.5.0 in the field report).
+			if v := m.activeVersionOf(p.Name()); v != "" {
+				version = StyleActive.Render(v)
 			}
 		}
 
@@ -85,6 +89,21 @@ func (m Model) hasInstalled(name string) bool {
 		return false
 	}
 	return len(entries) > 0
+}
+
+// activeVersionOf returns the active version of one specific tool by reading
+// its current/<tool> link. Returns "" when the tool is not active.
+func (m Model) activeVersionOf(name string) string {
+	link := filepath.Join(m.config.Core.XMDevDir, "current", name)
+	target, err := os.Readlink(link)
+	if err != nil {
+		return ""
+	}
+	// A dangling link must not be presented as an active version.
+	if _, err := os.Stat(link); err != nil {
+		return ""
+	}
+	return filepath.Base(target)
 }
 
 // readDirCompat uses os.Stat for junction compatibility on Windows.

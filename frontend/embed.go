@@ -1,3 +1,5 @@
+//go:build desktop && !bindings
+
 package frontend
 
 import "embed"

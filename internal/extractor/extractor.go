@@ -81,33 +81,44 @@ func Extract(src, dst, format string, strip int) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
+	var err error
 	switch strings.ToLower(format) {
 	case "zip":
-		return extractZip(src, dst, strip)
+		err = extractZip(src, dst, strip)
 	case "tar":
-		return extractTar(src, dst, strip, nil)
+		err = extractTar(src, dst, strip, nil)
 	case "tar.gz", "tgz":
-		return extractTar(src, dst, strip, gzipReaderAdapter)
+		err = extractTar(src, dst, strip, gzipReaderAdapter)
 	case "tar.xz", "txz":
-		return extractTarXZ(src, dst, strip)
+		err = extractTarXZ(src, dst, strip)
 	case "tar.bz2", "tbz2":
-		return extractTar(src, dst, strip, bzip2ReaderAdapter)
+		err = extractTar(src, dst, strip, bzip2ReaderAdapter)
 	case "tar.zst", "tzst":
-		return extractTarZst(src, dst, strip)
+		err = extractTarZst(src, dst, strip)
 	case "7z":
-		return extract7z(src, dst)
+		err = extract7z(src, dst)
 	case "exe":
 		// NSIS/Inno Setup installers can be extracted by 7z
-		return extract7z(src, dst)
+		err = extract7z(src, dst)
 	case "pkg":
 		// macOS .pkg is xar-based; try 7z extraction as fallback
-		return extract7z(src, dst)
+		err = extract7z(src, dst)
 	case "dmg":
 		// macOS disk image — hdiutil attach → copy .app → detach
-		return extractDmg(src, dst)
+		err = extractDmg(src, dst)
+	case "appimage":
+		// AppImage 是单文件可执行镜像（不是归档）：原样落盘并补执行位。
+		err = extractAppImage(src, dst)
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
+	if err != nil {
+		return err
+	}
+	// Windows 打的 zip / 7z 不带 POSIX 权限位：Go 的 archive/zip 会报 0666，
+	// 解出的二进制在 Linux 上直接 EACCES（内置 manifest 有 40 处 linux+zip）。
+	ensureExecutableBits(dst)
+	return nil
 }
 
 // hdiutilCmd is the hdiutil command used by extractDmg. It is a package
@@ -331,6 +342,65 @@ func unzipFile(f *zip.File, dst string) (int64, error) {
 	return n, nil
 }
 
+// extractAppImage copies a single-file AppImage into dst and marks it
+// executable. AppImages are self-contained executable images, not archives.
+func extractAppImage(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	name := filepath.Base(src)
+	outPath := filepath.Join(dst, name)
+	out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	n, err := io.Copy(out, io.LimitReader(in, maxDecompressSize+1))
+	if err != nil {
+		return err
+	}
+	if n > maxDecompressSize {
+		return fmt.Errorf("file %s exceeds max decompression size (%d bytes)", outPath, maxDecompressSize)
+	}
+	return os.Chmod(outPath, 0o755)
+}
+
+// ensureExecutableBits restores the POSIX execute bit for archives that cannot
+// carry it. Go's archive/zip reports 0666 for entries created on FAT/Windows,
+// so extracted binaries land non-executable and every shim exec fails with
+// EACCES — invisible on Windows, where the permission bits are ignored.
+//
+// Heuristic: files under a "bin" directory, files without an extension, and
+// common executable extensions get 0755. Anything else is left untouched.
+func ensureExecutableBits(root string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		if info.Mode().Perm()&0o111 != 0 {
+			return nil // already executable
+		}
+		base := filepath.Base(path)
+		ext := strings.ToLower(filepath.Ext(base))
+		inBin := strings.EqualFold(filepath.Base(filepath.Dir(path)), "bin")
+		switch ext {
+		case "", ".sh", ".bash", ".run", ".bin", ".appimage":
+			// plausible executable
+		default:
+			if !inBin {
+				return nil
+			}
+		}
+		_ = os.Chmod(path, 0o755)
+		return nil
+	})
+}
+
 func extractTar(src, dst string, strip int, decompress func(io.Reader) (io.ReadCloser, error)) error {
 	f, err := os.Open(src)
 	if err != nil {
@@ -411,7 +481,7 @@ func extract7z(src, dst string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("7z extraction requires 7z or 7za command to be installed")
+	return fmt.Errorf("7z extraction requires a 7z command: install p7zip-full (Debian/Ubuntu: apt install p7zip-full), p7zip (macOS: brew install p7zip) or 7-Zip (Windows), or use a tar/zip archive")
 }
 
 // validate7zArchive lists the contents of a 7z archive and validates

@@ -184,6 +184,34 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Println("• shell rc injection: not applicable")
 			}
 
+			// 4b. login-shell profile.
+			//
+			// WSL/Linux（本次实测 L5）：Ubuntu 的 bash 只在交互式 shell 读
+			// ~/.bashrc，`bash -lc`（WSL 默认、CI 脚本、ssh 命令）走 ~/.profile。
+			// 若只写 .bashrc，doctor 会报 ✔ 而登录 shell 的 PATH 里根本没有
+			// shims —— 这正是"init 成功但工具用不了"的根因。只有在交互式 RC
+			// 已注入、登录 profile 缺失/陈旧时才判定失败，避免首次安装把两个
+			// 检查重复计为两个错误。
+			if sh.LoginRCFile != "" && sh.LoginRCFile != sh.RCFile {
+				data, err := os.ReadFile(sh.LoginRCFile)
+				rcHasBlock := false
+				if err == nil {
+					rcHasBlock = hasXdevRCBlock(data)
+				}
+				if rcHasBlock {
+					if home, ok := rcBlockHome(data); ok && !samePath(home, cfg.Core.XMDevDir) {
+						check("login shell rc injected", false,
+							fmt.Sprintf("%s sets XMDEV_HOME=%s, current home is %s — re-run `xdev init`",
+								sh.LoginRCFile, home, cfg.Core.XMDevDir))
+					} else {
+						check("login shell rc injected", true, sh.LoginRCFile)
+					}
+				} else if sh.RCFile != "" && rcFileHasBlock(sh.RCFile) {
+					check("login shell rc injected", false,
+						fmt.Sprintf("%s has no xdev block — `bash -lc` (login shells) will not see the shims; re-run `xdev init`", sh.LoginRCFile))
+				}
+			}
+
 			// 5. shim binaries look right
 			//
 			// 票 40（P2-18 / E-14）：此处原先写死 shimOK=true——ShimDir 被
@@ -309,10 +337,17 @@ func newDoctorCmd() *cobra.Command {
 				for _, issue := range shadowIssues {
 					fmt.Printf("  - %s\n", issue)
 				}
-				fmt.Println("  Suggestion: Remove the conflicting directory from Machine (system) PATH,")
-				fmt.Println("  or ensure the shim directory appears first in the merged PATH.")
-				fmt.Println("  You can also temporarily prepend the shim dir with:")
-				fmt.Println("    $env:PATH = \"" + cfg.Core.ShimDir + ";$env:PATH\"")
+				if runtime.GOOS == "windows" {
+					fmt.Println("  Suggestion: Remove the conflicting directory from Machine (system) PATH,")
+					fmt.Println("  or ensure the shim directory appears first in the merged PATH.")
+					fmt.Println("  You can also temporarily prepend the shim dir with:")
+					fmt.Println("    $env:PATH = \"" + cfg.Core.ShimDir + ";$env:PATH\"")
+				} else {
+					fmt.Println("  Suggestion: ensure the shim directory appears before the conflicting")
+					fmt.Println("  directory in PATH, or drop the conflicting entry from your shell profile.")
+					fmt.Println("  You can also temporarily prepend the shim dir with:")
+					fmt.Println("    export PATH=\"" + cfg.Core.ShimDir + ":$PATH\"")
+				}
 				allOK = false
 			} else {
 				fmt.Println("✔ PATH shadow: no conflicts detected")
@@ -450,6 +485,12 @@ func hasXdevRCBlock(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// rcFileHasBlock reports whether the file at path contains any known xdev block.
+func rcFileHasBlock(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && hasXdevRCBlock(data)
 }
 
 // rcBlockHome 提取 RC 注入块里声明的 XMDEV_HOME 值。
@@ -599,6 +640,17 @@ func shimDirCheck(dir string) (bool, string) {
 	return true, fmt.Sprintf("%d shim(s) installed", len(entries))
 }
 
+// normalizePathForCompare lowercases paths only on Windows, where the
+// filesystem is case-insensitive. On Unix paths are compared verbatim so
+// /Home/U and /home/u remain distinct (the previous unconditional ToLower
+// could match unrelated directories).
+func normalizePathForCompare(p string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
 // pathContainsShim reports whether the shim dir appears in the
 // current process PATH.  On Windows we also try to read the user
 // PATH from the registry via PowerShell as a fallback.
@@ -643,7 +695,7 @@ func detectPathShadowConflicts(shimDir string) []string {
 		return issues
 	}
 
-	shimDirClean := strings.ToLower(filepath.Clean(shimDir))
+	shimDirClean := normalizePathForCompare(filepath.Clean(shimDir))
 	parts := strings.Split(path, sep)
 
 	// Find the shim directory position in the merged PATH.
@@ -651,7 +703,7 @@ func detectPathShadowConflicts(shimDir string) []string {
 	// shadowing (scan full PATH). If shim is first, no conflict.
 	shimPos := -1
 	for i, p := range parts {
-		clean := strings.ToLower(filepath.Clean(strings.Trim(p, "\" ")))
+		clean := normalizePathForCompare(filepath.Clean(strings.Trim(p, "\" ")))
 		if clean == shimDirClean {
 			shimPos = i
 			break

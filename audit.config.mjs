@@ -10,9 +10,10 @@ export default {
   entryCwd: 'frontend',
   url: 'http://127.0.0.1:4173',
 
-  // Real Wails shell (build/bin/xdev-gui.exe from wails.json outputfilename)
+  // Windows desktop single binary from node scripts/build.mjs (Wails v3.1.0).
+  // No arguments selects GUI mode; a maintenance build has no desktop runtime.
   webview2: {
-    exe: 'build/bin/xdev-gui.exe',
+    exe: 'build/bin/xdev.exe',
     port: 9222,
   },
 

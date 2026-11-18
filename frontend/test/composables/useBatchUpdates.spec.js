@@ -110,6 +110,17 @@ describe('useBatchUpdates (Spec 037 phase 1: serial confirm + parallel run)', ()
     expect(ctx.installConfirmed).toHaveBeenCalledWith('opencode', '1.2.0', 'cli');
   });
 
+  it('asks for a concrete archive form before starting a multi-form update', async () => {
+    const ctx = setup({ updates: [{ tool: 'editor', latestVersion: '2' }], previewResult: { unverified: false, hasFormSpecificArchives: true, availableForms: ['cli', 'gui'] } });
+    const pending = ctx.batch.installAllUpdates();
+    clickDialog(ctx.dialog, 'positive');
+    await vi.waitFor(() => expect(ctx.dialog.warning).toHaveBeenCalledTimes(2));
+    const choices = ctx.dialog.warning.mock.calls[1][0];
+    choices.content().props['onUpdate:value']('gui');
+    expect(ctx.installConfirmed).not.toHaveBeenCalled(); choices.onPositiveClick(); await pending;
+    expect(ctx.installConfirmed).toHaveBeenCalledWith('editor', '2', 'gui');
+  });
+
   it('counts a failed start as failed (all items still attempted)', async () => {
     const ctx = setup({ sessionStartImpl: vi.fn(async () => false) });
     await runBatch(ctx, { itemDialogs: ['positive', 'positive'] });

@@ -1,4 +1,4 @@
-﻿// app_migration.go implements initialization, migration, and self-install
+// app_migration.go implements initialization, migration, and self-install
 // methods for the GUI.
 //
 // Provides:
@@ -21,8 +21,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
@@ -306,7 +304,9 @@ func (a *App) InitConfig(baseDir string) error {
 		logWarn("[InitConfig] failed to install xdev self: %v", err)
 	}
 	xdevBinDir := filepath.Join(baseDir, "current", "xdev")
-	if err := env.AppendToUserPath(xdevBinDir); err != nil {
+	if a.noEnvWrite {
+		logInfo("[InitConfig] host PATH writes disabled")
+	} else if err := env.AppendToUserPath(xdevBinDir); err != nil {
 		logWarn("[InitConfig] failed to add xdev dir to user PATH: %v", err)
 	} else {
 		logInfo("[InitConfig] added xdev dir to user PATH: %s", xdevBinDir)
@@ -319,6 +319,9 @@ func (a *App) InitConfig(baseDir string) error {
 // 双反斜杠路径和旧版 xmdevenvmt shim 目录。
 // cfg 由调用方传入（InitConfig 持写锁时传 a.cfg，避免 getCfg 死锁，F-18）。
 func (a *App) cleanupUserPath(cfg *config.Config, baseDir string) {
+	if a.noEnvWrite {
+		return
+	}
 	mode := cfg.GetPathMode()
 	shimDir := filepath.Join(baseDir, "shims")
 	// 票 11（P0-13）：home 锚定——仅清理 baseDir 下的 xdev 自有条目，
@@ -384,9 +387,7 @@ func (a *App) migrateLegacyDir(dir string) string {
 
 // SelectDirectory opens a native directory picker dialog.
 func (a *App) SelectDirectory(title string) string {
-	dir, err := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-		Title: title,
-	})
+	dir, err := a.chooseDirectory(title)
 	if err != nil {
 		return ""
 	}
@@ -398,9 +399,7 @@ func (a *App) BrowseDirectory(title string) string {
 	if a.ctx == nil {
 		return ""
 	}
-	dir, err := wailsRuntime.OpenDirectoryDialog(a.ctx, wailsRuntime.OpenDialogOptions{
-		Title: title,
-	})
+	dir, err := a.chooseDirectory(title)
 	if err != nil {
 		logWarn("[BrowseDirectory] 目录选择对话框失败: %v", err)
 		return ""
@@ -604,7 +603,7 @@ func (a *App) migrateLocalToolByMove(tool localmigrate.LocalTool) error {
 		// 之前把潜在数据损失显式暴露出来）
 		_, skippedLinks, copyErr := util.CopyDirReport(localPath, targetPath, func(copied, total int) {
 			if a.ctx != nil {
-				wailsRuntime.EventsEmit(a.ctx, "migrationProgress", map[string]interface{}{
+				a.emitEvent("migrationProgress", map[string]interface{}{
 					"tool":    tool.Name,
 					"phase":   "copying",
 					"copied":  copied,
@@ -794,7 +793,7 @@ func (a *App) postMigrateSetup(tool localmigrate.LocalTool, cfg *config.Config) 
 	//   - PATH 一律跳过（大小写不敏感）——由 xdev 的 shim/目录注入机制管理；
 	//   - 其余键走 SetUserEnvVarTrusted（受保护键拒绝 + 路径型值 X-08 校验）。
 	vars := p.EnvVars(installPath)
-	if len(vars) > 0 {
+	if len(vars) > 0 && !a.noEnvWrite {
 		// Windows registry writes must be serialized to prevent lost updates
 		regMu.Lock()
 		for k, v := range vars {

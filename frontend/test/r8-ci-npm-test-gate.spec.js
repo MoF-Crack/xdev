@@ -1,7 +1,7 @@
 // 第八轮审计 · 红→绿守卫 4（F-44 修复不完整：CI 前端门禁漏掉 `npm test`）
 //
 // 缺陷（R8-04，P2）：F-44 在 `.github/workflows/ci.yaml` 的 build job 里加了
-// `Frontend unit tests`（`npx vitest run`），但 `frontend/package.json` 的
+// `Frontend unit tests`（`npm run test:unit -- --maxWorkers=2`），但 `frontend/package.json` 的
 // `"test": "node test/smoke.mjs"` 是**另一套**守卫：
 //   - `vite.config.js` 的 `test.include = ['test/**/*.{test,spec}.js']` 只匹配
 //     `*.test.js` / `*.spec.js`，`test/smoke.mjs` 不匹配；
@@ -37,9 +37,9 @@ describe('R8-04 CI 必须同时跑 vitest 与 smoke.mjs（红→绿）', () => {
     expect(/smoke/.test(cfg)).toBe(false);
   });
 
-  it('CI 里必须出现 npm test（红：修复前只有 npx vitest run）', () => {
+  it('CI 里必须出现 npm test（红：修复前只有 npm run test:unit -- --maxWorkers=2）', () => {
     const ci = read('.github/workflows/ci.yaml');
-    expect(ci).toContain('npx vitest run');
+    expect(ci).toContain('npm run test:unit -- --maxWorkers=2');
     // 红：修复前 ci.yaml 中没有任何 `npm test` / `npm run test`。
     expect(ci).toMatch(/npm (run )?test\b/);
   });

@@ -127,7 +127,7 @@ func newUninstallCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("✔ removed %s@%s\n", name, ver)
-			fmt.Println("Tip: open a new terminal to reflect the uninstalled tool in your PATH.")
+			fmt.Println("Tip: open a new terminal (or run `hash -r` in bash / `rehash` in zsh) so the shell drops the removed shim path.")
 			return nil
 		},
 	}

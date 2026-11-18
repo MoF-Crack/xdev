@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -28,7 +29,11 @@ func stdinIsTTY() bool {
 }
 
 // runSelfCheck 执行启动自检（更新检查策略由 internal/update 决策）。
-func runSelfCheck() error {
+//
+// allowPrompt=false 用于 TUI/GUI 等交互入口：更新提示绝不能抢占 Bubble Tea
+// / Wails 的 stdin，也不应向屏幕打印；只写日志（TUI 场景日志已重定向到
+// <cache>/logs/tui.log）。
+func runSelfCheck(allowPrompt bool) error {
 	cfg := Cfg()
 	if !cfg.Core.SelfUpdate {
 		return nil
@@ -41,9 +46,9 @@ func runSelfCheck() error {
 	act, res := policy.CheckPolicy(ctx, &cfg.Core, cfg.Core.CacheDir)
 	switch act {
 	case update.ActionAsk:
-		// 非 TTY / --no-path-fix：降级为一行提示，不读 stdin。
-		if !stdinIsTTY() || NoPathFix() {
-			fmt.Printf("xdev: 有可用更新 v%s -> v%s（运行 'xdev self update' 更新）\n", res.CurrentVersion, res.LatestVersion)
+		// 非 TTY / --no-path-fix / TUI 入口：降级为日志或一行提示，不读 stdin。
+		if !shouldPromptSelfUpdate(allowPrompt, stdinIsTTY(), NoPathFix()) {
+			log.Printf("xdev: 有可用更新 v%s -> v%s（运行 'xdev self update' 更新）", res.CurrentVersion, res.LatestVersion)
 			return nil
 		}
 		err := promptSelfUpdate(res, os.Stdin, cfg.Core.CacheDir, runSelfUpdate)
@@ -52,16 +57,23 @@ func runSelfCheck() error {
 		}
 		return err
 	case update.ActionNotify:
-		fmt.Printf("xdev: 有可用更新 v%s -> v%s（运行 'xdev self update' 更新）\n", res.CurrentVersion, res.LatestVersion)
+		log.Printf("xdev: 有可用更新 v%s -> v%s（运行 'xdev self update' 更新）", res.CurrentVersion, res.LatestVersion)
 	case update.ActionUpdate:
-		fmt.Printf("xdev: 自动更新 v%s -> v%s ...\n", res.CurrentVersion, res.LatestVersion)
+		log.Printf("xdev: 自动更新 v%s -> v%s ...", res.CurrentVersion, res.LatestVersion)
 		if err := runSelfUpdate(); err != nil {
-			fmt.Printf("xdev: 自动更新失败: %v\n", err)
+			log.Printf("xdev: 自动更新失败: %v", err)
 		}
 	default:
 		// ActionSkip：静默
 	}
 	return nil
+}
+
+// shouldPromptSelfUpdate decides whether the startup update check may block on
+// stdin. TUI/GUI entrances pass allowPrompt=false; non-TTY and --no-path-fix
+// also force the non-blocking path.
+func shouldPromptSelfUpdate(allowPrompt, stdinTTY, noPathFix bool) bool {
+	return allowPrompt && stdinTTY && !noPathFix
 }
 
 // promptSelfUpdate 三选交互：更新 / 忽略并继续 / 退出。

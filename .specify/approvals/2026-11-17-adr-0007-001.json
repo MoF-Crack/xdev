@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "approval_id": "2026-11-17-adr-0007-001",
+  "asset_type": "adr",
+  "target_path": "docs/adr/0007-wails3-desktop-runtime.md",
+  "decision": "approve",
+  "target_version": "1.0.0",
+  "target_state": "Accepted",
+  "scope": "实施已展示的架构契约收敛和固定 Wails 3 正式版迁移方案，保留单二进制产品、兼容配置与信任模型；不包含推送、打 tag、发布或最终验收归档批准",
+  "approved_by": "xinyan <zuijiuhjd@foxmail.com>",
+  "approved_at": "2026-11-17",
+  "authorization_text": "按照方案执行，注意并发数量。子代理可以选择走 xc 渠道的模型。",
+  "recorded_at": "2026-11-17",
+  "recorded_by": "DeepSeek Harness lead"
+}

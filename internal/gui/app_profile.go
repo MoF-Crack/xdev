@@ -281,6 +281,10 @@ func (a *App) ImportProfile(filePath string) ImportResult {
 	// Set environment variables. Profiles are untrusted user-supplied
 	// JSON: only syntactically valid, non-protected names may be written.
 	for _, e := range profile.EnvVars {
+		if a.noEnvWrite {
+			errors = append(errors, "env "+e.Name+": host environment writes disabled")
+			continue
+		}
 		if e.Level != "user" {
 			continue
 		}

@@ -13,7 +13,7 @@
 *.bat text eol=crlf
 
 # Generated Wails bindings preserve generator formatting.
-frontend/wailsjs/go/models.ts -whitespace
+frontend/bindings/** -whitespace linguist-generated=true
 
 # Markdown hard line breaks intentionally use trailing spaces.
 build/manifest-changes-unsigned.md -whitespace

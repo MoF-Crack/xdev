@@ -814,6 +814,8 @@ func TestRemoteVersionsMsg_AcceptsMessageForCurrentTool(t *testing.T) {
 func TestRemoteVersionsMsg_IgnoresErrForOtherTool(t *testing.T) {
 	m := newTUITestModelWithTools(t, "aaa", "bbb")
 	m.toolIdx = 1 // "bbb"
+	// Isolate the stale-error assertion from the eagerly loaded installable list.
+	m.remoteVersions = nil
 
 	updated, _ := m.Update(RemoteVersionsMsg{Tool: "aaa", Err: fmt.Errorf("boom")})
 	m2 := updated.(Model)

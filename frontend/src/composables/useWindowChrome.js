@@ -1,5 +1,5 @@
 import { onMounted, onUnmounted, ref } from 'vue';
-import { Quit, WindowIsMaximised, WindowMinimise, WindowToggleMaximise } from '../../wailsjs/runtime/runtime';
+import { Quit, WindowIsMaximised, WindowMinimise, WindowToggleMaximise } from '../desktop/window.js';
 
 export function useWindowChrome() {
   const isMaximized = ref(false);

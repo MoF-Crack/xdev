@@ -47,7 +47,7 @@
 
   <ToolDetailDrawer v-model:show="showDrawer" :tool="selectedTool" :installed-versions="installedVersions" :available-versions="availableVersions" :show-count="showCount" :operating-tool="pmOperating" :return-focus-to="drawerTrigger" :deps="toolDeps" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @toggle-favorite="toggleFavorite" @migrate="migrateTool" @switch-local="switchToLocal" @switch-xdev="switchToXdev" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" @show-more="showCount += 20" @launch="launchTool" @copy-command="copyToolCommand" @migrate-pm="migratePackageManager" @install-package-manager="installPackageManager" @update-package-manager="updatePackageManager" />
   <!-- Install progress modal -->
-  <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
+  <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :can-cancel="installCanCancel" :can-pause="installCanPause" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
   <EnvVarEditorDialog :show="showEnvEditor" :editing="editingEnvVar" :browse-directory="browseEnvDir" :t="t" @update:show="showEnvEditor = $event" @save="saveEnvDraft" />
   <!-- Spec 034: 启动自检更新三选对话框 -->
@@ -89,6 +89,8 @@ const IsolationPage = defineAsyncComponent(() => import('./pages/IsolationPage.v
 const RemoteDevelopmentPage = defineAsyncComponent(() => import('./pages/RemoteDevelopmentPage.vue'));
 const AboutPage = defineAsyncComponent(() => import('./pages/AboutPage.vue'));
 import { useInstall } from './composables/useInstall.js';
+import { createInstallCoordinator, confirmInstallAction } from './composables/useInstallCoordinator.js';
+const installCoordinator = createInstallCoordinator();
 import { useBatchUpdates } from './composables/useBatchUpdates.js';
 import { useParallelBatch } from './composables/useParallelBatch.js';
 import { useTools } from './composables/useTools.js';
@@ -257,7 +259,7 @@ const toolDeps = ref([]);
 const installedVersions = ref([]);
 const availableVersions = ref([]);
 const showCount = ref(10);
-const { install: runInstall, installConfirmed: runInstallConfirmed, repair: runRepair, pause: runPause, resume: runResume, cancel: runCancel, waitForCompletion, phase: installPhase, progress: installProgress, error: installError, active: installing, paused: downloadPaused } = useInstall({ onComplete: handleInstallComplete, onError: handleInstallError, onCancel: handleInstallCancel });
+const { install: runInstall, installConfirmed: runInstallConfirmed, repair: runRepair, pause: runPause, resume: runResume, cancel: runCancel, waitForCompletion, phase: installPhase, progress: installProgress, error: installError, active: installing, paused: downloadPaused, canCancel: installCanCancel, canPause: installCanPause, taskId: installSessionId } = useInstall({ onComplete: handleInstallComplete, onError: handleInstallError, onCancel: handleInstallCancel });
 const showProgress = ref(false);
 const installTrigger = ref(null);
 const showFormSelector = ref(false);
@@ -279,6 +281,8 @@ function createBatchSession(row) {
   watch(() => session.progress.value, (v) => { row.percent = v?.percent || 0; row.bytes = v?.bytes || 0; row.totalBytes = v?.totalBytes || 0; row.speed = v?.speed || ''; row.eta = v?.eta || ''; }, { immediate: true });
   watch(() => session.active.value, (v) => { row.active = v; }, { immediate: true });
   watch(() => session.paused.value, (v) => { row.paused = v; }, { immediate: true });
+  watch(() => session.canCancel.value, (v) => { row.canCancel = v; }, { immediate: true });
+  watch(() => session.status.value, (v) => { row.status = v; }, { immediate: true });
   watch(() => session.error.value, (v) => { if (v) row.error = v; }, { immediate: true });
   return session;
 }
@@ -381,14 +385,16 @@ const { installAllUpdates } = useBatchUpdates({
   dialog,
   message,
   t,
-  loadUpdates,
+  loadUpdates: () => Promise.all([loadUpdates(), refreshTools(), loadDashboard(), loadFavorites()]),
+  coordinator: installCoordinator,
   availableUpdates,
   setShowProgress: (v) => { showProgress.value = v; },
   active: installing,
   batchActive,
 });
 const { pmOperating, installPackageManager, updatePackageManager, migratePackageManager } = usePackageManagers({
-  t, message, dialog, refreshTools: (...args) => refreshTools(...args), selectedTool,
+  t, message, dialog, coordinator: installCoordinator,
+  refreshTools: () => Promise.all([refreshTools(), loadDashboard(), loadFavorites(), loadUpdates()]), selectedTool,
 });
 
 
@@ -1029,128 +1035,64 @@ function mergeInstallTool(toolName, fallback = null) {
   return { ...(fallback || {}), ...(current || {}), ...(local || {}) };
 }
 
-async function doInstall(toolName, version, tool = null, formFilter = '') {
+async function doInstall(toolName, version, tool = null, formFilter = '', repairRequested = false) {
   if (!version) return;
-  // Spec 036 N2 补遗：此处原为静默早退——安装进行中点击任何安装入口
-  // （更新列表行/徽标弹层/抽屉/版本管理器）无任何反馈。改为 busy 提示。
-  if (installing.value || batchActive.value) { message.warning(t('install.busy')); return; }
-  tool = mergeInstallTool(toolName, tool);
-  installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
-
-  let preview = null;
+  const lease = installCoordinator.acquire(repairRequested ? 'repair' : 'single');
+  if (!lease) { message.warning(t('install.busy')); return; }
   try {
-    preview = await window.go.gui.App.PreviewInstall(toolName, version);
-  } catch (e) {
-    // Older builds may lack PreviewInstall — fall back to local metadata.
-  }
-  if (preview) {
-    tool = {
-      ...tool,
-      hasFormSpecificArchives: preview.hasFormSpecificArchives,
-      availableForms: preview.availableForms || tool.availableForms,
-    };
-  }
-
-  const formChoices = (Array.isArray(tool?.availableForms) && tool.availableForms.length)
-    ? tool.availableForms
-    : (Array.isArray(tool?.formFactor) ? tool.formFactor : []);
-  if (!formFilter && tool?.hasFormSpecificArchives && formChoices.length === 1) {
-    formFilter = formChoices[0];
-  }
-  if (!formFilter && tool?.hasFormSpecificArchives && formChoices.length > 1) {
+    tool = mergeInstallTool(toolName, tool);
+    installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
+    let preview;
+    try { preview = await window.go.gui.App.PreviewInstall(toolName, version); } catch { /* backend still validates */ }
+    if (preview) tool = { ...tool, hasFormSpecificArchives: preview.hasFormSpecificArchives, availableForms: preview.availableForms || tool.availableForms };
+    const choices = tool.availableForms?.length ? tool.availableForms : tool.formFactor || [];
+    if (!formFilter && tool.hasFormSpecificArchives) {
+      if (choices.length === 1) formFilter = choices[0];
+      else if (choices.length > 1) {
+        showDrawer.value = false;
+        formSelectorTool.value = tool;
+        formFilter = await new Promise(resolve => {
+          formSelectorRequest.value = { resolve };
+          showFormSelector.value = true;
+        });
+        if (!formFilter) return;
+      }
+    }
     showDrawer.value = false;
-    formSelectorTool.value = tool;
-    formSelectorRequest.value = { toolName, version, tool };
-    showFormSelector.value = true;
-    return;
-  }
-  showDrawer.value = false;
-
-  const integrity = preview?.integrity;
-  if (integrity && integrity.path && !integrity.ok && integrity.reason !== 'not installed') {
-    const missing = (integrity.missing || []).length ? ` (${(integrity.missing || []).join(', ')})` : '';
-    dialog.warning({
-      title: t('confirm_repair_title'),
-      content: `${t('confirm_repair_content', { tool: toolName, version })}${missing}`,
-      positiveText: t('detail.repair'),
-      negativeText: t('btn.cancel'),
-      onPositiveClick: () => startRepairConfirmed(toolName, version),
-    });
-    return;
-  }
-
-  if (preview?.unverified) {
-    dialog.warning({
-      title: t('install.unverified_title') || 'Unverified Version',
-      content: t('install.unverified_content', { tool: toolName, version }) || `Version ${toolName}@${version} was discovered by sniffing. The archive URL has not been verified — downloads may fail. Continue?`,
-      positiveText: t('btn.install'),
-      negativeText: t('btn.cancel'),
-      onPositiveClick: () => startInstallConfirmed(toolName, version, true, formFilter),
-    });
-    return;
-  }
-  startInstallConfirmed(toolName, version, false, formFilter);
+    const integrity = preview?.integrity;
+    const force = repairRequested || Boolean(integrity?.path && !integrity.ok && integrity.reason !== 'not installed');
+    if (force && !(await confirmInstallAction(dialog, {
+      title: t('confirm_repair_title'), content: t('confirm_repair_content', { tool: toolName, version }),
+      positiveText: t('detail.repair'), negativeText: t('btn.cancel'),
+    }))) return;
+    if (preview?.unverified && !(await confirmInstallAction(dialog, {
+      title: t('install.unverified_title'), content: t('install.unverified_content', { tool: toolName, version }),
+      positiveText: t('btn.install'), negativeText: t('btn.cancel'),
+    }))) return;
+    showProgress.value = true;
+    const started = force ? await runRepair(toolName, version, formFilter)
+      : preview?.unverified ? await runInstallConfirmed(toolName, version, formFilter)
+        : await runInstall(toolName, version, formFilter);
+    if (started) await waitForCompletion();
+    return started;
+  } finally { lease.release(); }
 }
 
 function confirmFormInstall(formFilter) {
   const request = formSelectorRequest.value;
+  formSelectorRequest.value = null;
+  request?.resolve(formFilter);
   showFormSelector.value = false;
   formSelectorTool.value = null;
-  formSelectorRequest.value = null;
-  if (request) doInstall(request.toolName, request.version, request.tool, formFilter);
 }
+watch(showFormSelector, visible => {
+  if (!visible && formSelectorRequest.value) confirmFormInstall('');
+});
+onUnmounted(() => { formSelectorRequest.value?.resolve(''); });
 
-async function startInstallConfirmed(toolName, version, confirmed, formFilter = '') {
-  // Spec 036 N2: install mutex — every secondary install entry (row
-  // buttons, update badge popover, drawer, version manager, form
-  // selector, unverified confirm) converges here. The batch adapter
-  // never trips this: its loop waits for active=false between items.
-  if (installing.value || batchActive.value) {
-    message.warning(t('install.busy'));
-    return;
-  }
-  showProgress.value = true;
-  const started = confirmed
-    ? await runInstallConfirmed(toolName, version, formFilter)
-    : await runInstall(toolName, version, formFilter);
-  if (!started && installError.value) showInstallError(t('install.failed', { error: installError.value.message }));
-  // 冒烟反馈 #2 根因修复：必须把 started 布尔值返回给调用方——批量更新
-  // 适配器据 `if (!started)` 区分「启动失败」与「已启动（等待事件）」。
-  // 此前 void 返回 undefined 被当失败计，且 active 仍 true 导致下一项
-  // 预检 break——批量在首个成功启动的项之后即中止（成功0 失败1）。
-  return started;
-}
-
-// repairInstall force-reinstalls an installed (possibly incomplete) version.
-// Confirmation uses Naive UI so it is not hidden behind the Wails window.
 async function repairInstall(toolName, version) {
-  if (!version) return;
-  // Spec 036 N2 补遗：同 doInstall——静默早退改 busy 提示。
-  if (installing.value || batchActive.value) { message.warning(t('install.busy')); return; }
-  installTrigger.value = showDrawer.value ? drawerTrigger.value : document.activeElement;
-  showDrawer.value = false;
-  dialog.warning({
-    title: t('confirm_repair_title'),
-    content: t('confirm_repair_content', { tool: toolName, version }),
-    positiveText: t('detail.repair'),
-    negativeText: t('btn.cancel'),
-    onPositiveClick: () => startRepairConfirmed(toolName, version),
-  });
+  return doInstall(toolName, version, null, '', true);
 }
-
-async function startRepairConfirmed(toolName, version) {
-  // Spec 036 N2: install mutex (converges both repair entries —
-  // repairInstall dialog and doInstall integrity-check dialog).
-  if (installing.value) {
-    message.warning(t('install.busy'));
-    return;
-  }
-  showProgress.value = true;
-  const started = await runRepair(toolName, version);
-  if (!started && installError.value) showInstallError(t('install.failed', { error: installError.value.message }));
-  return started; // 冒烟反馈 #2：与 startInstallConfirmed 同契约（调用方需要布尔返回值）
-}
-
 async function refreshInstallViews(toolName) {
   const refreshExpandedFavorite = favVersionExpanded.value === toolName;
   const refreshExpandedDashboard = dashVersionExpanded.value === toolName;
@@ -1173,11 +1115,18 @@ async function handleInstallError(data) {
 }
 
 async function handleInstallCancel(data) {
+  // Close before asynchronous refresh: a previous session must not close a retry.
+  const returnView = selectedView.value;
+  const trigger = installTrigger.value;
+  if (!batchActive.value) showProgress.value = false;
   await refreshInstallViews(data.tool);
   await nextTick();
-  installTrigger.value = document.querySelector(`[data-action="detail"][data-tool="${CSS.escape(data.tool)}"]`) || installTrigger.value;
-  // Spec 036 N4: during a batch the loop owns the progress dialog.
-  if (!batchActive.value) showProgress.value = false;
+  if (installSessionId.value !== data.sessionId || installing.value || batchActive.value || showProgress.value || selectedView.value !== returnView) return;
+  // Refresh replaces catalog button nodes. Restore the same logical trigger,
+  // not the detached element that the progress dialog initially remembered.
+  const replacement = [...document.querySelectorAll('[data-action="detail"][data-tool]')]
+    .find(element => element.dataset.tool === data.tool);
+  (trigger?.isConnected ? trigger : replacement)?.focus?.();
 }
 
 async function pauseDownload() {

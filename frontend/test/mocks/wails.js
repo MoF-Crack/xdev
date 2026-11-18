@@ -82,10 +82,22 @@ export function createWailsBrowserMocks() {
     SelectDirectory: async () => '\\\\server\\development\\a-very-long-directory-name\\another-long-directory-name\\XDev',
     InitConfig: async (...args) => { window.__wailsCalls.InitConfig.push(args); },
   }, {
-    get: (target, property) => target[property] ?? (async () => []),
+    get: (target, property) => {
+      if (Reflect.has(target, property)) return target[property];
+      if (typeof property === 'symbol' || property === 'then') return undefined;
+      const error = `Unmocked Wails App method: ${property}`;
+      (window.__wailsUnexpected ||= []).push(error);
+      throw new Error(error);
+    },
   });
   const runtime = new Proxy({ WindowIsMaximised: async () => false }, {
-    get: (target, property) => target[property] ?? (() => null),
+    get: (target, property) => {
+      if (Reflect.has(target, property)) return target[property];
+      if (typeof property === 'symbol' || property === 'then') return undefined;
+      const error = `Unmocked Wails runtime method: ${property}`;
+      (window.__wailsUnexpected ||= []).push(error);
+      throw new Error(error);
+    },
   });
   window.go = { gui: { App: app } };
   window.runtime = runtime;
@@ -116,8 +128,41 @@ export function createInitializedWailsBrowserMocks() {
     isFavorite: false,
     formFactor: ['cli'],
   }];
+  const sessions = new Map();
+  const terminal = new Set(['completed', 'error', 'cancelled', 'needs-repair']);
+  window.__wailsSession = (id, patch) => {
+    const previous = sessions.get(id);
+    if (!previous) throw new Error(`Unknown install session ${id}`);
+    const next = { ...previous, ...patch, sessionId: id, taskId: id, revision: previous.revision + 1 };
+    if (terminal.has(next.status)) Object.assign(next, { terminal: true, canCancel: false, canPause: false, paused: false });
+    sessions.set(id, next);
+    window.__wailsEmit('installSession', { ...next });
+    return next;
+  };
   const methods = {
     IsInitialized: async () => true,
+    GetIgnoredTools: async () => [],
+    GetSniffConfig: async () => ({}),
+    SniffServiceStatus: async () => ({}),
+    GetMigrationMode: async () => 'junction',
+    GetArchiveRetention: async () => 'immediate',
+    StartInstall: async spec => {
+      if (!spec?.sessionId || sessions.has(spec.sessionId)) throw new Error('Missing or duplicate sessionId');
+      if ([...sessions.values()].some(s => s.tool === spec.tool && !s.terminal)) throw new Error('resource busy');
+      window.__wailsCalls.StartInstall.push({ ...spec });
+      sessions.set(spec.sessionId, { ...spec, taskId: spec.sessionId, status: 'accepted', phase: 'Preparing', revision: 0, terminal: false, canCancel: true, canPause: false });
+      window.__wailsSession(spec.sessionId, {});
+      return spec.sessionId;
+    },
+    GetInstallSession: async id => {
+      if (!sessions.has(id)) throw new Error(`Unknown install session ${id}`);
+      return { ...sessions.get(id) };
+    },
+    CancelInstall: async id => {
+      if (!sessions.get(id)?.canCancel) throw new Error('cancellation unavailable');
+      window.__wailsCalls.CancelInstall.push([id]);
+      window.__wailsSession(id, { status: 'cancelling', phase: 'Cancelling', canCancel: false, canPause: false });
+    },
     // Spec 032 bootstrap round-trip: AppContent calls GetBootstrapState
     // first on mount. The Proxy fallback would answer [] (no throw, no
     // data) leaving categories/stats/favorites empty — the e2e sidebar
@@ -168,8 +213,14 @@ export function createInitializedWailsBrowserMocks() {
     // Spec 037 e2e: parallel batch installs go through InstallToolConfirmed.
     InstallToolConfirmed: async (...args) => { window.__wailsCalls.InstallToolConfirmed.push(args); return null; },
     InstallToolWithForm: async (...args) => { window.__wailsCalls.InstallToolWithForm.push(args); },
-    PauseDownload: async (...args) => { window.__wailsCalls.PauseDownload.push(args); },
-    ResumeDownload: async (...args) => { window.__wailsCalls.ResumeDownload.push(args); },
+    PauseDownload: async id => {
+      if (!sessions.get(id)?.canPause) throw new Error('pause unavailable');
+      window.__wailsCalls.PauseDownload.push([id]); window.__wailsSession(id, { phase: 'Paused', paused: true });
+    },
+    ResumeDownload: async id => {
+      if (!sessions.get(id)?.canPause) throw new Error('resume unavailable');
+      window.__wailsCalls.ResumeDownload.push([id]); window.__wailsSession(id, { phase: 'Downloading', paused: false });
+    },
     CancelDownload: async (...args) => { window.__wailsCalls.CancelDownload.push(args); },
     InstallPackageManager: async () => { window.__wailsCalls.InstallPackageManager++; },
     UpdatePackageManager: async () => { window.__wailsCalls.UpdatePackageManager++; },
@@ -215,7 +266,13 @@ export function createInitializedWailsBrowserMocks() {
     ToolCommand: async (...args) => { window.__wailsCalls.ToolCommand.push(args); return args[0] === 'node' ? 'node' : ''; },
   };
   const app = new Proxy(methods, {
-    get: (target, property) => target[property] ?? (async () => []),
+    get: (target, property) => {
+      if (Reflect.has(target, property)) return target[property];
+      if (typeof property === 'symbol' || property === 'then') return undefined;
+      const error = `Unmocked Wails App method: ${property}`;
+      (window.__wailsUnexpected ||= []).push(error);
+      throw new Error(error);
+    },
   });
   const listeners = {};
   const runtime = new Proxy({
@@ -225,10 +282,17 @@ export function createInitializedWailsBrowserMocks() {
     EventsOff: (name) => { delete listeners[name]; },
     WindowIsMaximised: async () => false,
   }, {
-    get: (target, property) => target[property] ?? (() => null),
+    get: (target, property) => {
+      if (Reflect.has(target, property)) return target[property];
+      if (typeof property === 'symbol' || property === 'then') return undefined;
+      const error = `Unmocked Wails runtime method: ${property}`;
+      (window.__wailsUnexpected ||= []).push(error);
+      throw new Error(error);
+    },
   });
   window.__wailsEmit = (name, data) => listeners[name]?.forEach((fn) => fn(data));
-  window.__wailsCalls = { InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [] };
+  window.__wailsUnexpected = [];
+  window.__wailsCalls = { StartInstall: [], CancelInstall: [], InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [] };
   window.go = { gui: { App: app } };
   window.runtime = runtime;
 }

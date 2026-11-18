@@ -1,164 +1,79 @@
 import { ref } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanupWailsMocks, installWailsMocks } from '../mocks/wails.js';
+import { cleanupWailsMocks } from '../mocks/wails.js';
 import { usePackageManagers } from '../../src/composables/usePackageManagers.js';
-
+import { createInstallCoordinator } from '../../src/composables/useInstallCoordinator.js';
+import { installSessionHarness } from './installSessionHarness.js';
 afterEach(cleanupWailsMocks);
-
-function setup(appOverrides = {}) {
-  const app = {
-    InstallSubTool: vi.fn(async () => null),
-    InstallPackageManager: vi.fn(async () => null),
-    UpdatePackageManager: vi.fn(async () => null),
-    MigratePackageManager: vi.fn(async () => null),
-    GetAvailableVersions: vi.fn(async () => [{ version: '0.12.5' }]),
-    PreviewInstall: vi.fn(async () => ({ unverified: false })),
-    ...appOverrides,
-  };
-  installWailsMocks(app);
-  const message = { success: vi.fn(), error: vi.fn() };
-  const dialog = { warning: vi.fn((opts) => opts) };
-  const t = (key, params) => (params ? `${key}:${JSON.stringify(params)}` : key);
-  const refreshTools = vi.fn(async () => null);
-  const selectedTool = ref({ displayName: 'PNPM' });
-  const pm = usePackageManagers({ t, message, dialog, refreshTools, selectedTool });
-  return { app, message, dialog, refreshTools, pm };
+const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+function setup(overrides = {}) {
+  const h = installSessionHarness({ GetAvailableVersions: vi.fn(async () => [{ version: '1' }]), PreviewInstall: vi.fn(async () => ({ unverified: false })), MigratePackageManager: vi.fn(async () => null), ...overrides });
+  const coordinator = createInstallCoordinator();
+  const message = { success: vi.fn(), warning: vi.fn(), error: vi.fn() };
+  const dialog = { warning: vi.fn() }; const refreshTools = vi.fn(async () => {});
+  const pm = usePackageManagers({ t: key => key, message, dialog, refreshTools, selectedTool: ref({}), coordinator });
+  return { ...h, coordinator, pm, message, dialog, refreshTools };
 }
-
-describe('usePackageManagers', () => {
-  it('opens a method selector when more than one install method exists', () => {
-    const { dialog, pm, app } = setup();
-    pm.installPackageManager({
-      name: 'pipx',
-      displayName: 'PIPX',
-      installMethods: [
-        { name: 'pip', command: 'pip install pipx' },
-        { name: 'uv', command: 'uv tool install pipx' },
-      ],
-    });
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    expect(app.InstallSubTool).not.toHaveBeenCalled();
+describe('package manager session ownership', () => {
+  it.each([
+    [{ name: 'pipx', installMethods: [{ name: 'pip', command: 'pip install pipx' }] }, 'sub-tool', 'pip', false],
+    [{ name: 'pnpm', enableCommand: 'corepack enable pnpm' }, 'sub-tool', '', true],
+    [{ name: 'scoop', installCommand: 'irm get.scoop.sh | iex' }, 'package-manager', '', true],
+  ])('waits for terminal success of $0.name', async (tool, kind, method, confirm) => {
+    const h = setup(); const pending = h.pm.installPackageManager(tool);
+    if (confirm) h.dialog.warning.mock.calls[0][0].onPositiveClick();
+    await flush();
+    expect(h.app.StartInstall).toHaveBeenCalledWith(expect.objectContaining({ tool: tool.name, kind, method }));
+    expect(h.message.success).not.toHaveBeenCalled(); expect(h.refreshTools).not.toHaveBeenCalled();
+    expect(h.coordinator.busy.value).toBe(true);
+    h.emit(h.app.StartInstall.mock.calls[0][0].sessionId, { status: 'completed' }); await pending;
+    expect(h.message.success).toHaveBeenCalledOnce(); expect(h.refreshTools).toHaveBeenCalledOnce();
+    expect(h.coordinator.busy.value).toBe(false); expect(h.pm.pmOperating.value).toBe('');
+    expect(h.listeners.get('installSession').size).toBe(0);
   });
-
-  it('installs a single-method sub-tool without a dialog', async () => {
-    const { app, pm, refreshTools } = setup();
-    await pm.installPackageManager({
-      name: 'pipx',
-      displayName: 'PIPX',
-      installMethods: [{ name: 'pip', command: 'pip install pipx' }],
-    });
-    expect(app.InstallSubTool).toHaveBeenCalledWith('pipx', 'pip');
-    expect(refreshTools).toHaveBeenCalledOnce();
+  it('method selector preserves selected method and holds reservation', async () => {
+    const h = setup(); const pending = h.pm.installPackageManager({ name: 'pipx', installMethods: [{ name: 'pip', command: 'pip' }, { name: 'uv', command: 'uv' }] });
+    const options = h.dialog.warning.mock.calls[0][0];
+    options.content().props['onUpdate:value']('uv');
+    expect(h.coordinator.acquire('single')).toBeNull(); options.onPositiveClick(); await flush();
+    const spec = h.app.StartInstall.mock.calls[0][0]; expect(spec.method).toBe('uv');
+    h.emit(spec.sessionId, { status: 'completed' }); await pending;
   });
-
-  it('confirms enableCommand for yarn/pnpm', () => {
-    const { dialog, app, pm } = setup();
-    pm.installPackageManager({
-      name: 'pnpm',
-      displayName: 'PNPM',
-      enableCommand: 'corepack enable pnpm',
-    });
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    expect(app.InstallSubTool).not.toHaveBeenCalled();
-    dialog.warning.mock.calls[0][0].onPositiveClick();
-    expect(app.InstallSubTool).toHaveBeenCalledWith('pnpm', '');
+  it('guards the slow update preflight and waits through confirmation and execution', async () => {
+    let resolve; const h = setup({ GetAvailableVersions: vi.fn(() => new Promise(r => { resolve = r; })), PreviewInstall: vi.fn(async () => ({ unverified: true })) });
+    const tool = { name: 'uv', toolName: 'uv' }; const pending = h.pm.updatePackageManager(tool);
+    await h.pm.updatePackageManager(tool);
+    expect(h.app.GetAvailableVersions).toHaveBeenCalledOnce(); expect(h.pm.pmOperating.value).toBe('uv');
+    expect(h.coordinator.acquire('batch')).toBeNull(); resolve([{ version: '2' }]); await flush();
+    expect(h.dialog.warning).toHaveBeenCalledOnce(); expect(h.app.StartInstall).not.toHaveBeenCalled();
+    h.dialog.warning.mock.calls[0][0].onPositiveClick(); await flush();
+    const spec = h.app.StartInstall.mock.calls[0][0]; expect(spec).toMatchObject({ tool: 'uv', version: '2', confirmed: true });
+    expect(h.pm.pmOperating.value).toBe('uv'); h.emit(spec.sessionId, { status: 'completed' }); await pending;
+    expect(h.pm.pmOperating.value).toBe('');
   });
-
-  it('installs an independent package manager via InstallPackageManager', async () => {
-    const { app, dialog, pm } = setup();
-    pm.installPackageManager({ name: 'scoop', displayName: 'Scoop', installCommand: 'irm get.scoop.sh | iex' });
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    await dialog.warning.mock.calls[0][0].onPositiveClick();
-    expect(app.InstallPackageManager).toHaveBeenCalledWith('scoop');
+  it.each(['onNegativeClick', 'onClose', 'onEsc', 'onMaskClick'])('releases reservation on %s and permits retry', async close => {
+    const h = setup(); const tool = { name: 'pnpm', enableCommand: 'corepack enable pnpm' };
+    const pending = h.pm.installPackageManager(tool); h.dialog.warning.mock.calls[0][0][close](); await pending;
+    expect(h.coordinator.busy.value).toBe(false); expect(h.app.StartInstall).not.toHaveBeenCalled();
+    const retry = h.pm.installPackageManager(tool); expect(h.dialog.warning).toHaveBeenCalledTimes(2);
+    h.dialog.warning.mock.calls[1][0].onClose(); await retry;
   });
-
-  it('confirms sniff-discovered updates before calling UpdatePackageManager', async () => {
-    const { app, dialog, pm } = setup({
-      PreviewInstall: vi.fn(async () => ({ unverified: true })),
-    });
-    await pm.updatePackageManager({ name: 'uv', toolName: 'uv', displayName: 'UV' });
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    expect(app.UpdatePackageManager).not.toHaveBeenCalled();
-    await dialog.warning.mock.calls[0][0].onPositiveClick();
-    expect(app.UpdatePackageManager).toHaveBeenCalledWith('uv');
+  it.each(['error', 'cancelled', 'needs-repair'])('releases reservation without premature success on %s', async status => {
+    const h = setup(); const pending = h.pm.updatePackageManager({ name: 'uv' }); await flush();
+    h.emit(h.app.StartInstall.mock.calls[0][0].sessionId, { status, error: 'broken' }); await pending;
+    expect(h.message.success).not.toHaveBeenCalled(); expect(h.coordinator.busy.value).toBe(false);
+    expect(h.refreshTools).toHaveBeenCalledOnce();
+    expect(h.message.error).toHaveBeenCalledTimes(status === 'cancelled' ? 0 : 1);
   });
-
-  // ---- 票 36 (Batch 5 / P1-38 G-06)：PM 更新重入守卫 ----
-
-  // 红（修复前）：守卫只在 updatePm 内、即两次 await 之后才置位，慢 IPC 期间
-  // 连点两次会并行跑两条链 → 两个确认框 + 两次 UpdatePackageManager。
-  it('G-06: holds the guard from entry so a double click during slow IPC opens one dialog', async () => {
-    let resolveVersions;
-    const { app, dialog, pm } = setup({
-      GetAvailableVersions: vi.fn(() => new Promise((resolve) => { resolveVersions = resolve; })),
-      PreviewInstall: vi.fn(async () => ({ unverified: true })),
-    });
-    const tool = { name: 'uv', toolName: 'uv', displayName: 'UV' };
-
-    const first = pm.updatePackageManager(tool);
-    const second = pm.updatePackageManager(tool); // 慢 IPC 期间的第二次点击
-    expect(pm.pmOperating.value).toBe('uv'); // catalogName，入口即置位
-    expect(app.GetAvailableVersions).toHaveBeenCalledOnce();
-
-    resolveVersions([{ version: '0.12.5' }]);
-    await Promise.all([first, second]);
-
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    expect(app.UpdatePackageManager).not.toHaveBeenCalled();
+  it('rejects competing PM operations while a single install owns the coordinator', async () => {
+    const h = setup(); const lease = h.coordinator.acquire('single');
+    await h.pm.updatePackageManager({ name: 'uv' });
+    expect(h.app.GetAvailableVersions).not.toHaveBeenCalled(); expect(h.message.warning).toHaveBeenCalledWith('install.busy'); lease.release();
   });
-
-  it('G-06: keeps the guard while the unverified dialog is open and hands it to updatePm', async () => {
-    const { app, dialog, pm } = setup({ PreviewInstall: vi.fn(async () => ({ unverified: true })) });
-    const tool = { name: 'uv', toolName: 'uv', displayName: 'UV' };
-
-    await pm.updatePackageManager(tool);
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    expect(pm.pmOperating.value).toBe('uv'); // 弹窗期间守卫持续有效
-
-    // 弹窗期间再点 Update：既不弹第二个框，也不发起 IPC。
-    await pm.updatePackageManager(tool);
-    expect(dialog.warning).toHaveBeenCalledOnce();
-    expect(app.UpdatePackageManager).not.toHaveBeenCalled();
-
-    // 不开 closable（连带 ESC/遮罩关闭）：这些路径都不经过 onNegativeClick，
-    // 会让 pmOperating 永不复位、Update 按钮永久锁死。
-    const options = dialog.warning.mock.calls[0][0];
-    expect(options.closable).toBe(false);
-    expect(options.closeOnEsc).toBe(false);
-    expect(options.maskClosable).toBe(false);
-
-    await options.onPositiveClick(); // 复位权 → updatePm → finally 复位
-    expect(app.UpdatePackageManager).toHaveBeenCalledWith('uv');
-    expect(pm.pmOperating.value).toBe('');
-  });
-
-  it('G-06: cancel releases the guard so the Update button is not locked forever', async () => {
-    const { dialog, pm } = setup({ PreviewInstall: vi.fn(async () => ({ unverified: true })) });
-    const tool = { name: 'uv', toolName: 'uv', displayName: 'UV' };
-
-    await pm.updatePackageManager(tool);
-    dialog.warning.mock.calls[0][0].onNegativeClick();
-    expect(pm.pmOperating.value).toBe('');
-
-    // 释放后可重新发起（第二次弹框说明守卫确实解除了）。
-    await pm.updatePackageManager(tool);
-    expect(dialog.warning).toHaveBeenCalledTimes(2);
-  });
-
-  it('G-06: the direct path releases the guard in updatePm finally', async () => {
-    const { app, dialog, pm } = setup(); // unverified=false → 直连路径
-    await pm.updatePackageManager({ name: 'uv', toolName: 'uv', displayName: 'UV' });
-    expect(dialog.warning).not.toHaveBeenCalled();
-    expect(app.UpdatePackageManager).toHaveBeenCalledWith('uv');
-    expect(pm.pmOperating.value).toBe('');
-  });
-
-  it('G-06: releases the guard when the update fails', async () => {
-    const { message, pm } = setup({
-      UpdatePackageManager: vi.fn(async () => { throw new Error('boom'); }),
-    });
-    await pm.updatePackageManager({ name: 'uv', toolName: 'uv', displayName: 'UV' });
-    expect(message.error).toHaveBeenCalledOnce();
-    expect(pm.pmOperating.value).toBe('');
+  it('releases a rejected start and allows a subsequent operation', async () => {
+    const h = setup({ StartInstall: vi.fn(async () => { throw Error('boom'); }) });
+    await h.pm.updatePackageManager({ name: 'uv' });
+    expect(h.message.error).toHaveBeenCalledOnce(); expect(h.coordinator.busy.value).toBe(false);
+    expect(h.pm.pmOperating.value).toBe('');
   });
 });

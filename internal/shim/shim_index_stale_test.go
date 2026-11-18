@@ -180,7 +180,9 @@ func TestWriteDiskShimIndex_AtomicWriteLeavesNoResidue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("disk shim index missing after InvalidateShimIndex: %v", err)
 	}
-	if !strings.HasPrefix(string(data), "xdev-shim-index\tv1\n") {
+	// Fresh writes use v2 (fields escaped for TAB/newline in file names);
+	// v1 remains readable — see loadDiskShimIndex.
+	if !strings.HasPrefix(string(data), "xdev-shim-index\tv2\n") {
 		t.Errorf("disk index header corrupted:\n%s", data)
 	}
 	idx := loadDiskShimIndex(home)

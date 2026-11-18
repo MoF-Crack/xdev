@@ -24,24 +24,24 @@ function setup({ updates, backend, voidReturn }) {
   const listeners = {};
   const app = {
     // backend(tool, version): 'fail'（事件失败）| 'ok'（完成）| 'reject'（IPC 拒绝）| 'slow-ok'
-    InstallToolConfirmed: vi.fn(async (tool, version) => {
+    StartInstall: vi.fn(async ({ tool, version, sessionId }) => {
       const behavior = backend(tool, version);
       if (behavior === 'reject') throw new Error('backend rejected');
       const emit = (name, payload) => listeners[name]?.forEach((fn) => fn(payload));
       if (behavior === 'fail') {
         queueMicrotask(() => {
-          emit('installError', { taskId: `${tool}@${version}`, tool, version, error: 'download failed' });
+          emit('installSession', { sessionId, status: 'error', taskId: `${tool}@${version}`, tool, version, error: 'download failed' });
         });
       } else if (behavior === 'slow-ok') {
         setTimeout(() => {
-          emit('installProgress', { taskId: `${tool}@${version}`, tool, version, phase: 'Completed', percent: 100 });
+          emit('installSession', { sessionId, status: 'completed', taskId: `${tool}@${version}`, tool, version, phase: 'Completed', percent: 100 });
         }, 50);
       } else {
         queueMicrotask(() => {
-          emit('installProgress', { taskId: `${tool}@${version}`, tool, version, phase: 'Completed', percent: 100 });
+          emit('installSession', { sessionId, status: 'completed', taskId: `${tool}@${version}`, tool, version, phase: 'Completed', percent: 100 });
         });
       }
-      return null;
+      return sessionId;
     }),
     PreviewInstall: vi.fn(async () => ({ unverified: true, hasFormSpecificArchives: false, availableForms: [] })),
   };
@@ -107,7 +107,7 @@ describe('batch updates integration (real useInstall + useParallelBatch + useBat
   it('continues to the remaining items after the first item fails (event error)', async () => {
     const ctx = setup({ updates: FOUR_UPDATES, backend: (tool) => (tool === 'node' ? 'fail' : 'ok') });
     await drive(ctx.batch, ctx.dialog, 4);
-    expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(4);
+    expect(ctx.app.StartInstall).toHaveBeenCalledTimes(4);
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 3, failed: 1, skipped: 0 }));
     expect(ctx.message.warning).not.toHaveBeenCalled();
   });
@@ -115,7 +115,7 @@ describe('batch updates integration (real useInstall + useParallelBatch + useBat
   it('continues after the first item fails (IPC rejection)', async () => {
     const ctx = setup({ updates: FOUR_UPDATES, backend: (tool) => (tool === 'node' ? 'reject' : 'ok') });
     await drive(ctx.batch, ctx.dialog, 4);
-    expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(4);
+    expect(ctx.app.StartInstall).toHaveBeenCalledTimes(4);
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 3, failed: 1, skipped: 0 }));
   });
 
@@ -125,14 +125,14 @@ describe('batch updates integration (real useInstall + useParallelBatch + useBat
     // 只是该项计 failed，其余项照常执行。锁定该不变量。
     const ctx = setup({ updates: FOUR_UPDATES, backend: () => 'slow-ok', voidReturn: true });
     await drive(ctx.batch, ctx.dialog, 4);
-    expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(4); // 全部 4 项都启动
+    expect(ctx.app.StartInstall).toHaveBeenCalledTimes(4); // 全部 4 项都启动
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 0, failed: 4, skipped: 0 }));
   });
 
   it('FIXED semantics: slow-completing installs all succeed across the whole batch', async () => {
     const ctx = setup({ updates: FOUR_UPDATES, backend: () => 'slow-ok' });
     await drive(ctx.batch, ctx.dialog, 4);
-    expect(ctx.app.InstallToolConfirmed).toHaveBeenCalledTimes(4);
+    expect(ctx.app.StartInstall).toHaveBeenCalledTimes(4);
     expect(ctx.message.info).toHaveBeenCalledWith('updates.install_all_summary:' + JSON.stringify({ done: 4, failed: 0, skipped: 0 }));
   });
 

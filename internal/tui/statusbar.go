@@ -10,9 +10,9 @@ import (
 // viewStatusBar renders the bottom status bar.
 func (m Model) viewStatusBar() string {
 	shortcutHints := []string{
-		StyleHelpKey.Render("i") + ":Install",
+		StyleHelpKey.Render("i") + ":Choose version",
 		StyleHelpKey.Render("u") + ":Uninstall",
-		StyleHelpKey.Render("Enter") + ":Use",
+		StyleHelpKey.Render("Enter") + ":Use/Install",
 		StyleHelpKey.Render("/") + ":Search",
 		StyleHelpKey.Render("q") + ":Quit",
 		StyleHelpKey.Render("?") + ":Help",

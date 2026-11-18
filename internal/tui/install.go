@@ -214,3 +214,65 @@ func (m Model) viewUninstallOverlay(base string) string {
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, popup, lipgloss.WithWhitespaceChars(" "))
 }
+
+// viewInstallPanel renders install progress inside the third (detail) pane.
+// It replaces the tool detail content while an install is running, so the
+// three-column layout stays intact (no full-screen progress window).
+func (m Model) viewInstallPanel(width, height int) string {
+	if m.installState == nil {
+		return ""
+	}
+	s := m.installState
+
+	style := StylePanel
+	if m.focus == FocusDetail {
+		style = StylePanelFocused
+	}
+	contentHeight := height - 2
+	contentWidth := width - 2
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	percent := s.Percent
+	if percent < 0 {
+		percent = 0
+	}
+	barWidth := contentWidth - 16
+	if barWidth < 8 {
+		barWidth = 8
+	}
+	if barWidth > 30 {
+		barWidth = 30
+	}
+	filled := int(percent / 100 * float64(barWidth))
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+	var b strings.Builder
+	b.WriteString(StyleBold.Render("  Installing "+s.Tool+"@"+s.Version) + "\n\n")
+	if m.updateQueue != nil {
+		b.WriteString(StyleDim.Render(fmt.Sprintf("  Batch %d/%d", m.updateIdx+1, len(m.updateQueue))) + "\n")
+	}
+	b.WriteString(fmt.Sprintf("  %s\n", s.Phase.String()))
+	b.WriteString(fmt.Sprintf("  %s\n", bar))
+	b.WriteString(fmt.Sprintf("  %.0f%%", percent))
+	if s.Speed != "" {
+		b.WriteString(fmt.Sprintf("   Speed: %s", s.Speed))
+	}
+	if s.ETA != "" {
+		b.WriteString(fmt.Sprintf("   ETA: %s", s.ETA))
+	}
+	b.WriteString("\n\n" + StyleDim.Render("  Press Esc to cancel"))
+
+	content := lipgloss.NewStyle().
+		Width(contentWidth).
+		Height(contentHeight).
+		Render(b.String())
+	return style.Width(width).Height(height - 2).Render(content)
+}

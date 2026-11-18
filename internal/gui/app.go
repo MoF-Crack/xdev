@@ -55,8 +55,6 @@ import (
 	"sync"
 	"time"
 
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/downloader"
 	"github.com/xmdemt/xdev/internal/hostscan"
@@ -391,14 +389,17 @@ var regMu sync.Mutex
 // query, install session, host scan, and prefs. New Wails bindings are
 // not added in Spec 029; existing wrappers forward into those modules.
 type App struct {
-	ctx      context.Context
-	cfg      *config.Config
-	cfgMu    sync.RWMutex // protects cfg for concurrent read/write
-	catMu    sync.RWMutex // protects cat for concurrent read/write (reloadCatalog)
-	cat      *manifest.Catalog
-	registry *plugin.Registry
-	localMu  sync.RWMutex
-	localMap map[string]localInfo // cached local tool detection results
+	desktop         desktopRuntime
+	noEnvWrite      bool
+	installSessions installSessions
+	ctx             context.Context
+	cfg             *config.Config
+	cfgMu           sync.RWMutex // protects cfg for concurrent read/write
+	catMu           sync.RWMutex // protects cat for concurrent read/write (reloadCatalog)
+	cat             *manifest.Catalog
+	registry        *plugin.Registry
+	localMu         sync.RWMutex
+	localMap        map[string]localInfo // cached local tool detection results
 	// cacheWriteMu 串行化 tool_scan_cache.json 的落盘（票 22 / P1-16 / D-08）。
 	// GUI 包有 15 个 saveLocalCache 调用点分布在 7 个文件，且批量迁移是并发
 	// 执行的（MigrateAllLocalTools 最多 4 路并发 worker），并发写会让
@@ -489,7 +490,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	// 创建应用级根上下文（F-20 / D18）：shutdown 时取消，所有后台任务
 	// 由此派生以便退出时立即停止。
-	a.rootCtx, a.rootCancel = context.WithCancel(context.Background())
+	a.rootCtx, a.rootCancel = context.WithCancel(ctx)
 	logInfo("[startup] Wails OnStartup callback fired")
 
 	// Configure HTTP client proxy from config (fixes sniff failing behind proxy).
@@ -539,11 +540,8 @@ func (a *App) domReady(ctx context.Context) {
 	//
 	// 因此必须显式 Unminimise。顺序：Show → Unminimise → 再 Show，
 	// 确保窗口真正回到屏幕内可见。
-	wailsRuntime.WindowShow(ctx)
-	if wailsRuntime.WindowIsMinimised(ctx) {
-		logInfo("[domReady] window was minimised after WindowShow — calling WindowUnminimise()")
-		wailsRuntime.WindowUnminimise(ctx)
-		wailsRuntime.WindowShow(ctx)
+	if a.desktop != nil {
+		a.desktop.Show()
 	}
 	logInfo("[domReady] WindowShow() completed, window should now be visible")
 
@@ -603,6 +601,9 @@ func (a *App) shutdown(ctx context.Context) {
 	logInfo("[shutdown] 清理下载任务...")
 	if a.dlMgr != nil {
 		a.dlMgr.CleanupOnExit()
+	}
+	if !a.installSessions.waitForShutdown(5 * time.Second) {
+		logWarn("[shutdown] installation cleanup did not finish within 5 seconds")
 	}
 	logInfo("[shutdown] 清理完成")
 }
@@ -709,7 +710,7 @@ func (a *App) refreshLocalCache() {
 	a.signalLocalReady()
 	a.InvalidateToolsCache()
 	if a.ctx != nil {
-		wailsRuntime.EventsEmit(a.ctx, "localCacheUpdated", len(newMap))
+		a.emitEvent("localCacheUpdated", len(newMap))
 	}
 }
 
@@ -767,7 +768,9 @@ func (a *App) mustGetPlugin(toolName string) (plugin.Plugin, error) {
 
 // newInstaller creates a new Installer using the app's registry.
 func (a *App) newInstaller(cfg *config.Config) *installer.Installer {
-	return installer.New(cfg, a.registry)
+	ins := installer.New(cfg, a.registry)
+	ins.SetNoEnvWrite(a.noEnvWrite)
+	return ins
 }
 
 // currentLink returns the path to the current/<toolName> symlink.
@@ -897,7 +900,7 @@ func (a *App) GetAboutInfo() AboutInfo {
 		Version:      version.Get(),
 		BuildDate:    version.BuildDate,
 		GoVersion:    runtime.Version(),
-		WailsVersion: "v2.12.0",
+		WailsVersion: "v3.1.0",
 		Platform:     runtime.GOOS,
 		Arch:         runtime.GOARCH,
 		RepoURL:      "https://github.com/MoF-Crack/xdev",

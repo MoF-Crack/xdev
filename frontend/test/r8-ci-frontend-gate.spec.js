@@ -1,7 +1,7 @@
 // 第八轮审计 · R8-04 回归守卫（CI 前端门禁必须同时跑 vitest 与 smoke.mjs）
 //
 // 缺陷：F-44 在 `.github/workflows/ci.yaml` 的 build job 里加了
-// `Frontend unit tests`（`npx vitest run`），但 `frontend/package.json` 的
+// `Frontend unit tests`（`npm run test:unit -- --maxWorkers=2`），但 `frontend/package.json` 的
 // `"test": "node test/smoke.mjs"` 是**另一套**守卫：
 //   - `vite.config.js` 的 `test.include = ['test/**/*.{test,spec}.js']` 只匹配
 //     `*.test.js` / `*.spec.js`，`test/smoke.mjs` 不匹配；
@@ -48,9 +48,9 @@ describe('R8-04 CI 前端门禁必须同时执行 vitest 与 npm test（红→�
     expect(pkg.scripts.test).not.toContain('vitest');
   });
 
-  it('ci.yaml 同时包含 npx vitest run 与 npm test', () => {
+  it('ci.yaml 同时包含 npm run test:unit -- --maxWorkers=2 与 npm test', () => {
     const ci = read('.github/workflows/ci.yaml');
-    expect(ci).toContain('npx vitest run');
+    expect(ci).toContain('npm run test:unit -- --maxWorkers=2');
     // 红：修复前 ci.yaml 中没有任何 `npm test` / `npm run test`。
     expect(ci).toMatch(/npm (run )?test\b/);
   });
@@ -58,18 +58,18 @@ describe('R8-04 CI 前端门禁必须同时执行 vitest 与 npm test（红→�
   it('两条命令在同一个 Frontend unit tests 步骤内、且 working-directory 是 frontend', () => {
     const ci = read('.github/workflows/ci.yaml');
     const block = stepBlock(ci, 'Frontend unit tests');
-    expect(block).toContain('npx vitest run');
+    expect(block).toContain('npm run test:unit -- --maxWorkers=2');
     expect(block).toMatch(/npm (run )?test\b/);
     expect(block).toContain('working-directory: frontend');
     // 必须是两条独立命令行（而不是被注释掉或写进 echo）。
     const commands = block.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-    expect(commands).toContain('npx vitest run');
+    expect(commands).toContain('npm run test:unit -- --maxWorkers=2');
     expect(commands).toContain('npm test');
   });
 
   it('该步骤位于 build job（PR 触发）内，不是只在 release/tag 才跑的 job', () => {
     const ci = read('.github/workflows/ci.yaml');
-    const buildJob = ci.slice(ci.indexOf('\n  build:'), ci.indexOf('\n  integration-tests:'));
+    const buildJob = ci.slice(ci.indexOf('\n  build:'), ci.indexOf('\n  e2e:'));
     expect(buildJob).toContain('Frontend unit tests');
     expect(buildJob).toMatch(/npm (run )?test\b/);
   });

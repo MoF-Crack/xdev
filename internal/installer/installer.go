@@ -122,6 +122,8 @@ func (osExecRunner) Run(ctx context.Context, name string, args []string, env []s
 	// 隐藏子进程的控制台窗口（Windows），避免 rustup 等安装器弹出
 	// 独立命令行窗口打断用户操作（与 getVersion 等其他调用一致）。
 	util.HideWindow(cmd)
+	// Unix：独立进程组 + 取消时整组 SIGKILL（Windows 为 no-op，Job Object 兜底）。
+	util.TrackProcessGroup(cmd)
 	return cmd.Run()
 }
 
@@ -229,6 +231,15 @@ type InstallOptions struct {
 	// complete install is only re-activated, and an incomplete install
 	// returns ErrIncompleteInstall instead of being silently activated.
 	Force bool
+
+	// Form selects the archive shape once for the entire workflow. An explicit
+	// form never falls back to a different shape.
+	Form string
+
+	// BeforeCommit runs immediately before activation or install-tree writes.
+	// GUI sessions use this to atomically arbitrate cancel versus commit. An
+	// error leaves the previous installation intact. It is called at most once.
+	BeforeCommit func() error
 
 	// DownloadFunc, when non-nil, replaces the default downloader for the
 	// fetch step of this install.
@@ -482,7 +493,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		return nil, err
 	}
 
-	arch, err := p.ArchiveFor(ver)
+	arch, err := resolveInstallArchive(p, ver, opts.Form)
 	if err != nil {
 		log.Printf("[install] ERROR: archive resolution failed for %s@%s: %v", p.Name(), ver, err)
 		return nil, err
@@ -533,11 +544,17 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			log.Printf("[install] Force reinstall requested for %s@%s — deferring removal until the new archive is verified", p.Name(), ver)
 			forceReinstall = true
 		} else {
+			if err := verifyInstalledSelection(installPath, arch, opts.Form); err != nil {
+				return nil, err
+			}
 			// Intact install — just activate (unless NoActivate).
 			log.Printf("[install] Already installed at %s", installPath)
 			if opts.NoActivate {
 				log.Printf("[install] NoActivate set, skipping activation")
 				return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: false}, nil
+			}
+			if err := beginInstallCommit(ctx, opts); err != nil {
+				return nil, err
 			}
 			if onProgress != nil {
 				onProgress(PhaseActivating, 100, "", "")
@@ -579,6 +596,9 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	// which acquires the same lock internally.
 	err = func() error {
 		defer installLock.Release()
+		if err := beginInstallCommit(ctx, opts); err != nil {
+			return err
+		}
 		log.Printf("[install] Download complete, starting install-by-kind")
 
 		// Ticket 26 (A-07): the deferred force-reinstall removal. By this
@@ -628,7 +648,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		if err := p.PostInstall(ctx, installPath); err != nil {
 			log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
 		}
-		return nil
+		return recordInstalledSelection(installPath, arch)
 	}()
 	if err != nil {
 		return nil, err
@@ -1141,7 +1161,7 @@ func (i *Installer) buildDownloadOptions(tool, ver string, a *manifest.Archive) 
 	// instead of writing outside the cache. The install entry points
 	// (InstallWithProgress / ExtractAndActivate) reject unsafe names earlier
 	// with a precise error, so this is defence in depth.
-	dest, nameErr := i.cacheArchivePath(tool, ver, a.Format)
+	dest, nameErr := i.selectedCacheArchivePath(tool, ver, a)
 	var diagErr error
 	if nameErr != nil {
 		log.Printf("[install] ERROR: refusing unsafe cache path: %v", nameErr)
@@ -1304,7 +1324,7 @@ func (i *Installer) extract(tool string, a *manifest.Archive, ver, dest string) 
 	// The cache filename uses the tool name (matching downloadWithProgress).
 	// F-25: the name is validated so a traversal version cannot read/write
 	// outside CacheDir.
-	src, err := i.cacheArchivePath(tool, ver, a.Format)
+	src, err := i.selectedCacheArchivePath(tool, ver, a)
 	if err != nil {
 		log.Printf("[install] ERROR: refusing unsafe cache path: %v", err)
 		return err
@@ -1402,7 +1422,7 @@ var installerRunMu sync.Mutex
 // rust 1.97.1（rustup-init.exe，sha256 为空）等工具的安装。
 func (i *Installer) runInstaller(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
 	// F-25: validate the cache path components before building it.
-	src, err := i.cacheArchivePath(p.Name(), ver, a.Format)
+	src, err := i.selectedCacheArchivePath(p.Name(), ver, a)
 	if err != nil {
 		return err
 	}
@@ -1659,8 +1679,6 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 			plan.envVarsWritten = true
 		}
 	}
-
-
 
 	log.Printf("[install] Activation complete: %s@%s (%d shims)", p.Name(), ver, len(p.Shims()))
 	shim.InvalidateShimIndex()
@@ -2526,10 +2544,12 @@ func ensureSelfJunction(cfg *config.Config, installDir string) {
 
 	currentLink := filepath.Join(currentDir, "xdev")
 
-	// 安全检查：验证目标路径在 XDev 目录内
-	normalizedInstall := strings.ToLower(filepath.Clean(installDir))
-	normalizedXDev := strings.ToLower(filepath.Clean(cfg.Core.XMDevDir))
-	if !strings.HasPrefix(normalizedInstall, normalizedXDev) {
+	// 安全检查：验证目标路径在 XDev 目录内。
+	//
+	// 2026-10-30（WSL 实测 L12）：旧实现用 ToLower + HasPrefix，在 Linux 上
+	// 既把大小写不同的路径视为相同，又把 /home/u/xdev-evil 当成
+	// /home/u/xdev 的子目录。改为按路径分量判断（Windows 才折叠大小写）。
+	if !isWithinDir(installDir, cfg.Core.XMDevDir) {
 		log.Printf("[self] WARNING: install dir %s is outside XDev home %s, skipping junction", installDir, cfg.Core.XMDevDir)
 		return
 	}
@@ -2558,4 +2578,28 @@ func ensureSelfJunction(cfg *config.Config, installDir string) {
 		_ = os.Symlink(installDir, currentLink)
 	}
 	log.Printf("[self] current/xdev -> %s", installDir)
+}
+
+// isWithinDir reports whether child is parent itself or lies inside it, using
+// path-component boundaries rather than a raw string prefix. Case folding is
+// applied only on Windows (case-insensitive filesystem); on Unix
+// "/home/u/xdev-evil" must not count as inside "/home/u/xdev".
+func isWithinDir(child, parent string) bool {
+	c := filepath.Clean(child)
+	p := filepath.Clean(parent)
+	if runtime.GOOS == "windows" {
+		c = strings.ToLower(c)
+		p = strings.ToLower(p)
+	}
+	rel, err := filepath.Rel(p, c)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if filepath.IsAbs(rel) || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

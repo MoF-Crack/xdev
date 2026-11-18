@@ -1,36 +1,60 @@
 # XDev domain glossary
 
-Single-context vocabulary for architecture skills. Prefer these names over synonyms.
+Single-context vocabulary for contributors and architecture reviews. Prefer these names over synonyms.
 
 ## Product
 
-- **XDev** — cross-platform development-environment version manager (CLI + TUI + GUI). The **CLI binary** is also every managed-tool **shim**. The GUI is a separate `xdev-gui` binary (`-tags gui`).
-- **Shim** — a hard link (Windows) or symlink (Unix) whose basename is a tool alias; the CLI binary dispatches to the real tool. Unix uses `unix.Exec` (process overlay). Windows copies are a fallback when `CreateHardLink` fails.
-- **Manifest** — YAML catalog entry for a tool (versions, archives, shims, form factor).
-- **Catalog** — in-memory load of all manifests.
-- **Plugin** — adapter that turns a manifest into install/archive behaviour (Generic / Lua / Vfox / Java).
+- **XDev** — cross-platform development-environment version manager. One distributed `xdev[.exe]` runs CLI, TUI, GUI and managed-tool shim dispatch. No separate GUI executable is distributed.
+- **Desktop build** — the distributed binary built with `desktop,production` (Linux also `gtk3`). It embeds frontend assets and uses Wails v3.1.0. Project scripts delegate to `node scripts/build.mjs`.
+- **Maintenance build** — a build without `desktop`: CLI/TUI/shim code remains available, while GUI returns an explicit unavailable-runtime error. It does not require frontend/dist. It is not the distributed desktop product.
+- **Shim** — a hard link (Windows) or symlink (Unix) whose basename is a tool alias; the same executable dispatches to the real tool. Unix uses `unix.Exec`; Windows copying is a fallback when hard-link creation fails. Zero-argument tool shims dispatch before the GUI branch.
+- **Manifest** — YAML tool entry describing versions, archives, shims, environment and form factor.
+- **Plugin** — manifest-to-install/archive adapter (Generic / Lua / Vfox / Java). The installer owns downloading, verification, installation and activation.
+
+## Catalog
+
+- **Catalog** — in-memory tool collection. Disk loading and cache fingerprinting share the top-level plus `third-party/` source set. A directory containing only third-party manifests is not empty and does not trigger repository fallback.
+- **Disk precedence** — top-level manifests load first, then third-party manifests; the later same-name disk entry wins. Embedded manifests then retain trusted fields of their existing versions; disk-only versions may be appended.
+- **Latest promotion** — a disk latest must exist in the merged list, be installable and newer than the embedded effective default. Stable defaults cannot advance to prereleases; prereleases may advance within the same channel or to a newer stable release. Arbitrary labels do not establish upgrade ordering. `DefaultVersion` consumers use the accepted default, including the original LTS/first-entry fallback.
+- **Catalog fingerprint** — source root, relative paths, modification times and sizes. It invalidates on normal file additions, removals and metadata-changing updates; it is not a content hash of every YAML file.
 
 ## Host scan
 
-- **Host-scan** — one module (`internal/hostscan`) that walks a PATH snapshot and returns every **Hit**, skipping the xdev **shim directory**. Each PATH directory is `ReadDir` once (Spec 031). Callers pass `ShimDir` from App config; they never `config.Load("")` inside helpers. GUI `refreshLocalCache` builds one basename index then matches every catalog tool against it. `env.ScanLocalTools` PATH lookup uses hostscan, not `exec.LookPath`.
-- **Hit** — `{Path, Dir}` for one binary found on PATH.
-- **Managed instance** — a Hit whose path is inside xdev `InstallDir` or `ShimDir`.
-- **Local instance** — a Hit outside xdev directories (system leftover, e.g. D: pnpm while E: Node is xdev-managed).
+- **Host-scan** — `internal/hostscan` walks a PATH snapshot and returns every **Hit**, skipping the xdev shim directory. Each PATH directory is read once. Callers pass ShimDir from resolved configuration; helpers do not reload default home.
+- **Hit** — `{Path, Dir}` for a binary found on PATH.
+- **Managed instance** — a Hit inside InstallDir or ShimDir.
+- **Local instance** — a Hit outside managed directories. GUI local detection builds one basename index and matches catalog tools against it.
 
 ## Install session
 
-- **InstallSpec** — single install-session input: tool, version, form, confirmed, force, kind, method. Wails wrappers (`InstallTool*`, `InstallPackageManager`, `InstallSubTool`) forward into `App.install(spec)` and are not new bindings.
-- **Kind** — `tool` (catalog pipeline), `package-manager` (official script or catalog PM), `sub-tool` (corepack enable / pip|uv|npm method).
-- **Package manager** — npm/yarn/pnpm/pip/uv/scoop/brew/choco etc. Independent PMs have `detectCmd == toolName`; **sub-tools** (yarn/pnpm/pipx) do not.
-- **Sub-tool** — a package manager that is enabled/installed through a parent tool (Node corepack, Python pip), not a standalone catalog entry.
+- **InstallSpec** — session input: sessionId, tool, version, form, confirmed, force, kind and method.
+- **InstallSession** — authoritative backend snapshot identified by a unique sessionId, independent of tool/version display fields. A monotonic revision lets the UI ignore reordered snapshots. The resource key prevents concurrent writers to the same resource.
+- **Acceptance** — `StartInstall` returns an identity, not installation success. The frontend subscribes before starting and queries `GetInstallSession` to recover fast completion or uncertain IPC responses.
+- **Terminal outcome** — completed, error, cancelled or needs-repair. A session terminates once; needs-repair represents an existing incomplete installation. Retrying uses a new identity.
+- **Cancellation** — `CancelInstall` acknowledges a request. The session remains cancelling until the worker returns. BeforeCommit arbitrates cancelling versus committing under the same lock; once committing wins, user cancellation is unavailable. Clients use canCancel/canPause instead of guessing from phase text.
+- **Legacy install binding** — `InstallTool*`, `RepairInstall`, `InstallPackageManager` and `InstallSubTool` retain their callable interfaces and wait for the real session outcome.
+- **Kind** — tool (catalog pipeline), package-manager (official script or catalog PM), sub-tool (corepack / pip / uv / npm method).
+- **Sub-tool** — enabled or installed through a parent tool rather than an independent catalog entry, such as yarn/pnpm/pipx. Resource ownership follows the writer, such as node for corepack/npm.
+- **Install coordinator** — frontend ownership shared by single install, repair, PM and batch preflight/confirmation. A batch owns one lease and creates independent backend sessions for its items.
 
 ## Desktop adapter
 
-- **App** — Wails desktop adapter. Exported methods stay on App so JS bindings do not grow; implementation groups into catalog query, install session, host-scan, prefs/env.
-- **Wails binding** — an exported `App` method generated into `frontend/wailsjs`. Spec 029/031 do not add bindings. `localCacheUpdated` is a Wails event, not a new method.
+- **App** — exported Go service facade. Framework operations live behind desktopRuntime; business methods use application/session contexts.
+- **Wails binding** — generated Wails v3 callable under `frontend/bindings`. Generate with desktop plus bindings tags so a static asset stub avoids requiring frontend/dist. Production desktop builds omit bindings and embed real assets.
+- **Desktop bridge** — `frontend/src/desktop/bridge.js` installs the compatibility namespaces used by existing pages. Generated bindings remain the production caller; Events.On envelopes are normalized from event.data and subscriptions have explicit disposal.
+- **Lifecycle** — ServiceStartup creates the app root context; WindowRuntimeReady shows the window and starts DOM-dependent work; ServiceShutdown cancels application work and performs cleanup.
+- **RunOptions** — carries the already-resolved CLI configuration policy into GUI. `--xmdevenv-dir` is not discarded by reloading default config; NoEnvWrite comes from `--no-path-fix` and gates host environment writes.
+
+## Decisions and verification
+
+Wails v3.1.0 migration is authorized by the user's approval of Spec 040; ADR-0007 records the decision. The v3 configuration is wails.yaml; project build scripts remain the supported build/release route. Direct wails3 build is not equivalent to the signing pipeline, and direct wails3 dev has not been validated in this iteration.
+
+The integration lead reported Windows desktop build and native WebView2 rendering, generated bindings, GetConfig with an isolated temporary home, and exit checks passed. Linux manifest/plugin/gui/installer package tests and the desktop,production,gtk3 build passed. macOS has not been run on a real host. These are scoped verification results, not a claim that every release/platform check is complete.
 
 ## Avoid
 
-- Do not call host-scan a “service” or “API”.
+- Do not call host-scan a service or API.
 - Do not treat yarn/pnpm as standalone catalog tools.
-- `one-api/` is not part of XDev. It is gitignored leftover from an older checkout; Spec 029 B5 evicts it from the working tree. See `THIRD_PARTY.md`.
+- Do not equate StartInstall or CancelInstall acknowledgement with terminal success/cancellation.
+- Do not distribute a maintenance build as the complete desktop binary.
+- `one-api/` is unrelated legacy checkout residue, not part of XDev; see THIRD_PARTY.md.

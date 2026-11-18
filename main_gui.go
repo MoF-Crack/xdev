@@ -23,12 +23,20 @@ func runGUI() {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		os.Exit(2)
 	}
+	if err := runGUIWithConfig(cfg, false); err != nil {
+		fmt.Fprintln(os.Stderr, "GUI error:", err)
+		os.Exit(1)
+	}
+}
+
+// runGUIWithConfig preserves the command's explicit home and environment policy.
+func runGUIWithConfig(cfg *config.Config, noEnvWrite bool) error {
 	cat, err := manifest.LoadCatalogCached(cfg.Core.ManifestDir, cfg.Core.CacheDir)
 	if err != nil {
 		cat = &manifest.Catalog{}
 	}
 	reg := cli.LoadRegistry(cat)
-	app := gui.NewApp(cfg, cat, reg)
+	app := gui.NewAppWithOptions(cfg, cat, reg, gui.RunOptions{NoEnvWrite: noEnvWrite})
 	webviewDir := filepath.Join(cfg.Core.XMDevDir, "cache", "webview2")
 
 	// 第十二轮收口（Round 12 报告 §七-③）：GUI 是**长驻宿主**，在这里启动进程内
@@ -48,8 +56,5 @@ func runGUI() {
 	}
 	defer gui.CloseLogger()
 
-	if err := gui.Run(app, webviewDir); err != nil {
-		fmt.Fprintln(os.Stderr, "GUI error:", err)
-		os.Exit(1)
-	}
+	return gui.Run(app, webviewDir)
 }

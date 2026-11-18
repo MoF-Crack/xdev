@@ -477,6 +477,9 @@ func buildEnvVarInfos(pairs []env.EnvPair, source, level string, exp *percentExp
 }
 
 func (a *App) DeleteEnvVarEntry(name, level string) error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	if util.IsProtectedSystemEnvVar(name) {
 		return fmt.Errorf("cannot delete protected system env var: %s", name)
 	}
@@ -489,6 +492,9 @@ func (a *App) DeleteEnvVarEntry(name, level string) error {
 }
 
 func (a *App) CleanEnvVarPath(name, level string) error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	_, err := a.cleanEnvVarPath(name, level, newPercentExpander())
 	return err
 }
@@ -496,6 +502,9 @@ func (a *App) CleanEnvVarPath(name, level string) error {
 // cleanEnvVarPath 是 CleanEnvVarPath 的实现体，接收批量共享的 percentExpander
 // （B-08：CleanAllInvalidEnvVars 整批只枚举一次合并环境）。
 func (a *App) cleanEnvVarPath(name, level string, exp *percentExpander) (bool, error) {
+	if err := a.requireEnvWrite(); err != nil {
+		return false, err
+	}
 	if util.IsProtectedSystemEnvVar(name) && !strings.EqualFold(name, "path") {
 		return false, fmt.Errorf("cannot modify protected system env var: %s", name)
 	}
@@ -623,6 +632,9 @@ type CleanResult struct {
 }
 
 func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
+	if err := a.requireEnvWrite(); err != nil {
+		return []CleanResult{{Action: "skipped", Detail: err.Error()}}
+	}
 	logInfo("[CleanAllInvalidEnvVars] level=%s", level)
 	// B-08（票 30 第 3 条）：整批共享同一个 percentExpander —— 合并环境
 	//（user+machine 注册表+进程 env）只枚举一次。若每个变量的每次 %VAR%
@@ -672,6 +684,9 @@ func (a *App) CleanAllInvalidEnvVars(level string) []CleanResult {
 }
 
 func (a *App) SetEnvVar(toolName, name, value, level string) error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	if err := util.ValidateEnvVarName(name); err != nil && !strings.EqualFold(name, "path") {
 		return err
 	}
@@ -710,6 +725,9 @@ func (a *App) CheckEnvVarExists(name, level string) bool {
 
 // DeleteEnvVar removes a user/machine environment variable.
 func (a *App) DeleteEnvVar(name, level string) error {
+	if err := a.requireEnvWrite(); err != nil {
+		return err
+	}
 	if util.IsProtectedSystemEnvVar(name) {
 		return fmt.Errorf("cannot modify protected system env var: %s", name)
 	}

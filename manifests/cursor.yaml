@@ -66,10 +66,12 @@ versions:
         sha256: ""
         size: 273073843
         strip: 0
-      # Linux: Cursor 仅提供 AppImage，xdev 下载后需用户 chmod +x 手动运行（非 archive 解包模型）。
+      # Linux: Cursor 仅提供 AppImage（单文件可执行镜像，非归档）。
+      # 2026-10-30（WSL 实测 L16）：原先写 format: exe 会走 7z 解包（AppImage
+      # 不是 7z 归档，必失败）。改用 format: appimage：原样落盘 + 0755。
       - os: linux
         arch: x86_64
-        format: exe
+        format: appimage
         url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/linux/x64/Cursor-3.14.7-x86_64.AppImage
         mirror_url: ""
         sha256: ""
@@ -77,7 +79,7 @@ versions:
         strip: 0
       - os: linux
         arch: arm64
-        format: exe
+        format: appimage
         url: https://downloads.cursor.com/production/a758f2241ca99fecf380180b6cbdbbce0f1f42cf/linux/arm64/Cursor-3.14.7-aarch64.AppImage
         mirror_url: ""
         sha256: ""

@@ -58,18 +58,7 @@ func HostOS() string {
 // HostArch returns the canonical CPU arch used in manifests.
 // Manifests use x86_64 on Linux/macOS and amd64 on Windows.
 func HostArch() string {
-	switch runtime.GOARCH {
-	case "amd64":
-		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-			return "x86_64"
-		}
-		return "amd64"
-	case "arm64":
-		return "arm64"
-	case "386":
-		return "386"
-	}
-	return runtime.GOARCH
+	return manifest.CanonicalArch(runtime.GOOS, runtime.GOARCH)
 }
 
 // Generic is a Plugin implementation driven entirely by a manifest.Tool.
@@ -283,6 +272,7 @@ func (g *Generic) EnvVars(installPath string) map[string]string {
 //   - Go：  `go install`   → $GOPATH/bin
 //   - Rust：`cargo install`→ $CARGO_HOME/bin
 //   - Bun： 全局包         → $BUN_INSTALL/bin
+//
 // 不追加，用户装完工具会得到 "command not found"。
 //
 // 模板支持：

@@ -21,9 +21,16 @@ import (
 // ShellInfo describes the user's preferred shell, used to pick the
 // right RC file to inject into.
 type ShellInfo struct {
-	Shell    string // bash | zsh | fish | powershell | pwsh | cmd
-	RCFile   string // absolute path
-	XMDevTag string // sentinel comment marking our injection
+	Shell  string // bash | zsh | fish | powershell | pwsh | cmd
+	RCFile string // absolute path (interactive shells)
+	// LoginRCFile is the profile read by *login* shells (bash -l / bash -lc,
+	// ssh commands, CI runners). Empty when the shell reads RCFile in every
+	// mode (fish, sh) or on Windows.
+	//
+	// Linux/WSL 上的必需性：Ubuntu 的 bash 只在交互式 shell 里读 ~/.bashrc，
+	// `bash -lc` 走 ~/.profile —— 只写 ~/.bashrc 会让 init 报 ✔ 而 PATH 不生效。
+	LoginRCFile string
+	XMDevTag    string // sentinel comment marking our injection
 }
 
 // EnvPair represents a name=value environment variable pair.
@@ -60,18 +67,39 @@ func DetectShell() ShellInfo {
 }
 
 func detectUnixShell() ShellInfo {
-	home, _ := os.UserHomeDir()
 	sh := os.Getenv("SHELL")
 	name := filepath.Base(sh)
+	if name == "" || name == "." {
+		name = "sh"
+	}
+	// Fail closed when HOME is missing: filepath.Join("", ".bashrc") yields a
+	// *relative* path, and the block would then be written into the caller's
+	// current directory. %USERPROFILE% is effectively always present on
+	// Windows, so this shape only occurs on POSIX (e.g. `env -u HOME`).
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ShellInfo{Shell: name, RCFile: "", XMDevTag: marker}
+	}
 	switch name {
 	case "zsh":
-		return ShellInfo{Shell: "zsh", RCFile: filepath.Join(home, ".zshrc"), XMDevTag: marker}
+		return ShellInfo{
+			Shell: "zsh", RCFile: filepath.Join(home, ".zshrc"),
+			LoginRCFile: filepath.Join(home, ".zprofile"), XMDevTag: marker,
+		}
 	case "bash":
 		// .bashrc on Linux, .bash_profile on macOS for login shells.
 		if runtime.GOOS == "darwin" {
 			return ShellInfo{Shell: "bash", RCFile: filepath.Join(home, ".bash_profile"), XMDevTag: marker}
 		}
-		return ShellInfo{Shell: "bash", RCFile: filepath.Join(home, ".bashrc"), XMDevTag: marker}
+		// Ubuntu/Debian bash: ~/.bashrc is only read by *interactive* shells;
+		// `bash -lc` (WSL default, CI scripts, ssh commands) reads the login
+		// profile instead. Write the same block to both so PATH is effective
+		// everywhere (the block itself is idempotent — see renderShellBlock).
+		return ShellInfo{
+			Shell: "bash", RCFile: filepath.Join(home, ".bashrc"),
+			LoginRCFile: firstExistingFile(home, ".bash_profile", ".bash_login", ".profile"),
+			XMDevTag:    marker,
+		}
 	case "fish":
 		return ShellInfo{Shell: "fish", RCFile: filepath.Join(home, ".config", "fish", "config.fish"), XMDevTag: marker}
 	default:
@@ -80,6 +108,18 @@ func detectUnixShell() ShellInfo {
 		}
 		return ShellInfo{Shell: "sh", RCFile: filepath.Join(home, ".profile"), XMDevTag: marker}
 	}
+}
+
+// firstExistingFile returns <home>/<name> for the first existing name, or
+// <home>/.profile when none exists (the POSIX login-shell default).
+func firstExistingFile(home string, names ...string) string {
+	for _, n := range names {
+		p := filepath.Join(home, n)
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return filepath.Join(home, ".profile")
 }
 
 func detectWindowsShell() ShellInfo {
@@ -109,16 +149,43 @@ func psProfile() string {
 	return filepath.Join(documentsDir(), "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")
 }
 
-// InjectShellRC appends (or replaces) the xdev block in the
-// shell's RC file.  Idempotent: running it twice does not double up.
+// RCTargets returns every RC/profile file the xdev block must live in,
+// RCFile first and deduplicated. Empty when no shell RC could be located.
+func (info ShellInfo) RCTargets() []string {
+	var out []string
+	seen := make(map[string]bool, 2)
+	for _, p := range []string{info.RCFile, info.LoginRCFile} {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// InjectShellRC appends (or replaces) the xdev block in the shell's RC file
+// and, when the shell needs one, its login profile. Idempotent: running it
+// twice does not double up.
 func InjectShellRC(info ShellInfo, xmdeHome, shimDir string) error {
-	if info.RCFile == "" {
+	targets := info.RCTargets()
+	if len(targets) == 0 {
 		return fmt.Errorf("no RC file for shell %s", info.Shell)
 	}
-	if err := os.MkdirAll(filepath.Dir(info.RCFile), 0o755); err != nil {
+	block := renderShellBlock(info.Shell, xmdeHome, shimDir)
+	for _, path := range targets {
+		if err := injectBlockIntoFile(path, block); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func injectBlockIntoFile(path, block string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	existing, err := os.ReadFile(info.RCFile)
+	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -126,45 +193,62 @@ func InjectShellRC(info ShellInfo, xmdeHome, shimDir string) error {
 	// Remove both legacy and current marker blocks.
 	text = removeBlock(text, legacyMarker, legacyEndMarker)
 	text = removeBlock(text, marker, endMarker)
-	text += renderShellBlock(info.Shell, xmdeHome, shimDir)
-	return os.WriteFile(info.RCFile, []byte(text), 0o644)
+	// A last line without a trailing newline is a common shape for hand-edited
+	// RC files (`printf 'alias ll=ls' > ~/.bashrc`). Appending the block
+	// directly would glue the marker onto that line and corrupt the file.
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	text += block
+	return os.WriteFile(path, []byte(text), 0o644)
 }
 
-// RemoveShellRC strips any xdev block from the shell RC.
+// RemoveShellRC strips any xdev block from the shell RC and login profile.
 func RemoveShellRC(info ShellInfo) error {
-	if info.RCFile == "" {
-		return nil
-	}
-	data, err := os.ReadFile(info.RCFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	for _, path := range info.RCTargets() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
 		}
-		return err
+		text := removeBlock(string(data), legacyMarker, legacyEndMarker)
+		text = removeBlock(text, marker, endMarker)
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			return err
+		}
 	}
-	text := removeBlock(string(data), legacyMarker, legacyEndMarker)
-	text = removeBlock(text, marker, endMarker)
-	return os.WriteFile(info.RCFile, []byte(text), 0o644)
+	return nil
 }
 
+// removeBlock deletes *every* start..end block from s and consumes the single
+// newline that followed each block, so an inject/remove cycle is byte-exact and
+// repeated injects cannot accumulate blank lines. The old implementation only
+// removed the first block and left its trailing newline behind, so
+// `activate` grew the RC file by one byte per run and two pre-existing blocks
+// could never converge back to one.
 func removeBlock(s, start, end string) string {
-	i := strings.Index(s, start)
-	if i < 0 {
-		return s
+	for {
+		i := strings.Index(s, start)
+		if i < 0 {
+			return s
+		}
+		j := strings.Index(s[i:], end)
+		if j < 0 {
+			return s
+		}
+		rest := strings.TrimPrefix(s[i+j+len(end):], "\n")
+		s = s[:i] + rest
 	}
-	j := strings.Index(s[i:], end)
-	if j < 0 {
-		return s
-	}
-	return s[:i] + s[i+j+len(end):]
 }
 
 func renderShellBlock(shell, xmdeHome, shimDir string) string {
 	switch shell {
 	case "fish":
 		return fmt.Sprintf(
-			"%s\nset -gx XMDEV_HOME '%s'\nset -gx PATH '%s' $PATH\n%s\n",
-			marker, shellSingleQuote(xmdeHome), shellSingleQuote(shimDir), endMarker,
+			"%s\nset -gx XMDEV_HOME %s\nset -gx PATH %s $PATH\n%s\n",
+			marker, fishQuote(xmdeHome), fishQuote(shimDir), endMarker,
 		)
 	case "powershell", "pwsh":
 		return fmt.Sprintf(
@@ -175,11 +259,26 @@ func renderShellBlock(shell, xmdeHome, shimDir string) string {
 		// 2026-10-25 修复（P0-1）：与 HookOutput 同源 bug。`$PATH` 必须在单引号外，
 		// 否则写进 RC 文件的那一行 eval 后会把 PATH 变成字面量 `'/a:/b:$PATH'`，
 		// 用户原有 PATH 被彻底覆盖（且每次开 shell 都错一次）。
+		//
+		// 2026-10-30（WSL 测试 L5/L6）：同一块会同时写入 ~/.bashrc 与登录
+		// profile（Ubuntu 登录 shell 不读 .bashrc），因此前插必须幂等 —— 见
+		// posixPathPrepend 的 case 守卫，重复 source 不再让 PATH 增长。
 		return fmt.Sprintf(
-			"%s\nexport XMDEV_HOME='%s'\nexport PATH='%s':\"$PATH\"\n%s\n",
-			marker, shellSingleQuote(xmdeHome), shellSingleQuote(shimDir), endMarker,
+			"%s\nexport XMDEV_HOME='%s'\n%s\n%s\n",
+			marker, shellSingleQuote(xmdeHome), posixPathPrepend(shimDir), endMarker,
 		)
 	}
+}
+
+// posixPathPrepend emits an idempotent PATH prepend for POSIX shells: the
+// directory is added only when it is not already a PATH entry. Needed because
+// the same block is written to both ~/.bashrc and the login profile, and login
+// interactive shells source both.
+func posixPathPrepend(dir string) string {
+	return fmt.Sprintf(
+		"_xdev_shim='%s'\ncase \":$PATH:\" in *\":$_xdev_shim:\"*) ;; *) export PATH=\"$_xdev_shim:$PATH\" ;; esac\nunset _xdev_shim",
+		shellSingleQuote(dir),
+	)
 }
 
 // shellSingleQuote wraps a string in single quotes for POSIX shells.

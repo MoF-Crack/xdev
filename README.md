@@ -2,13 +2,13 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-alpha.2** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-beta.1** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
 ## 核心特性
 
-- **零依赖** —— 单一可执行文件，无需安装运行时
+- **单文件分发** —— Go 业务代码与前端资源合并；桌面模式使用系统 WebView，Linux 需要 GTK/WebKitGTK 系统库
 - **跨平台** —— Windows 10/11（主要）、macOS 12+、Ubuntu 20.04+
 - **多版本管理** —— 同时安装同一工具的多个版本，一键切换
 - **项目级版本** —— `.xdev.yaml` 声明项目所需版本，shim 按当前目录自动解析（无需来回 `xdev use`）
@@ -59,13 +59,13 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 | 产物 | 说明 |
 |------|------|
-| `xdev-windows-amd64-v1.0.0-alpha.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-alpha.2.tar.gz` | Linux 单二进制（amd64） |
-| `xdev-1.0.0-alpha.2-x86_64.AppImage` | Linux AppImage（amd64） |
-| `xdev-1.0.0-alpha.2-aarch64.AppImage` | Linux AppImage（arm64） |
-| `xdev-darwin-arm64-v1.0.0-alpha.2.dmg` | macOS（Apple Silicon） |
-| `xdev-1.0.0-alpha.2-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
-| `SHA256SUMS` / `SHA256SUMS-darwin` | 校验和 |
+| `xdev-windows-amd64-v1.0.0-beta.1.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-amd64-v1.0.0-beta.1.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-1.0.0-beta.1-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-beta.1-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-beta.1.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-beta.1-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
+| `SHA256SUMS` | 汇总所有平台资产的完整校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
 本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）。
@@ -258,7 +258,16 @@ proxy:
 
 ## 从源码构建
 
-需要 Go 1.27+、Node 22（GUI 前端）和 [Wails v2](https://wails.io/) CLI。
+需要 Go 1.27+、Node 22+（GUI 前端）和固定版本的 [Wails 3](https://wails.io/) CLI：
+
+```bash
+# Windows / macOS
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+# Linux：先安装 GTK3 / WebKitGTK 4.1 开发库，再编译生成器
+go install -tags gtk3 github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+```
+
+Linux 桌面构建使用 GTK3 + WebKitGTK 4.1 开发库；桌面运行依赖系统 WebView。
 
 ```bash
 git clone https://github.com/MoF-Crack/xdev.git
@@ -279,10 +288,11 @@ cd xdev
 # 前端资源（GUI 的 //go:embed 依赖 frontend/dist）
 cd frontend && npm ci && npm run build && cd ..
 
-# 单二进制（含 GUI/TUI/CLI；等价 wails build）
-wails build -o build/bin/xdev.exe
-# 或先 npm build 后：
-# go build -ldflags "-s -w" -o build/bin/xdev.exe .
+# 单二进制（GUI/TUI/CLI/shim），使用共享构建与公钥注入流程
+node scripts/build.mjs --skip-audit
+# 已有前端资源时可直接编译；Linux 标签额外加 gtk3：
+# go build -tags desktop,production -o build/bin/xdev.exe .
+# 无 desktop 标签用于开发维护命令，不是发布用桌面产物。
 ```
 
 产物行为：无参数 → GUI；`xdev tui` → TUI；其他参数 → CLI 命令。
@@ -297,7 +307,7 @@ wails build -o build/bin/xdev.exe
 
 Lua / vfox 插件放到 `$XMDEV_HOME/plugins/`，无需改 Go 代码。
 
-## 1.0.0-alpha.2 要点
+## 1.0.0-beta.1 要点
 
 本版是架构优化与环境变量体系重建的合集：
 
@@ -319,7 +329,7 @@ Lua / vfox 插件放到 `$XMDEV_HOME/plugins/`，无需改 Go 代码。
 | **M2 首批插件** | 编程语言运行时 | ✅ |
 | **M3 Android** | Android SDK/NDK 全套 + Flutter | ✅ |
 | **M4 TUI** | Bubble Tea 终端界面 | ✅ |
-| **M5 GUI** | Wails v2 + Vue 3 桌面应用 | ✅ |
+| **M5 GUI** | Wails 3 + Vue 3 桌面应用（见 ADR-0007） | ✅ |
 | **M6 完善** | 镜像测速、断点续传、Profile 导入导出、自更新 | ✅ |
 | **0.3.x** | 工具嗅探、开发工具扁平分类、包管理器自动安装与多实例、形态区分、安全加固 | ✅ |
 | **隔离 / 远程** | Isolator + Orchestrator 框架已落地，跨平台与生产化打磨中 | 🔶 |
