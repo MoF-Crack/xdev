@@ -3,6 +3,24 @@ import { describe, expect, it } from 'vitest';
 import ToolDetailDrawer from '../../src/components/ToolDetailDrawer.vue';
 
 describe('ToolDetailDrawer', () => {
+  it('renders embedded inspection without a modal mask and keeps version actions', async () => {
+    const wrapper = mount(ToolDetailDrawer, { props: { embedded: true, show: true, tool: { name: 'go', displayName: 'Go', category: 'language', installed: true, activeVersion: '1.27.3' }, installedVersions: [{ version: '1.26.5', active: false }], t: key => key } });
+    expect(wrapper.get('aside.tool-inspector').attributes('aria-label')).toBe('Go');
+    expect(wrapper.find('.n-drawer-mask').exists()).toBe(false);
+    expect(wrapper.get('.tool-active-version').text()).toContain('1.27.3');
+    await wrapper.get('[aria-label="btn.close"]').trigger('click');
+    expect(wrapper.emitted('update:show')).toEqual([[false]]);
+    wrapper.unmount();
+  });
+  it('updates the active card from fresh versions and does not invent a Shim in direct mode', async () => {
+    const wrapper = mount(ToolDetailDrawer, { props: { embedded: true, show: true, pathMode: 'direct', tool: { name: 'node', installed: true, activeVersion: '20.18.0' }, installedVersions: [{ version: '22.14.0', active: true }], t: key => key } });
+    expect(wrapper.get('.tool-active-version strong').text()).toBe('22.14.0');
+    expect(wrapper.get('.tool-active-version__route').text()).not.toContain('Shim');
+    await wrapper.setProps({ pathMode: 'shim', installedVersions: [{ version: '26.5.0', active: true }] });
+    expect(wrapper.get('.tool-active-version strong').text()).toBe('26.5.0');
+    expect(wrapper.get('.tool-active-version__route').text()).toContain('Shim');
+    wrapper.unmount();
+  });
   it('uses responsive width, copyable path, versions, and returns focus after close', async () => {
     const trigger = document.createElement('button'); document.body.append(trigger); trigger.focus();
     const wrapper = mount(ToolDetailDrawer, { attachTo: document.body, global: { stubs: { teleport: true } }, props: { show: true, tool: { name: 'node', displayName: 'Node', localPath: 'C:\\node' }, installedVersions: [], availableVersions: [], t: (key) => key, returnFocusTo: trigger } });

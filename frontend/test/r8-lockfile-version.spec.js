@@ -22,7 +22,7 @@ describe('R8-06 lockfile root version 必须与 package.json 一致（红→绿�
   it('顶层 version 与 packages[""].version 都等于 package.json 的 version', () => {
     const pkg = readJson('frontend/package.json');
     const lock = readJson('frontend/package-lock.json');
-    expect(pkg.version).toBe('0.4.0');
+    expect(pkg.version).toBe(readFileSync(join(repoRoot, 'internal/version/version.go'), 'utf8').match(/const Version = "([^"]+)"/)[1]);
     // 红：修复前两处均为 '0.3.3-rc.2'。
     expect(lock.version).toBe(pkg.version);
     expect(lock.packages[''].version).toBe(pkg.version);

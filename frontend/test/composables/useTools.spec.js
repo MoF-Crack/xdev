@@ -3,6 +3,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { useTools } from '../../src/composables/useTools.js';
 
 describe('useTools', () => {
+  it('reports only successfully applied requests, including ABA navigation', async () => {
+    const requests = [];
+    const state = useTools({ GetToolsByCategory: vi.fn(() => new Promise((resolve, reject) => requests.push({ resolve, reject }))) });
+    const a1 = state.loadTools('language');
+    const b = state.loadTools('package-manager');
+    requests[1].resolve([{ name: 'scoop' }]);
+    expect(await b).toBe(true);
+    const a2 = state.loadTools('language');
+    requests[0].resolve([{ name: 'old-node' }]);
+    expect(await a1).toBe(false);
+    expect(state.loading.value).toBe(true);
+    requests[2].reject(new Error('offline'));
+    expect(await a2).toBe(false);
+    expect(state.error.value.message).toBe('offline');
+    const retry = state.retry();
+    requests[3].resolve([{ name: 'new-node' }]);
+    expect(await retry).toBe(true);
+    expect(state.tools.value).toEqual([{ name: 'new-node' }]);
+  });
+
   it('loads, searches, and hides unavailable tools', async () => {
     const api = { GetToolsByCategory: vi.fn().mockResolvedValue([
       { name: 'node', displayName: 'Node.js', description: 'Runtime', installed: true },

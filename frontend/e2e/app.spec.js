@@ -7,7 +7,7 @@ const cases = {
   dashboard: { viewport: { width: 1440, height: 900 }, theme: 'dark', locale: 'zh' },
   catalog: { viewport: { width: 1024, height: 640 }, theme: 'light', locale: 'en' },
   settings: { viewport: { width: 1440, height: 900 }, theme: 'light', locale: 'zh' },
-  drawer: { viewport: { width: 1440, height: 900 }, theme: 'dark', locale: 'en' },
+  drawer: { viewport: { width: 1200, height: 900 }, theme: 'dark', locale: 'en' },
   progress: { viewport: { width: 1024, height: 640 }, theme: 'light', locale: 'zh' },
 };
 
@@ -29,7 +29,7 @@ async function openApp(page, testInfo, options, initialized = true) {
 // Default view is the dashboard; tests that need the tool catalog must navigate to it explicitly.
 async function openToolCatalog(page) {
   await page.locator('[data-view="language"]').click();
-  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+  await expect(page.getByText('Node.js', { exact: true }).first()).toBeVisible();
 }
 
 async function expectDocumentContained(page) {
@@ -124,12 +124,12 @@ test('dashboard visual baseline', async ({ page }, testInfo) => {
 test('tool catalog visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.catalog);
   await openToolCatalog(page);
-  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+  await expect(page.getByText('Node.js', { exact: true }).first()).toBeVisible();
   await expectDocumentContained(page);
   await expectInViewport(page.locator('.app-shell__content'), cases.catalog.viewport);
   await expect(page.locator('[data-testid="tool-search"]')).toBeVisible();
   await expect(page.locator('[data-testid="hide-unavailable"]')).toBeVisible();
-  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+  await expect(page.getByText('Node.js', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('20.18.0', { exact: true }).first()).toBeVisible();
   await expect(page.locator('[data-action="detail"]').first()).toBeVisible();
   await expect(page.locator('[data-action="favorite"]').first()).toBeVisible();
@@ -240,14 +240,14 @@ test('isolation, remote, and about pages preserve API contracts', async ({ page 
 test('tool detail drawer visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.drawer);
   await openToolCatalog(page);
-  await page.getByText('Node.js', { exact: true }).click();
+  await page.getByText('Node.js', { exact: true }).first().click();
   await expect(page.locator('.n-drawer')).toBeVisible();
   await expectDocumentContained(page);
   const drawerPanel = page.locator('.n-drawer-content-wrapper');
   await expectInViewport(drawerPanel, cases.drawer.viewport);
   expect(await drawerPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(page.getByRole('button', { name: 'Install' }).first()).toBeVisible();
-  await expect(page).toHaveScreenshot('tool-drawer-1440-dark-en.png', { animations: 'disabled' });
+  await expect(page).toHaveScreenshot('tool-drawer-1200-dark-en.png', { animations: 'disabled' });
 });
 
 test('spec-023 form badges, dependencies, launch and copy-command actions', async ({ page }, testInfo) => {
@@ -255,7 +255,7 @@ test('spec-023 form badges, dependencies, launch and copy-command actions', asyn
   await openApp(page, testInfo, cases.drawer);
   await openToolCatalog(page);
   // form-factor badges on the catalog table row
-  const nodeRow = page.getByRole('row').filter({ has: page.getByText('Node.js', { exact: true }) });
+  const nodeRow = page.getByRole('row').filter({ has: page.getByText('Node.js', { exact: true }).first() });
   await expect(nodeRow.locator('[data-form="gui"]')).toHaveText('GUI');
   await expect(nodeRow.locator('[data-form="cli"]')).toHaveText('CLI');
   // open the drawer: dependency row + launch/copy actions
@@ -326,7 +326,7 @@ test('command palette switches the active theme end to end', async ({ page }, te
 test('installation progress visual baseline', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
   await openToolCatalog(page);
-  await page.getByText('Node.js', { exact: true }).click();
+  await page.getByText('Node.js', { exact: true }).first().click();
   await page.getByRole('button', { name: '安装', exact: true }).filter({ visible: true }).first().click();
   await progressSession(page, 'node', { status: 'downloading', canCancel: true, canPause: true, percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s' });
   await expect(page.locator('.n-modal')).toBeVisible();
@@ -348,7 +348,7 @@ test('installation progress visual baseline', async ({ page }, testInfo) => {
 test('backgrounded install shows a toolbar progress indicator that reopens the dialog', async ({ page }, testInfo) => {
   await openApp(page, testInfo, cases.progress);
   await openToolCatalog(page);
-  await page.getByText('Node.js', { exact: true }).click();
+  await page.getByText('Node.js', { exact: true }).first().click();
   await page.getByRole('button', { name: '安装', exact: true }).filter({ visible: true }).first().click();
   await progressSession(page, 'node', { status: 'downloading', canCancel: true, canPause: true, percent: 42, phase: 'Downloading', speed: '12 MB/s', eta: '8s' });
   await expect(page.locator('.n-modal')).toBeVisible();
@@ -377,7 +377,7 @@ test('installation pause resume and cancel use the active task and protect the d
   const detailTrigger = page.locator('[data-action="detail"]').first();
   await detailTrigger.click();
   await expectVisibleStateAccessible(page, '.n-drawer');
-  await page.getByRole('button', { name: '安装' }).first().click();
+  await page.locator('.n-drawer').getByRole('button', { name: '安装', exact: true }).first().click();
   await expect(page.locator('.n-modal')).toBeVisible();
   await expectVisibleDialogAccessible(page);
   await page.keyboard.press('Escape');
@@ -462,7 +462,7 @@ test('batch update runs items in parallel with a multi-item progress dialog', as
 
 test('narrow app shell is compact, contained, and has no serious accessibility violations', async ({ page }, testInfo) => {
   await openApp(page, testInfo, { viewport: { width: 640, height: 720 }, theme: 'dark', locale: 'en' });
-  await expect(page.getByText('Node.js', { exact: true })).toBeVisible();
+  await expect(page.getByText('Node.js', { exact: true }).first()).toBeVisible();
 
   await expect(page.locator('.app-sidebar')).toHaveCSS('width', '56px');
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveCount(0);
@@ -509,8 +509,11 @@ test('setup radios support label click, Space, Arrow keys, step flow, and focus'
   await page.getByRole('button', { name: 'Confirm & Save' }).click();
   await expect(page.getByRole('heading', { name: 'Setup Complete!' })).toBeFocused();
   await expectNoAxeViolations(page);
-  await page.getByRole('button', { name: 'Start Using' }).click();
   await expect.poll(() => page.evaluate(() => window.__wailsCalls.InitConfig)).toEqual([['C:\\XDev']]);
+  // Setup now transitions into the full app; provide that distinct runtime contract.
+  await page.evaluate(createInitializedWailsBrowserMocks);
+  await page.getByRole('button', { name: 'Start Using' }).click();
+  await expect(page.locator('.dashboard-page')).toBeVisible();
 });
 
 test('setup normal, error, and narrow custom path states remain accessible and contained', async ({ page }, testInfo) => {
@@ -533,4 +536,57 @@ test('setup normal, error, and narrow custom path states remain accessible and c
   await page.evaluate(() => { window.__failSetupDrives = false; });
   await page.getByRole('button', { name: 'Retry' }).click();
   await expect(page.getByRole('radio', { name: /C:/ })).toBeFocused();
+});
+
+// Spec 041: desktop inspection is a sibling column, not a modal overlay.
+for (const theme of ['eye-care', 'light', 'dark']) {
+  test('F2 split workspace and quick theme ' + theme, async ({ page }, testInfo) => {
+    await openApp(page, testInfo, { viewport: { width: 1600, height: 1000 }, theme, locale: 'zh' });
+    await openToolCatalog(page);
+    const inspector = page.locator('.tool-inspector');
+    await expect(inspector).toBeVisible();
+    await expect(page.locator('.n-drawer-mask')).toHaveCount(0);
+    await expect(page.locator('.app-shell__workspace--split')).toBeVisible();
+    await expect(page.locator('.tool-table tbody tr.tool-table__row--selected')).toHaveCount(1);
+    await page.locator('[data-action="detail"][data-tool="go"]').click();
+    await expect(inspector.getByRole('heading', { name: 'Go', exact: true })).toBeVisible();
+    await page.locator('[data-theme-select="' + theme + '"]').click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expectDocumentContained(page);
+    await expectNoSeriousAxeViolations(page);
+    await expect(page).toHaveScreenshot('workspace-1600-' + theme + '-zh.png', { animations: 'disabled' });
+    await inspector.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(inspector).toBeHidden();
+    await expect(page.locator('[data-action="detail"][data-tool="go"]')).toBeFocused();
+    await expect(page.locator('.tool-table')).toBeVisible();
+  });
+}
+
+test('a failed category request never opens the previous tool in the new category', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 1600, height: 1000 }, theme: 'light', locale: 'en' });
+  await openToolCatalog(page);
+  await expect(page.locator('.tool-inspector')).toBeVisible();
+  await page.evaluate(() => { window.go.gui.App.GetToolsByCategory = async () => { throw new Error('category offline'); }; });
+  await page.locator('[data-view="package-manager"]').click();
+  await expect(page.locator('.tool-catalog')).toContainText('category offline');
+  await expect(page.locator('.tool-inspector')).toHaveCount(0);
+  await expect(page.locator('.n-drawer-mask')).toHaveCount(0);
+});
+
+test('ABA category navigation cannot open a stale inspector while the newest request is pending', async ({ page }, testInfo) => {
+  await openApp(page, testInfo, { viewport: { width: 1600, height: 1000 }, theme: 'dark', locale: 'en' });
+  await page.evaluate(() => {
+    window.__categoryRequests = [];
+    window.go.gui.App.GetToolsByCategory = category => new Promise(resolve => window.__categoryRequests.push({ category, resolve }));
+  });
+  await page.locator('[data-view="language"]').click();
+  await page.locator('[data-view="package-manager"]').click();
+  await page.evaluate(() => window.__categoryRequests[1].resolve([{ name: 'scoop', displayName: 'Scoop', category: 'package-manager', canInstall: true }]));
+  await expect(page.locator('.tool-inspector h2')).toHaveText('Scoop');
+  await page.locator('[data-view="language"]').click();
+  await page.evaluate(() => window.__categoryRequests[0].resolve([{ name: 'old-node', canInstall: true }]));
+  await expect(page.locator('.tool-catalog')).toContainText('Loading tools');
+  await expect(page.locator('.tool-inspector')).toHaveCount(0);
+  await page.evaluate(() => window.__categoryRequests[2].resolve([{ name: 'new-node', displayName: 'New Node', category: 'language', canInstall: true }]));
+  await expect(page.locator('.tool-inspector h2')).toHaveText('New Node');
 });

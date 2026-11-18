@@ -22,15 +22,18 @@ export function useTools(api = window.go.gui.App) {
 
   async function loadTools(category) {
     if (category) activeCategory.value = category;
-    if (!activeCategory.value) return;
+    if (!activeCategory.value) return false;
     const currentRequest = ++requestId;
     loading.value = true;
     error.value = null;
     try {
       const result = await api.GetToolsByCategory(activeCategory.value);
-      if (currentRequest === requestId) tools.value = result || [];
+      if (currentRequest !== requestId) return false;
+      tools.value = result || [];
+      return true;
     } catch (cause) {
       if (currentRequest === requestId) error.value = cause;
+      return false;
     } finally {
       if (currentRequest === requestId) loading.value = false;
     }

@@ -1,4 +1,21 @@
 export default {
+  // F2 workspace and theme suite
+  'brand.tagline': '开发环境版本管理',
+  'catalog.description': '统一管理运行时，清楚掌握每一个工具的生效版本。',
+  'catalog.filters': '工具状态筛选',
+  'catalog.all': '全部',
+  'catalog.local_filter': '本地检测',
+  'catalog.tool_count': '{n} 个工具 · 选择工具查看版本详情',
+  'detail.xdev_managed': 'XDev 托管',
+  'dashboard.current_toolchain': '当前工具链',
+  'dashboard.scan_summary': '本地扫描概要',
+  'dashboard.scan_pending': '尚未扫描本地环境',
+  'theme.main_themes': '主主题',
+  'theme.legacy_themes': '经典主题',
+  'theme.eye_care_description': '低饱和绿调，柔和非纯白表面',
+  'theme.light_description': '冰蓝冷白，清晰分隔与对比',
+  'theme.dark_description': '柔和蓝紫强调色，适合低光环境',
+
   // Navigation
   'nav.dashboard': '仪表盘',
   'nav.settings': '设置',
@@ -554,12 +571,12 @@ export default {
   'window.close': '关闭',
 
   // Theme controls
-  'theme.dark': '石墨',
+  'theme.dark': '暗色 · 深空',
   'theme.midnight': '午夜',
   'theme.nord': '极夜',
   'theme.ember': '余烬',
-  'theme.light': '日光',
-  'theme.eye_care': '护眼',
+  'theme.light': '亮色 · 冰川',
+  'theme.eye_care': '护眼 · 雾松',
   'theme.family_dark': '暗色',
   'theme.family_light': '浅色',
   'settings.load_failed': '加载设置失败',

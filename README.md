@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-beta.1** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-beta.2** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,20 +55,50 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 下载对应平台的产物：
+从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 下载对应平台的产物。软件版本为 `1.0.0-beta.2`，发布 Tag 为 `v1.0.0-beta.2`；下表为该 Tag 的预期资产名，实际可用产物以发布页为准：
 
 | 产物 | 说明 |
 |------|------|
-| `xdev-windows-amd64-v1.0.0-beta.1.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-beta.1.tar.gz` | Linux 单二进制（amd64） |
-| `xdev-1.0.0-beta.1-x86_64.AppImage` | Linux AppImage（amd64） |
-| `xdev-1.0.0-beta.1-aarch64.AppImage` | Linux AppImage（arm64） |
-| `xdev-darwin-arm64-v1.0.0-beta.1.dmg` | macOS（Apple Silicon） |
-| `xdev-1.0.0-beta.1-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
+| `xdev-windows-amd64-v1.0.0-beta.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-amd64-v1.0.0-beta.2.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-1.0.0-beta.2-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-beta.2-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-beta.2.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-beta.2-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
 | `SHA256SUMS` | 汇总所有平台资产的完整校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
 本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）。
+
+## 新版 GUI 与品牌（1.0.0-beta.2）
+
+<img src="docs/assets/brand/xdev-wordmark.svg" alt="XDev F2 流弧单 X 一体字标（浅色背景用）" width="269" />
+
+<img src="docs/assets/brand/xdev-app-icon.svg" alt="XDev 应用图标：靛紫圆角底与白色流弧 X" width="80" />
+
+F2 字标由一个流弧 **x** 与 **dev** 一体组成，不再叠加独立 X 或重复品牌文字。上方静态字标供浅色背景使用；应用图标固定为靛紫底、白色流弧 X，不随主题变色。
+
+- **三主主题**：护眼·雾松、亮色·冰川、暗色·深空；顶部可快速切换，设置页提供三张主题主卡。
+- **经典主题兼容**：午夜、极夜、余烬仍可选择，保留已有主题偏好。
+- **响应式工作区**：宽度 ≥ 1280 px 时，工具列表与非遮挡详情面板并排；更窄窗口使用详情抽屉。
+- **操作契约不变**：当前工具链、工具目录筛选 tabs（全部 / 已安装 / 本地）与安装会话契约沿用既有行为。
+- **原生图标接入**：Windows 构建将多尺寸 ICO 实际嵌入可执行文件；macOS DMG 包装为带 ICNS 的 `XDev.app`；Linux 桌面入口使用应用图标。此处说明已实施的构建接入，不代表各平台最终产物已完成验收。
+
+以下截图均使用**测试示例数据**，不代表用户真实环境、已安装工具或本机路径。
+
+### 亮色·冰川
+
+![亮色·冰川工作区（测试示例数据）](<docs/assets/screenshots/workspace-light.png>)
+
+### 护眼·雾松
+
+![护眼·雾松工作区（测试示例数据）](<docs/assets/screenshots/workspace-eye-care.png>)
+
+### 暗色·深空
+
+![暗色·深空工作区（测试示例数据）](<docs/assets/screenshots/workspace-dark.png>)
+
+本次变更、兼容范围与发布验证状态见 [1.0.0-beta.2 发布说明](<docs/releases/1.0.0-beta.2.md>)。
 
 ## 命令总览
 
@@ -220,7 +250,7 @@ Host-scan 会列出 PATH 上的每一个实例（本机 leftover 与 xdev 管理
 | 开发工具 | VS Code, Cursor, Zed, IntelliJ IDEA Community, PyCharm Community, GoLand, CLion, WebStorm, RubyMine, Claude Code, Codex, OpenCode, GitHub Copilot CLI, DSH（DeepSeek Harness，npm 托管安装） |
 | 包管理器 | UV（catalog）；Scoop / Homebrew / Chocolatey 可自动安装；yarn / pnpm 经 xdev Node 的 corepack 或 `npm i -g` 启用；pipx 经 pip / uv 安装 |
 
-GUI 工具目录按「编程语言 / 构建工具 / 开发工具 / 移动开发 / 系统工具 / 本地工具 / 包管理器」分组。安装、启用、更新在详情抽屉中操作。
+GUI 工具目录按「编程语言 / 构建工具 / 开发工具 / 移动开发 / 系统工具 / 本地工具 / 包管理器」分组。安装、启用、更新在详情面板或窄屏详情抽屉中操作。
 
 ## 配置文件
 
@@ -307,9 +337,9 @@ node scripts/build.mjs --skip-audit
 
 Lua / vfox 插件放到 `$XMDEV_HOME/plugins/`，无需改 Go 代码。
 
-## 1.0.0-beta.1 要点
+## 1.0.0-beta.1 历史要点
 
-本版是架构优化与环境变量体系重建的合集：
+以下保留 beta.1 README 的功能要点，作为本次 UI 更新之前的能力背景：
 
 - **项目级多版本**：`.xdev.yaml` 声明项目所需版本，shim 按 CWD 自动解析，未命中回落全局
 - **环境变量首次在非 Windows 生效**：env 从「写注册表」改为「注入子进程环境」（`internal/envctx`）

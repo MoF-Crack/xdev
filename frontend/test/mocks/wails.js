@@ -198,7 +198,7 @@ export function createInitializedWailsBrowserMocks() {
     }),
     GetFavorites: async () => [{ name: 'node', displayName: 'Node.js', category: 'language', addedAt: '2026-08-01', activeVersion: '20.18.0', installed: true, localVersion: '20.18.0', localPath: 'C:\\Program Files\\nodejs', source: 'xdev', formFactor: ['gui', 'cli'] }],
     ScanLegacyDir: async () => [],
-    GetInstalledVersions: async () => [{ version: '20.18.0', active: true }],
+    GetInstalledVersions: async name => [{ version: name === 'go' ? '1.24.0' : '20.18.0', active: true }],
     GetAvailableVersions: async () => [
       { version: '22.14.0', installed: false },
       { version: '20.18.0', installed: true },

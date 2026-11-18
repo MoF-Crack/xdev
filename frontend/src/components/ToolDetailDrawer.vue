@@ -1,8 +1,10 @@
 <template>
-  <n-drawer :show="show" placement="right" :width="drawerWidth" :aria-label="tool?.displayName || t('detail.name')" @update:show="$emit('update:show', $event)">
-    <n-drawer-content :title="tool?.displayName || ''">
+  <component :is="embedded ? 'aside' : NDrawer" v-bind="embedded ? { class: 'tool-inspector', 'aria-label': tool?.displayName || t('detail.name') } : { show, placement: 'right', width: drawerWidth, 'aria-label': tool?.displayName || t('detail.name') }" @update:show="$emit('update:show', $event)">
+    <component :is="embedded ? 'div' : NDrawerContent" :title="embedded ? undefined : (tool?.displayName || '')">
+      <header v-if="embedded" class="tool-inspector__header"><span class="tool-inspector__mark" aria-hidden="true">{{ tool?.displayName?.slice(0, 2) || tool?.name?.slice(0, 2) }}</span><div><h2>{{ tool?.displayName || tool?.name }}</h2><span>{{ t('category.' + tool?.category) }}</span></div><button type="button" class="xdev-btn xdev-btn--secondary" :aria-label="t('btn.close')" @click="$emit('update:show', false)">×</button></header>
       <div v-if="tool" class="tool-detail-drawer" data-responsive-width="min(520px, calc(100vw - 24px))">
         <n-space vertical>
+          <section v-if="tool.installed && currentVersion" class="tool-active-version"><div class="tool-active-version__label">{{ t('status.active') }} <span>{{ t('detail.xdev_managed') }}</span></div><strong>{{ currentVersion }}</strong><div class="tool-active-version__route"><code>{{ tool.name }}</code><span>→</span><code>current</code><template v-if="pathMode === 'shim'"><span>→</span><code>Shim</code></template><span>→</span><code>PATH</code></div></section>
           <n-descriptions :column="1" bordered size="small">
             <n-descriptions-item :label="t('detail.name')">{{ tool.name }}</n-descriptions-item>
             <n-descriptions-item :label="t('detail.category')">{{ tool.category }}</n-descriptions-item>
@@ -74,15 +76,15 @@
             <section class="detail-section">
               <h3>{{ t('detail.install_custom') }}</h3>
               <n-space>
-                <n-input v-model:value="customVersion" />
+                <n-input v-model:value="customVersion" :aria-label="t('detail.install_custom')" />
                 <n-button :disabled="!customVersion" @click="$emit('install', tool.name, customVersion)">{{ t('btn.install') }}</n-button>
               </n-space>
             </section>
           </template>
         </n-space>
       </div>
-    </n-drawer-content>
-  </n-drawer>
+    </component>
+  </component>
 </template>
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue';
@@ -92,6 +94,8 @@ import VersionList from './VersionList.vue';
 const drawerWidth = 'min(520px, calc(100vw - 24px))';
 const props = defineProps({
   show: Boolean,
+  embedded: Boolean,
+  pathMode: { type: String, default: '' },
   tool: Object,
   installedVersions: { type: Array, default: () => [] },
   availableVersions: { type: Array, default: () => [] },
@@ -116,6 +120,7 @@ const showPmActionButton = computed(() => showPmEnable.value || showPmInstall.va
 const showPmAction = computed(() => showPmActionButton.value || Boolean(props.tool?.installHint));
 const showPmInstances = computed(() => Array.isArray(props.tool?.instances) && (props.tool.instances.length > 1 || props.tool.instances.some((i) => !i.managed)));
 const customVersion = ref('');
+const currentVersion = computed(() => props.installedVersions.find(version => version.active)?.version || props.tool?.activeVersion || '');
 function normalizePath(path) {
   return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
@@ -145,6 +150,21 @@ watch(() => props.show, async (show, was) => {
 });
 </script>
 <style scoped>
+.tool-inspector { min-width: 0; }
+.tool-inspector__header { display:flex; align-items:center; gap:11px; padding:18px; border-bottom:1px solid var(--xdev-border-subtle); }
+.tool-inspector__header h2 { font-size:20px; margin:0 0 4px; }
+.tool-inspector__header span { color:var(--xdev-text-secondary); font-size:12px; }
+.tool-inspector__header button { margin-left:auto; font-size:20px; min-width:30px; padding:0 6px; }
+.tool-inspector__header .tool-inspector__mark { display:grid; place-items:center; width:42px; height:42px; border:1px solid var(--xdev-border-strong); background:var(--xdev-accent-soft); color:var(--xdev-accent); font-size:16px; border-radius:10px; }
+.tool-inspector .tool-detail-drawer { padding:18px; }
+.tool-active-version { padding:15px; border:1px solid var(--xdev-border-strong); background:var(--xdev-accent-soft); border-radius:var(--xdev-radius-md); }
+.tool-active-version__label { color:var(--xdev-accent); font-size:12px; display:flex; justify-content:space-between; gap:10px; }
+.tool-active-version__label span { color:var(--xdev-text-secondary); font-size:11px; }
+.tool-active-version strong { display:block; font:600 28px var(--xdev-font-mono); margin:10px 0; }
+.tool-active-version__route { display:flex; gap:6px; flex-wrap:wrap; align-items:center; color:var(--xdev-accent); font-size:10px; padding-top:9px; border-top:1px solid var(--xdev-border-subtle); }
+.tool-inspector .detail-section { border:0; padding:8px 0; }
+.tool-inspector :deep(.n-descriptions) { font-size:12px; }
+
 .detail-section { padding: var(--xdev-space-3); border: 1px solid var(--xdev-border-subtle); border-radius: var(--xdev-radius-md); }
 h3 { margin: 0 0 var(--xdev-space-3); color: var(--xdev-text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
 .deps-list { display: grid; gap: var(--xdev-space-2); }

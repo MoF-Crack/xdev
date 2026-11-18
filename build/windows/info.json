@@ -1,15 +1,19 @@
 {
-	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
-	},
-	"info": {
-		"0000": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
-			"CompanyName": "{{.Info.CompanyName}}",
-			"FileDescription": "{{.Info.ProductName}}",
-			"LegalCopyright": "{{.Info.Copyright}}",
-			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
-		}
-	}
+  "fixed": {
+    "file_version": "{{XDEV_WINDOWS_VERSION}}",
+    "product_version": "{{XDEV_WINDOWS_VERSION}}",
+    "flags": "{{XDEV_PRERELEASE_FLAGS}}"
+  },
+  "info": {
+    "0000": {
+      "ProductVersion": "{{XDEV_VERSION}}",
+      "FileVersion": "{{XDEV_VERSION}}",
+      "CompanyName": "XDev",
+      "FileDescription": "XDev Development Environment Manager",
+      "ProductName": "XDev",
+      "OriginalFilename": "xdev.exe",
+      "InternalName": "xdev",
+      "Comments": "Cross-platform development environment manager"
+    }
+  }
 }

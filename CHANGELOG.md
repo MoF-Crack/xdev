@@ -3,6 +3,25 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-beta.2] - 2026-11-19
+
+本版更新 F2 流弧单 X 品牌、三主题与响应式 GUI。软件版本为 `1.0.0-beta.2`，发布 Tag 为 `v1.0.0-beta.2`。
+
+### Added
+
+- 三主主题：护眼·雾松、亮色·冰川、暗色·深空；顶部快速切换与设置页三张主题主卡。
+- F2 一体 `xdev` 字标（单个流弧 x + dev）及统一应用图标；文档截图标注测试示例数据。
+
+### Changed
+
+- 宽度 ≥ 1280 px 时，工具列表与非遮挡详情面板并排；窄屏继续使用详情抽屉。
+- 原生图标接入构建：Windows 实际嵌入多尺寸 ICO，macOS DMG 内提供带 ICNS 的 `XDev.app`，Linux 桌面入口使用应用图标。跨平台最终产物验收另行记录。
+
+### Compatibility
+
+- 保留午夜、极夜、余烬经典主题与已有主题偏好；当前工具链、筛选 tabs、安装会话契约及 CLI/TUI 入口不变。
+- 本地测试结果、平台验收与发布状态见 [发布说明](<docs/releases/1.0.0-beta.2.md#发布验证>)。
+
 ## [1.0.0-beta.1] - 2026-11-18
 
 本版完成 Catalog、安装会话、GUI 启动策略与 Wails 3 桌面运行时契约收敛，并统一构建与发布验证链。

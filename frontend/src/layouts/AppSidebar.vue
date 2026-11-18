@@ -1,6 +1,6 @@
 <template>
   <aside class="app-sidebar" :class="{ 'app-sidebar--compact': compact }">
-    <div class="app-sidebar__brand"><XDevLogo :decorative="!compact" /><strong v-if="!compact">XDev</strong></div>
+    <div class="app-sidebar__brand"><XDevLogo :variant="compact ? 'symbol' : 'wordmark'" /><p v-if="!compact" class="app-sidebar__description">{{ t('brand.tagline') }}</p></div>
     <nav :aria-label="t('nav.application_navigation')">
       <section v-for="group in groups" :key="group.key">
         <p v-if="!compact" class="app-sidebar__group">{{ group.label }}</p>
@@ -25,13 +25,16 @@ defineEmits(['select', 'toggle-compact']);
 <style scoped>
 .app-sidebar { width: 216px; min-width: 216px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--xdev-border-subtle); background: var(--xdev-bg-panel); transition: width var(--xdev-motion-normal) var(--xdev-ease-standard), min-width var(--xdev-motion-normal) var(--xdev-ease-standard); }
 .app-sidebar--compact { width: 56px; min-width: 56px; }
-.app-sidebar__brand { min-height: 64px; display: flex; align-items: center; gap: var(--xdev-space-2); padding: 0 var(--xdev-space-4); border-bottom: 1px solid var(--xdev-border-subtle); }
+.app-sidebar__brand { min-height: 104px; padding: 18px 22px 21px; }
+.app-sidebar__description { margin: 4px 0 0; font-size: 11px; color: var(--xdev-text-secondary); }
+.app-sidebar--compact .app-sidebar__brand { min-height: 86px; padding: 20px 10px; }
+.app-sidebar--compact .app-sidebar__brand :deep(svg) { width: 36px; height: 36px; }
 .app-sidebar__brand strong { color: var(--xdev-text-primary); font-size: var(--xdev-font-size-md); font-weight: 650; letter-spacing: 0.01em; }
-.app-sidebar__brand :deep(svg) { width: 26px; height: 26px; flex: 0 0 26px; }
+.app-sidebar__brand :deep(svg) { width: 144px; height: auto; max-width: 100%; }
 nav { flex: 1; padding: var(--xdev-space-4) var(--xdev-space-3); }
 section { margin-bottom: var(--xdev-space-3); }
-.app-sidebar__group { margin: var(--xdev-space-2) var(--xdev-space-3); color: var(--xdev-text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
-button { width: 100%; min-height: 36px; display: flex; align-items: center; gap: var(--xdev-space-3); margin: 2px 0; padding: 0 var(--xdev-space-3); border: 0; border-radius: var(--xdev-radius-sm); background: transparent; color: var(--xdev-text-secondary); cursor: pointer; text-align: left; transition: background var(--xdev-motion-fast) var(--xdev-ease-standard), color var(--xdev-motion-fast) var(--xdev-ease-standard); }
+.app-sidebar__group { margin: var(--xdev-space-2) var(--xdev-space-3); color: var(--xdev-text-secondary); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+button { width: 100%; min-height: 36px; display: flex; align-items: center; gap: var(--xdev-space-3); margin: 2px 0; padding: 0 var(--xdev-space-3); border: 0; border-radius: var(--xdev-radius-md); background: transparent; color: var(--xdev-text-secondary); cursor: pointer; text-align: left; transition: background var(--xdev-motion-fast) var(--xdev-ease-standard), color var(--xdev-motion-fast) var(--xdev-ease-standard); }
 button svg { width: 18px; height: 18px; flex: 0 0 18px; }
 button:hover { background: var(--xdev-bg-hover); color: var(--xdev-text-primary); }
 button.active { background: var(--xdev-accent-soft); color: var(--xdev-accent); box-shadow: inset 2px 0 0 var(--xdev-accent); font-weight: 600; }

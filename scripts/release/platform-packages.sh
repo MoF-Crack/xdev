@@ -9,11 +9,26 @@ STAGING="$(mktemp -d)"
 # STAGING is created here and never supplied by a caller.
 trap 'rm -rf -- "$STAGING"' EXIT
 if [[ "$OS" == darwin ]]; then
-  # Preserve the existing Apple Silicon DMG alongside canonical updater archives.
+  # Additional installer only: canonical updater tarballs keep one root xdev.
+  # Preserve the existing Apple Silicon DMG name, now with a real app bundle.
   if [[ "$ARCH" == arm64 ]]; then
-    mkdir -p "$STAGING/dmg"
-    cp "$BIN" "$STAGING/dmg/xdev"
-    chmod +x "$STAGING/dmg/xdev"
+    APP="$STAGING/dmg/XDev.app"
+    ICONSET="$STAGING/XDev.iconset"
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ICONSET"
+    cp "$BIN" "$APP/Contents/MacOS/xdev"
+    chmod +x "$APP/Contents/MacOS/xdev"
+    "${NODE:-node}" scripts/release/native-resources.mjs plist "$VERSION" "$APP/Contents/Info.plist"
+    for SIZE in 16 32 128 256 512; do
+      sips -z "$SIZE" "$SIZE" build/appicon.png --out "$ICONSET/icon_${SIZE}x${SIZE}.png" >/dev/null
+      DOUBLE=$((SIZE * 2))
+      sips -z "$DOUBLE" "$DOUBLE" build/appicon.png --out "$ICONSET/icon_${SIZE}x${SIZE}@2x.png" >/dev/null
+    done
+    iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/XDev.icns"
+    [[ -s "$APP/Contents/Resources/XDev.icns" ]] || { echo 'Missing macOS application icon' >&2; exit 1; }
+    # Set XDEV_DMG_APPLICATIONS_LINK=0 for an app-only disk image.
+    if [[ "${XDEV_DMG_APPLICATIONS_LINK:-1}" == 1 ]]; then
+      ln -s /Applications "$STAGING/dmg/Applications"
+    fi
     hdiutil create -volname XDev -srcfolder "$STAGING/dmg" -ov -format UDZO "$OUT/xdev-darwin-arm64-v${VERSION}.dmg"
   fi
   exit 0
@@ -57,9 +72,11 @@ if [[ "$ARCH" == amd64 ]]; then
   sudo apt-get install -y -qq ruby ruby-dev rpm
   sudo gem install fpm --version 1.16.0 --no-document
   PKGROOT="$STAGING/pkg"
-  mkdir -p "$PKGROOT/usr/bin"
+  mkdir -p "$PKGROOT/usr/bin" "$PKGROOT/usr/share/applications" "$PKGROOT/usr/share/icons/hicolor/256x256/apps"
   cp "$BIN" "$PKGROOT/usr/bin/xdev"
   chmod +x "$PKGROOT/usr/bin/xdev"
+  cp "$APPDIR/xdev.desktop" "$PKGROOT/usr/share/applications/xdev.desktop"
+  cp build/appicon.png "$PKGROOT/usr/share/icons/hicolor/256x256/apps/xdev.png"
   fpm -s dir -t deb -n xdev -v "$VERSION" -a amd64 --license MIT --depends libgtk-3-0 --depends libwebkit2gtk-4.1-0 --url https://github.com/MoF-Crack/xdev -C "$PKGROOT" -p "$OUT/xdev-${VERSION}-linux-amd64.deb"
   fpm -s dir -t rpm -n xdev -v "$VERSION" -a x86_64 --license MIT --depends gtk3 --depends webkit2gtk4.1 --url https://github.com/MoF-Crack/xdev -C "$PKGROOT" -p "$OUT/xdev-${VERSION}-linux-amd64.rpm"
 fi
