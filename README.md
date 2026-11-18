@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-alpha.2** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-beta.1** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -59,12 +59,12 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 | 产物 | 说明 |
 |------|------|
-| `xdev-windows-amd64-v1.0.0-alpha.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-alpha.2.tar.gz` | Linux 单二进制（amd64） |
-| `xdev-1.0.0-alpha.2-x86_64.AppImage` | Linux AppImage（amd64） |
-| `xdev-1.0.0-alpha.2-aarch64.AppImage` | Linux AppImage（arm64） |
-| `xdev-darwin-arm64-v1.0.0-alpha.2.dmg` | macOS（Apple Silicon） |
-| `xdev-1.0.0-alpha.2-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
+| `xdev-windows-amd64-v1.0.0-beta.1.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-amd64-v1.0.0-beta.1.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-1.0.0-beta.1-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-beta.1-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-beta.1.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-beta.1-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
 | `SHA256SUMS` / `SHA256SUMS-darwin` | 校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
@@ -304,7 +304,7 @@ node scripts/build.mjs --skip-audit
 
 Lua / vfox 插件放到 `$XMDEV_HOME/plugins/`，无需改 Go 代码。
 
-## 1.0.0-alpha.2 要点
+## 1.0.0-beta.1 要点
 
 本版是架构优化与环境变量体系重建的合集：
 

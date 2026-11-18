@@ -60,4 +60,5 @@ async function main() {
   await checksums(resolve(args[0]),args[1]);
  } else throw new Error('Expected pack or checksums');
 }
-if(import.meta.url===pathToFileURL(process.argv[1]).href) await main();
+const invokedPath = process.argv[1];
+if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) await main();

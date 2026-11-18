@@ -3,6 +3,22 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-beta.1] - 2026-11-18
+
+本版完成 Catalog、安装会话、GUI 启动策略与 Wails 3 桌面运行时契约收敛，并统一构建与发布验证链。
+
+### Added
+
+- Wails 3.1.0 桌面适配、生成 bindings、单二进制 GUI/TUI/CLI/shim 分发。
+- 安装会话唯一身份、终态查询、取消与提交仲裁、形态特定归档缓存与已安装身份记录。
+- Catalog third-party 来源、缓存指纹与受信 embedded/latest 合并规则。
+- 统一构建脚本、严格 manifest 签名覆盖门禁、更新器归档消费验证与完整校验和。
+
+### Fixed
+
+- 修复 GUI 显式 home、`--no-path-fix` 及环境写入策略在桌面入口丢失的问题。
+- 修复 PM/sub-tool 后台进程脱离应用生命周期、安装取消确认和取消后焦点恢复问题。
+
 ## [1.0.0-alpha.2] - 2026-10-25
 
 本版是架构优化 + 环境变量体系重建的合集。四个阶段：P0（缺陷）、P1（path_append）、
