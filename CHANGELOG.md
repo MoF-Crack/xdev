@@ -5,7 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [1.0.0-beta.3] - 2026-11-19
 
-本版修复自更新版本发现与 GUI 下载、安装流程。软件版本为 `1.0.0-beta.3`，发布 Tag 为 `v1.0.0-beta.3`；发布构建、公开资产与最终验证待 CI 完成。
+本版修复自更新版本发现与 GUI 下载、安装流程。软件版本为 `1.0.0-beta.3`，发布 Tag 为 `v1.0.0-beta.3`；跨平台构建、签名、五平台打包与发布均已成功；beta.3 已设为 GitHub Latest，实际旧 beta.2 程序可检测到它。
 
 ### Fixed
 
@@ -20,7 +20,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 - 保留 beta.2 的 F2 品牌、主题与响应式 GUI，以及 Windows 单二进制、Linux amd64/arm64、macOS Intel/Apple Silicon 分发范围。
 - 自更新仅消费当前系统、架构与版本对应的 canonical 归档，强制通过 `SHA256SUMS` 校验后解压并安装；成功后由用户自行关闭并重新打开应用。
-- 旧版仍读取 GitHub Latest 元数据，新检测逻辑与 GUI 下载入口须升级后生效。beta.2 已标为 GitHub 非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 待发布后采用相同兼容标记。`beta` 版本号的 SemVer 预发布含义不变。
+- 旧版仍读取 GitHub Latest 元数据，新检测逻辑与 GUI 下载入口须升级后生效。beta.2 已标为 GitHub 非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 发布后已采用相同兼容标记。`beta` 版本号的 SemVer 预发布含义不变。
 - 旧 beta.2 无下载按钮时，先手动下载归档、解压并退出旧应用，再运行新程序；保留原配置目录和已安装工具。发布状态与操作步骤见 [发布说明](<docs/releases/1.0.0-beta.3.md>)。
 
 ## [1.0.0-beta.2] - 2026-11-19

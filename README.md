@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-beta.3（待 CI 发布）** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-beta.3** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,9 +55,9 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-1.0.0-beta.3 的跨平台构建、打包、发布与资产校验待 CI 完成，发布 Tag 为 `v1.0.0-beta.3`。请从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 查看发布状态并下载对应平台产物。下表为预定产物名，不表示资产已经可下载；最终结果见 [1.0.0-beta.3 发布说明](<docs/releases/1.0.0-beta.3.md#发布验证>)。
+[1.0.0-beta.3 已发布](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)，Tag 为 `v1.0.0-beta.3`。三平台构建、签名、五平台打包和发布均通过，[CI 记录](https://github.com/MoF-Crack/xdev/actions/runs/44455590112)可查；发布提供下列 11 项资产（含 `SHA256SUMS`）。它已设为 GitHub Latest，实际旧 beta.2 程序已验证能够检测到 beta.3，详见 [发布验证](<docs/releases/1.0.0-beta.3.md#发布验证>)。
 
-| 预定产物（待 CI 发布） | 说明 |
+| 发布产物 | 说明 |
 |------|------|
 | `xdev-windows-amd64-v1.0.0-beta.3.zip` | Windows 单二进制（GUI+TUI+CLI） |
 | `xdev-linux-amd64-v1.0.0-beta.3.tar.gz` / `xdev-linux-arm64-v1.0.0-beta.3.tar.gz` | Linux 单二进制（amd64 / arm64） |
@@ -73,9 +73,9 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 旧版升级和自更新
 
-旧版检测只读取 GitHub 的 `/releases/latest` 元数据，曾出现已安装 beta.2 却返回 alpha.3 的情况。beta.2 的 GitHub Release 已调整为非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 待 CI 发布完成后也将采用此兼容标记，使已安装 beta.2 能发现它。版本号 `1.0.0-beta.3` 在 SemVer 中仍属预发布，GitHub 标记是旧版兼容选择；新检测逻辑与下载入口须先升级才会生效。
+旧版检测只读取 GitHub 的 `/releases/latest` 元数据，曾出现已安装 beta.2 却返回 alpha.3 的情况。beta.2 的 GitHub Release 已调整为非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 也已采用此兼容标记，实际已安装 beta.2 程序能够发现它。版本号 `1.0.0-beta.3` 在 SemVer 中仍属预发布，GitHub 标记是旧版兼容选择；新检测逻辑与下载入口须先升级才会生效。
 
-如果旧 beta.2 没有下载按钮，请在 beta.3 资产发布后从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 手动下载对应平台归档并解压，退出旧 XDev，再运行解压后的新程序（Windows 为单个 `xdev.exe`），保留原配置目录和已安装工具。升级后，设置中的「检查更新」不受启动检查的 24 小时节流限制；发现更新会弹出确认框，选择「下载并安装」后显示真实下载字节及校验、解压、安装阶段，也可单独下载归档。失败会显示具体错误并可重试，不会提示已是最新版；下载或校验失败不会覆盖原二进制。安装成功后请自行关闭并重新打开 XDev，应用不会自动重启。详见 [beta.3 发布说明](<docs/releases/1.0.0-beta.3.md>)。
+旧版已有 CLI 自更新命令，可在退出 GUI 后运行 `xdev self update`。如果旧 beta.2 界面没有下载按钮，或网络导致命令下载失败，请从 [beta.3 发布页](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3) 手动下载对应平台归档并解压，退出旧 XDev，再运行解压后的新程序（Windows 为单个 `xdev.exe`），保留原配置目录和已安装工具。升级后，设置中的「检查更新」不受启动检查的 24 小时节流限制；发现更新会弹出确认框，选择「下载并安装」后显示真实下载字节及校验、解压、安装阶段，也可单独下载归档。失败会显示具体错误并可重试，不会提示已是最新版；下载或校验失败不会覆盖原二进制。安装成功后请自行关闭并重新打开 XDev，应用不会自动重启。详见 [beta.3 发布说明](<docs/releases/1.0.0-beta.3.md>)。
 
 ## 新版 GUI 与品牌（1.0.0-beta.2）
 
