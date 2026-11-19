@@ -110,11 +110,9 @@ build/local-*
 # issue/spec markdown is working state, not product source).
 .scratch/
 
-# OpenCode session artifacts: clipboard screenshots and config backups are
-# per-machine state, never part of the repository.
-.opencode/images/
-.opencode/*.bak_*
-.opencode/*.json
+# Repository OpenCode/Spec Kit integration retired on 2026-11-19.
+# Any client-created session state stays machine-local; see docs/agents/tooling.md.
+.opencode/
 
 # 临时排查记录（一次性的环境问题诊断、本机故障处理步骤），
 # 不属于产品源码。需要长期保留的结论请写进 docs/audits/ 或 CONTEXT.md。

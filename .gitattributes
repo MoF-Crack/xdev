@@ -16,7 +16,7 @@
 frontend/bindings/** -whitespace linguist-generated=true
 
 # Markdown hard line breaks intentionally use trailing spaces.
-build/manifest-changes-unsigned.md -whitespace
+docs/history/reports/2026-07-14-manifest-changes-unsigned.md -whitespace
 docs/history/2026-06-15-uni-env-design-vision.md -whitespace
 docs/download-cache-recovery.md -whitespace
 docs/security-audit-verification.md -whitespace

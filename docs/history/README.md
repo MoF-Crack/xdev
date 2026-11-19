@@ -19,3 +19,5 @@
 
 - `implementation-plans/`：已经执行、被替代或冻结的一次性实施计划。
 - `superpowers/`：Superpowers/SpecKit Agent 工作流的旧计划与设计稿（2026-10-22 从 `docs/superpowers/` 归档）。
+- `reports/`：时间点分析和安全变更记录的原始正文。
+- [2026 年整理索引](cleanup-2026/README.md)：四份旧文档的迁移位置、原始正文校验和与未完成事项映射；旧入口保留迁移指引。
