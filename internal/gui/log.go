@@ -1,9 +1,6 @@
-// log.go implements a log file writer for the GUI that captures
-// diagnostic output to <XMDevDir>/logs/gui.log with automatic rotation.
-//
-// The GUILogWriter implements io.Writer and is set as the default log
-// output via log.SetOutput. Log files are rotated when they exceed
-// 10 MB, keeping the 5 most recent files.
+// log.go captures GUI diagnostics in <XMDevDir>/logs/xdev-gui.log.
+// A new application session truncates the previous log. Reinitializing the
+// same active log during first-run setup preserves early startup diagnostics.
 //
 // This ensures GUI errors are captured to disk even when the user
 // cannot see the console output (e.g. when launched from a shortcut).
@@ -24,9 +21,12 @@ import (
 // making it easy to diagnose startup issues like window flashing,
 // crashes, and slow initialization.
 var (
-	logFileMu sync.Mutex
-	logFile   *os.File
-	logPath   string
+	logLifecycleMu    sync.Mutex
+	logFileMu         sync.Mutex
+	logFile           *os.File
+	logPath           string
+	previousLogOutput io.Writer
+	standardLogOutput io.Writer = logWriter{}
 )
 
 // pendingLogs holds log messages written before the logger is
@@ -47,31 +47,33 @@ var (
 // Any log messages written before InitLogger is called are
 // buffered and flushed to the file once it is opened.
 func InitLogger(dir string) {
-	logFileMu.Lock()
-	defer logFileMu.Unlock()
-
 	if dir == "" {
 		return
+	}
+	logLifecycleMu.Lock()
+	defer logLifecycleMu.Unlock()
+
+	path := filepath.Join(dir, "xdev-gui.log")
+	logFileMu.Lock()
+	alreadyOpen := logFile != nil && logPath == path
+	logFileMu.Unlock()
+	if alreadyOpen {
+		return // InitConfig must not erase diagnostics from first-run startup.
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	logPath = filepath.Join(dir, "xdev-gui.log")
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return
 	}
-	logFile = f
+	if previousLogOutput == nil {
+		previousLogOutput = log.Writer()
+	}
+	logFileMu.Lock()
+	old := logFile
+	logFile, logPath = f, path
 	_, _ = fmt.Fprintf(f, "\n=== XDev GUI started at %s ===\n", time.Now().Format("2006-01-02 15:04:05.000"))
-
-	// Bridge the standard library logger (used by internal/downloader,
-	// internal/installer, etc.) into the GUI log file so download errors,
-	// SHA mismatches, and retry/fallback decisions are captured on disk
-	// instead of being lost to stderr (which is invisible in a Wails GUI).
-	log.SetOutput(io.MultiWriter(f, logWriter{}))
-
-	// Flush any pending logs that were written before the logger
-	// was initialised.
 	pendingMu.Lock()
 	for _, msg := range pendingLogs {
 		_, _ = f.WriteString(msg)
@@ -79,16 +81,36 @@ func InitLogger(dir string) {
 	pendingLogs = nil
 	pendingMu.Unlock()
 	_ = f.Sync()
+	logFileMu.Unlock()
+
+	// Route standard logs once through the synchronized GUI writer. Do not hold
+	// logFileMu while changing log.Output: a concurrent standard log can already
+	// own log's writer lock and be waiting for logFileMu.
+	log.SetOutput(standardLogOutput)
+	if old != nil {
+		_ = old.Close()
+	}
 }
 
 // CloseLogger flushes and closes the log file.
 func CloseLogger() {
+	logLifecycleMu.Lock()
+	defer logLifecycleMu.Unlock()
 	logFileMu.Lock()
-	defer logFileMu.Unlock()
-	if logFile != nil {
-		_, _ = fmt.Fprintf(logFile, "=== XDev GUI closed at %s ===\n", time.Now().Format("2006-01-02 15:04:05.000"))
-		logFile.Close()
+	old := logFile
+	if old != nil {
+		_, _ = fmt.Fprintf(old, "=== XDev GUI closed at %s ===\n", time.Now().Format("2006-01-02 15:04:05.000"))
 		logFile = nil
+	}
+	logFileMu.Unlock()
+	if previousLogOutput != nil {
+		if log.Writer() == standardLogOutput {
+			log.SetOutput(previousLogOutput)
+		}
+		previousLogOutput = nil
+	}
+	if old != nil {
+		_ = old.Close()
 	}
 }
 

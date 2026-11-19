@@ -39,11 +39,16 @@ func runSelfCheck(allowPrompt bool) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	operation, closeNetwork := update.WithProxy(context.Background(), cfg.Proxy)
+	defer closeNetwork()
+	ctx, cancel := context.WithTimeout(operation, 30*time.Second)
 	defer cancel()
 
+	// Policy still owns its existing 24h/mode/ignore behavior. Its context
+	// carries the full config's network snapshot despite Core having no proxy.
 	policy := update.NewPolicy()
 	act, res := policy.CheckPolicy(ctx, &cfg.Core, cfg.Core.CacheDir)
+	apply := func() error { return runSelfUpdateContext(operation) }
 	switch act {
 	case update.ActionAsk:
 		// 非 TTY / --no-path-fix / TUI 入口：降级为日志或一行提示，不读 stdin。
@@ -51,7 +56,7 @@ func runSelfCheck(allowPrompt bool) error {
 			log.Printf("xdev: 有可用更新 v%s -> v%s（运行 'xdev self update' 更新）", res.CurrentVersion, res.LatestVersion)
 			return nil
 		}
-		err := promptSelfUpdate(res, os.Stdin, cfg.Core.CacheDir, runSelfUpdate)
+		err := promptSelfUpdate(res, os.Stdin, cfg.Core.CacheDir, apply)
 		if errors.Is(err, errQuitSelfUpdate) {
 			os.Exit(0)
 		}
@@ -60,7 +65,7 @@ func runSelfCheck(allowPrompt bool) error {
 		log.Printf("xdev: 有可用更新 v%s -> v%s（运行 'xdev self update' 更新）", res.CurrentVersion, res.LatestVersion)
 	case update.ActionUpdate:
 		log.Printf("xdev: 自动更新 v%s -> v%s ...", res.CurrentVersion, res.LatestVersion)
-		if err := runSelfUpdate(); err != nil {
+		if err := apply(); err != nil {
 			log.Printf("xdev: 自动更新失败: %v", err)
 		}
 	default:

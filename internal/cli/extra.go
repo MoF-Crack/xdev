@@ -190,7 +190,14 @@ func runSelfInstall(cfg *config.Config) error {
 // runSelfUpdate 执行 xdev 自更新（self update 命令与交互入口共用，
 // Spec 034 复用优先）。
 func runSelfUpdate() error {
-	ctx := context.Background()
+	ctx, closeNetwork := update.WithProxy(context.Background(), Cfg().Proxy)
+	defer closeNetwork()
+	return runSelfUpdateContext(ctx)
+}
+
+// runSelfUpdateContext keeps startup checks, their refetch and both downloads on
+// the same network snapshot. Manual commands create a fresh snapshot above.
+func runSelfUpdateContext(ctx context.Context) error {
 	v := version.Version
 	fmt.Printf("Current version: %s\n", v)
 	fmt.Println("Checking for updates...")
