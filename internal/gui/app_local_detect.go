@@ -240,49 +240,132 @@ func (a *App) invalidateDashboardCache() {
 	a.dashMu.Unlock()
 }
 
-// CheckForUpdate checks if a new version is available.
+// guiSelfUpdateMu is shared by manual checks/applies and startup self-checks.
+// Every GUI instance in this process updates the same executable; reject a
+// second operation instead of queuing another replacement after the first one.
+var guiSelfUpdateMu sync.Mutex
+
+// CheckForUpdate preserves the existing Wails binding. Private dependency seams
+// let GUI tests exercise the complete adapter without replacing the test binary.
 func (a *App) CheckForUpdate() UpdateCheckResult {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	result, err := update.Check(ctx, version.Version)
-	if err != nil {
-		return UpdateCheckResult{
-			Error:     err.Error(),
-			HasUpdate: false,
-			Current:   version.Version,
-			Latest:    "",
-		}
-	}
-	return UpdateCheckResult{
-		HasUpdate: result.HasUpdate,
-		Current:   result.CurrentVersion,
-		Latest:    result.LatestVersion,
-	}
+	return a.checkForUpdateWith(update.Check)
 }
 
-// ApplyUpdate downloads and applies the latest update.
-// Spec 034: GUI 场景更新目标是同目录 CLI 二进制（xdev.exe）——
-// 运行中的 GUI 壳（xdev-gui.exe）不能被替换；CLI 归档只写 CLI 二进制。
-func (a *App) ApplyUpdate() UpdateCheckResult {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+func (a *App) checkForUpdateWith(check func(context.Context, string) (*update.CheckResult, error)) UpdateCheckResult {
+	if !guiSelfUpdateMu.TryLock() {
+		return UpdateCheckResult{Current: version.Version, Error: "an XDev self-update operation is already in progress"}
+	}
+	defer guiSelfUpdateMu.Unlock()
+	ctx, cancel := context.WithTimeout(a.rootContext(), 15*time.Second)
 	defer cancel()
-
-	target := cliBinaryNextToSelf()
-	if target == "" {
-		return UpdateCheckResult{Error: "未找到与 GUI 同目录的 xdev CLI 二进制", Current: version.Version}
+	if err := ctx.Err(); err != nil {
+		return UpdateCheckResult{Current: version.Version, Error: err.Error()}
 	}
-
-	result, err := update.Check(ctx, version.Version)
+	result, err := check(ctx, version.Version)
 	if err != nil {
-		return UpdateCheckResult{Error: err.Error(), Current: version.Version}
+		return UpdateCheckResult{Current: version.Version, Error: err.Error()}
 	}
-	if !result.HasUpdate {
-		return UpdateCheckResult{HasUpdate: false, Current: version.Version, Latest: result.LatestVersion}
+	return guiUpdateResult(result)
+}
+
+// ApplyUpdate refetches the release, downloads, verifies and installs it through
+// the existing binding. cliBinaryNextToSelf is the existing target resolver;
+// in the current single-binary model it resolves the running XDev executable.
+// This method never restarts the application.
+func (a *App) ApplyUpdate() UpdateCheckResult {
+	return a.applyUpdateWith(update.Check, cliBinaryNextToSelf, update.ApplyToWithProgress)
+}
+
+func (a *App) applyUpdateWith(
+	check func(context.Context, string) (*update.CheckResult, error),
+	target func() string,
+	apply func(context.Context, *update.CheckResult, string, func(update.Progress)) error,
+) UpdateCheckResult {
+	if !guiSelfUpdateMu.TryLock() {
+		return UpdateCheckResult{Current: version.Version, Error: "an XDev self-update operation is already in progress"}
 	}
-	if err := update.ApplyTo(ctx, result, target); err != nil {
-		return UpdateCheckResult{Error: err.Error(), HasUpdate: true, Current: version.Version, Latest: result.LatestVersion}
+	defer guiSelfUpdateMu.Unlock()
+	ctx, cancel := context.WithTimeout(a.rootContext(), 10*time.Minute)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return UpdateCheckResult{Current: version.Version, Error: err.Error()}
 	}
-	return UpdateCheckResult{HasUpdate: true, Current: version.Version, Latest: result.LatestVersion}
+
+	result, err := check(ctx, version.Version)
+	if err != nil {
+		return UpdateCheckResult{Current: version.Version, Error: err.Error()}
+	}
+	view := guiUpdateResult(result)
+	if view.Error != "" || !view.HasUpdate {
+		// A second check can find no update. It did not install anything and
+		// must not return applied=true merely because no error occurred.
+		return view
+	}
+	exe := target()
+	if exe == "" {
+		view.Error = "cannot locate the XDev executable to update"
+		return view
+	}
+	if err := apply(ctx, result, exe, func(progress update.Progress) {
+		a.emitSelfUpdateProgress(result, progress)
+	}); err != nil {
+		view.Error = err.Error()
+		return view
+	}
+	view.Applied = true
+	return view
+}
+
+// guiUpdateResult only projects version/release data; applied defaults to false.
+// Download links are actual archive URLs from the selected release, never
+// guessed download pages or fabricated app APIs.
+func guiUpdateResult(result *update.CheckResult) UpdateCheckResult {
+	if result == nil {
+		return UpdateCheckResult{Current: version.Version, Error: "update check returned no result"}
+	}
+	view := UpdateCheckResult{HasUpdate: result.HasUpdate, Current: result.CurrentVersion, Latest: result.LatestVersion}
+	if view.Current == "" {
+		view.Current = version.Version
+	}
+	if view.HasUpdate && view.Latest == "" {
+		view.Error = "update check returned no release version"
+		return view
+	}
+	if result.Release != nil {
+		for _, asset := range result.Release.Assets {
+			if !strings.HasPrefix(asset.Name, "xdev-") || (!strings.HasSuffix(asset.Name, ".zip") && !strings.HasSuffix(asset.Name, ".tar.gz")) || !strings.HasPrefix(asset.BrowserDownloadURL, "https://") {
+				continue
+			}
+			if view.DownloadURLs == nil {
+				view.DownloadURLs = make(map[string]string)
+			}
+			view.DownloadURLs[asset.Name] = asset.BrowserDownloadURL
+		}
+	}
+	return view
+}
+
+// emitSelfUpdateProgress is also used by startup auto-update: preserve the
+// backend's synchronous phase/byte/percent snapshot on the existing event.
+func (a *App) emitSelfUpdateProgress(result *update.CheckResult, progress update.Progress, source ...string) {
+	if result == nil {
+		return
+	}
+	origin := "manual"
+	if len(source) > 0 && source[0] == "startup" {
+		origin = "startup"
+	}
+	a.emitEvent(selfUpdateEvent, map[string]interface{}{
+		"action":          "progress",
+		"source":          origin,
+		"current":         result.CurrentVersion,
+		"latest":          result.LatestVersion,
+		"applied":         false,
+		"phase":           progress.Phase,
+		"downloadedBytes": progress.DownloadedBytes,
+		"totalBytes":      progress.TotalBytes,
+		"percent":         progress.Percent,
+	})
 }
 
 // ScanLocalTools scans the system for all locally installed development tools

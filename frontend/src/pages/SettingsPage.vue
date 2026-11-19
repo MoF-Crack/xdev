@@ -147,11 +147,28 @@
           </template>
         </FormSection>
         <FormSection :title="t('settings.self_update')">
-          <StatusBadge v-if="updateInfo" :tone="updateInfo.hasUpdate ? 'warning' : 'success'">
-            {{ updateInfo.hasUpdate ? t('update_available', updateInfo) : t('up_to_date') }}
-          </StatusBadge>
+          <div class="self-update-status" data-testid="settings-self-update" :aria-busy="selfUpdateBusy">
+            <p v-if="updateChecking" role="status">{{ t('self_update.checking') }}</p>
+            <p v-else-if="selfUpdating" role="status">{{ t('self_update.preparing') }}</p>
+            <div v-else-if="selfUpdateError" class="self-update-status__error" role="alert">
+              <strong>{{ t(updateError?.kind === 'apply' ? 'self_update.apply_failed' : 'update_check_failed') }}</strong>
+              <p>{{ selfUpdateError }}</p>
+            </div>
+            <template v-else-if="updateInfo?.applied === true">
+              <StatusBadge tone="success">{{ t('self_update.applied', updateInfo) }}</StatusBadge>
+              <p role="status">{{ t('self_update.restart_hint') }}</p>
+            </template>
+            <StatusBadge v-else-if="updateInfo?.hasUpdate === true" tone="warning">{{ t('update_available', updateInfo) }}</StatusBadge>
+            <StatusBadge v-else-if="updateInfo?.hasUpdate === false" tone="success">{{ t('up_to_date') }}</StatusBadge>
+            <p v-if="selfUpdateBusy" id="settings-self-update-busy">{{ t('self_update.busy') }}</p>
+          </div>
           <template #actions>
-            <button class="xdev-btn xdev-btn--primary" data-action="check-update" @click="$emit('check-update')">{{ t('btn.check_update') }}</button>
+            <button type="button" class="xdev-btn xdev-btn--secondary" data-action="check-update" :disabled="selfUpdateBusy"
+              :aria-label="t('btn.check_update')" :aria-describedby="selfUpdateBusy ? 'settings-self-update-busy' : undefined" @click="$emit('check-update')">{{ t('btn.check_update') }}</button>
+            <button v-if="selfUpdateError" type="button" class="xdev-btn xdev-btn--primary" data-action="retry-self-update" :disabled="selfUpdateBusy"
+              :aria-label="t('btn.retry')" @click="$emit('retry-self-update')">{{ t('btn.retry') }}</button>
+            <button v-else-if="updateInfo?.hasUpdate === true && updateInfo?.applied !== true" type="button" class="xdev-btn xdev-btn--primary" data-action="open-self-update" :disabled="selfUpdateBusy"
+              :aria-label="t('self_update.download_install')" :aria-describedby="selfUpdateBusy ? 'settings-self-update-busy' : undefined" @click="$emit('open-self-update')">{{ t('self_update.download_install') }}</button>
           </template>
         </FormSection>
         <FormSection :title="t('settings.diagnostics')">
@@ -198,6 +215,10 @@ const p = defineProps({
   proxyProbes: { type: Array, default: () => [] },
   importResult: Object,
   updateInfo: Object,
+  updateChecking: Boolean,
+  selfUpdating: Boolean,
+  updateBusy: Boolean,
+  updateError: { type: Object, default: null },
   diagResults: { type: Array, default: () => [] },
   cacheBreakdown: Object,
   archiveRetention: { type: String, default: 'immediate' },
@@ -212,12 +233,14 @@ defineEmits([
   'update:theme', 'update:locale', 'update:path-mode', 'update:migration-mode',
   'mirror-update', 'mirror-test', 'mirror-remove', 'mirror-add', 'mirror-save',
   'update:proxy', 'proxy-test', 'proxy-save', 'proxy-probe', 'apply-proxy-probe',
-  'profile-export', 'profile-import', 'check-update', 'run-diagnostics', 'cache-clean', 'update:archive-retention',
+  'profile-export', 'profile-import', 'check-update', 'open-self-update', 'retry-self-update', 'run-diagnostics', 'cache-clean', 'update:archive-retention',
   'save-sniff-strategy', 'install-sniff-service', 'uninstall-sniff-service', 'refresh-sniff-status',
   'preview-custom-tool', 'add-custom-tool', 'remove-custom-tool',
 ]);
 
 const t = p.t;
+const selfUpdateBusy = computed(() => p.updateBusy || p.updateChecking || p.selfUpdating);
+const selfUpdateError = computed(() => p.updateError?.message || p.updateInfo?.error || '');
 
 const customToolForm = reactive({
   name: '',
@@ -252,6 +275,11 @@ const diagColumns = computed(() => [
 .sniff-status { display: flex; align-items: center; gap: var(--xdev-space-3); flex-wrap: wrap; margin-top: var(--xdev-space-3); }
 .sniff-status__detail { color: var(--xdev-text-muted); font-size: var(--xdev-font-size-sm); }
 .sniff-status__error { color: var(--xdev-error); font-size: var(--xdev-font-size-sm); }
+.self-update-status { display: grid; gap: var(--xdev-space-2); color: var(--xdev-text-secondary); line-height: 1.6; }
+.self-update-status p { margin: 0; }
+.self-update-status__error { padding: var(--xdev-space-3); border: 1px solid var(--xdev-error); border-radius: var(--xdev-radius-sm); background: var(--xdev-error-soft); color: var(--xdev-error); overflow-wrap: anywhere; }
+.self-update-status__error p { margin-top: var(--xdev-space-2); white-space: pre-wrap; }
+[data-action="check-update"]:disabled, [data-action="retry-self-update"]:disabled, [data-action="open-self-update"]:disabled { cursor: not-allowed; opacity: .6; }
 :deep(.xdev-btn), :deep(select), :deep(input:not([type="checkbox"])) { min-height: 34px; border-radius: var(--xdev-radius-sm); font-size: var(--xdev-font-size-md); }
 :deep(select), :deep(input:not([type="checkbox"])) { width: 100%; max-width: 480px; padding: 0 var(--xdev-space-3); border: 1px solid var(--xdev-border-subtle); background: var(--xdev-bg-panel); color: var(--xdev-text-primary); }
 :deep(select:focus), :deep(input:not([type="checkbox"]):focus) { border-color: var(--xdev-accent); }

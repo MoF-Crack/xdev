@@ -3,6 +3,26 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-beta.3] - 2026-11-19
+
+本版修复自更新版本发现与 GUI 下载、安装流程。软件版本为 `1.0.0-beta.3`，发布 Tag 为 `v1.0.0-beta.3`；发布构建、公开资产与最终验证待 CI 完成。
+
+### Fixed
+
+- 自更新改查 GitHub Release 列表，最多 5 页、每页 100 项，从中选择当前平台可安装的最高 SemVer，修复旧版读取 `/releases/latest` 时返回 alpha.3、漏掉较新 beta 的问题。
+- 按当前版本选择更新通道：预发布安装允许更新至更高预发布或稳定版本；稳定安装同时检查版本号与 GitHub Pre-release 标记，不因 beta 被错误标为非 Pre-release 而升级到 beta。
+- GUI 手动「检查更新」发现更新后弹出确认框，支持「下载并安装」与单独下载归档链接；检查失败显示错误，不再误报已是最新版。
+- 下载进度使用真实字节，依次呈现校验、解压与安装阶段；仅后端返回 `applied: true` 才显示安装成功。失败在对话框内保留错误并支持重试，下载或校验失败不覆盖原二进制。
+- 主下载入口超时或返回临时 HTTP 错误时，有界尝试同仓库发布元数据提供的 GitHub 资产 API；重试清空部分下载，仍强制校验 SHA-256，错误提示不包含签名 URL 查询参数。
+- 启动自动更新、手动检查与安装共享互斥锁，防止并发替换；对话框增加焦点管理及重复点击保护。手动检查不受启动检查的 24 小时节流限制，`xdev gui` 入口不再提前消耗启动检查额度。
+
+### Compatibility
+
+- 保留 beta.2 的 F2 品牌、主题与响应式 GUI，以及 Windows 单二进制、Linux amd64/arm64、macOS Intel/Apple Silicon 分发范围。
+- 自更新仅消费当前系统、架构与版本对应的 canonical 归档，强制通过 `SHA256SUMS` 校验后解压并安装；成功后由用户自行关闭并重新打开应用。
+- 旧版仍读取 GitHub Latest 元数据，新检测逻辑与 GUI 下载入口须升级后生效。beta.2 已标为 GitHub 非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 待发布后采用相同兼容标记。`beta` 版本号的 SemVer 预发布含义不变。
+- 旧 beta.2 无下载按钮时，先手动下载归档、解压并退出旧应用，再运行新程序；保留原配置目录和已安装工具。发布状态与操作步骤见 [发布说明](<docs/releases/1.0.0-beta.3.md>)。
+
 ## [1.0.0-beta.2] - 2026-11-19
 
 本版更新 F2 流弧单 X 品牌、三主题与响应式 GUI。软件版本为 `1.0.0-beta.2`，发布 Tag 为 `v1.0.0-beta.2`。

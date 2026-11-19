@@ -254,10 +254,9 @@ func newGuiCmd() *cobra.Command {
 		Use:   "gui",
 		Short: "Launch the cross-platform desktop GUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Spec 034: 交互入口启动自检（GUI 不弹 stdin 提示）
-			if err := runSelfCheck(false); err != nil {
-				return err
-			}
+			// The desktop owns its startup check and progress UI. Checking here
+			// would consume the shared 24h record before the GUI can show its
+			// prompt, or install an update before a desktop window exists.
 			if configuredGUILauncher != nil {
 				return configuredGUILauncher(Cfg(), NoPathFix())
 			}

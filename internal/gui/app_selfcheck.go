@@ -1,59 +1,71 @@
-// app_selfcheck.go — Spec 034: GUI 启动自检更新。
-//
-// 复用 internal/update 的策略层（CheckPolicy）与既有 ApplyUpdate 绑定：
-// 启动 2s 后异步按配置自检；prompt → 前端三选对话框（事件驱动）；
-// auto → 后台应用（目标为同目录 CLI 二进制）；notify → 前端提示。
-// 任何失败静默降级为日志，绝不阻塞启动。
+// app_selfcheck.go — startup and manual updates share the same installation
+// lock, release selection, progress envelope and authoritative terminal result.
 package gui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/update"
 )
 
-// selfUpdateEvent 是前端监听的自检事件名（单一通道，payload.action 区分场景）。
 const selfUpdateEvent = "self-update"
 
-// runStartupSelfCheck 在 GUI 启动 2s 后执行（goroutine 调用，
-// 与 EnsureSelfInstalled / FixLocalVersions 同模式）。
+// runStartupSelfCheck is called asynchronously after the desktop is ready.
 func (a *App) runStartupSelfCheck() {
+	a.runStartupSelfCheckWith(update.NewPolicy(), cliBinaryNextToSelf, update.ApplyToWithProgress)
+}
+
+// Dependencies stay private: tests exercise the real adapter without replacing
+// the test executable or performing a network request.
+func (a *App) runStartupSelfCheckWith(
+	policy *update.Policy,
+	target func() string,
+	apply func(context.Context, *update.CheckResult, string, func(update.Progress)) error,
+) {
 	cfg := a.getCfg()
-	if cfg == nil {
+	if cfg == nil || !guiSelfUpdateMu.TryLock() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(a.rootContext(), 30*time.Second)
+	defer guiSelfUpdateMu.Unlock()
+	// Discovery has its own 15-second bound; an automatic download has the same
+	// 10-minute bound as a manual apply, rather than a 30-second startup timer.
+	ctx, cancel := context.WithTimeout(a.rootContext(), 10*time.Minute)
 	defer cancel()
+	if ctx.Err() != nil {
+		return
+	}
 
-	policy := update.NewPolicy()
 	act, res := policy.CheckPolicy(ctx, &cfg.Core, cfg.Core.CacheDir)
+	if ctx.Err() != nil || res == nil {
+		return
+	}
 	switch act {
 	case update.ActionAsk:
 		a.emitSelfUpdate("ask", res)
 	case update.ActionNotify:
 		a.emitSelfUpdate("notify", res)
 	case update.ActionUpdate:
-		// 更新目标是同目录 CLI 二进制（xdev.exe），不是运行中的 GUI 壳。
-		target := cliBinaryNextToSelf()
-		if target == "" {
-			logInfo("[self-update] auto: no CLI binary next to GUI, skipping auto update")
+		exe := target()
+		if exe == "" {
+			a.emitSelfUpdate("applied-error", res, fmt.Errorf("cannot locate the XDev executable to update"))
 			return
 		}
-		logInfo("[self-update] auto-updating CLI binary %s -> %s", target, res.LatestVersion)
-		if err := update.ApplyTo(ctx, res, target); err != nil {
+		logInfo("[self-update] auto-updating XDev %s -> %s", exe, res.LatestVersion)
+		if err := apply(ctx, res, exe, func(progress update.Progress) {
+			a.emitSelfUpdateProgress(res, progress, "startup")
+		}); err != nil {
 			logWarn("[self-update] auto update failed: %v", err)
-			a.emitSelfUpdate("applied-error", res)
+			a.emitSelfUpdate("applied-error", res, err)
 			return
 		}
 		a.emitSelfUpdate("applied", res)
-	default: // ActionSkip：静默
 	}
 }
 
-// cliBinaryNextToSelf 单二进制模型下返回当前可执行文件自身
-// （GUI/CLI 同一二进制，更新目标即自身；Windows 上通过 rename 替换运行中文件）。
+// CLI, GUI and shim dispatch use the same distributed executable.
 func cliBinaryNextToSelf() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -62,19 +74,26 @@ func cliBinaryNextToSelf() string {
 	return exe
 }
 
-// emitSelfUpdate 向前端推送自检事件（action: ask|notify|applied|applied-error）。
-func (a *App) emitSelfUpdate(action string, res *update.CheckResult) {
-	if a.ctx == nil || res == nil {
+func (a *App) emitSelfUpdate(action string, res *update.CheckResult, failures ...error) {
+	if res == nil {
 		return
 	}
-	a.emitEvent(selfUpdateEvent, map[string]interface{}{
-		"action":  action,
-		"current": res.CurrentVersion,
-		"latest":  res.LatestVersion,
-	})
+	view := guiUpdateResult(res)
+	payload := map[string]interface{}{
+		"action":       action,
+		"source":       "startup",
+		"current":      view.Current,
+		"latest":       view.Latest,
+		"hasUpdate":    view.HasUpdate,
+		"applied":      action == "applied",
+		"downloadUrls": view.DownloadURLs,
+	}
+	if len(failures) > 0 && failures[0] != nil {
+		payload["error"] = failures[0].Error()
+	}
+	a.emitEvent(selfUpdateEvent, payload)
 }
 
-// IgnoreSelfUpdate 记录用户「忽略并继续」的版本（前端三选回调）。
 func (a *App) IgnoreSelfUpdate(latest string) {
 	cfg := a.getCfg()
 	if cfg == nil {

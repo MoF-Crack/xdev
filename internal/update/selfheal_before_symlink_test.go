@@ -120,8 +120,8 @@ func TestHealInterruptedUpdate_EmptyPath(t *testing.T) {
 	}
 }
 
-// 源码级守卫：ApplyTo 里 healInterruptedUpdate 的调用必须出现在
-// EvalSymlinks 之前 —— 这正是本次修复的实质。
+// 源码级守卫：ApplyTo 委派到 ApplyToWithProgress 后，自愈仍必须在
+// EvalSymlinks 之前 —— 新接口不能倒置既有的崩溃修复顺序。
 //
 // 为什么用源码断言：ApplyTo 需要真实 release 资产与网络才能跑到自愈分支，
 // 行为测试要拉起整套 mock；而这条缺陷的本质是**语句顺序**，
@@ -133,9 +133,9 @@ func TestApplyTo_HealsBeforeEvalSymlinks(t *testing.T) {
 	}
 	src := string(data)
 
-	idx := indexOfFunc(src, "func ApplyTo(")
+	idx := indexOfFunc(src, "func ApplyToWithProgress(")
 	if idx < 0 {
-		t.Fatal("ApplyTo 未找到")
+		t.Fatal("ApplyToWithProgress 未找到")
 	}
 	body := src[idx:]
 	if end := indexOfFunc(body[1:], "\nfunc "); end >= 0 {
@@ -145,10 +145,10 @@ func TestApplyTo_HealsBeforeEvalSymlinks(t *testing.T) {
 	healPos := indexOf(body, "healInterruptedUpdate(exePath)")
 	evalPos := indexOf(body, "filepath.EvalSymlinks(exePath)")
 	if healPos < 0 {
-		t.Fatal("ApplyTo 必须调用 healInterruptedUpdate(exePath) —— 崩溃态自愈不能只藏在 replaceBinaryWindows 里")
+		t.Fatal("ApplyToWithProgress 必须调用 healInterruptedUpdate(exePath) —— 崩溃态自愈不能只藏在 replaceBinaryWindows 里")
 	}
 	if evalPos < 0 {
-		t.Fatal("ApplyTo 里未找到 EvalSymlinks")
+		t.Fatal("ApplyToWithProgress 里未找到 EvalSymlinks")
 	}
 	if healPos > evalPos {
 		t.Error("healInterruptedUpdate 必须出现在 EvalSymlinks 之前：" +

@@ -171,7 +171,7 @@ func TestCheckForUpdate_ErrorBranch_JSONFormat(t *testing.T) {
 	}
 
 	assertJSONKeys(t, data, []string{
-		"error", "hasUpdate", "current", "latest",
+		"error", "hasUpdate", "applied", "current", "latest",
 	})
 
 	var m map[string]interface{}
@@ -202,7 +202,7 @@ func TestCheckForUpdate_SuccessBranch_JSONFormat(t *testing.T) {
 
 	// 成功时 error 为空，omitempty 导致不出现在 JSON 中
 	assertJSONKeys(t, data, []string{
-		"hasUpdate", "current", "latest",
+		"hasUpdate", "applied", "current", "latest",
 	})
 
 	var m map[string]interface{}

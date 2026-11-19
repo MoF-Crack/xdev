@@ -216,10 +216,12 @@ type DashboardStats struct {
 
 // UpdateCheckResult contains the result of checking for updates.
 type UpdateCheckResult struct {
-	HasUpdate bool   `json:"hasUpdate"`
-	Current   string `json:"current"`
-	Latest    string `json:"latest"`
-	Error     string `json:"error,omitempty"`
+	HasUpdate    bool              `json:"hasUpdate"`
+	Applied      bool              `json:"applied"` // true only after an update was actually installed
+	Current      string            `json:"current"`
+	Latest       string            `json:"latest"`
+	DownloadURLs map[string]string `json:"downloadUrls,omitempty"`
+	Error        string            `json:"error,omitempty"`
 }
 
 // DiagnosticResult represents a single diagnostic check result.
