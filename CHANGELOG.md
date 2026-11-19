@@ -5,7 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [1.0.0-rc.1] - 2026-11-19
 
-RC1 修复 Windows GUI 常驻控制台与自更新代理配置。目标软件版本为 `1.0.0-rc.1`，Tag 为 `v1.0.0-rc.1`，计划作为 GitHub Pre-release 发布；本地验证已完成，发布 CI 与 11 项公开资产验收待完成。状态见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)。
+RC1 修复 Windows GUI 常驻控制台与自更新代理配置。目标软件版本为 `1.0.0-rc.1`，Tag 为 `v1.0.0-rc.1`，已作为 GitHub Pre-release 发布；正式 CI、签名、Linux race、在线 E2E、五平台打包均通过，11 项资产已上传。公开 SHA256SUMS 与 Release API 摘要一致；受本机网络限制，安装包本体未能全部逐项下载。状态见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)。
 
 ### Fixed
 
@@ -28,7 +28,7 @@ RC1 修复 Windows GUI 常驻控制台与自更新代理配置。目标软件版
 
 - 本地 Go 33 个包、`go vet ./...`、desktop 与 CLI integration 验证通过；原生资源与打包契约 17 项通过、0 跳过，重新生成 bindings 与跟踪文件一致。
 - Windows 四种真实 GUI 启动场景均显示窗口、无控制台关联，`WM_CLOSE` 后退出码 0；自更新经真实 CONNECT 代理与可信 TLS 完成元数据、归档、校验和、API 回退及临时目标安装，旧实现对照失败、修复实现通过。
-- Windows race 检查因本机 C 环境缺少头文件而未执行；本次发布 CI 的 Linux race 与跨平台资产结果待补充，既往 beta 的 CI 结果不代替本版结果。
+- 正式标签 CI（[44562550013](https://github.com/MoF-Crack/xdev/actions/runs/44562550013)）全部成功，含 Linux race、在线 E2E、签名覆盖、五平台打包和发布；PR #5 合入提交 `e8d2d7993028f9252bcf0747b4e6c26d68b57ca7`。本机 Windows race 因 C 工具链缺少头文件未执行。公开 Release 的 11 项资产均显示已上传，公开 `SHA256SUMS` 覆盖的 10 项摘要与 Release API digest 字段一致；本机下载器对资产正文超时，故不声称已逐一下载并核验安装包字节。
 
 ## [1.0.0-beta.3] - 2026-11-19
 

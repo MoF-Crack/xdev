@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **版本：1.0.0-rc.1（RC1，待 CI 发布）** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-rc.1（RC1）** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,11 +55,11 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-`1.0.0-rc.1` 正在准备发布，目标 Tag 为 `v1.0.0-rc.1`，计划标记为 GitHub **Pre-release**。本地修复验证已完成，跨平台发布 CI、签名、打包及公开资产验收待完成；下表是预期的 11 项资产，尚不代表可下载。最新状态见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)，公开资产发布后可从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 获取。目前可下载的版本仍为 [1.0.0-beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。
+[1.0.0-rc.1 已发布](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1)，Tag 为 `v1.0.0-rc.1`，GitHub Pre-release。正式 CI（[44562550013](https://github.com/MoF-Crack/xdev/actions/runs/44562550013)）中三平台构建、签名、Linux race、在线 E2E、五平台打包和发布均成功；11 项资产均已上传。公开 `SHA256SUMS` 中 10 项安装包摘要与 Release API digest 字段一致。此环境未能完整下载所有安装包逐项核验归档内容；资产与验证详情见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)。
 
 RC1 修复 Windows GUI 启动留下控制台，以及自更新未采用应用代理配置的问题。Windows GUI 在文件日志就绪后释放自身控制台关联，CLI、TUI 与 shim 保留标准输入输出；自更新每次操作使用一份代理配置快照，元数据、归档、`SHA256SUMS` 与资产 API 回退共用该次网络配置。
 
-| 预期发布产物 | 说明 |
+| RC1 发布产物 | 说明 |
 |------|------|
 | `xdev-windows-amd64-v1.0.0-rc.1.zip` | Windows 单二进制（GUI+TUI+CLI） |
 | `xdev-linux-amd64-v1.0.0-rc.1.tar.gz` | Linux 单二进制（amd64） |
@@ -78,9 +78,9 @@ RC1 修复 Windows GUI 启动留下控制台，以及自更新未采用应用代
 
 ## 旧版升级和自更新
 
-RC1 资产公开且校验和齐备后，**beta.3 的 Release 列表更新器可以发现它，无需将 RC1 改为非 Pre-release 或 Latest**。beta.3 用户可在设置中点击「检查更新」，或退出 GUI 后运行 `xdev self update`。手动检查不受启动检查的 24 小时节流限制；发现更新后选择「下载并安装」，即可查看真实下载字节及校验、解压、安装阶段，也可单独下载归档。
+**beta.3 的 Release 列表更新器已在发布后实测发现 RC1，无需将 RC1 改为非 Pre-release 或 Latest**。beta.3 用户可在设置中点击「检查更新」，或退出 GUI 后运行 `xdev self update`。手动检查不受启动检查的 24 小时节流限制；发现更新后选择「下载并安装」，即可查看真实下载字节及校验、解压、安装阶段，也可单独下载归档。
 
-**安装 RC1 之前，beta.3 自更新仍不读取 GUI 设置中的代理。** 受限网络下，即使设置页已配置代理，更新检查或下载仍可能失败；此时可使用标准环境代理，或待 RC1 发布后从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 手动下载对应平台归档。RC1 的应用代理修复在运行新程序后生效。
+**安装 RC1 之前，beta.3 自更新仍不读取 GUI 设置中的代理。** 受限网络下，即使设置页已配置代理，更新检查或下载仍可能失败；此时可使用标准环境代理，或从 [RC1 Release](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1) 手动下载对应平台归档。RC1 的应用代理修复在运行新程序后生效。
 
 较早的 alpha / beta.2 仍只读取 GitHub `/releases/latest`，目前该入口指向 [beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。可先升级到 beta.3，再由新版更新器升级 RC1；也可在 RC1 发布后直接手动下载 RC1。beta.3 的 GitHub Latest 兼容标记继续保留，`beta` 版本号在 SemVer 中仍表示预发布。
 
