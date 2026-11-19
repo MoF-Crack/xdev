@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-beta.2** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前版本：1.0.0-beta.3（待 CI 发布）** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,21 +55,27 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-从 [1.0.0-beta.2 Release](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.2) 下载对应平台产物。发布 Tag 为 `v1.0.0-beta.2`；Windows、Linux amd64/arm64、macOS Intel/Apple Silicon 的构建与打包均已成功，[CI 记录](https://github.com/MoF-Crack/xdev/actions/runs/44376749298)可查。Release 提供 11 项资产（含校验和）：
+1.0.0-beta.3 的跨平台构建、打包、发布与资产校验待 CI 完成，发布 Tag 为 `v1.0.0-beta.3`。请从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 查看发布状态并下载对应平台产物。下表为预定产物名，不表示资产已经可下载；最终结果见 [1.0.0-beta.3 发布说明](<docs/releases/1.0.0-beta.3.md#发布验证>)。
 
-| 产物 | 说明 |
+| 预定产物（待 CI 发布） | 说明 |
 |------|------|
-| `xdev-windows-amd64-v1.0.0-beta.2.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-beta.2.tar.gz` / `xdev-linux-arm64-v1.0.0-beta.2.tar.gz` | Linux 单二进制（amd64 / arm64） |
-| `xdev-darwin-amd64-v1.0.0-beta.2.tar.gz` / `xdev-darwin-arm64-v1.0.0-beta.2.tar.gz` | macOS 单二进制（Intel / Apple Silicon） |
-| `xdev-1.0.0-beta.2-x86_64.AppImage` | Linux AppImage（amd64） |
-| `xdev-1.0.0-beta.2-aarch64.AppImage` | Linux AppImage（arm64） |
-| `xdev-darwin-arm64-v1.0.0-beta.2.dmg` | macOS（Apple Silicon） |
-| `xdev-1.0.0-beta.2-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
+| `xdev-windows-amd64-v1.0.0-beta.3.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-amd64-v1.0.0-beta.3.tar.gz` / `xdev-linux-arm64-v1.0.0-beta.3.tar.gz` | Linux 单二进制（amd64 / arm64） |
+| `xdev-darwin-amd64-v1.0.0-beta.3.tar.gz` / `xdev-darwin-arm64-v1.0.0-beta.3.tar.gz` | macOS 单二进制（Intel / Apple Silicon） |
+| `xdev-1.0.0-beta.3-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-beta.3-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-beta.3.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-beta.3-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
 | `SHA256SUMS` | 汇总所有平台资产的完整校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
 本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）。
+
+## 旧版升级和自更新
+
+旧版检测只读取 GitHub 的 `/releases/latest` 元数据，曾出现已安装 beta.2 却返回 alpha.3 的情况。beta.2 的 GitHub Release 已调整为非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 待 CI 发布完成后也将采用此兼容标记，使已安装 beta.2 能发现它。版本号 `1.0.0-beta.3` 在 SemVer 中仍属预发布，GitHub 标记是旧版兼容选择；新检测逻辑与下载入口须先升级才会生效。
+
+如果旧 beta.2 没有下载按钮，请在 beta.3 资产发布后从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 手动下载对应平台归档并解压，退出旧 XDev，再运行解压后的新程序（Windows 为单个 `xdev.exe`），保留原配置目录和已安装工具。升级后，设置中的「检查更新」不受启动检查的 24 小时节流限制；发现更新会弹出确认框，选择「下载并安装」后显示真实下载字节及校验、解压、安装阶段，也可单独下载归档。失败会显示具体错误并可重试，不会提示已是最新版；下载或校验失败不会覆盖原二进制。安装成功后请自行关闭并重新打开 XDev，应用不会自动重启。详见 [beta.3 发布说明](<docs/releases/1.0.0-beta.3.md>)。
 
 ## 新版 GUI 与品牌（1.0.0-beta.2）
 

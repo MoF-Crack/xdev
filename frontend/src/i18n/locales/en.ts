@@ -1,4 +1,25 @@
 export default {
+  // Application update discovery, download and installation
+  'self_update.download_install': "Download and install",
+  'self_update.confirm': "The update will be downloaded, verified and installed. XDev will not restart automatically.",
+  'self_update.checking': "Checking for updates…",
+  'self_update.preparing': "Confirming the update and preparing the download…",
+  'self_update.busy': "An update operation is in progress. Wait until it finishes before closing.",
+  'self_update.error_title': "Self update failed",
+  'self_update.apply_failed': "Could not download or install the update",
+  'self_update.invalid_response': "The update service returned an invalid result. Try again.",
+  'self_update.not_applied': "Installation was not confirmed. Try again.",
+  'self_update.no_update_applied': "Already up to date. No update was installed.",
+  'self_update.applied_title': "Update installed",
+  'self_update.restart_hint': "Close and reopen XDev to use the new version. This window will not restart automatically.",
+  'self_update.download_archive': "Download the archive separately",
+  'self_update.download_progress': "Update download progress",
+  'self_update.phase.downloading': "Downloading",
+  'self_update.phase.verifying': "Verifying checksum",
+  'self_update.phase.extracting': "Extracting",
+  'self_update.phase.installing': "Installing",
+  'self_update.phase.completed': "Installation finished; confirming result…",
+
   // F2 workspace and theme suite
   'brand.tagline': 'Development environment manager',
   'catalog.description': 'Manage runtimes and see which version is active for every tool.',

@@ -1,4 +1,25 @@
 export default {
+  // Application update discovery, download and installation
+  'self_update.download_install': "下载并安装",
+  'self_update.confirm': "将下载、校验并安装更新。XDev 不会自动重启。",
+  'self_update.checking': "正在检查更新…",
+  'self_update.preparing': "正在确认更新并准备下载…",
+  'self_update.busy': "更新操作进行中，请等待完成后再关闭。",
+  'self_update.error_title': "自我更新失败",
+  'self_update.apply_failed': "下载或安装更新失败",
+  'self_update.invalid_response': "更新服务返回了无效结果，请重试。",
+  'self_update.not_applied': "未确认安装成功，请重试。",
+  'self_update.no_update_applied': "已是最新版本，未安装任何更新。",
+  'self_update.applied_title': "更新已安装",
+  'self_update.restart_hint': "请自行关闭并重新打开 XDev 以使用新版本；当前窗口不会自动重启。",
+  'self_update.download_archive': "单独下载归档",
+  'self_update.download_progress': "更新下载进度",
+  'self_update.phase.downloading': "正在下载",
+  'self_update.phase.verifying': "正在校验",
+  'self_update.phase.extracting': "正在解压",
+  'self_update.phase.installing': "正在安装",
+  'self_update.phase.completed': "安装完成，正在确认结果…",
+
   // F2 workspace and theme suite
   'brand.tagline': '开发环境版本管理',
   'catalog.description': '统一管理运行时，清楚掌握每一个工具的生效版本。',

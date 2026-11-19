@@ -32,7 +32,7 @@
         <!-- Favorites Page -->
         <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
         <!-- Settings -->
-        <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
+        <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :update-checking="selfUpdateChecking" :self-updating="selfUpdating" :update-busy="updateOperating" :update-error="selfUpdateError" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @open-self-update="openSelfUpdate" @retry-self-update="retrySelfUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
         <!-- Environment Variables Page -->
         <EnvironmentVariablesPage v-else-if="selectedView === 'env-vars'" :t="t" :all-env-vars="allEnvVars" :all-level="envAllLevel" :validation-stats="envValidationStats" :migration-mode="migrationMode" :migration-tools="migrationTools" :migration-results="migrationResults" :migration-busy="!!migratingAll || !!migratingSingle" @update:all-level="setEnvAllLevel" @validate="validateAllEnvVars" @new="newEnvVar" @edit="editEnvVar" @delete="deleteEnvRow" @clean="cleanEnvRow" @clean-all-invalid="cleanAllInvalidEnvVars" @migration-scan="scanForMigration" @migration-single="migrateSingle" @migration-all="migrateAll" />
 
@@ -54,8 +54,12 @@
   <InstallProgressDialog v-model:show="showProgress" :active="installing" :paused="downloadPaused" :can-cancel="installCanCancel" :can-pause="installCanPause" :phase="installPhase" :progress="installProgress" :error="installError" :return-focus-to="installTrigger" :items="batchActive ? batchItems : []" :t="t" @pause="pauseDownload" @resume="resumeDownload" @cancel="cancelDownload" @cancel-item="cancelBatchItem" @cancel-all="cancelAllBatch" />
   <FormSelectorDialog v-model:show="showFormSelector" :tool="formSelectorTool" :t="t" @confirm="confirmFormInstall" />
   <EnvVarEditorDialog :show="showEnvEditor" :editing="editingEnvVar" :browse-directory="browseEnvDir" :t="t" @update:show="showEnvEditor = $event" @save="saveEnvDraft" />
-  <!-- Spec 034: 启动自检更新三选对话框 -->
-  <SelfUpdateDialog :show="showSelfUpdate" :current="selfUpdateInfo.current" :latest="selfUpdateInfo.latest" :updating="selfUpdating" :t="t" @update="applySelfUpdate" @ignore="ignoreSelfUpdate" @quit="quitSelfUpdate" />
+  <!-- One accessible confirmation path for manual and startup self updates. -->
+  <SelfUpdateDialog :show="showSelfUpdate" :current="selfUpdateInfo.current" :latest="selfUpdateInfo.latest"
+    :updating="selfUpdating" :checking="selfUpdateChecking" :dismissing="selfUpdateDismissing"
+    :error="selfUpdateError" :progress="selfUpdateProgress" :status="selfUpdateStatus" :source="selfUpdateSource"
+    :download-urls="selfUpdateInfo.downloadUrls" :return-focus-to="selfUpdateTrigger" :t="t"
+    @update="applySelfUpdate" @retry="retrySelfUpdate" @close="closeSelfUpdate" @ignore="ignoreSelfUpdate" @quit="quitSelfUpdate" />
   <CommandPalette
     v-model:show="showCommandPalette"
     :options="commandPaletteOptions"
@@ -102,6 +106,7 @@ import { useNotifications } from './composables/useNotifications.js';
 import { usePackageManagers } from './composables/usePackageManagers.js';
 import { useWindowChrome } from './composables/useWindowChrome.js';
 import { useSniffSession } from './composables/useSniffSession.js';
+import { useSelfUpdate } from './composables/useSelfUpdate.js';
 import AppShell from './layouts/AppShell.vue';
 import PageToolbar from './layouts/PageToolbar.vue';
 import QuickThemeSwitch from './components/QuickThemeSwitch.vue';
@@ -113,6 +118,14 @@ import { createLatestRequestController } from './pages/settingsState.js';
 const { t, locale, setLocale } = useI18n();
 
 const message = useMessage();
+const {
+  info: updateInfo, dialogInfo: selfUpdateInfo, show: showSelfUpdate,
+  checking: selfUpdateChecking, updating: selfUpdating, dismissing: selfUpdateDismissing,
+  busy: updateOperating, error: selfUpdateError, progress: selfUpdateProgress,
+  source: selfUpdateSource, status: selfUpdateStatus, returnFocusTo: selfUpdateTrigger,
+  check: checkUpdate, open: openSelfUpdate, apply: applySelfUpdate, close: closeSelfUpdate,
+  ignore: ignoreSelfUpdate, quit: quitSelfUpdate, retry: retrySelfUpdate, handleEvent: handleSelfUpdateEvent,
+} = useSelfUpdate({ t, message });
 const dialog = useDialog();
 const { isMaximized, minimizeWindow, toggleMaximize, closeWindow } = useWindowChrome();
 
@@ -178,22 +191,9 @@ function registerRuntimeListeners() {
     loadDashboard();
   });
 
-  // Spec 034: 启动自检更新事件（ask → 三选对话框；notify/applied/applied-error → 提示）
-  window.runtime?.EventsOn?.('self-update', (data) => {
-    if (!data) return;
-    if (data.action === 'ask') {
-      selfUpdateInfo.value = { current: data.current, latest: data.latest };
-      showSelfUpdate.value = true;
-    } else if (data.action === 'notify') {
-      message.info(t('update_available_short', { latest: data.latest }));
-    } else if (data.action === 'applied') {
-      showSelfUpdate.value = false;
-      message.success(t('self_update.applied', { latest: data.latest }));
-    } else if (data.action === 'applied-error') {
-      showSelfUpdate.value = false;
-      message.error(t('update_check_failed'));
-    }
-  });
+  // Startup and manual self updates share the same confirmation/progress/error
+  // path; registration stays synchronous so remounts cannot leak listeners.
+  window.runtime?.EventsOn?.('self-update', handleSelfUpdateEvent);
 }
 
 onMounted(async () => {
@@ -241,7 +241,13 @@ function setTheme(name) {
 }
 const showCommandPalette = ref(false);
 const commandPaletteTrigger = ref(null);
-function openCommandPalette() { showCommandPalette.value = true; }
+function openCommandPalette() { if (!showSelfUpdate.value) showCommandPalette.value = true; }
+watch(showSelfUpdate, (visible) => {
+  if (visible && showCommandPalette.value) {
+    selfUpdateTrigger.value = commandPaletteTrigger.value?.$el || selfUpdateTrigger.value;
+    showCommandPalette.value = false;
+  }
+}, { flush: 'sync' });
 async function setCommandPaletteVisible(visible) {
   showCommandPalette.value = visible;
   if (!visible) {
@@ -326,7 +332,6 @@ const dashAvailableVers = ref([]);
 const mirrorConfig = ref({});
 const mirrorTestResults = ref({});
 const mirrorRequests = createLatestRequestController();
-const updateInfo = ref(null);
 const diagResults = ref([]);
 const cacheBreakdown = ref({});
 const archiveRetention = ref('immediate');
@@ -378,7 +383,6 @@ const migrationMode = ref('junction');
 const aboutInfo = ref({});
 
 const scanOperating = ref(false);
-const updateOperating = ref(false);
 const { notifications, addNotification, clearNotifications, dismissNotification } = useNotifications();
 const scanResults = ref([]);
 const scanAttempted = ref(false);
@@ -1250,59 +1254,6 @@ async function unignoreTool(item) {
     message.error(t("ignore.remove_failed") + ": " + e);
   }
 }
-async function checkUpdate() {
-  updateOperating.value = true;
-  try {
-    updateInfo.value = await window.go.gui.App.CheckForUpdate();
-    if (updateInfo.value && updateInfo.value.hasUpdate) {
-      message.info(t('update_available_short', { latest: updateInfo.value.latest }));
-    } else if (updateInfo.value && !updateInfo.value.error) {
-      message.success(t('up_to_date'));
-    }
-  } catch (e) {
-    message.error(t('update_check_failed') + ': ' + e);
-  } finally {
-    updateOperating.value = false;
-  }
-}
-
-// Spec 034: 启动自检三选对话框状态与动作
-const showSelfUpdate = ref(false);
-const selfUpdateInfo = ref({ current: '', latest: '' });
-const selfUpdating = ref(false);
-
-async function applySelfUpdate() {
-  selfUpdating.value = true;
-  try {
-    const res = await window.go.gui.App.ApplyUpdate();
-    if (res?.error) {
-      message.error(res.error);
-    } else {
-      showSelfUpdate.value = false;
-      message.success(t('self_update.applied', { latest: res.latest }));
-    }
-  } catch (e) {
-    message.error(t('update_check_failed') + ': ' + e);
-  } finally {
-    selfUpdating.value = false;
-  }
-}
-
-async function ignoreSelfUpdate() {
-  showSelfUpdate.value = false;
-  message.info(t('self_update.ignored', { latest: selfUpdateInfo.value.latest }));
-  try {
-    await window.go.gui.App.IgnoreSelfUpdate(selfUpdateInfo.value.latest);
-  } catch (e) {
-    console.error('IgnoreSelfUpdate failed:', e);
-  }
-}
-
-function quitSelfUpdate() {
-  showSelfUpdate.value = false;
-  window.runtime?.WindowClose?.();
-}
-
 async function saveMirrors() {
   try {
     await window.go.gui.App.SetMirrorConfig(mirrorConfig.value);

@@ -16,9 +16,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,15 +38,20 @@ const (
 
 // ReleaseInfo represents a GitHub release.
 type ReleaseInfo struct {
-	TagName string  `json:"tag_name"`
-	Assets  []Asset `json:"assets"`
+	TagName    string  `json:"tag_name"`
+	Draft      bool    `json:"draft"`
+	Prerelease bool    `json:"prerelease"`
+	Assets     []Asset `json:"assets"`
 }
 
 // Asset represents a release asset.
 type Asset struct {
+	ID                 int64  `json:"id"`
+	URL                string `json:"url"`
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+	State              string `json:"state,omitempty"`
 }
 
 // CheckResult holds the outcome of a version check.
@@ -54,36 +62,86 @@ type CheckResult struct {
 	Release        *ReleaseInfo
 }
 
-// Check queries the GitHub Releases API and compares the latest
-// tag with the current version. Returns a CheckResult indicating
-// whether an update is available.
+// Check finds the highest installable semantic version in a bounded release
+// list. Prerelease installations follow newer prereleases or stable versions;
+// stable installations only follow stable tags AND non-prerelease releases.
 func Check(ctx context.Context, currentVersion string) (*CheckResult, error) {
 	log.Printf("[update] Checking for updates: current=%s", currentVersion)
-
-	release, err := fetchLatestRelease(ctx)
+	current := strings.TrimPrefix(currentVersion, "v")
+	if !validUpdateVersion(current) {
+		return nil, fmt.Errorf("invalid current update version %q", currentVersion)
+	}
+	// Bound the whole discovery, not just each of its pages.
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	releases, err := fetchReleases(ctx)
 	if err != nil {
-		log.Printf("[update] ERROR: failed to fetch latest release: %v", err)
 		return nil, fmt.Errorf("check for updates: %w", err)
 	}
-
-	latest := strings.TrimPrefix(release.TagName, "v")
-	current := strings.TrimPrefix(currentVersion, "v")
-
-	log.Printf("[update] Latest release: %s (current: %s)", latest, current)
-
-	hasUpdate := semverLess(current, latest)
-	if hasUpdate {
-		log.Printf("[update] Update available: %s -> %s", current, latest)
-	} else {
-		log.Printf("[update] Already up to date")
+	result := &CheckResult{CurrentVersion: current, LatestVersion: current}
+	allowPrerelease := util.IsPrereleaseVersion(current)
+	for i := range releases {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("check for updates: %w", err)
+		}
+		release := &releases[i]
+		candidate := strings.TrimPrefix(release.TagName, "v")
+		if release.Draft || !validUpdateVersion(candidate) {
+			continue
+		}
+		if !allowPrerelease && (release.Prerelease || util.IsPrereleaseVersion(candidate)) {
+			continue
+		}
+		archive, ok := findAsset(release, assetNameForPlatform(candidate))
+		sums, hasSums := findChecksumAsset(release)
+		if !ok || !hasSums || !usableAsset(archive) || !usableAsset(sums) {
+			continue
+		}
+		if result.Release == nil || semverLess(result.LatestVersion, candidate) {
+			result.LatestVersion, result.Release = candidate, release
+		}
 	}
+	result.HasUpdate = result.Release != nil && semverLess(current, result.LatestVersion)
+	log.Printf("[update] Latest installable release: %s (current: %s, update: %v)", result.LatestVersion, current, result.HasUpdate)
+	return result, nil
+}
 
-	return &CheckResult{
-		CurrentVersion: current,
-		LatestVersion:  latest,
-		HasUpdate:      hasUpdate,
-		Release:        release,
-	}, nil
+// This is update-tag validation only, not another version-ordering utility.
+// CompareSemver intentionally accepts numeric prefixes and four-part tool
+// versions, so validate release tags before using its existing ordering.
+var updateVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+
+func validUpdateVersion(version string) bool {
+	parts := updateVersionPattern.FindStringSubmatch(version)
+	if parts == nil {
+		return false
+	}
+	// The shared comparator saturates core parts at MaxInt32 and numeric
+	// prerelease identifiers at MaxUint64. Refuse out-of-range update tags
+	// rather than silently tie two different versions at those ceilings.
+	for _, part := range parts[1:4] {
+		if _, err := strconv.ParseInt(part, 10, 32); err != nil {
+			return false
+		}
+	}
+	for _, id := range strings.Split(parts[4], ".") {
+		if id == "" || strings.Trim(id, "0123456789") != "" {
+			continue
+		}
+		if len(id) > 1 && id[0] == '0' {
+			return false
+		}
+		if _, err := strconv.ParseUint(id, 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func usableAsset(asset Asset) bool {
+	u, err := url.Parse(asset.BrowserDownloadURL)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && asset.Size > 0 &&
+		(asset.State == "" || asset.State == "uploaded")
 }
 
 // Apply downloads the new binary from the release assets and replaces
@@ -93,14 +151,23 @@ func Apply(ctx context.Context, result *CheckResult) error {
 	if err != nil {
 		return fmt.Errorf("get executable path: %w", err)
 	}
-	return ApplyTo(ctx, result, exe)
+	return ApplyToWithProgress(ctx, result, exe, nil)
 }
 
-// ApplyTo downloads the new binary from the release assets and replaces
-// the binary at exePath. 用于 GUI 自检更新：GUI 进程（xdev-gui）更新的是
-// 同目录的 CLI 二进制（xdev.exe），而不是运行中的 GUI 壳自身。
+// ApplyTo replaces the distributed xdev binary at exePath (CLI, GUI and shim
+// dispatch all share this binary). It preserves the no-callback API.
 func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
-	if result.Release == nil {
+	return ApplyToWithProgress(ctx, result, exePath, nil)
+}
+
+// ApplyToWithProgress reports real download bytes and application phases.
+// onProgress runs synchronously and may be nil. Errors never emit completed;
+// cancellation before replacement leaves the current binary unpublished.
+func ApplyToWithProgress(ctx context.Context, result *CheckResult, exePath string, onProgress func(Progress)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if result == nil || result.Release == nil {
 		return fmt.Errorf("no release info available")
 	}
 
@@ -150,16 +217,27 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 	archivePath := tmpFile.Name()
 	defer os.Remove(archivePath)
 
-	if err := downloadAsset(ctx, asset.BrowserDownloadURL, tmpFile); err != nil {
+	progress := &progressReporter{callback: onProgress}
+	if err := downloadReleaseArchive(ctx, asset, tmpFile, progress); err != nil {
 		tmpFile.Close()
 		return fmt.Errorf("download update: %w", err)
 	}
-	tmpFile.Close()
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("sync downloaded update: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close downloaded update: %w", err)
+	}
 
+	progress.phase("verifying")
 	if err := verifySHA256(ctx, result.Release, asset.Name, archivePath); err != nil {
 		return fmt.Errorf("SHA256 verification failed: %w", err)
 	}
-
+	progress.phase("extracting")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	binPath, err := extractUpdateBinary(archivePath, asset.Name, tmpDir)
 	if err != nil {
 		return fmt.Errorf("extract update binary: %w", err)
@@ -172,7 +250,10 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 		}
 	}
 
-	if err := replaceBinary(exe, binPath); err != nil {
+	progress.phase("installing")
+	// A callback may cancel; arbitrate again immediately before publication,
+	// including inside the Windows copy fallback after staging completes.
+	if err := replaceBinaryWithContext(ctx, exe, binPath); err != nil {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
@@ -186,6 +267,7 @@ func ApplyTo(ctx context.Context, result *CheckResult, exePath string) error {
 	refreshShimDispatchers(exe)
 
 	log.Printf("[update] Successfully updated to %s", result.LatestVersion)
+	progress.phase("completed")
 	return nil
 }
 
@@ -233,46 +315,66 @@ func resolveShimDir() string {
 	return filepath.Join(home, "shims")
 }
 
-// fetchLatestRelease calls the GitHub API to get the latest release.
-func fetchLatestRelease(ctx context.Context) (*ReleaseInfo, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", githubOwner, githubRepo)
+const (
+	releasePageSize = 100
+	maxReleasePages = 5
+	maxReleaseJSON  = 8 << 20
+)
 
-	// Security (M-2 fix): the release JSON gates the self-update binary
-	// replacement — this metadata client must use the same shared redirect
-	// policy as downloadAsset/downloadToMemory (blocks HTTPS→HTTP downgrades
-	// and redirects to private hosts).
+// fetchReleases does not use /latest (which omits GitHub prereleases) and
+// never follows arbitrary pagination URLs from the response's Link header.
+func fetchReleases(ctx context.Context) ([]ReleaseInfo, error) {
+	// Preserve the metadata client's HTTPS downgrade/private redirect guards.
 	client := &http.Client{
 		Timeout:       15 * time.Second,
 		CheckRedirect: util.SecureRedirectCheck(10),
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
+	var releases []ReleaseInfo
+	for page := 1; page <= maxReleasePages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=%d&page=%d", githubOwner, githubRepo, releasePageSize, page)
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("User-Agent", "xdev-self-update")
+		// Reuse remote's unified explicit/config/env/GH_TOKEN resolution.
+		if token := remote.EffectiveGitHubToken(); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			resp.Body.Close()
+			return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxReleaseJSON+1))
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(body) > maxReleaseJSON {
+			return nil, fmt.Errorf("release list exceeds %d bytes", maxReleaseJSON)
+		}
+		var batch []ReleaseInfo
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, fmt.Errorf("decode release list JSON: %w", err)
+		}
+		if batch == nil {
+			return nil, fmt.Errorf("decode release list JSON: expected an array, got null")
+		}
+		releases = append(releases, batch...)
+		if len(batch) < releasePageSize {
+			break
+		}
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "xdev-self-update")
-	// GitHub token 复用 remote 的统一解析（显式配置/env/注册表/GH_TOKEN），
-	// 不再自行弱化读取（Spec 034 审计消除重复）。
-	if token := remote.EffectiveGitHubToken(); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var release ReleaseInfo
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, fmt.Errorf("decode release JSON: %w", err)
-	}
-	return &release, nil
+	return releases, ctx.Err()
 }
 
 // assetNameForPlatform is the CI archive name for this OS/arch and version.
@@ -415,54 +517,122 @@ func writeUpdateFile(dest string, r io.Reader) error {
 // "xdev-gui-windows-amd64-v1.0.zip") when the exact name is missing.
 // CI asset names match assetNameForPlatform verbatim on every platform.
 func findAsset(release *ReleaseInfo, name string) (Asset, bool) {
-	for _, a := range release.Assets {
-		if a.Name == name {
-			return a, true
+	var found Asset
+	matches := 0
+	if release != nil {
+		for _, a := range release.Assets {
+			if a.Name == name {
+				found, matches = a, matches+1
+			}
 		}
 	}
-	return Asset{}, false
+	return found, matches == 1
+}
+
+func findChecksumAsset(release *ReleaseInfo) (Asset, bool) {
+	var found Asset
+	matches := 0
+	if release != nil {
+		for _, asset := range release.Assets {
+			name := strings.ToLower(asset.Name)
+			if name == "sha256sums" || name == "sha256sums.txt" {
+				found, matches = asset, matches+1
+			}
+		}
+	}
+	return found, matches == 1
 }
 
 // downloadAsset downloads a release asset to the given writer.
 // Security (N-9): enforce HTTPS and block downgrade redirects to
 // protect self-update from MITM.
 func downloadAsset(ctx context.Context, url string, w io.Writer) error {
-	if !strings.HasPrefix(url, "https://") {
-		return fmt.Errorf("self-update download URL must use HTTPS, got %q", url)
-	}
-	client := &http.Client{
-		Timeout:       10 * time.Minute,
-		CheckRedirect: util.SecureRedirectCheck(10),
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
+	return downloadAssetWithProgress(ctx, url, w, 0, nil)
+}
+
+func downloadAssetWithProgress(ctx context.Context, rawURL string, w io.Writer, expectedSize int64, progress *progressReporter) error {
+	return downloadAssetAttempt(ctx, rawURL, w, expectedSize, progress, false)
+}
+
+func downloadAssetAttempt(ctx context.Context, rawURL string, w io.Writer, expectedSize int64, progress *progressReporter, assetAPI bool) error {
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if progress != nil {
+		progress.value = Progress{TotalBytes: max(0, expectedSize)}
+		progress.phase("downloading")
+	}
+	if !strings.HasPrefix(rawURL, "https://") {
+		return fmt.Errorf("self-update download URL must use HTTPS")
+	}
+	client := assetHTTPClient(10 * time.Minute)
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return newAssetDownloadError(ctx, rawURL, err)
 	}
 	req.Header.Set("User-Agent", "xdev-self-update")
 	req.Header.Set("Accept", "application/octet-stream")
+	if assetAPI {
+		if req.URL.Host != "api.github.com" || req.URL.Scheme != "https" || req.URL.User != nil {
+			return fmt.Errorf("invalid asset API origin")
+		}
+		if token := remote.EffectiveGitHubToken(); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return newAssetDownloadError(ctx, rawURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+		return &assetDownloadError{host: req.URL.Host, status: resp.StatusCode}
 	}
 
-	_, err = io.Copy(w, resp.Body)
-	return err
+	if progress != nil && resp.ContentLength >= 0 {
+		progress.value.TotalBytes = resp.ContentLength
+	}
+	_, err = io.Copy(w, downloadProgressReader{contextReader{ctx: ctx, r: resp.Body}, progress})
+	if err == nil {
+		err = ctx.Err()
+	}
+	if progress != nil {
+		if err == nil {
+			// EOF is the exact byte count, even for chunked/unknown lengths or
+			// stale release metadata. It is not verification or completion.
+			progress.value.TotalBytes = progress.value.DownloadedBytes
+			if progress.value.DownloadedBytes > 0 {
+				progress.value.Percent = 99
+			}
+		}
+		progress.notify(true)
+	}
+	if err != nil {
+		return newAssetDownloadError(ctx, rawURL, err)
+	}
+	return nil
 }
 
 // replaceBinary replaces the current executable with the new one.
 // On Windows, the running binary is locked, so we rename the old one
 // first and then rename the new one into place.
 func replaceBinary(currentExe, newBinary string) error {
-	if runtime.GOOS == "windows" {
-		return replaceBinaryWindows(currentExe, newBinary)
+	return replaceBinaryWithContext(context.Background(), currentExe, newBinary)
+}
+
+func replaceBinaryWithContext(ctx context.Context, currentExe, newBinary string) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	// Unix: atomic rename
+	if runtime.GOOS == "windows" {
+		return replaceBinaryWindowsWithContext(ctx, currentExe, newBinary)
+	}
+	// Unix: atomic publication. Cancellation after this point cannot undo it.
 	return os.Rename(newBinary, currentExe)
 }
 
@@ -471,6 +641,13 @@ func replaceBinary(currentExe, newBinary string) error {
 // then rename the new one into place. The old file will be cleaned
 // up on the next launch.
 func replaceBinaryWindows(currentExe, newBinary string) error {
+	return replaceBinaryWindowsWithContext(context.Background(), currentExe, newBinary)
+}
+
+func replaceBinaryWindowsWithContext(ctx context.Context, currentExe, newBinary string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	backup := currentExe + ".old"
 
 	// 票 32（P1-25 / E-06）崩溃自愈：上一次更新若在「currentExe → .old」
@@ -491,11 +668,20 @@ func replaceBinaryWindows(currentExe, newBinary string) error {
 	// Remove any leftover backup from a previous update
 	_ = os.Remove(backup)
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Rename current binary to backup
 	if err := os.Rename(currentExe, backup); err != nil {
 		log.Printf("[update] WARNING: failed to rename current binary: %v", err)
 		// On Windows, if rename fails, try copy-based approach
-		return copyAndReplace(currentExe, newBinary)
+		return copyAndReplaceWithContext(ctx, currentExe, newBinary)
+	}
+	if err := ctx.Err(); err != nil {
+		if restoreErr := os.Rename(backup, currentExe); restoreErr != nil {
+			return fmt.Errorf("%w (rollback failed: %v)", err, restoreErr)
+		}
+		return err
 	}
 
 	// Rename new binary to the target location
@@ -600,6 +786,13 @@ func restoreFromBackup(currentExe string) (bool, error) {
 // 失败时 currentExe 保持原样（或缺失由 restoreFromBackup 自愈），
 // 只留下一个可被启动清理的 .new 中间文件。
 func copyAndReplace(currentExe, newBinary string) error {
+	return copyAndReplaceWithContext(context.Background(), currentExe, newBinary)
+}
+
+func copyAndReplaceWithContext(ctx context.Context, currentExe, newBinary string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	staging := currentExe + ".new"
 	_ = os.Remove(staging)
 
@@ -613,7 +806,7 @@ func copyAndReplace(currentExe, newBinary string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(dst, src); err != nil {
+	if _, err := io.Copy(dst, contextReader{ctx: ctx, r: src}); err != nil {
 		dst.Close()
 		os.Remove(staging)
 		return err
@@ -627,6 +820,10 @@ func copyAndReplace(currentExe, newBinary string) error {
 		os.Remove(staging)
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		os.Remove(staging)
+		return err
+	}
 	if err := os.Rename(staging, currentExe); err != nil {
 		os.Remove(staging)
 		return err
@@ -634,38 +831,29 @@ func copyAndReplace(currentExe, newBinary string) error {
 	return nil
 }
 
-// semverLess reports whether version a is less than version b
-// using a simple major.minor.patch comparison.
+// semverLess delegates core and prerelease precedence to the shared comparator.
 func semverLess(a, b string) bool {
 	return util.CompareSemver(a, b) < 0
 }
 
-// verifySHA256 checks the downloaded binary against SHA256SUMS
-// from the release assets.  If no checksums asset is found, it
-// logs a warning and proceeds without failing.
+// verifySHA256 checks the archive against SHA256SUMS and fails closed for
+// missing, ambiguous, unavailable checksums or mismatched archive bytes.
 func verifySHA256(ctx context.Context, release *ReleaseInfo, assetName, filePath string) error {
-	// Look for a SHA256SUMS asset in the release.
-	var sumsAsset *Asset
-	for i := range release.Assets {
-		name := strings.ToLower(release.Assets[i].Name)
-		if name == "sha256sums.txt" || name == "sha256sums" {
-			a := release.Assets[i]
-			sumsAsset = &a
-			break
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	if sumsAsset == nil {
+	sumsAsset, ok := findChecksumAsset(release)
+	if !ok {
 		// Security (H-11): Self-update is the most security-critical download
 		// (it replaces the running binary). Refuse to update without hash
 		// verification to prevent a MITM attacker from serving a malicious binary.
 		return fmt.Errorf("no SHA256SUMS asset found in release — refusing to update without hash verification (security)")
 	}
 
-	log.Printf("[update] Downloading SHA256SUMS from %s", sumsAsset.BrowserDownloadURL)
+	log.Printf("[update] Downloading SHA256SUMS")
 
-	// Download the checksums file to memory.
-	sumsData, err := downloadToMemory(ctx, sumsAsset.BrowserDownloadURL)
+	// The checksums use the same bounded, validated asset-API fallback.
+	sumsData, err := downloadReleaseChecksums(ctx, sumsAsset)
 	if err != nil {
 		// Security (H-11): Failed to download checksums — refuse to update
 		return fmt.Errorf("failed to download SHA256SUMS: %w — refusing to update without hash verification", err)
@@ -684,6 +872,9 @@ func verifySHA256(ctx context.Context, release *ReleaseInfo, assetName, filePath
 		return fmt.Errorf("compute SHA256 of %s: %w", filePath, err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if actualHash != expectedHash {
 		return fmt.Errorf("hash mismatch for %s: expected %s, got %s", assetName, expectedHash, actualHash)
 	}
@@ -712,31 +903,9 @@ func parseSHA256SUMS(content, filename string) (string, error) {
 	return "", fmt.Errorf("entry for %q not found", filename)
 }
 
-// downloadToMemory downloads a URL and returns its body as bytes.
-// Security (N-9): enforce HTTPS and block downgrade redirects.
-func downloadToMemory(ctx context.Context, url string) ([]byte, error) {
-	if !strings.HasPrefix(url, "https://") {
-		return nil, fmt.Errorf("download URL must use HTTPS, got %q", url)
-	}
-	client := &http.Client{
-		Timeout:       30 * time.Second,
-		CheckRedirect: util.SecureRedirectCheck(10),
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "xdev-self-update")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB max for checksums
+// downloadToMemory preserves the single-URL checksum API and its HTTPS guards.
+func downloadToMemory(ctx context.Context, endpoint string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	return checksumAttempt(ctx, endpoint, false)
 }

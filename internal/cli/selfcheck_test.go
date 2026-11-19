@@ -90,7 +90,7 @@ func TestStdinIsTTY_PipeIsFalse(t *testing.T) {
 	}
 }
 
-// TC-S4-6 挂载点守卫：runSelfCheck 调用点仅 3 个交互入口（无参 TUI / tui / gui）
+// CLI checks belong to root TUI / tui only. GUI owns its own startup policy.
 func TestSelfCheckMountPoints_OnlyInteractive(t *testing.T) {
 	// 定义在 selfcheck.go，本守卫只扫命令挂载文件（root.go 无参 TUI、extra.go tui/gui）
 	files := []string{"root.go", "extra.go"}
@@ -103,7 +103,7 @@ func TestSelfCheckMountPoints_OnlyInteractive(t *testing.T) {
 		}
 		callCount += len(callRe.FindAllString(string(data), -1))
 	}
-	if callCount != 3 {
-		t.Errorf("runSelfCheck call sites = %d, want exactly 3 (root TUI / tui / gui); 一次性子命令与 shim 不得检查", callCount)
+	if callCount != 2 {
+		t.Errorf("runSelfCheck call sites = %d, want exactly 2 (root TUI / tui); GUI must not consume its desktop check record", callCount)
 	}
 }

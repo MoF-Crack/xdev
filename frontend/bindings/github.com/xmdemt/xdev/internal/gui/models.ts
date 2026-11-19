@@ -2168,14 +2168,23 @@ export class ToolInfo {
  */
 export class UpdateCheckResult {
     "hasUpdate": boolean;
+
+    /**
+     * true only after an update was actually installed
+     */
+    "applied": boolean;
     "current": string;
     "latest": string;
+    "downloadUrls"?: { [_ in string]?: string };
     "error"?: string;
 
     /** Creates a new UpdateCheckResult instance. */
     constructor($$source: Partial<UpdateCheckResult> = {}) {
         if (!("hasUpdate" in $$source)) {
             this["hasUpdate"] = false;
+        }
+        if (!("applied" in $$source)) {
+            this["applied"] = false;
         }
         if (!("current" in $$source)) {
             this["current"] = "";
@@ -2191,7 +2200,11 @@ export class UpdateCheckResult {
      * Creates a new UpdateCheckResult instance from a string or object.
      */
     static createFrom($$source: any = {}): UpdateCheckResult {
+        const $$createField4_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("downloadUrls" in $$parsedSource) {
+            $$parsedSource["downloadUrls"] = $$createField4_0($$parsedSource["downloadUrls"]);
+        }
         return new UpdateCheckResult($$parsedSource as Partial<UpdateCheckResult>);
     }
 }

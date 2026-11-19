@@ -47,9 +47,10 @@ export function AddFavorite(toolName: string): $CancellablePromise<void> {
 }
 
 /**
- * ApplyUpdate downloads and applies the latest update.
- * Spec 034: GUI 场景更新目标是同目录 CLI 二进制（xdev.exe）——
- * 运行中的 GUI 壳（xdev-gui.exe）不能被替换；CLI 归档只写 CLI 二进制。
+ * ApplyUpdate refetches the release, downloads, verifies and installs it through
+ * the existing binding. cliBinaryNextToSelf is the existing target resolver;
+ * in the current single-binary model it resolves the running XDev executable.
+ * This method never restarts the application.
  */
 export function ApplyUpdate(): $CancellablePromise<$models.UpdateCheckResult> {
     return $Call.ByID(4269927107).then(($result: any) => {
@@ -87,7 +88,8 @@ export function CheckEnvVarExists(name: string, level: string): $CancellableProm
 }
 
 /**
- * CheckForUpdate checks if a new version is available.
+ * CheckForUpdate preserves the existing Wails binding. Private dependency seams
+ * let GUI tests exercise the complete adapter without replacing the test binary.
  */
 export function CheckForUpdate(): $CancellablePromise<$models.UpdateCheckResult> {
     return $Call.ByID(12705936).then(($result: any) => {
@@ -585,9 +587,6 @@ export function GetToolsByCategory(category: string): $CancellablePromise<$model
     });
 }
 
-/**
- * IgnoreSelfUpdate 记录用户「忽略并继续」的版本（前端三选回调）。
- */
 export function IgnoreSelfUpdate(latest: string): $CancellablePromise<void> {
     return $Call.ByID(4197737455, latest);
 }
