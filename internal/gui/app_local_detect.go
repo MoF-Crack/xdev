@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/hostscan"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/toolmeta"
@@ -256,7 +257,9 @@ func (a *App) checkForUpdateWith(check func(context.Context, string) (*update.Ch
 		return UpdateCheckResult{Current: version.Version, Error: "an XDev self-update operation is already in progress"}
 	}
 	defer guiSelfUpdateMu.Unlock()
-	ctx, cancel := context.WithTimeout(a.rootContext(), 15*time.Second)
+	ctx, closeNetwork := a.selfUpdateContext(a.rootContext())
+	defer closeNetwork()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return UpdateCheckResult{Current: version.Version, Error: err.Error()}
@@ -285,7 +288,10 @@ func (a *App) applyUpdateWith(
 		return UpdateCheckResult{Current: version.Version, Error: "an XDev self-update operation is already in progress"}
 	}
 	defer guiSelfUpdateMu.Unlock()
-	ctx, cancel := context.WithTimeout(a.rootContext(), 10*time.Minute)
+	// The refetch, archive and checksum share this operation's proxy snapshot.
+	ctx, closeNetwork := a.selfUpdateContext(a.rootContext())
+	defer closeNetwork()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return UpdateCheckResult{Current: version.Version, Error: err.Error()}
@@ -314,6 +320,18 @@ func (a *App) applyUpdateWith(
 	}
 	view.Applied = true
 	return view
+}
+
+// selfUpdateContext copies the proxy value under cfgMu. No mutable client is
+// shared across Apps, and SetProxyConfig affects the next operation.
+func (a *App) selfUpdateContext(parent context.Context) (context.Context, func()) {
+	a.cfgMu.RLock()
+	proxy := config.ProxyConfig{}
+	if a.cfg != nil {
+		proxy = a.cfg.Proxy
+	}
+	a.cfgMu.RUnlock()
+	return update.WithProxy(parent, proxy)
 }
 
 // guiUpdateResult only projects version/release data; applied defaults to false.

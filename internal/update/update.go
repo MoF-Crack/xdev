@@ -327,6 +327,7 @@ func fetchReleases(ctx context.Context) ([]ReleaseInfo, error) {
 	// Preserve the metadata client's HTTPS downgrade/private redirect guards.
 	client := &http.Client{
 		Timeout:       15 * time.Second,
+		Transport:     updateTransport(ctx),
 		CheckRedirect: util.SecureRedirectCheck(10),
 	}
 	var releases []ReleaseInfo
@@ -566,6 +567,7 @@ func downloadAssetAttempt(ctx context.Context, rawURL string, w io.Writer, expec
 		return fmt.Errorf("self-update download URL must use HTTPS")
 	}
 	client := assetHTTPClient(10 * time.Minute)
+	client.Transport = updateTransport(ctx)
 	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return newAssetDownloadError(ctx, rawURL, err)

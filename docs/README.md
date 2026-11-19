@@ -31,6 +31,7 @@
 - 时间点审计：`docs/audits/`
 - 历史实施记录：`docs/history/`
 - 活跃功能规格：`specs/`
+- 代理工具与治理：[OpenCode / Spec Kit 集成退役说明](agents/tooling.md)（保留治理材料与检查）
 
 ## 语言规则
 

@@ -2,6 +2,8 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
+The repository's OpenCode / Spec Kit integration is retired; [tooling and retained governance](tooling.md) explains the boundary. Domain documentation, ADRs, and their governance remain in use.
+
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root, or

@@ -32,7 +32,9 @@ func (a *App) runStartupSelfCheckWith(
 	defer guiSelfUpdateMu.Unlock()
 	// Discovery has its own 15-second bound; an automatic download has the same
 	// 10-minute bound as a manual apply, rather than a 30-second startup timer.
-	ctx, cancel := context.WithTimeout(a.rootContext(), 10*time.Minute)
+	ctx, closeNetwork := update.WithProxy(a.rootContext(), cfg.Proxy)
+	defer closeNetwork()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	if ctx.Err() != nil {
 		return

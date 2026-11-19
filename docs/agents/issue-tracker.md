@@ -2,6 +2,8 @@
 
 Active implementation issues and working specs live as markdown files in `.scratch/` and are machine-local. The tracked `specs/` directory contains established specifications checked by governance; do not create a competing active copy there. Durable decisions belong in `docs/adr/`, and completed implementation/verification records in `docs/audits/`. A local working spec becomes historical evidence when its result is recorded there.
 
+The repository's OpenCode / Spec Kit integration is retired. See [tooling and retained governance](tooling.md) for the retired paths and the governance checks that remain in use.
+
 > **选择理由（2026-08-05）**：本仓库是独立开发项目。GitHub 仓库虽然已创建，但为 private 未开源，无在线 issue，因此使用本地 markdown 作为 issue tracker。
 
 ## Conventions

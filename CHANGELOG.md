@@ -3,6 +3,33 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-rc.1] - 2026-11-19
+
+RC1 修复 Windows GUI 常驻控制台与自更新代理配置。目标软件版本为 `1.0.0-rc.1`，Tag 为 `v1.0.0-rc.1`，计划作为 GitHub Pre-release 发布；本地验证已完成，发布 CI 与 11 项公开资产验收待完成。状态见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)。
+
+### Fixed
+
+- Windows 桌面 GUI 在文件日志就绪后、后台清理日志输出前调用 `FreeConsole`，解除当前 GUI 进程的控制台关联；CLI、TUI、shim 和维护入口保留终端标准流。桌面启动失败写日志并显示 Windows 错误提示，配置加载的早期错误仍可输出到终端。
+- GUI 日志重复初始化同一路径不再截断早期记录；更换路径关闭旧句柄，关闭后恢复调用方的标准日志输出，避免重复写入。
+- GUI 手动检查与安装、GUI 启动更新、CLI 手动及启动更新通过 `update.WithProxy` 为每次操作捕获代理配置快照。版本元数据、安装前重新检查、归档、`SHA256SUMS`、GitHub 资产 API 回退及 CDN 跳转采用同一份私有网络配置，设置变化在下一次操作生效。
+- 应用代理支持 `NO_PROXY` 的域名、IP、CIDR 和端口匹配；代理未启用或留空时沿用标准环境代理。非法显式代理返回脱敏错误；TLS 验证、安全重定向、令牌作用域、强制 SHA-256 校验、时限、取消和替换保护继续生效。
+
+### Compatibility
+
+- RC1 保持 GitHub Pre-release；beta.3 的 Release 列表更新器能在 RC1 资产齐备后发现它，无需将 RC1 设为非 Pre-release 或 Latest。旧 alpha / beta.2 的 `/releases/latest` 仍指向 beta.3，可先升级 beta.3 再升级 RC1，或在 RC1 发布后手动下载归档。
+- beta.3 自更新尚不读取 GUI 代理配置；安装并运行 RC1 前，受限网络下可能需要环境代理或手动下载 RC1。更新成功后仍需用户自行关闭并重新打开应用。
+- 保留单二进制 GUI/TUI/CLI/shim、已有配置与工具目录、F2 品牌、主题和响应式工作区；公开 Wails bindings 无变化。
+
+### Maintenance
+
+- 退役 19 个仓库级 SpecKit/OpenCode 集成文件，将四份历史文档的原文迁入归档并保留旧路径指引，移除两个无引用 PNG。详见 [工程清理记录](<docs/audits/2026/2026-11-19-history-cleanup.md>)。
+
+### Validation
+
+- 本地 Go 33 个包、`go vet ./...`、desktop 与 CLI integration 验证通过；原生资源与打包契约 17 项通过、0 跳过，重新生成 bindings 与跟踪文件一致。
+- Windows 四种真实 GUI 启动场景均显示窗口、无控制台关联，`WM_CLOSE` 后退出码 0；自更新经真实 CONNECT 代理与可信 TLS 完成元数据、归档、校验和、API 回退及临时目标安装，旧实现对照失败、修复实现通过。
+- Windows race 检查因本机 C 环境缺少头文件而未执行；本次发布 CI 的 Linux race 与跨平台资产结果待补充，既往 beta 的 CI 结果不代替本版结果。
+
 ## [1.0.0-beta.3] - 2026-11-19
 
 本版修复自更新版本发现与 GUI 下载、安装流程。软件版本为 `1.0.0-beta.3`，发布 Tag 为 `v1.0.0-beta.3`；跨平台构建、签名、五平台打包与发布均已成功；beta.3 已设为 GitHub Latest，实际旧 beta.2 程序可检测到它。

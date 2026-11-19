@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-beta.3** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **版本：1.0.0-rc.1（RC1，待 CI 发布）** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,27 +55,36 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-[1.0.0-beta.3 已发布](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)，Tag 为 `v1.0.0-beta.3`。三平台构建、签名、五平台打包和发布均通过，[CI 记录](https://github.com/MoF-Crack/xdev/actions/runs/44455590112)可查；发布提供下列 11 项资产（含 `SHA256SUMS`）。它已设为 GitHub Latest，实际旧 beta.2 程序已验证能够检测到 beta.3，详见 [发布验证](<docs/releases/1.0.0-beta.3.md#发布验证>)。
+`1.0.0-rc.1` 正在准备发布，目标 Tag 为 `v1.0.0-rc.1`，计划标记为 GitHub **Pre-release**。本地修复验证已完成，跨平台发布 CI、签名、打包及公开资产验收待完成；下表是预期的 11 项资产，尚不代表可下载。最新状态见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)，公开资产发布后可从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 获取。目前可下载的版本仍为 [1.0.0-beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。
 
-| 发布产物 | 说明 |
+RC1 修复 Windows GUI 启动留下控制台，以及自更新未采用应用代理配置的问题。Windows GUI 在文件日志就绪后释放自身控制台关联，CLI、TUI 与 shim 保留标准输入输出；自更新每次操作使用一份代理配置快照，元数据、归档、`SHA256SUMS` 与资产 API 回退共用该次网络配置。
+
+| 预期发布产物 | 说明 |
 |------|------|
-| `xdev-windows-amd64-v1.0.0-beta.3.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-beta.3.tar.gz` / `xdev-linux-arm64-v1.0.0-beta.3.tar.gz` | Linux 单二进制（amd64 / arm64） |
-| `xdev-darwin-amd64-v1.0.0-beta.3.tar.gz` / `xdev-darwin-arm64-v1.0.0-beta.3.tar.gz` | macOS 单二进制（Intel / Apple Silicon） |
-| `xdev-1.0.0-beta.3-x86_64.AppImage` | Linux AppImage（amd64） |
-| `xdev-1.0.0-beta.3-aarch64.AppImage` | Linux AppImage（arm64） |
-| `xdev-darwin-arm64-v1.0.0-beta.3.dmg` | macOS（Apple Silicon） |
-| `xdev-1.0.0-beta.3-linux-amd64.deb` / `.rpm` | Linux 软件包（amd64） |
+| `xdev-windows-amd64-v1.0.0-rc.1.zip` | Windows 单二进制（GUI+TUI+CLI） |
+| `xdev-linux-amd64-v1.0.0-rc.1.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-linux-arm64-v1.0.0-rc.1.tar.gz` | Linux 单二进制（arm64） |
+| `xdev-darwin-amd64-v1.0.0-rc.1.tar.gz` | macOS 单二进制（Intel） |
+| `xdev-darwin-arm64-v1.0.0-rc.1.tar.gz` | macOS 单二进制（Apple Silicon） |
+| `xdev-1.0.0-rc.1-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-rc.1-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-rc.1.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-rc.1-linux-amd64.deb` | Linux Debian 软件包（amd64） |
+| `xdev-1.0.0-rc.1-linux-amd64.rpm` | Linux RPM 软件包（amd64） |
 | `SHA256SUMS` | 汇总所有平台资产的完整校验和 |
 
 每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
-本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）。
+本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）；本地测试包不属于公开 Release 资产。
 
 ## 旧版升级和自更新
 
-旧版检测只读取 GitHub 的 `/releases/latest` 元数据，曾出现已安装 beta.2 却返回 alpha.3 的情况。beta.2 的 GitHub Release 已调整为非 Pre-release 的 Latest，Tag 与资产保持不变；beta.3 也已采用此兼容标记，实际已安装 beta.2 程序能够发现它。版本号 `1.0.0-beta.3` 在 SemVer 中仍属预发布，GitHub 标记是旧版兼容选择；新检测逻辑与下载入口须先升级才会生效。
+RC1 资产公开且校验和齐备后，**beta.3 的 Release 列表更新器可以发现它，无需将 RC1 改为非 Pre-release 或 Latest**。beta.3 用户可在设置中点击「检查更新」，或退出 GUI 后运行 `xdev self update`。手动检查不受启动检查的 24 小时节流限制；发现更新后选择「下载并安装」，即可查看真实下载字节及校验、解压、安装阶段，也可单独下载归档。
 
-旧版已有 CLI 自更新命令，可在退出 GUI 后运行 `xdev self update`。如果旧 beta.2 界面没有下载按钮，或网络导致命令下载失败，请从 [beta.3 发布页](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3) 手动下载对应平台归档并解压，退出旧 XDev，再运行解压后的新程序（Windows 为单个 `xdev.exe`），保留原配置目录和已安装工具。升级后，设置中的「检查更新」不受启动检查的 24 小时节流限制；发现更新会弹出确认框，选择「下载并安装」后显示真实下载字节及校验、解压、安装阶段，也可单独下载归档。失败会显示具体错误并可重试，不会提示已是最新版；下载或校验失败不会覆盖原二进制。安装成功后请自行关闭并重新打开 XDev，应用不会自动重启。详见 [beta.3 发布说明](<docs/releases/1.0.0-beta.3.md>)。
+**安装 RC1 之前，beta.3 自更新仍不读取 GUI 设置中的代理。** 受限网络下，即使设置页已配置代理，更新检查或下载仍可能失败；此时可使用标准环境代理，或待 RC1 发布后从 [GitHub Releases](https://github.com/MoF-Crack/xdev/releases) 手动下载对应平台归档。RC1 的应用代理修复在运行新程序后生效。
+
+较早的 alpha / beta.2 仍只读取 GitHub `/releases/latest`，目前该入口指向 [beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。可先升级到 beta.3，再由新版更新器升级 RC1；也可在 RC1 发布后直接手动下载 RC1。beta.3 的 GitHub Latest 兼容标记继续保留，`beta` 版本号在 SemVer 中仍表示预发布。
+
+手动升级时，使用同一 Release 的 `SHA256SUMS` 核对下载文件，将归档解压到单独目录，退出旧 XDev 后再运行或替换可执行文件，保留原配置目录与已安装工具。下载或校验失败不会覆盖原二进制；安装成功后请自行关闭并重新打开 XDev，当前进程在重新启动前仍运行旧版代码。完整步骤和验证边界见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md>)；历史升级记录见 [beta.3 发布说明](<docs/releases/1.0.0-beta.3.md>)。
 
 ## 新版 GUI 与品牌（1.0.0-beta.2）
 

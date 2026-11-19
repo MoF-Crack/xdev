@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -31,6 +32,46 @@ func runGUI() {
 
 // runGUIWithConfig preserves the command's explicit home and environment policy.
 func runGUIWithConfig(cfg *config.Config, noEnvWrite bool) error {
+	return runGUIWithRuntime(cfg, noEnvWrite, guiStartupRuntime{
+		run:    gui.Run,
+		detach: detachGUIConsole,
+		report: reportGUIStartupError,
+	})
+}
+
+// Dependencies are private so startup ordering can be tested without detaching
+// the test runner's console or starting a native WebView.
+type guiStartupRuntime struct {
+	run    func(*gui.App, string) error
+	detach func() error
+	report func(error)
+}
+
+func runGUIWithRuntime(cfg *config.Config, noEnvWrite bool, desktop guiStartupRuntime) (runErr error) {
+	if cfg == nil || cfg.Core.XMDevDir == "" {
+		return fmt.Errorf("cannot start GUI without a resolved XDev home")
+	}
+
+	// Logging must be ready before detaching the Windows console or starting
+	// background work. First-run setup needs startup diagnostics as well.
+	previousLogOutput := log.Writer()
+	gui.InitLogger(filepath.Join(cfg.Core.XMDevDir, "logs"))
+	defer func() {
+		gui.CloseLogger()
+		log.SetOutput(previousLogOutput)
+	}()
+	// Maintenance builds use a no-op here so their missing-runtime error still
+	// reaches the caller's terminal. CLI/TUI/shim never enter this function.
+	if err := desktop.detach(); err != nil {
+		log.Printf("[gui] could not detach the GUI console: %v", err)
+	}
+	defer func() {
+		if runErr != nil {
+			log.Printf("[gui] startup failed: %v", runErr)
+			desktop.report(runErr)
+		}
+	}()
+
 	cat, err := manifest.LoadCatalogCached(cfg.Core.ManifestDir, cfg.Core.CacheDir)
 	if err != nil {
 		cat = &manifest.Catalog{}
@@ -39,22 +80,10 @@ func runGUIWithConfig(cfg *config.Config, noEnvWrite bool) error {
 	app := gui.NewAppWithOptions(cfg, cat, reg, gui.RunOptions{NoEnvWrite: noEnvWrite})
 	webviewDir := filepath.Join(cfg.Core.XMDevDir, "cache", "webview2")
 
-	// 第十二轮收口（Round 12 报告 §七-③）：GUI 是**长驻宿主**，在这里启动进程内
-	// **唯一**的 `.stale-*` 残留清扫 goroutine（幂等，60s 一次）。
-	//
-	// 为什么只有 GUI 需要它：CLI 是短命进程，ticker 还没来得及触发进程就退出了；
-	// 而 CLI 的卫生由 `Activate`/`Uninstall` 后的一次即时回收 + `removeLinkEntry`
-	// 的**归档式改名**（把残留搬到 current/ 之外）共同保证 —— 后者让 `current/`
-	// 根本不会再出现 `.stale-*`。GUI 可能连续驻留数天，且用户在其中反复
-	// install/uninstall，因此需要后台兜底。
+	// A long-running GUI owns one sweeper; short CLI invocations reclaim stale
+	// links during activation/uninstall instead. Stop it before closing the log.
 	shim.StartStaleResidueSweeper(cfg.Core.XMDevDir)
 	defer shim.StopStaleResidueSweeper()
 
-	if app.IsInitialized() {
-		logDir := filepath.Join(cfg.Core.XMDevDir, "logs")
-		gui.InitLogger(logDir)
-	}
-	defer gui.CloseLogger()
-
-	return gui.Run(app, webviewDir)
+	return desktop.run(app, webviewDir)
 }
