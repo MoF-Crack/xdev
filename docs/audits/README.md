@@ -46,3 +46,5 @@ docs/audits/YYYY-MM-DD-<audit-name>.md
 | 2026-10-24 | [2026-10-24-code-review.md](2026/2026-10-24-code-review.md) | `b8e981c` | 全库代码审查：13 项发现，修复 11 项（含 npm cmd 注入、PATH 吞错、SSRF 及其 fallback 绕过、shim panic 等）+ 新增回归测试 |
 | 2026-11-19 | [2026-11-19-history-cleanup.md](2026/2026-11-19-history-cleanup.md) | `f011031` | 工程外归档、闲置生成物清理、C2 集成退役、历史文档迁移与验证边界 |
 | 2026-11-19 | [2026-11-19-gui-console-update-proxy.md](2026/2026-11-19-gui-console-update-proxy.md) | `64493d0` | GUI 释放控制台与早期日志、自更新代理快照、真实 Windows 与 CONNECT 下载验证 |
+| 2026-11-20 | [2026-11-20-platform-self-update.md](2026/2026-11-20-platform-self-update.md) | `b3bedce` | 本机平台唯一更新包、自动安装入口、运行中 Windows PE 替换与失败保护 |
+| 2026-11-20 | [2026-11-20-direct-exe-restart-update.md](2026/2026-11-20-direct-exe-restart-update.md) | `58fc70f` | Windows 直接 EXE、下载就绪后确认重启、退出后替换与原生窗口完整链路 |

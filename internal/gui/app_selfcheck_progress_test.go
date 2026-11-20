@@ -97,8 +97,13 @@ func TestStartupPromptIncludesDownloadsWithoutInstalling(t *testing.T) {
 			if payload["applied"] != false || payload["source"] != "startup" || !strings.Contains(payload["latest"].(string), "beta.2") {
 				t.Fatalf("invalid prompt: %+v", payload)
 			}
-			if len(payload["downloadUrls"].(map[string]string)) != 2 {
-				t.Fatal("prompt lost actual archive links")
+			selected, err := update.SelectedAsset(guiUpdateFixture())
+			if err != nil {
+				t.Fatal(err)
+			}
+			urls := payload["downloadUrls"].(map[string]string)
+			if len(urls) != 1 || urls[selected.Name] != selected.BrowserDownloadURL || payload["assetName"] != selected.Name || payload["platform"] != update.TargetPlatform() {
+				t.Fatalf("startup prompt must identify only its own installable platform: %+v", payload)
 			}
 		})
 	}

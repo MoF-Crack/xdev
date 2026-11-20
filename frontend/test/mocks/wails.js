@@ -6,8 +6,10 @@ const defaultApp = {
   PreviewCustomToolVersions: async () => ({ success: true, message: '', versions: ['v1.0.0'] }),
   AddCustomTool: async () => ({ success: true, message: 'added', versions: ['v1.0.0'] }),
   RemoveCustomTool: async () => {},
-  CheckForUpdate: async () => ({ current: '1.0.0-beta.2', latest: '1.0.0-beta.2', hasUpdate: false, applied: false }),
+  CheckForUpdate: async () => ({ current: '1.0.0-beta.2', latest: '1.0.0-beta.2', hasUpdate: false, applied: false, ready: false, restarting: false }),
+  PrepareUpdate: async () => ({ current: '1.0.0-beta.2', latest: '1.0.0-beta.2', hasUpdate: false, applied: false, ready: false, restarting: false }),
   ApplyUpdate: async () => ({ current: '1.0.0-beta.2', latest: '1.0.0-beta.2', hasUpdate: false, applied: false }),
+  RestartToUpdate: async () => ({ ready: false, restarting: false, error: 'No prepared update' }),
   IgnoreSelfUpdate: async () => {},
 };
 
@@ -275,6 +277,28 @@ export function createInitializedWailsBrowserMocks() {
       if (result.reject) throw new Error(result.reject);
       return { ...result };
     },
+    PrepareUpdate: async () => {
+      window.__wailsCalls.PrepareUpdate.push([]);
+      const result = window.__wailsSelfUpdatePlan?.prepares?.shift() || { current: '1.0.0-beta.2', latest: '1.0.0-beta.2', hasUpdate: false, applied: false, ready: false };
+      if (window.__wailsSelfUpdatePlan?.holdPrepare) {
+        return new Promise((resolve, reject) => {
+          window.__wailsFinishPrepare = override => {
+            delete window.__wailsFinishPrepare;
+            const reply = override || result;
+            if (reply.reject) reject(new Error(reply.reject));
+            else resolve({ ...reply });
+          };
+        });
+      }
+      if (result.reject) throw new Error(result.reject);
+      return { ...result };
+    },
+    RestartToUpdate: async () => {
+      window.__wailsCalls.RestartToUpdate.push([]);
+      const result = window.__wailsSelfUpdatePlan?.restarts?.shift() || { ready: false, restarting: false, error: 'No ready fixture' };
+      if (result.reject) throw new Error(result.reject);
+      return { ...result };
+    },
     IgnoreSelfUpdate: async (...args) => { window.__wailsCalls.IgnoreSelfUpdate.push(args); },
     ListCustomTools: async () => [],
     // F-2：Go 契约已改为 {success, message, versions}（失败可携带原因直达 UI）。
@@ -321,7 +345,7 @@ export function createInitializedWailsBrowserMocks() {
   });
   window.__wailsEmit = (name, data) => listeners[name]?.forEach((fn) => fn(data));
   window.__wailsUnexpected = [];
-  window.__wailsCalls = { StartInstall: [], CancelInstall: [], InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [], CheckForUpdate: [], ApplyUpdate: [], IgnoreSelfUpdate: [], WindowClose: 0 };
+  window.__wailsCalls = { StartInstall: [], CancelInstall: [], InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [], CheckForUpdate: [], PrepareUpdate: [], RestartToUpdate: [], ApplyUpdate: [], IgnoreSelfUpdate: [], WindowClose: 0 };
   window.go = { gui: { App: app } };
   window.runtime = runtime;
 }

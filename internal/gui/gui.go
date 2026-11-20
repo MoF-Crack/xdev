@@ -22,6 +22,7 @@ type wailsDesktop struct {
 }
 
 func (d *wailsDesktop) Emit(name string, data any) { d.app.Event.Emit(name, data) }
+func (d *wailsDesktop) Quit()                      { d.app.Quit() }
 func (d *wailsDesktop) Show() {
 	if d.window.IsMinimised() {
 		d.window.UnMinimise()

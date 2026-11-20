@@ -87,13 +87,19 @@ describe('SettingsPage', () => {
     expect(wrapper.emitted('retry-self-update')).toEqual([[]]);
   });
 
-  it('opens the download/install confirmation action for an available update', async () => {
-    const wrapper = mount(SettingsPage, { props: { ...props, updateInfo: { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false } } });
+  it('opens the confirmation for available or prepared updates without calling download or restart directly', async () => {
+    const updateInfo = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false };
+    const wrapper = mount(SettingsPage, { props: { ...props, updateInfo } });
     const button = wrapper.get('[data-action="open-self-update"]');
-    expect(button.text()).toBe('self_update.download_install');
-    expect(button.attributes('aria-label')).toBe('self_update.download_install');
+    expect(button.text()).toBe('self_update.download');
+    expect(button.attributes('aria-label')).toBe('self_update.download');
     await button.trigger('click');
-    expect(wrapper.emitted('open-self-update')).toEqual([[]]);
+    await wrapper.setProps({ updateInfo: { ...updateInfo, ready: true }, updateError: { kind: 'restart', message: 'helper unavailable' } });
+    expect(wrapper.get('[data-testid="settings-self-update"]').text()).toContain('self_update.ready_hint');
+    expect(button.text()).toBe('self_update.review_ready');
+    expect(wrapper.find('[data-action="retry-self-update"]').exists()).toBe(false);
+    await button.trigger('click');
+    expect(wrapper.emitted('open-self-update')).toEqual([[], []]);
   });
 
   it.each(['updateChecking', 'selfUpdating', 'updateBusy'])('%s disables check and installation and explains the busy state', async flag => {

@@ -242,19 +242,33 @@ test('native installers do not change the five canonical single-binary archive n
   ]);
 });
 
-test('all five canonical archives still contain exactly one root binary', t => {
+test('all five archives retain one root binary; Windows also stages the identical executable', t => {
   const dir = temp(t);
   const binary = join(dir, 'xdev');
-  writeFileSync(binary, 'canonical binary fixture');
+  const dist = join(dir, 'dist');
+  const payload = Buffer.from([0x4d, 0x5a, 0x00, 0x0d, 0x0a, 0xff]);
+  writeFileSync(binary, payload);
+  const outputs = [];
   for (const [os, arch] of platforms) {
-    const output = pack(binary, join(dir, 'dist'), '1.0.0-beta.2', os, arch);
+    const output = pack(binary, dist, '1.0.0-beta.2', os, arch);
+    outputs.push(archiveName('1.0.0-beta.2', os, arch));
     // Windows ships bsdtar, which also reads zip; GNU tar uses unzip for zip.
-    const result = os === 'windows' && process.platform !== 'win32'
+    const zipOnUnix = os === 'windows' && process.platform !== 'win32';
+    const result = zipOnUnix
       ? spawnSync('unzip', ['-Z1', output], { encoding: 'utf8' })
       : spawnSync('tar', ['-tf', output], { encoding: 'utf8' });
     assert.equal(result.status, 0, String(result.error || '') + result.stderr);
     assert.deepEqual(result.stdout.trim().split(/\r?\n/), [os === 'windows' ? 'xdev.exe' : 'xdev']);
+    if (os === 'windows') {
+      const rawName = 'xdev-windows-amd64-v1.0.0-beta.2.exe';
+      outputs.push(rawName);
+      const member = zipOnUnix ? spawnSync('unzip', ['-p', output, 'xdev.exe']) : spawnSync('tar', ['-xOf', output, 'xdev.exe']);
+      assert.equal(member.status, 0, String(member.error || '') + member.stderr);
+      assert.deepEqual(member.stdout, payload);
+      assert.deepEqual(readFileSync(join(dist, rawName)), member.stdout);
+    }
   }
+  assert.deepEqual(readdirSync(dist).sort(), outputs.sort());
 });
 
 // Parse the linked PE resource directory instead of treating an ICO/syso file as

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Canonical updater archive producer. The updater consumes exactly one root
-// member (xdev or xdev.exe); package validation is mandatory before publishing.
-import { mkdirSync, mkdtempSync, copyFileSync, readdirSync, createReadStream, writeFileSync, readFileSync } from 'node:fs';
-import { dirname, resolve, join, basename } from 'node:path';
+// Canonical updater payload producer. Windows stages a direct executable and
+// retains the single-member ZIP; Unix uses single-member tarballs.
+import { mkdirSync, mkdtempSync, copyFileSync, readdirSync, createReadStream, writeFileSync, lstatSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -15,6 +15,9 @@ export function archiveName(version, os, arch) {
  if (!platforms.some(([o,a]) => o === os && a === arch)) throw new Error(`Unsupported release platform: ${os}/${arch}`);
  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(version.replace(/^v/,''))) throw new Error('Invalid release version');
  return `xdev-${os}-${arch}-v${version.replace(/^v/,'')}.${os === 'windows' ? 'zip' : 'tar.gz'}`;
+}
+function windowsExeName(version, arch) {
+ return archiveName(version,'windows',arch).replace(/\.zip$/, '.exe');
 }
 function run(command,args,cwd) {
  const r=spawnSync(command,args,{cwd,stdio:'inherit'});
@@ -30,6 +33,13 @@ export async function checksums(directory,version) {
  const expected=platforms.map(([os,arch])=>archiveName(version,os,arch));
  const names=readdirSync(directory).filter(n=>n!=='SHA256SUMS' && !n.endsWith('.json')).sort();
  for(const name of expected) if(!names.includes(name)) throw new Error(`Missing required update archive: ${name}`);
+ for(const [os,arch] of platforms) {
+  if(os!=='windows') continue;
+  const name=windowsExeName(version,arch);
+  if(!names.includes(name)) throw new Error(`Missing required update executable: ${name}`);
+  const info=lstatSync(join(directory,name));
+  if(!info.isFile() || info.size===0) throw new Error(`Invalid required update executable: ${name}`);
+ }
  const lines=[];
  for(const name of names) lines.push(`${await hashFile(join(directory,name))}  ${name}`);
  writeFileSync(join(directory,'SHA256SUMS'),lines.join('\n')+'\n');
@@ -39,12 +49,14 @@ export function pack(binary,directory,version,os,arch) {
  const name=archiveName(version,os,arch);
  const staging=mkdtempSync(join(tmpdir(),'xdev-package-'));
  const member=os==='windows'?'xdev.exe':'xdev';
- copyFileSync(binary,join(staging,member));
+ const stagedBinary=join(staging,member);
+ copyFileSync(binary,stagedBinary);
  mkdirSync(directory,{recursive:true});
  const output=resolve(directory,name);
  if(os==='windows') {
-  if(process.platform==='win32') run('powershell.exe',['-NoProfile','-Command',`Compress-Archive -LiteralPath '${join(staging,member).replaceAll("'","''")}' -DestinationPath '${output.replaceAll("'","''")}' -Force`]);
-  else run('zip',['-j',output,join(staging,member)]);
+  if(process.platform==='win32') run('powershell.exe',['-NoProfile','-Command',`Compress-Archive -LiteralPath '${stagedBinary.replaceAll("'","''")}' -DestinationPath '${output.replaceAll("'","''")}' -Force`]);
+  else run('zip',['-j',output,stagedBinary]);
+  copyFileSync(stagedBinary,resolve(directory,windowsExeName(version,arch)));
  } else run('tar',['-czf',output,'-C',staging,member]);
  // Staging is deliberately confined to an owned temp directory. OS temp cleanup
  // can reclaim it; no recursive deletion is needed in a packaging command.

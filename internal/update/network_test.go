@@ -286,6 +286,7 @@ func TestWithProxyReadCancellation(t *testing.T) {
 	defer cleanup()
 	done := make(chan error, 1)
 	result := updateResultFixture("https://github.com", nil)
+	result.Release.Assets[0].Size = int64(len("partial archive"))
 	go func() { done <- ApplyToWithProgress(ctx, result, exe, nil) }()
 	select {
 	case <-started:

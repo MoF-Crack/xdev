@@ -217,9 +217,13 @@ type DashboardStats struct {
 // UpdateCheckResult contains the result of checking for updates.
 type UpdateCheckResult struct {
 	HasUpdate    bool              `json:"hasUpdate"`
-	Applied      bool              `json:"applied"` // true only after an update was actually installed
+	Applied      bool              `json:"applied"`    // true only after an update was actually installed
+	Ready        bool              `json:"ready"`      // verified payload is staged; original executable is unchanged
+	Restarting   bool              `json:"restarting"` // helper is armed and the GUI is closing
 	Current      string            `json:"current"`
 	Latest       string            `json:"latest"`
+	Platform     string            `json:"platform"`
+	AssetName    string            `json:"assetName,omitempty"`
 	DownloadURLs map[string]string `json:"downloadUrls,omitempty"`
 	Error        string            `json:"error,omitempty"`
 }
@@ -391,17 +395,21 @@ var regMu sync.Mutex
 // query, install session, host scan, and prefs. New Wails bindings are
 // not added in Spec 029; existing wrappers forward into those modules.
 type App struct {
-	desktop         desktopRuntime
-	noEnvWrite      bool
-	installSessions installSessions
-	ctx             context.Context
-	cfg             *config.Config
-	cfgMu           sync.RWMutex // protects cfg for concurrent read/write
-	catMu           sync.RWMutex // protects cat for concurrent read/write (reloadCatalog)
-	cat             *manifest.Catalog
-	registry        *plugin.Registry
-	localMu         sync.RWMutex
-	localMap        map[string]localInfo // cached local tool detection results
+	desktop    desktopRuntime
+	noEnvWrite bool
+	// Protected by guiSelfUpdateMu, shared with startup/manual update work.
+	preparedUpdate   preparedUpdateSession
+	preparedView     UpdateCheckResult
+	restartScheduled bool
+	installSessions  installSessions
+	ctx              context.Context
+	cfg              *config.Config
+	cfgMu            sync.RWMutex // protects cfg for concurrent read/write
+	catMu            sync.RWMutex // protects cat for concurrent read/write (reloadCatalog)
+	cat              *manifest.Catalog
+	registry         *plugin.Registry
+	localMu          sync.RWMutex
+	localMap         map[string]localInfo // cached local tool detection results
 	// cacheWriteMu 串行化 tool_scan_cache.json 的落盘（票 22 / P1-16 / D-08）。
 	// GUI 包有 15 个 saveLocalCache 调用点分布在 7 个文件，且批量迁移是并发
 	// 执行的（MigrateAllLocalTools 最多 4 路并发 worker），并发写会让
@@ -546,6 +554,7 @@ func (a *App) domReady(ctx context.Context) {
 		a.desktop.Show()
 	}
 	logInfo("[domReady] WindowShow() completed, window should now be visible")
+	a.reportRestartFailure()
 
 	// 先尝试从缓存加载；命中后立刻 signalLocalReady，避免
 	// waitForLocalCache 在 refresh 完成前白等 500ms。
@@ -596,6 +605,7 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.rootCancel != nil {
 		a.rootCancel()
 	}
+	a.discardPreparedUpdate()
 	logInfo("[shutdown] 取消延迟刷新任务...")
 	if a.cancelRefresh != nil {
 		a.cancelRefresh()

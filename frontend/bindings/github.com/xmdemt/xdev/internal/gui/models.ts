@@ -2173,8 +2173,20 @@ export class UpdateCheckResult {
      * true only after an update was actually installed
      */
     "applied": boolean;
+
+    /**
+     * verified payload is staged; original executable is unchanged
+     */
+    "ready": boolean;
+
+    /**
+     * helper is armed and the GUI is closing
+     */
+    "restarting": boolean;
     "current": string;
     "latest": string;
+    "platform": string;
+    "assetName"?: string;
     "downloadUrls"?: { [_ in string]?: string };
     "error"?: string;
 
@@ -2186,11 +2198,20 @@ export class UpdateCheckResult {
         if (!("applied" in $$source)) {
             this["applied"] = false;
         }
+        if (!("ready" in $$source)) {
+            this["ready"] = false;
+        }
+        if (!("restarting" in $$source)) {
+            this["restarting"] = false;
+        }
         if (!("current" in $$source)) {
             this["current"] = "";
         }
         if (!("latest" in $$source)) {
             this["latest"] = "";
+        }
+        if (!("platform" in $$source)) {
+            this["platform"] = "";
         }
 
         Object.assign(this, $$source);
@@ -2200,10 +2221,10 @@ export class UpdateCheckResult {
      * Creates a new UpdateCheckResult instance from a string or object.
      */
     static createFrom($$source: any = {}): UpdateCheckResult {
-        const $$createField4_0 = $$createType9;
+        const $$createField8_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("downloadUrls" in $$parsedSource) {
-            $$parsedSource["downloadUrls"] = $$createField4_0($$parsedSource["downloadUrls"]);
+            $$parsedSource["downloadUrls"] = $$createField8_0($$parsedSource["downloadUrls"]);
         }
         return new UpdateCheckResult($$parsedSource as Partial<UpdateCheckResult>);
     }

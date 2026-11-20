@@ -23,6 +23,7 @@ import (
 	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/signer"
+	"github.com/xmdemt/xdev/internal/update"
 )
 
 //go:embed manifests/*.yaml
@@ -43,6 +44,15 @@ func init() {
 }
 
 func main() {
+	// An owned updater helper must run before GUI/CLI/shim initialization. It
+	// waits for the old process to exit, then installs and relaunches XDev.
+	if handled, err := update.RunRestartHelper(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "update helper:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// 单二进制多态入口：无参数 → GUI；其余交给 Cobra CLI
 	// （tui/gui 子命令与普通命令由命令树分派）。
 	if len(os.Args) <= 1 {

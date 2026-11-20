@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useSelfUpdate } from '../src/composables/useSelfUpdate.js';
 
 const t = (key, params) => params ? `${key}:${params.latest}` : key;
-const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, downloadUrls: { 'xdev-windows-amd64-v1.0.0-beta.2.zip': 'https://example.test/beta.2.zip' } };
+const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.exe';
+const assetInfo = { platform: 'windows/amd64', assetName, downloadUrls: { [assetName]: 'https://example.test/beta.2.exe' } };
+const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, ready: false, restarting: false, ...assetInfo };
+const ready = { ...available, ready: true };
+const restarting = { ...ready, restarting: true };
 const progress = { action: 'progress', current: available.current, latest: available.latest, phase: 'downloading', downloadedBytes: 320, totalBytes: 1000, percent: 32 };
 function deferred() { let resolve; let reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function fixture(overrides = {}) {
@@ -22,9 +26,57 @@ describe('useSelfUpdate', () => {
     expect(state.show.value).toBe(true);
     expect(state.status.value).toBe('available');
     expect(state.returnFocusTo.value).toBe(trigger);
-    expect(state.info.value.downloadUrls).toEqual(available.downloadUrls);
+    expect(state.dialogInfo.value).toMatchObject(assetInfo);
     expect(app.ApplyUpdate).not.toHaveBeenCalled();
     expect(message.info).not.toHaveBeenCalled();
+  });
+
+  it('uses a fresh archive snapshot for checks and startup offers, including older payloads', async () => {
+    const legacy = { current: available.current, latest: available.latest, hasUpdate: true };
+    const check = vi.fn().mockResolvedValueOnce(available).mockResolvedValueOnce(legacy);
+    const { state, app } = fixture({ CheckForUpdate: check });
+    await state.check();
+    expect(state.dialogInfo.value).toMatchObject(assetInfo);
+    await state.check();
+    expect(state.dialogInfo.value.assetName).toBeFalsy();
+    expect(state.dialogInfo.value.downloadUrls).toBeUndefined();
+    expect(app.ApplyUpdate).not.toHaveBeenCalled();
+    state.handleEvent({ action: 'ask', ...available });
+    expect(state.dialogInfo.value).toMatchObject(assetInfo);
+    state.handleEvent({ action: 'notify', ...legacy, latest: '1.0.0-beta.3' });
+    expect(state.dialogInfo.value.assetName).toBeFalsy();
+    expect(state.dialogInfo.value.downloadUrls).toBeUndefined();
+    expect(await state.apply()).toBe(true);
+  });
+
+  it('preserves the same candidate on sparse progress and a thrown apply, but never inherits a different candidate', async () => {
+    const response = deferred();
+    const { state } = fixture({ ApplyUpdate: vi.fn().mockReturnValue(response.promise) });
+    await state.check();
+    const applying = state.apply();
+    state.handleEvent(progress);
+    expect(state.dialogInfo.value).toMatchObject(assetInfo);
+    response.reject(new Error('network offline'));
+    await applying;
+    expect(state.dialogInfo.value).toMatchObject(assetInfo);
+    state.handleEvent({ ...progress, source: 'startup', latest: '1.0.0-beta.3' });
+    expect(state.dialogInfo.value.assetName).toBeFalsy();
+    expect(state.dialogInfo.value.downloadUrls).toBeUndefined();
+  });
+
+  it('clears the manual resource on a fresh same-release apply failure that reports no selected asset', async () => {
+    const { state, app } = fixture({ ApplyUpdate: vi.fn().mockResolvedValue({
+      current: available.current, latest: available.latest, platform: available.platform, hasUpdate: true, applied: false,
+      error: 'No matching archive for windows/amd64',
+    }) });
+    await state.check();
+    expect(await state.apply()).toBe(false);
+    expect(state.status.value).toBe('error');
+    expect(state.dialogInfo.value.platform).toBe(available.platform);
+    expect(state.dialogInfo.value.assetName).toBeFalsy();
+    expect(state.dialogInfo.value.downloadUrls).toBeUndefined();
+    await state.retry();
+    expect(app.ApplyUpdate).toHaveBeenCalledTimes(2);
   });
 
   it('applies through the existing API, consumes real progress, waits for applied and leaves a restart result open', async () => {

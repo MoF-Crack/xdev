@@ -13,9 +13,18 @@
           : effectiveStatus === 'up-to-date' ? t('self_update.no_update_applied')
           : current && latest ? t('self_update.text', { current, latest }) : t('settings.self_update') }}
       </p>
-      <p v-if="effectiveStatus === 'available'" class="self-update__text">{{ t('self_update.confirm') }}</p>
+      <dl v-if="effectiveStatus !== 'checking' && (platform || assetName)" class="self-update__target">
+        <div v-if="platform"><dt>{{ t('self_update.detected_platform') }}</dt><dd class="xdev-mono">{{ platform }}</dd></div>
+        <div v-if="assetName"><dt>{{ t(isExecutable ? 'self_update.selected_executable' : 'self_update.selected_archive') }}</dt><dd class="xdev-mono">{{ assetName }}</dd></div>
+      </dl>
+      <template v-if="effectiveStatus === 'available'">
+        <p class="self-update__text">{{ t(downloadOnly ? 'self_update.confirm' : 'self_update.confirm_legacy') }}</p>
+        <p v-if="platform?.startsWith('windows/') && /\.zip$/i.test(assetName)" class="self-update__hint self-update__zip">{{ t('self_update.windows_zip') }}</p>
+      </template>
+      <p v-if="effectiveStatus === 'ready'" class="self-update__text" role="status" data-testid="self-update-ready">{{ t('self_update.ready_hint') }}</p>
+      <p v-if="effectiveStatus === 'restarting'" class="self-update__text" role="status" data-testid="self-update-restarting">{{ t('self_update.restarting') }}</p>
       <div v-if="error" class="self-update__error" role="alert" data-testid="self-update-error">
-        <strong>{{ t(error.kind === 'check' ? 'update_check_failed' : 'self_update.error_title') }}</strong>
+        <strong>{{ t(error.kind === 'check' ? 'update_check_failed' : error.kind === 'restart' ? 'self_update.restart_failed' : 'self_update.error_title') }}</strong>
         <p>{{ error.message }}</p>
       </div>
       <div v-if="checking || updating" class="self-update__progress" data-testid="self-update-progress">
@@ -32,20 +41,30 @@
       </div>
       <p v-if="busy" class="self-update__hint">{{ t('self_update.busy') }}</p>
       <p v-if="effectiveStatus === 'applied'" class="self-update__hint" role="status" data-testid="self-update-restart">{{ t('self_update.restart_hint') }}</p>
-      <ul v-if="!busy && effectiveStatus === 'available' && downloads.length" class="self-update__downloads">
-        <li v-for="download in downloads" :key="download.name">
-          <a :href="download.url" target="_blank" rel="noopener noreferrer">{{ t('self_update.download_archive') }} · {{ download.name }}</a>
-        </li>
-      </ul>
+      <div v-if="!busy && manualDownloadUrl && (effectiveStatus === 'available' || (error?.kind === 'apply' && effectiveStatus === 'error'))" class="self-update__fallback">
+        <button type="button" class="self-update__fallback-toggle" data-action="self-update-manual-download"
+          :aria-expanded="manualExpanded" :aria-controls="manualDownloadId" @click="manualExpanded = !manualExpanded">
+          <ChevronForwardOutline aria-hidden="true" />
+          {{ t('self_update.manual_download') }}
+        </button>
+        <div :id="manualDownloadId" :hidden="!manualExpanded">
+          <template v-if="manualExpanded">
+            <p :id="manualWarningId" class="self-update__hint">{{ t(isExecutable ? 'self_update.manual_exe_warning' : isArchive ? 'self_update.manual_archive_warning' : 'self_update.manual_warning') }}</p>
+            <a :href="manualDownloadUrl" :aria-describedby="manualWarningId" target="_blank" rel="noopener noreferrer">{{ t('self_update.download_asset', { name: assetName }) }}</a>
+          </template>
+        </div>
+      </div>
       <div class="dialog-actions">
         <template v-if="source === 'startup' && (effectiveStatus === 'available' || effectiveStatus === 'updating')">
           <n-button data-action="self-update-quit" :disabled="busy" :aria-label="t('self_update.quit')" @click="requestAction('quit')">{{ t('self_update.quit') }}</n-button>
           <n-button data-action="self-update-ignore" secondary :disabled="busy" :aria-label="t('self_update.ignore')" @click="requestAction('ignore')">{{ t('self_update.ignore') }}</n-button>
         </template>
-        <n-button v-if="effectiveStatus === 'error' || checking" data-action="self-update-retry" type="primary" :disabled="busy" :loading="checking"
+        <n-button v-if="effectiveStatus === 'ready' || effectiveStatus === 'restarting'" data-action="self-update-restart-now" type="primary" :disabled="busy" :loading="restarting"
+          :aria-label="t('self_update.restart')" @click="requestAction('restart')">{{ t('self_update.restart') }}</n-button>
+        <n-button v-else-if="effectiveStatus === 'error' || checking" data-action="self-update-retry" type="primary" :disabled="busy" :loading="checking"
           :aria-label="t('btn.retry')" @click="requestAction('retry')">{{ t('btn.retry') }}</n-button>
         <n-button v-else-if="effectiveStatus === 'available' || effectiveStatus === 'updating'" data-action="self-update-update" type="primary" :disabled="busy" :loading="updating"
-          :aria-label="t('self_update.download_install')" @click="requestAction('update')">{{ t('self_update.download_install') }}</n-button>
+          :aria-label="downloadLabel" @click="requestAction('update')">{{ downloadLabel }}</n-button>
       </div>
     </section>
   </div>
@@ -54,6 +73,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { NButton } from 'naive-ui';
+import { ChevronForwardOutline } from '@vicons/ionicons5';
 import { formatBytes } from '../utils/format.js';
 
 const props = defineProps({
@@ -63,29 +83,46 @@ const props = defineProps({
   updating: Boolean,
   checking: Boolean,
   dismissing: Boolean,
+  restarting: Boolean,
+  downloadOnly: { type: Boolean, default: true },
   error: { type: Object, default: null },
   progress: { type: Object, default: null },
   status: { type: String, default: 'available' },
   source: { type: String, default: 'startup' },
+  platform: { type: String, default: '' },
+  assetName: { type: String, default: '' },
   downloadUrls: { type: Object, default: () => ({}) },
   returnFocusTo: Object,
   t: { type: Function, required: true },
 });
-const emit = defineEmits(['update', 'ignore', 'quit', 'close', 'retry']);
+const emit = defineEmits(['update', 'restart', 'ignore', 'quit', 'close', 'retry']);
 const panel = ref(null);
 const closeButton = ref(null);
 const submitted = ref(false);
+const manualExpanded = ref(false);
 const titleId = `${useId()}-self-update-title`;
 const descriptionId = `${titleId}-description`;
-const busy = computed(() => props.updating || props.checking || props.dismissing || submitted.value);
-const effectiveStatus = computed(() => props.updating ? 'updating' : props.checking ? 'checking' : props.dismissing ? 'dismissing' : props.error ? 'error' : props.status);
+const manualDownloadId = `${titleId}-manual`;
+const manualWarningId = `${manualDownloadId}-warning`;
+const busy = computed(() => props.updating || props.checking || props.dismissing || props.restarting || props.status === 'restarting' || submitted.value);
+const effectiveStatus = computed(() => props.restarting ? 'restarting'
+  : props.updating ? 'updating' : props.checking ? 'checking' : props.dismissing ? 'dismissing'
+  : ['ready', 'restarting'].includes(props.status) ? props.status : props.error ? 'error' : props.status);
 const title = computed(() => props.t(effectiveStatus.value === 'applied' ? 'self_update.applied_title' : effectiveStatus.value === 'error' ? 'self_update.error_title' : effectiveStatus.value === 'up-to-date' ? 'settings.self_update' : 'self_update.title'));
+const downloadLabel = computed(() => props.t(props.downloadOnly ? 'self_update.download' : 'self_update.download_install'));
+const isExecutable = computed(() => /\.exe$/i.test(props.assetName));
+const isArchive = computed(() => /\.(zip|tar\.gz)$/i.test(props.assetName));
 const downloadPercent = computed(() => props.progress?.totalBytes > 0 && typeof props.progress.percent === 'number' && Number.isFinite(props.progress.percent)
   ? Math.max(0, Math.min(100, props.progress.percent)) : undefined);
-const downloads = computed(() => Object.entries(props.downloadUrls || {}).flatMap(([name, url]) => {
-  if (!name || typeof url !== 'string') return [];
-  try { return new URL(url).protocol === 'https:' ? [{ name, url }] : []; } catch { return []; }
-}));
+// A legacy response without an authoritative selection can still be applied,
+// but it cannot safely offer a browser download.
+const manualDownloadUrl = computed(() => {
+  const { platform, assetName, downloadUrls } = props;
+  if (!platform || !assetName || !downloadUrls || !Object.hasOwn(downloadUrls, assetName)) return '';
+  const url = downloadUrls[assetName];
+  if (typeof url !== 'string') return '';
+  try { return new URL(url).protocol === 'https:' ? url : ''; } catch { return ''; }
+});
 let openingFocus = null;
 
 function focusInside() {
@@ -120,7 +157,10 @@ function onKeydown(event) {
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && (document.activeElement === last || !items.includes(document.activeElement))) { event.preventDefault(); first.focus(); }
 }
-watch(() => [props.show, props.updating, props.checking, props.dismissing, props.status, props.error], () => { submitted.value = false; }, { flush: 'sync' });
+watch(() => [props.show, props.updating, props.checking, props.dismissing, props.restarting, props.status, props.error], () => { submitted.value = false; }, { flush: 'sync' });
+watch([() => props.show, () => props.latest, () => props.platform, () => props.assetName, manualDownloadUrl, busy], () => {
+  manualExpanded.value = false;
+}, { flush: 'sync' });
 watch(() => props.show, async (visible, wasVisible) => {
   document.removeEventListener('focusin', keepFocusInside);
   if (visible) {
@@ -153,9 +193,19 @@ h2 { margin: 0; font-size: var(--xdev-font-size-lg); }
 .self-update__hint { color: var(--xdev-text-secondary); line-height: 1.6; }
 .self-update__progress p { margin: var(--xdev-space-2) 0; }
 progress { display: block; width: 100%; height: 12px; accent-color: var(--xdev-accent); }
-.self-update__downloads { display: grid; gap: var(--xdev-space-2); margin: var(--xdev-space-4) 0; padding-left: var(--xdev-space-4); }
-.self-update__downloads a { color: var(--xdev-accent); overflow-wrap: anywhere; }
-.self-update__downloads a:focus-visible { outline: 2px solid var(--xdev-accent); outline-offset: 2px; }
+.self-update__target { display: grid; gap: var(--xdev-space-2); margin: 0 0 var(--xdev-space-4); padding: var(--xdev-space-3); border-inline-start: 2px solid var(--xdev-accent); background: var(--xdev-bg-muted); font-size: var(--xdev-font-size-sm); }
+.self-update__target > div { display: grid; gap: var(--xdev-space-1); }
+.self-update__target dt { color: var(--xdev-text-secondary); }
+.self-update__target dd { margin: 0; overflow-wrap: anywhere; }
+.self-update__zip { margin: calc(-1 * var(--xdev-space-2)) 0 var(--xdev-space-4); }
+.self-update__fallback { margin-bottom: var(--xdev-space-4); border-top: 1px solid var(--xdev-border-subtle); padding-top: var(--xdev-space-2); }
+.self-update__fallback-toggle { display: inline-flex; align-items: center; gap: var(--xdev-space-2); min-height: 28px; padding: var(--xdev-space-1) 0; border: 0; background: transparent; color: var(--xdev-text-secondary); font: inherit; font-size: var(--xdev-font-size-sm); text-align: start; cursor: pointer; }
+.self-update__fallback-toggle svg { flex: 0 0 14px; width: 14px; height: 14px; }
+.self-update__fallback-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.self-update__fallback-toggle:hover { color: var(--xdev-text-primary); }
+.self-update__fallback .self-update__hint { margin: var(--xdev-space-2) 0; }
+.self-update__fallback a { color: var(--xdev-accent); overflow-wrap: anywhere; }
+.self-update__fallback :is(button, a):focus-visible { outline: 2px solid var(--xdev-accent); outline-offset: 2px; }
 .dialog-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--xdev-space-3); flex-wrap: wrap; }
 .dialog-actions :deep(.n-button) { min-width: 96px; white-space: normal; }
 </style>

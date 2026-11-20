@@ -148,27 +148,29 @@
         </FormSection>
         <FormSection :title="t('settings.self_update')">
           <div class="self-update-status" data-testid="settings-self-update" :aria-busy="selfUpdateBusy">
-            <p v-if="updateChecking" role="status">{{ t('self_update.checking') }}</p>
+            <p v-if="updateRestarting" role="status">{{ t('self_update.restarting') }}</p>
+            <p v-else-if="updateChecking" role="status">{{ t('self_update.checking') }}</p>
             <p v-else-if="selfUpdating" role="status">{{ t('self_update.preparing') }}</p>
-            <div v-else-if="selfUpdateError" class="self-update-status__error" role="alert">
-              <strong>{{ t(updateError?.kind === 'apply' ? 'self_update.apply_failed' : 'update_check_failed') }}</strong>
+            <div v-if="!selfUpdateBusy && selfUpdateError" class="self-update-status__error" role="alert">
+              <strong>{{ t(updateError?.kind === 'restart' ? 'self_update.restart_failed' : updateError?.kind === 'apply' ? 'self_update.apply_failed' : 'update_check_failed') }}</strong>
               <p>{{ selfUpdateError }}</p>
             </div>
-            <template v-else-if="updateInfo?.applied === true">
+            <p v-if="!selfUpdateBusy && updateInfo?.ready === true" role="status">{{ t('self_update.ready_hint') }}</p>
+            <template v-else-if="!selfUpdateBusy && !selfUpdateError && updateInfo?.applied === true">
               <StatusBadge tone="success">{{ t('self_update.applied', updateInfo) }}</StatusBadge>
               <p role="status">{{ t('self_update.restart_hint') }}</p>
             </template>
-            <StatusBadge v-else-if="updateInfo?.hasUpdate === true" tone="warning">{{ t('update_available', updateInfo) }}</StatusBadge>
-            <StatusBadge v-else-if="updateInfo?.hasUpdate === false" tone="success">{{ t('up_to_date') }}</StatusBadge>
+            <StatusBadge v-else-if="!selfUpdateBusy && !selfUpdateError && updateInfo?.hasUpdate === true" tone="warning">{{ t('update_available', updateInfo) }}</StatusBadge>
+            <StatusBadge v-else-if="!selfUpdateBusy && !selfUpdateError && updateInfo?.hasUpdate === false" tone="success">{{ t('up_to_date') }}</StatusBadge>
             <p v-if="selfUpdateBusy" id="settings-self-update-busy">{{ t('self_update.busy') }}</p>
           </div>
           <template #actions>
             <button type="button" class="xdev-btn xdev-btn--secondary" data-action="check-update" :disabled="selfUpdateBusy"
               :aria-label="t('btn.check_update')" :aria-describedby="selfUpdateBusy ? 'settings-self-update-busy' : undefined" @click="$emit('check-update')">{{ t('btn.check_update') }}</button>
-            <button v-if="selfUpdateError" type="button" class="xdev-btn xdev-btn--primary" data-action="retry-self-update" :disabled="selfUpdateBusy"
+            <button v-if="selfUpdateError && updateInfo?.ready !== true" type="button" class="xdev-btn xdev-btn--primary" data-action="retry-self-update" :disabled="selfUpdateBusy"
               :aria-label="t('btn.retry')" @click="$emit('retry-self-update')">{{ t('btn.retry') }}</button>
-            <button v-else-if="updateInfo?.hasUpdate === true && updateInfo?.applied !== true" type="button" class="xdev-btn xdev-btn--primary" data-action="open-self-update" :disabled="selfUpdateBusy"
-              :aria-label="t('self_update.download_install')" :aria-describedby="selfUpdateBusy ? 'settings-self-update-busy' : undefined" @click="$emit('open-self-update')">{{ t('self_update.download_install') }}</button>
+            <button v-else-if="(updateInfo?.hasUpdate === true || updateInfo?.ready === true) && updateInfo?.applied !== true" type="button" class="xdev-btn xdev-btn--primary" data-action="open-self-update" :disabled="selfUpdateBusy"
+              :aria-label="selfUpdateOpenLabel" :aria-describedby="selfUpdateBusy ? 'settings-self-update-busy' : undefined" @click="$emit('open-self-update')">{{ selfUpdateOpenLabel }}</button>
           </template>
         </FormSection>
         <FormSection :title="t('settings.diagnostics')">
@@ -217,6 +219,8 @@ const p = defineProps({
   updateInfo: Object,
   updateChecking: Boolean,
   selfUpdating: Boolean,
+  updateRestarting: Boolean,
+  updateDownloadOnly: { type: Boolean, default: true },
   updateBusy: Boolean,
   updateError: { type: Object, default: null },
   diagResults: { type: Array, default: () => [] },
@@ -239,8 +243,10 @@ defineEmits([
 ]);
 
 const t = p.t;
-const selfUpdateBusy = computed(() => p.updateBusy || p.updateChecking || p.selfUpdating);
+const selfUpdateBusy = computed(() => p.updateBusy || p.updateChecking || p.selfUpdating || p.updateRestarting);
 const selfUpdateError = computed(() => p.updateError?.message || p.updateInfo?.error || '');
+const selfUpdateOpenLabel = computed(() => t(p.updateInfo?.ready === true ? 'self_update.review_ready'
+  : p.updateDownloadOnly ? 'self_update.download' : 'self_update.download_install'));
 
 const customToolForm = reactive({
   name: '',
