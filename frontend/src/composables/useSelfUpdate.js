@@ -41,7 +41,7 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
   function rememberFocus() {
     if (!show.value) returnFocusTo.value = document.activeElement;
   }
-  function resultInfo(result, previous = info.value) {
+  function resultInfo(result, previous = null) {
     return {
       ...emptyInfo(),
       ...previous,
@@ -58,7 +58,10 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
   }
   function fail(kind, reason, result) {
     const detail = reason?.message || String(reason || t('self_update.invalid_response'));
-    info.value = { ...resultInfo(result), applied: false, ...(kind === 'check' ? { hasUpdate: false } : {}) };
+    // A thrown apply/ignore carries no new release snapshot. An actual reply
+    // (even an error) supersedes the old selection, including an omitted asset.
+    const previous = !result && kind !== 'check' ? info.value : null;
+    info.value = { ...resultInfo(result, previous), applied: false, ...(kind === 'check' ? { hasUpdate: false } : {}) };
     error.value = { kind, message: detail };
     show.value = true;
     notify('error', `${t(kind === 'check' ? 'update_check_failed' : 'self_update.error_title')}: ${detail}`);
@@ -117,11 +120,11 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
     try {
       const result = validateResult(await app().ApplyUpdate());
       if (disposed || request !== revision) return false;
-      info.value = resultInfo(result);
       if (result.error) {
         fail('apply', result.error, result);
         return false;
       }
+      info.value = resultInfo(result);
       if (result.applied === true) {
         notify('success', t('self_update.applied', { latest: result.latest }));
         return true;
@@ -212,7 +215,14 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
         rememberFocus();
         source.value = data.source === 'manual' ? 'manual' : 'startup';
       }
-      info.value = resultInfo({ ...data, hasUpdate: true, applied: false });
+      // Progress is a partial snapshot. Only retain archive metadata if the
+      // event still describes the same release and selected package.
+      const previous = info.value;
+      const sameCandidate = data.latest && data.latest === previous?.latest
+        && (!data.current || data.current === previous.current)
+        && (!Object.hasOwn(data, 'platform') || data.platform === previous.platform)
+        && (!Object.hasOwn(data, 'assetName') || data.assetName === previous.assetName);
+      info.value = resultInfo({ ...data, hasUpdate: true, applied: false }, sameCandidate ? previous : null);
       progress.value = {
         phase: data.phase,
         downloadedBytes: Math.max(0, Number(data.downloadedBytes) || 0),

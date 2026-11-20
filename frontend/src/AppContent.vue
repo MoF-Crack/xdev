@@ -58,7 +58,8 @@
   <SelfUpdateDialog :show="showSelfUpdate" :current="selfUpdateInfo.current" :latest="selfUpdateInfo.latest"
     :updating="selfUpdating" :checking="selfUpdateChecking" :dismissing="selfUpdateDismissing"
     :error="selfUpdateError" :progress="selfUpdateProgress" :status="selfUpdateStatus" :source="selfUpdateSource"
-    :download-urls="selfUpdateInfo.downloadUrls" :return-focus-to="selfUpdateTrigger" :t="t"
+    :platform="selfUpdateInfo.platform" :asset-name="selfUpdateInfo.assetName" :download-urls="selfUpdateInfo.downloadUrls"
+    :return-focus-to="selfUpdateTrigger" :t="t"
     @update="applySelfUpdate" @retry="retrySelfUpdate" @close="closeSelfUpdate" @ignore="ignoreSelfUpdate" @quit="quitSelfUpdate" />
   <CommandPalette
     v-model:show="showCommandPalette"

@@ -1,7 +1,10 @@
 export default {
   // Application update discovery, download and installation
   'self_update.download_install': "Download and install",
-  'self_update.confirm': "The update will be downloaded, verified and installed. XDev will not restart automatically.",
+  'self_update.confirm': "XDev will automatically download the update, verify its checksum, extract it and replace the executable. XDev won’t restart automatically.",
+  'self_update.detected_platform': "Detected platform",
+  'self_update.selected_archive': "Update archive",
+  'self_update.windows_zip': "On Windows, the ZIP only delivers the update. You do not need to extract it yourself.",
   'self_update.checking': "Checking for updates…",
   'self_update.preparing': "Confirming the update and preparing the download…",
   'self_update.busy': "An update operation is in progress. Wait until it finishes before closing.",
@@ -12,7 +15,9 @@ export default {
   'self_update.no_update_applied': "Already up to date. No update was installed.",
   'self_update.applied_title': "Update installed",
   'self_update.restart_hint': "Close and reopen XDev to use the new version. This window will not restart automatically.",
-  'self_update.download_archive': "Download the archive separately",
+  'self_update.manual_download': "Manual download (archive only)",
+  'self_update.manual_warning': "This only downloads the archive. Close XDev, extract the archive and replace the executable yourself.",
+  'self_update.download_archive': "Download archive: {name}",
   'self_update.download_progress': "Update download progress",
   'self_update.phase.downloading': "Downloading",
   'self_update.phase.verifying': "Verifying checksum",

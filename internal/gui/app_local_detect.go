@@ -334,14 +334,14 @@ func (a *App) selfUpdateContext(parent context.Context) (context.Context, func()
 	return update.WithProxy(parent, proxy)
 }
 
-// guiUpdateResult only projects version/release data; applied defaults to false.
-// Download links are actual archive URLs from the selected release, never
-// guessed download pages or fabricated app APIs.
+// guiUpdateResult projects the current platform and its sole installable asset;
+// applied defaults to false. A browser link is only a manual fallback and must
+// never expose archives for other operating systems or architectures.
 func guiUpdateResult(result *update.CheckResult) UpdateCheckResult {
 	if result == nil {
 		return UpdateCheckResult{Current: version.Version, Error: "update check returned no result"}
 	}
-	view := UpdateCheckResult{HasUpdate: result.HasUpdate, Current: result.CurrentVersion, Latest: result.LatestVersion}
+	view := UpdateCheckResult{HasUpdate: result.HasUpdate, Current: result.CurrentVersion, Latest: result.LatestVersion, Platform: update.TargetPlatform()}
 	if view.Current == "" {
 		view.Current = version.Version
 	}
@@ -349,16 +349,16 @@ func guiUpdateResult(result *update.CheckResult) UpdateCheckResult {
 		view.Error = "update check returned no release version"
 		return view
 	}
-	if result.Release != nil {
-		for _, asset := range result.Release.Assets {
-			if !strings.HasPrefix(asset.Name, "xdev-") || (!strings.HasSuffix(asset.Name, ".zip") && !strings.HasSuffix(asset.Name, ".tar.gz")) || !strings.HasPrefix(asset.BrowserDownloadURL, "https://") {
-				continue
-			}
-			if view.DownloadURLs == nil {
-				view.DownloadURLs = make(map[string]string)
-			}
-			view.DownloadURLs[asset.Name] = asset.BrowserDownloadURL
+	if view.HasUpdate {
+		asset, err := update.SelectedAsset(result)
+		if err != nil {
+			view.Error = err.Error()
+			return view
 		}
+		view.AssetName = asset.Name
+		// Keep the legacy binding field, but expose only the archive selected
+		// by the very same OS/architecture selector used by Apply.
+		view.DownloadURLs = map[string]string{asset.Name: asset.BrowserDownloadURL}
 	}
 	return view
 }
@@ -373,11 +373,15 @@ func (a *App) emitSelfUpdateProgress(result *update.CheckResult, progress update
 	if len(source) > 0 && source[0] == "startup" {
 		origin = "startup"
 	}
+	view := guiUpdateResult(result)
 	a.emitEvent(selfUpdateEvent, map[string]interface{}{
 		"action":          "progress",
 		"source":          origin,
-		"current":         result.CurrentVersion,
-		"latest":          result.LatestVersion,
+		"current":         view.Current,
+		"latest":          view.Latest,
+		"platform":        view.Platform,
+		"assetName":       view.AssetName,
+		"downloadUrls":    view.DownloadURLs,
 		"applied":         false,
 		"phase":           progress.Phase,
 		"downloadedBytes": progress.DownloadedBytes,

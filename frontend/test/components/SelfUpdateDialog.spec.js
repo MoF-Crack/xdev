@@ -3,6 +3,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import SelfUpdateDialog from '../../src/components/SelfUpdateDialog.vue';
 
 const t = (key, params) => (params ? `${key}{${Object.values(params).join('/')}}` : key);
+const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.zip';
+const assetUrl = 'https://example.test/beta.2.zip';
+const platformRelease = {
+  platform: 'windows/amd64', assetName,
+  downloadUrls: {
+    'xdev-linux-amd64-v1.0.0-beta.2.tar.gz': 'https://example.test/linux.tar.gz',
+    [assetName]: assetUrl,
+    'xdev-darwin-arm64-v1.0.0-beta.2.tar.gz': 'https://example.test/darwin.tar.gz',
+  },
+};
 const wrappers = [];
 function mountDialog(props = {}) {
   const wrapper = mount(SelfUpdateDialog, { attachTo: document.body, props: { show: true, current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', t, ...props } });
@@ -140,12 +150,60 @@ describe('SelfUpdateDialog', () => {
     expect(wrapper.find('[data-action="self-update-update"]').exists()).toBe(false);
   });
 
-  it('offers real HTTPS archive links only and removes the focus trap on unmount', async () => {
-    const trigger = document.createElement('button'); document.body.append(trigger);
-    const wrapper = mountDialog({ returnFocusTo: trigger, downloadUrls: { 'beta.2.zip': 'https://example.test/beta.2.zip', unsafe: 'javascript:alert(1)', invalid: 'not a URL' } });
-    await flushPromises();
+  it('displays the detected platform and package, with only its archive behind the manual disclosure', async () => {
+    const wrapper = mountDialog({ ...platformRelease, source: 'manual' });
+    expect(wrapper.text()).toContain('windows/amd64');
+    expect(wrapper.text()).toContain(assetName);
+    expect(wrapper.text()).toContain('self_update.windows_zip');
+    expect(wrapper.findAll('a')).toHaveLength(0);
+    const disclosure = wrapper.get('[data-action="self-update-manual-download"]');
+    expect(disclosure.attributes('aria-expanded')).toBe('false');
+    await disclosure.trigger('click');
+    expect(disclosure.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get(`#${disclosure.attributes('aria-controls')}`).text()).toContain('self_update.manual_warning');
     expect(wrapper.findAll('a')).toHaveLength(1);
-    expect(wrapper.get('a').attributes()).toMatchObject({ href: 'https://example.test/beta.2.zip', target: '_blank', rel: 'noopener noreferrer' });
+    expect(wrapper.get('a').attributes()).toMatchObject({ href: assetUrl, target: '_blank', rel: 'noopener noreferrer' });
+    expect(wrapper.emitted('update')).toBeUndefined();
+    await disclosure.trigger('click');
+    expect(wrapper.findAll('a')).toHaveLength(0);
+  });
+
+  it.each([{}, { platform: 'windows/amd64' }, { assetName }, { ...platformRelease, assetName: 'missing.zip' },
+    { ...platformRelease, downloadUrls: { [assetName]: 'javascript:alert(1)' } },
+    { ...platformRelease, downloadUrls: { [assetName]: 'not a URL' } },
+  ])('keeps automatic update usable but hides unproven or unsafe links: %j', async props => {
+    const wrapper = mountDialog({ downloadUrls: platformRelease.downloadUrls, ...props });
+    expect(wrapper.find('[data-action="self-update-manual-download"]').exists()).toBe(false);
+    expect(wrapper.findAll('a')).toHaveLength(0);
+    await wrapper.get('[data-action="self-update-update"]').trigger('click');
+    expect(wrapper.emitted('update')).toHaveLength(1);
+  });
+
+  it('resets the manual disclosure across apply failures, other packages and reopen', async () => {
+    const wrapper = mountDialog(platformRelease);
+    const toggle = () => wrapper.get('[data-action="self-update-manual-download"]');
+    await toggle().trigger('click');
+    await wrapper.setProps({ updating: true });
+    expect(wrapper.findAll('a')).toHaveLength(0);
+    await wrapper.setProps({ updating: false, error: { kind: 'apply', message: 'Could not download' } });
+    expect(toggle().attributes('aria-expanded')).toBe('false');
+    expect(wrapper.findAll('a')).toHaveLength(0);
+    await toggle().trigger('click');
+    expect(wrapper.get('a').attributes('href')).toBe(assetUrl);
+    await wrapper.setProps({ latest: '1.0.0-beta.3' });
+    expect(toggle().attributes('aria-expanded')).toBe('false');
+    await toggle().trigger('click');
+    await wrapper.setProps({ show: false });
+    await wrapper.setProps({ show: true });
+    expect(toggle().attributes('aria-expanded')).toBe('false');
+    await wrapper.setProps({ error: { kind: 'check', message: 'No matching asset' } });
+    expect(wrapper.find('[data-action="self-update-manual-download"]').exists()).toBe(false);
+  });
+
+  it('removes the focus trap on unmount', async () => {
+    const trigger = document.createElement('button'); document.body.append(trigger);
+    const wrapper = mountDialog({ returnFocusTo: trigger });
+    await flushPromises();
     wrapper.unmount(); wrappers.splice(wrappers.indexOf(wrapper), 1);
     trigger.focus(); expect(document.activeElement).toBe(trigger);
   });

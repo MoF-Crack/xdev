@@ -2,20 +2,31 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import { createInitializedWailsBrowserMocks } from '../test/mocks/wails.js';
 
+const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.zip';
 const available = {
   current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false,
-  downloadUrls: { 'xdev-windows-amd64-v1.0.0-beta.2.zip': 'https://example.test/releases/beta.2.zip' },
+  platform: 'windows/amd64', assetName,
+  downloadUrls: { [assetName]: 'https://example.test/releases/beta.2.zip' },
 };
 const installed = { ...available, applied: true };
 async function openApp(page, testInfo, plan = {}, locale = 'en') {
   testInfo.pageErrors = [];
+  testInfo.browserTransfers = [];
   page.on('pageerror', error => testInfo.pageErrors.push(error.message));
+  page.on('popup', () => testInfo.browserTransfers.push('popup'));
+  page.on('download', () => testInfo.browserTransfers.push('download'));
+  page.context().on('request', request => {
+    if (request.url().startsWith('https://example.test/releases/')) testInfo.browserTransfers.push(request.url());
+  });
+  await page.context().route('https://example.test/releases/**', route => route.fulfill({ status: 200, body: 'Archive fixture' }));
   await page.setViewportSize({ width: 1024, height: 760 });
   await page.addInitScript(createInitializedWailsBrowserMocks);
   await page.addInitScript(({ plan, locale }) => {
     localStorage.setItem('xdev-theme', 'dark');
     localStorage.setItem('locale', locale);
     window.__wailsSelfUpdatePlan = plan;
+    window.__selfUpdateOpenCalls = [];
+    window.open = (...args) => { window.__selfUpdateOpenCalls.push(args); return null; };
   }, { plan, locale });
   await page.goto('/', { waitUntil: 'networkidle' });
   await expect(page.locator('.dashboard-page')).toBeVisible();
@@ -38,6 +49,8 @@ async function accessibleDialog(page) {
 }
 test.afterEach(async ({ page }, testInfo) => {
   expect(testInfo.pageErrors || []).toEqual([]);
+  expect(testInfo.browserTransfers || []).toEqual([]);
+  expect(await page.evaluate(() => window.__selfUpdateOpenCalls || [])).toEqual([]);
   expect(await page.evaluate(() => window.__wailsUnexpected || [])).toEqual([]);
 });
 
@@ -49,7 +62,10 @@ test('manual check confirms download/install, real progress, busy protection and
   await expect(dialog).toContainText(available.current); await expect(dialog).toContainText(available.latest);
   await expect(dialog.getByRole('button', { name: 'Download and install', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.__wailsCalls.ApplyUpdate.length)).toBe(0);
-  await expect(dialog.getByRole('link')).toHaveAttribute('href', available.downloadUrls['xdev-windows-amd64-v1.0.0-beta.2.zip']);
+  await expect(dialog).toContainText('windows/amd64');
+  await expect(dialog).toContainText(assetName);
+  await expect(dialog).toContainText('You do not need to extract it yourself.');
+  await expect(dialog.locator('a')).toHaveCount(0);
   await accessibleDialog(page);
   await dialog.getByRole('button', { name: 'Download and install', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__wailsCalls.ApplyUpdate.length)).toBe(1);

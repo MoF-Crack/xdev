@@ -220,6 +220,8 @@ type UpdateCheckResult struct {
 	Applied      bool              `json:"applied"` // true only after an update was actually installed
 	Current      string            `json:"current"`
 	Latest       string            `json:"latest"`
+	Platform     string            `json:"platform"`
+	AssetName    string            `json:"assetName,omitempty"`
 	DownloadURLs map[string]string `json:"downloadUrls,omitempty"`
 	Error        string            `json:"error,omitempty"`
 }

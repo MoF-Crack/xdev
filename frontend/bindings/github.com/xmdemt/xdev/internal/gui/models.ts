@@ -2175,6 +2175,8 @@ export class UpdateCheckResult {
     "applied": boolean;
     "current": string;
     "latest": string;
+    "platform": string;
+    "assetName"?: string;
     "downloadUrls"?: { [_ in string]?: string };
     "error"?: string;
 
@@ -2192,6 +2194,9 @@ export class UpdateCheckResult {
         if (!("latest" in $$source)) {
             this["latest"] = "";
         }
+        if (!("platform" in $$source)) {
+            this["platform"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -2200,10 +2205,10 @@ export class UpdateCheckResult {
      * Creates a new UpdateCheckResult instance from a string or object.
      */
     static createFrom($$source: any = {}): UpdateCheckResult {
-        const $$createField4_0 = $$createType9;
+        const $$createField6_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("downloadUrls" in $$parsedSource) {
-            $$parsedSource["downloadUrls"] = $$createField4_0($$parsedSource["downloadUrls"]);
+            $$parsedSource["downloadUrls"] = $$createField6_0($$parsedSource["downloadUrls"]);
         }
         return new UpdateCheckResult($$parsedSource as Partial<UpdateCheckResult>);
     }

@@ -1,7 +1,10 @@
 export default {
   // Application update discovery, download and installation
   'self_update.download_install': "下载并安装",
-  'self_update.confirm': "将下载、校验并安装更新。XDev 不会自动重启。",
+  'self_update.confirm': "XDev 会自动下载更新、校验文件、解压并替换程序文件，不会自动重启。",
+  'self_update.detected_platform': "自动检测的平台",
+  'self_update.selected_archive': "更新压缩包",
+  'self_update.windows_zip': "Windows 的 ZIP 仅用于传输更新，无需自行解压。",
   'self_update.checking': "正在检查更新…",
   'self_update.preparing': "正在确认更新并准备下载…",
   'self_update.busy': "更新操作进行中，请等待完成后再关闭。",
@@ -12,7 +15,9 @@ export default {
   'self_update.no_update_applied': "已是最新版本，未安装任何更新。",
   'self_update.applied_title': "更新已安装",
   'self_update.restart_hint': "请自行关闭并重新打开 XDev 以使用新版本；当前窗口不会自动重启。",
-  'self_update.download_archive': "单独下载归档",
+  'self_update.manual_download': "手动下载（仅压缩包）",
+  'self_update.manual_warning': "仅下载压缩包，不会安装更新。请关闭 XDev，手动解压并替换程序文件。",
+  'self_update.download_archive': "下载压缩包：{name}",
   'self_update.download_progress': "更新下载进度",
   'self_update.phase.downloading': "正在下载",
   'self_update.phase.verifying': "正在校验",

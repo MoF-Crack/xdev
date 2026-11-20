@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -19,8 +20,11 @@ func guiUpdateFixture() *update.CheckResult {
 		CurrentVersion: "1.0.0-alpha.3", LatestVersion: "1.0.0-beta.2", HasUpdate: true,
 		Release: &update.ReleaseInfo{TagName: "v1.0.0-beta.2", Assets: []update.Asset{
 			{Name: "xdev-windows-amd64-v1.0.0-beta.2.zip", BrowserDownloadURL: "https://example.test/releases/beta.2.zip", Size: 1000},
-			{Name: "xdev-linux-amd64-v1.0.0-beta.2.tar.gz", BrowserDownloadURL: "https://example.test/releases/beta.2.tar.gz"},
-			{Name: "SHA256SUMS", BrowserDownloadURL: "https://example.test/releases/SHA256SUMS"},
+			{Name: "xdev-linux-amd64-v1.0.0-beta.2.tar.gz", BrowserDownloadURL: "https://example.test/releases/beta.2.tar.gz", Size: 1000},
+			{Name: "xdev-linux-arm64-v1.0.0-beta.2.tar.gz", BrowserDownloadURL: "https://example.test/releases/linux-arm64.tar.gz", Size: 1000},
+			{Name: "xdev-darwin-amd64-v1.0.0-beta.2.tar.gz", BrowserDownloadURL: "https://example.test/releases/darwin-amd64.tar.gz", Size: 1000},
+			{Name: "xdev-darwin-arm64-v1.0.0-beta.2.tar.gz", BrowserDownloadURL: "https://example.test/releases/darwin-arm64.tar.gz", Size: 1000},
+			{Name: "SHA256SUMS", BrowserDownloadURL: "https://example.test/releases/SHA256SUMS", Size: 1000},
 			{Name: "xdev-unsafe.zip", BrowserDownloadURL: "javascript:alert(1)"},
 		}},
 	}
@@ -63,8 +67,12 @@ func TestGUIUpdateCheckProjectsReleaseAndRootContext(t *testing.T) {
 	if !result.HasUpdate || result.Applied || result.Error != "" || result.Current != "1.0.0-alpha.3" || result.Latest != "1.0.0-beta.2" {
 		t.Fatalf("unexpected check result: %+v", result)
 	}
-	if len(result.DownloadURLs) != 2 || result.DownloadURLs["xdev-windows-amd64-v1.0.0-beta.2.zip"] != "https://example.test/releases/beta.2.zip" {
-		t.Fatalf("archive links must come from actual selected release assets: %+v", result.DownloadURLs)
+	selected, err := update.SelectedAsset(guiUpdateFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.DownloadURLs) != 1 || result.DownloadURLs[selected.Name] != selected.BrowserDownloadURL || result.AssetName != selected.Name || result.Platform != runtime.GOOS+"/"+runtime.GOARCH {
+		t.Fatalf("only the current OS/architecture archive must reach the GUI: %+v", result)
 	}
 }
 
@@ -103,6 +111,10 @@ func TestGUIUpdateApplyUsesRefetchedResultAndForwardsExactProgress(t *testing.T)
 	app := &App{rootCtx: ctx, desktop: desktop}
 	refetched := guiUpdateFixture()
 	refetched.LatestVersion = "1.0.0-beta.3" // Never claim the previously displayed release was applied.
+	refetched.Release.TagName = "v1.0.0-beta.3"
+	for i := range refetched.Release.Assets {
+		refetched.Release.Assets[i].Name = strings.ReplaceAll(refetched.Release.Assets[i].Name, "beta.2", "beta.3")
+	}
 	progress := []update.Progress{
 		{Phase: "downloading", DownloadedBytes: 320, TotalBytes: 1000, Percent: 32},
 		{Phase: "verifying", DownloadedBytes: 1000, TotalBytes: 1000, Percent: 99},
@@ -140,7 +152,11 @@ func TestGUIUpdateApplyUsesRefetchedResultAndForwardsExactProgress(t *testing.T)
 		if event.name != "self-update" {
 			t.Fatalf("event binding changed: %q", event.name)
 		}
-		want := map[string]interface{}{"action": "progress", "source": "manual", "current": refetched.CurrentVersion, "latest": refetched.LatestVersion, "applied": false,
+		selected, selectErr := update.SelectedAsset(refetched)
+		if selectErr != nil {
+			t.Fatal(selectErr)
+		}
+		want := map[string]interface{}{"action": "progress", "source": "manual", "current": refetched.CurrentVersion, "latest": refetched.LatestVersion, "platform": update.TargetPlatform(), "assetName": selected.Name, "downloadUrls": map[string]string{selected.Name: selected.BrowserDownloadURL}, "applied": false,
 			"phase": progress[i].Phase, "downloadedBytes": progress[i].DownloadedBytes, "totalBytes": progress[i].TotalBytes, "percent": progress[i].Percent}
 		if !reflect.DeepEqual(event.data, want) {
 			t.Fatalf("progress %d was estimated or changed: got=%+v want=%+v", i, event.data, want)

@@ -13,7 +13,9 @@ import AppContent from '../src/AppContent.vue';
 import SelfUpdateDialog from '../src/components/SelfUpdateDialog.vue';
 import { cleanupWailsMocks, installWailsMocks } from './mocks/wails.js';
 
-const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false };
+const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.zip';
+const assetInfo = { platform: 'windows/amd64', assetName, downloadUrls: { [assetName]: 'https://example.test/beta.2.zip' } };
+const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, ...assetInfo };
 const wrappers = [];
 const defaults = {
   GetBootstrapState: async () => ({ initialized: true, categories: [], stats: {}, favorites: [] }),
@@ -44,7 +46,7 @@ describe('AppContent self-update integration', () => {
     const wrapper = await mountedApp({ ApplyUpdate: apply });
     await wrapper.vm.checkUpdate(); await flushPromises();
     const dialog = wrapper.getComponent(SelfUpdateDialog);
-    expect(dialog.props()).toMatchObject({ show: true, source: 'manual', status: 'available', current: available.current, latest: available.latest });
+    expect(dialog.props()).toMatchObject({ show: true, source: 'manual', status: 'available', current: available.current, latest: available.latest, ...assetInfo });
     expect(apply).not.toHaveBeenCalled();
     dialog.vm.$emit('update'); await flushPromises();
     expect(apply).toHaveBeenCalledTimes(1); expect(dialog.props('updating')).toBe(true);
@@ -85,10 +87,10 @@ describe('AppContent self-update integration', () => {
   it('startup notifications use the same dialog and failed automatic updates keep their real error', async () => {
     const wrapper = await mountedApp();
     expect(window.runtime.__subscriptionNames()['self-update']).toBe(1);
-    window.__wailsEmit('self-update', { action: 'notify', current: available.current, latest: available.latest });
+    window.__wailsEmit('self-update', { action: 'notify', current: available.current, latest: available.latest, ...assetInfo });
     await flushPromises();
     const dialog = wrapper.getComponent(SelfUpdateDialog);
-    expect(dialog.props()).toMatchObject({ show: true, source: 'startup', status: 'available' });
+    expect(dialog.props()).toMatchObject({ show: true, source: 'startup', status: 'available', ...assetInfo });
     expect(naive.message.info).not.toHaveBeenCalled();
     window.__wailsEmit('self-update', { action: 'applied-error', current: available.current, latest: available.latest, error: 'permission denied' });
     await flushPromises();

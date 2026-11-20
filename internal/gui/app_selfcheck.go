@@ -86,9 +86,16 @@ func (a *App) emitSelfUpdate(action string, res *update.CheckResult, failures ..
 		"source":       "startup",
 		"current":      view.Current,
 		"latest":       view.Latest,
+		"platform":     view.Platform,
+		"assetName":    view.AssetName,
 		"hasUpdate":    view.HasUpdate,
 		"applied":      action == "applied",
 		"downloadUrls": view.DownloadURLs,
+	}
+	if view.Error != "" {
+		payload["action"] = "applied-error"
+		payload["applied"] = false
+		payload["error"] = view.Error
 	}
 	if len(failures) > 0 && failures[0] != nil {
 		payload["error"] = failures[0].Error()
