@@ -5,7 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [Sem
 
 ## [1.0.0-rc.2] - 2026-11-20
 
-RC2 发布候选，Tag `v1.0.0-rc.2`，按 GitHub Pre-release 发布；Latest 保持 beta.3，公开 RC1 标签与资产未变。正式 RC2 CI、12 项资产上传与 GitHub 公网升级验收待结果，见 [RC2 发布说明](<docs/releases/1.0.0-rc.2.md#发布验证>)。
+RC2 已作为 GitHub Pre-release 发布，Tag `v1.0.0-rc.2` 指向提交 `15f56231a09972667fae37b096cffca8c549eb07`。正式 CI、签名、五平台打包与发布通过，12 项公开资产已全部下载核验；Latest 保持 beta.3，公开 RC1 标签与资产未变。实际升级验证见 [RC2 发布说明](<docs/releases/1.0.0-rc.2.md#发布验证>)。
 
 ### Changed
 
@@ -20,8 +20,9 @@ RC2 发布候选，Tag `v1.0.0-rc.2`，按 GitHub Pre-release 发布；Latest �
 
 ### Validation
 
-- 本地 Go 33 个包、`go vet ./...`、前端 58 文件/451 测试、10 项更新 E2E、7 项真实 Windows 进程与 2 项文件保护回归、17 项原生打包契约（0 跳过）通过。
-- 原生 GUI 完整更新链已用本地可信 TLS 与正式 RC1 payload 验证；正式 RC2 CI、公开 RC1 客户端 ZIP 升级及新客户端公网 EXE 下载/确认重启验收仍待结果。
+- 本地 Go 33 个包、`go vet ./...`、前端 58 文件/451 测试、10 项更新 E2E、7 项真实 Windows 进程、2 项文件保护回归与短路径身份测试、17 项原生打包契约（0 跳过）通过。
+- [正式标签 CI](https://github.com/MoF-Crack/xdev/actions/runs/44747610056) 全部成功，包含三平台测试、Linux race、在线 E2E、签名覆盖与五平台打包；12 项公开资产本体均已下载，11 个安装资产的 SHA-256 与 `SHA256SUMS` 和 Release API 一致，Windows EXE 与 ZIP 内程序相同。
+- 使用与本机相同的应用代理，无修改的公开 RC1 通过公网 ZIP 升级到 RC2；包含新更新器的原生客户端通过公网 EXE 下载、校验和确认重启，旧进程退出码 0，新 RC2 窗口重开且目标哈希与公开资产一致。原生客户端仅增加窗口控制用回环 CDP，下载、TLS、代理与更新逻辑未改；直连慢和首次代理握手超时另有日志记录。
 
 ## [1.0.0-rc.1] - 2026-11-19
 

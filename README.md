@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前发布候选：1.0.0-rc.2（RC2）** · 正式 CI 与公网升级验证待结果 · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前发布：1.0.0-rc.2（RC2）** · GitHub Pre-release · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,11 +55,11 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-[RC2 发布候选说明](<docs/releases/1.0.0-rc.2.md>)：版本 `1.0.0-rc.2`，Tag `v1.0.0-rc.2`，按 GitHub Pre-release 发布，Latest 保持 beta.3。正式 RC2 CI、资产上传和 GitHub 公网升级验收待结果；当前已发布版本仍为 [RC1](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1)，其标签与资产未变。
+[下载 RC2](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.2)：版本 `1.0.0-rc.2`，Tag `v1.0.0-rc.2`，已作为 GitHub Pre-release 发布，Latest 保持 beta.3。正式 CI、签名、五平台打包和 12 项公开资产校验通过；[发布与升级验证说明](<docs/releases/1.0.0-rc.2.md>)记录实际验收结果。旧 [RC1](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1) 标签与资产未变。
 
 RC2 增加 Windows 直接 EXE 下载与「重启并更新」：下载、校验和暂存完成后原程序保持不变，点击重启按钮才交由更新助手等待旧进程退出、备份替换并重新打开。Linux/macOS 继续使用原 tar.gz 更新及手动重新打开流程。
 
-| RC2 预期发布产物（共 12 项） | 说明 |
+| RC2 发布产物（共 12 项，已下载校验） | 说明 |
 |------|------|
 | `xdev-windows-amd64-v1.0.0-rc.2.exe` | Windows 直接 EXE，优先下载 |
 | `xdev-windows-amd64-v1.0.0-rc.2.zip` | Windows 兼容包，供旧更新器使用 |
@@ -78,7 +78,7 @@ RC2 增加 Windows 直接 EXE 下载与「重启并更新」：下载、校验�
 
 ## 旧版升级和自更新
 
-**从公开 beta.3 / RC1 升级**：RC2 资产齐备后，Release 列表更新器可发现这个更高的 Pre-release，无需改变 beta.3 Latest。设置中点击「检查更新」并使用原「下载并安装」，或退出 GUI 后运行 `xdev self update`；这一轮仍下载 ZIP、使用旧界面，安装后自行关闭并重新打开。新按钮在运行 RC2 后生效。beta.3 尚不读取 GUI 代理设置，受限网络下需环境代理或手动下载。
+**从公开 beta.3 / RC1 升级**：Release 列表更新器可发现 RC2 Pre-release，无需改变 beta.3 Latest。设置中点击「检查更新」并使用原「下载并安装」，或退出 GUI 后运行 `xdev self update`；这一轮仍下载 ZIP、使用旧界面，安装后自行关闭并重新打开。新按钮在运行 RC2 后生效。beta.3 尚不读取 GUI 代理设置，受限网络下需环境代理或手动下载。
 
 **较早的 alpha / beta.2**：其 `/releases/latest` 仍指向 [beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。先经 beta.3 升级，或手动下载 RC2 EXE；`beta` 的 SemVer 预发布含义不变。
 
