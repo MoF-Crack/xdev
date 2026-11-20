@@ -15,7 +15,12 @@ import (
 // production helper pins before it backs up the current executable. Attempts
 // to mutate either bytes or path must be denied through publication.
 func TestSpec047PinnedPayloadCannotChangeAfterVerification(t *testing.T) {
-	dir := t.TempDir()
+	// Windows runners may expose Temp through an 8.3 path (RUNNER~1).
+	// Production preparation resolves that alias before handing off the plan.
+	dir, err := canonicalRestartPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := filepath.Join(dir, "payload.exe")
 	target := filepath.Join(dir, "xdev.exe")
 	good := []byte("verified immutable update payload")
@@ -63,7 +68,12 @@ func TestSpec047PinnedPayloadCannotChangeAfterVerification(t *testing.T) {
 }
 
 func TestSpec047HandlePublicationDoesNotOverwriteForeignDestination(t *testing.T) {
-	dir := t.TempDir()
+	// Windows runners may expose Temp through an 8.3 path (RUNNER~1).
+	// Production preparation resolves that alias before handing off the plan.
+	dir, err := canonicalRestartPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload := filepath.Join(dir, "payload.exe")
 	target := filepath.Join(dir, "xdev.exe")
 	if err := os.WriteFile(payload, []byte("new payload"), 0600); err != nil {

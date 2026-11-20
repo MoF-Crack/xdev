@@ -250,7 +250,10 @@ func TestSpec047PreparedRestartRealWindowsProcesses(t *testing.T) {
 		{"invalid-prepared", "", false},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
-			dir := t.TempDir()
+			dir, err := canonicalRestartPath(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			target := filepath.Join(dir, "running spec047.exe")
 			wd := filepath.Join(dir, "relaunch workdir")
 			if err := os.Mkdir(wd, 0o700); err != nil {
