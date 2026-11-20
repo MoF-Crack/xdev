@@ -13,9 +13,9 @@ func TargetPlatform() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
 }
 
-// SelectedAsset resolves the one canonical archive this executable can install.
-// GUI previews and Apply use this same selector so a manual link cannot point to
-// another platform while the primary action installs the current platform.
+// SelectedAsset resolves the canonical update payload for this executable.
+// Windows prefers the direct executable; only releases without it use the ZIP.
+// Check, GUI previews and Apply all select from the same release metadata.
 func SelectedAsset(result *CheckResult) (Asset, error) {
 	return selectedAssetForTarget(result, runtime.GOOS, runtime.GOARCH)
 }
@@ -27,6 +27,26 @@ func selectedAssetForTarget(result *CheckResult, goos, goarch string) (Asset, er
 	if !validUpdateVersion(strings.TrimPrefix(result.LatestVersion, "v")) {
 		return Asset{}, fmt.Errorf("invalid update version %q", result.LatestVersion)
 	}
+	if goos == "windows" {
+		name := rawExeNameForTarget(result.LatestVersion, goarch)
+		var raw Asset
+		for _, asset := range result.Release.Assets {
+			if asset.Name != name {
+				continue
+			}
+			if raw.Name != "" {
+				return Asset{}, fmt.Errorf("duplicate update executable %q", name)
+			}
+			raw = asset
+		}
+		// A bad current-format asset cannot be hidden by the legacy archive.
+		if raw.Name != "" {
+			if !usableAsset(raw) {
+				return Asset{}, fmt.Errorf("update executable %q is unavailable or has invalid download metadata", name)
+			}
+			return raw, nil
+		}
+	}
 	name := assetNameForTarget(result.LatestVersion, goos, goarch)
 	asset, found := findAsset(result.Release, name)
 	if !found {
@@ -36,4 +56,8 @@ func selectedAssetForTarget(result *CheckResult, goos, goarch string) (Asset, er
 		return Asset{}, fmt.Errorf("update archive %q is unavailable or has invalid download metadata", name)
 	}
 	return asset, nil
+}
+
+func rawExeNameForTarget(version, goarch string) string {
+	return strings.TrimSuffix(assetNameForTarget(version, "windows", goarch), ".zip") + ".exe"
 }

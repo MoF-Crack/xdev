@@ -27,7 +27,8 @@ describe('SelfUpdateDialog', () => {
     expect(wrapper.get('[data-testid="self-update-dialog"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('1.0.0-alpha.3');
     expect(wrapper.text()).toContain('1.0.0-beta.2');
-    expect(wrapper.get('[data-action="self-update-update"]').text()).toBe('self_update.download_install');
+    expect(wrapper.get('[data-action="self-update-update"]').text()).toBe('self_update.download');
+    expect(wrapper.find('[data-action="self-update-restart-now"]').exists()).toBe(false);
     expect(wrapper.get('[data-action="self-update-ignore"]').exists()).toBe(true);
     expect(wrapper.get('[data-action="self-update-quit"]').exists()).toBe(true);
     expect(wrapper.text()).toContain('self_update.confirm');
@@ -160,7 +161,7 @@ describe('SelfUpdateDialog', () => {
     expect(disclosure.attributes('aria-expanded')).toBe('false');
     await disclosure.trigger('click');
     expect(disclosure.attributes('aria-expanded')).toBe('true');
-    expect(wrapper.get(`#${disclosure.attributes('aria-controls')}`).text()).toContain('self_update.manual_warning');
+    expect(wrapper.get(`#${disclosure.attributes('aria-controls')}`).text()).toContain('self_update.manual_archive_warning');
     expect(wrapper.findAll('a')).toHaveLength(1);
     expect(wrapper.get('a').attributes()).toMatchObject({ href: assetUrl, target: '_blank', rel: 'noopener noreferrer' });
     expect(wrapper.emitted('update')).toBeUndefined();
@@ -198,6 +199,29 @@ describe('SelfUpdateDialog', () => {
     expect(toggle().attributes('aria-expanded')).toBe('false');
     await wrapper.setProps({ error: { kind: 'check', message: 'No matching asset' } });
     expect(wrapper.find('[data-action="self-update-manual-download"]').exists()).toBe(false);
+  });
+
+  it('shows the executable download without ZIP instructions and confirms restart only when ready', async () => {
+    const name = 'xdev-windows-amd64-v1.0.0-beta.2.exe';
+    const wrapper = mountDialog({ platform: 'windows/amd64', assetName: name, downloadUrls: { [name]: 'https://example.test/update.exe' } });
+    expect(wrapper.text()).toContain('self_update.selected_executable');
+    expect(wrapper.text()).not.toContain('self_update.windows_zip');
+    expect(wrapper.get('[data-action="self-update-update"]').text()).toBe('self_update.download');
+    await wrapper.setProps({ status: 'ready' });
+    expect(wrapper.text()).toContain('self_update.ready_hint');
+    expect(wrapper.find('[data-action="self-update-update"]').exists()).toBe(false);
+    expect(wrapper.find('[data-action="self-update-ignore"]').exists()).toBe(false);
+    expect(wrapper.find('a').exists()).toBe(false);
+    const restart = wrapper.get('[data-action="self-update-restart-now"]');
+    expect(restart.text()).toBe('self_update.restart');
+    await restart.trigger('click');
+    expect(wrapper.emitted('restart')).toHaveLength(1);
+    expect(wrapper.emitted('quit')).toBeUndefined();
+    await wrapper.setProps({ status: 'restarting', restarting: true });
+    expect(wrapper.get('[role="dialog"]').attributes('aria-busy')).toBe('true');
+    for (const button of wrapper.findAll('button')) expect(button.element.disabled).toBe(true);
+    await wrapper.get('[role="dialog"]').trigger('keydown', { key: 'Escape' });
+    expect(wrapper.emitted('close')).toBeUndefined();
   });
 
   it('removes the focus trap on unmount', async () => {

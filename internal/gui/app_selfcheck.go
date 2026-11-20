@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/update"
@@ -15,7 +16,29 @@ const selfUpdateEvent = "self-update"
 
 // runStartupSelfCheck is called asynchronously after the desktop is ready.
 func (a *App) runStartupSelfCheck() {
-	a.runStartupSelfCheckWith(update.NewPolicy(), cliBinaryNextToSelf, update.ApplyToWithProgress)
+	if runtime.GOOS != "windows" {
+		a.runStartupSelfCheckWith(update.NewPolicy(), cliBinaryNextToSelf, update.ApplyToWithProgress)
+		return
+	}
+	a.runStartupSelfCheckWith(update.NewPolicy(), cliBinaryNextToSelf, func(ctx context.Context, result *update.CheckResult, target string, report func(update.Progress)) error {
+		view := guiUpdateResult(result)
+		if view.Error != "" {
+			return fmt.Errorf("%s", view.Error)
+		}
+		pending, err := update.PrepareForRestart(ctx, result, target, report)
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			_ = pending.Discard()
+			return err
+		}
+		view.Ready = true
+		view.Applied = false
+		a.preparedUpdate = pending
+		a.preparedView = view
+		return nil
+	})
 }
 
 // Dependencies stay private: tests exercise the real adapter without replacing
@@ -30,6 +53,9 @@ func (a *App) runStartupSelfCheckWith(
 		return
 	}
 	defer guiSelfUpdateMu.Unlock()
+	if a.preparedUpdate != nil {
+		return
+	}
 	// Discovery has its own 15-second bound; an automatic download has the same
 	// 10-minute bound as a manual apply, rather than a 30-second startup timer.
 	ctx, closeNetwork := update.WithProxy(a.rootContext(), cfg.Proxy)
@@ -63,7 +89,11 @@ func (a *App) runStartupSelfCheckWith(
 			a.emitSelfUpdate("applied-error", res, err)
 			return
 		}
-		a.emitSelfUpdate("applied", res)
+		if a.preparedUpdate != nil && a.preparedView.Ready {
+			a.emitPreparedUpdate()
+		} else {
+			a.emitSelfUpdate("applied", res)
+		}
 	}
 }
 

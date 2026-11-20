@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useSelfUpdate } from '../src/composables/useSelfUpdate.js';
 
 const t = (key, params) => params ? `${key}:${params.latest}` : key;
-const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.zip';
-const assetInfo = { platform: 'windows/amd64', assetName, downloadUrls: { [assetName]: 'https://example.test/beta.2.zip' } };
-const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, ...assetInfo };
+const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.exe';
+const assetInfo = { platform: 'windows/amd64', assetName, downloadUrls: { [assetName]: 'https://example.test/beta.2.exe' } };
+const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, ready: false, restarting: false, ...assetInfo };
+const ready = { ...available, ready: true };
+const restarting = { ...ready, restarting: true };
 const progress = { action: 'progress', current: available.current, latest: available.latest, phase: 'downloading', downloadedBytes: 320, totalBytes: 1000, percent: 32 };
 function deferred() { let resolve; let reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function fixture(overrides = {}) {

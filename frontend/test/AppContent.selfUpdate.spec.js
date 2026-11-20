@@ -13,9 +13,10 @@ import AppContent from '../src/AppContent.vue';
 import SelfUpdateDialog from '../src/components/SelfUpdateDialog.vue';
 import { cleanupWailsMocks, installWailsMocks } from './mocks/wails.js';
 
-const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.zip';
-const assetInfo = { platform: 'windows/amd64', assetName, downloadUrls: { [assetName]: 'https://example.test/beta.2.zip' } };
-const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, ...assetInfo };
+const assetName = 'xdev-windows-amd64-v1.0.0-beta.2.exe';
+const assetInfo = { platform: 'windows/amd64', assetName, downloadUrls: { [assetName]: 'https://example.test/beta.2.exe' } };
+const available = { current: '1.0.0-alpha.3', latest: '1.0.0-beta.2', hasUpdate: true, applied: false, ready: false, restarting: false, ...assetInfo };
+const ready = { ...available, ready: true };
 const wrappers = [];
 const defaults = {
   GetBootstrapState: async () => ({ initialized: true, categories: [], stats: {}, favorites: [] }),
@@ -27,7 +28,7 @@ const defaults = {
   GetCacheBreakdown: async () => ({}), GetArchiveRetention: async () => 'immediate',
 };
 async function mountedApp(overrides = {}) {
-  installWailsMocks({ ...defaults, CheckForUpdate: vi.fn().mockResolvedValue(available), ApplyUpdate: vi.fn().mockResolvedValue({ ...available, applied: true }), IgnoreSelfUpdate: vi.fn(), ...overrides });
+  installWailsMocks({ ...defaults, CheckForUpdate: vi.fn().mockResolvedValue(available), PrepareUpdate: vi.fn().mockResolvedValue(ready), ApplyUpdate: vi.fn().mockResolvedValue({ ...available, applied: true }), RestartToUpdate: vi.fn().mockResolvedValue({ ...ready, restarting: true }), IgnoreSelfUpdate: vi.fn(), ...overrides });
   const wrapper = mount(AppContent, { shallow: true, global: { stubs: {
     AppShell: { template: '<main><slot /></main>' },
     SettingsPage: { name: 'SettingsPage', props: ['updateInfo', 'updateError', 'updateChecking', 'selfUpdating', 'updateBusy'], emits: ['check-update', 'open-self-update', 'retry-self-update'], template: '<section />' },
@@ -40,10 +41,11 @@ beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); cleanupWailsMocks(); document.body.innerHTML = ''; });
 
 describe('AppContent self-update integration', () => {
-  it('manual check wires confirmation → ApplyUpdate → progress → explicit installed result', async () => {
+  it('manual check wires prepare → verified ready → confirmed backend restart without early close', async () => {
     let finish;
     const apply = vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; }));
-    const wrapper = await mountedApp({ ApplyUpdate: apply });
+    const restart = vi.fn().mockResolvedValue({ ...ready, restarting: true });
+    const wrapper = await mountedApp({ PrepareUpdate: apply, RestartToUpdate: restart });
     await wrapper.vm.checkUpdate(); await flushPromises();
     const dialog = wrapper.getComponent(SelfUpdateDialog);
     expect(dialog.props()).toMatchObject({ show: true, source: 'manual', status: 'available', current: available.current, latest: available.latest, ...assetInfo });
@@ -56,10 +58,18 @@ describe('AppContent self-update integration', () => {
     dialog.vm.$emit('close'); dialog.vm.$emit('ignore'); dialog.vm.$emit('update'); await flushPromises();
     expect(dialog.props('show')).toBe(true); expect(apply).toHaveBeenCalledTimes(1);
     expect(window.go.gui.App.IgnoreSelfUpdate).not.toHaveBeenCalled();
-    finish({ ...available, applied: true }); await flushPromises();
-    expect(dialog.props()).toMatchObject({ show: true, updating: false, status: 'applied' });
-    expect(naive.message.success).toHaveBeenCalledTimes(1);
-    expect(naive.message.success.mock.calls[0][0]).toContain(available.latest);
+    finish(ready); await flushPromises();
+    expect(dialog.props()).toMatchObject({ show: true, updating: false, status: 'ready' });
+    expect(naive.message.success).not.toHaveBeenCalled();
+    expect(restart).not.toHaveBeenCalled();
+    expect(window.go.gui.App.ApplyUpdate).not.toHaveBeenCalled();
+    dialog.vm.$emit('close'); await flushPromises();
+    await wrapper.vm.checkUpdate(); await flushPromises();
+    expect(dialog.props()).toMatchObject({ show: true, status: 'ready' });
+    expect(apply).toHaveBeenCalledTimes(1);
+    dialog.vm.$emit('restart'); await flushPromises();
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(dialog.props()).toMatchObject({ restarting: true, status: 'restarting' });
   });
 
   it('manual check error is passed to both settings and the retryable dialog', async () => {
@@ -112,7 +122,7 @@ describe('AppContent self-update integration', () => {
   });
 
   it('a no-update ApplyUpdate reply is not mapped to an installed result or success toast', async () => {
-    const wrapper = await mountedApp({ ApplyUpdate: vi.fn().mockResolvedValue({ current: available.latest, latest: available.latest, hasUpdate: false, applied: false }) });
+    const wrapper = await mountedApp({ PrepareUpdate: vi.fn().mockResolvedValue({ current: available.latest, latest: available.latest, hasUpdate: false, applied: false, ready: false }) });
     await wrapper.vm.checkUpdate(); await wrapper.vm.applySelfUpdate(); await flushPromises();
     expect(wrapper.getComponent(SelfUpdateDialog).props()).toMatchObject({ status: 'up-to-date', show: true, updating: false });
     expect(naive.message.success).not.toHaveBeenCalled();

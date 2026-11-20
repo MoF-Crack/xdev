@@ -15,14 +15,16 @@
       </p>
       <dl v-if="effectiveStatus !== 'checking' && (platform || assetName)" class="self-update__target">
         <div v-if="platform"><dt>{{ t('self_update.detected_platform') }}</dt><dd class="xdev-mono">{{ platform }}</dd></div>
-        <div v-if="assetName"><dt>{{ t('self_update.selected_archive') }}</dt><dd class="xdev-mono">{{ assetName }}</dd></div>
+        <div v-if="assetName"><dt>{{ t(isExecutable ? 'self_update.selected_executable' : 'self_update.selected_archive') }}</dt><dd class="xdev-mono">{{ assetName }}</dd></div>
       </dl>
       <template v-if="effectiveStatus === 'available'">
-        <p class="self-update__text">{{ t('self_update.confirm') }}</p>
-        <p v-if="platform?.startsWith('windows/') && assetName?.endsWith('.zip')" class="self-update__hint self-update__zip">{{ t('self_update.windows_zip') }}</p>
+        <p class="self-update__text">{{ t(downloadOnly ? 'self_update.confirm' : 'self_update.confirm_legacy') }}</p>
+        <p v-if="platform?.startsWith('windows/') && /\.zip$/i.test(assetName)" class="self-update__hint self-update__zip">{{ t('self_update.windows_zip') }}</p>
       </template>
+      <p v-if="effectiveStatus === 'ready'" class="self-update__text" role="status" data-testid="self-update-ready">{{ t('self_update.ready_hint') }}</p>
+      <p v-if="effectiveStatus === 'restarting'" class="self-update__text" role="status" data-testid="self-update-restarting">{{ t('self_update.restarting') }}</p>
       <div v-if="error" class="self-update__error" role="alert" data-testid="self-update-error">
-        <strong>{{ t(error.kind === 'check' ? 'update_check_failed' : 'self_update.error_title') }}</strong>
+        <strong>{{ t(error.kind === 'check' ? 'update_check_failed' : error.kind === 'restart' ? 'self_update.restart_failed' : 'self_update.error_title') }}</strong>
         <p>{{ error.message }}</p>
       </div>
       <div v-if="checking || updating" class="self-update__progress" data-testid="self-update-progress">
@@ -39,7 +41,7 @@
       </div>
       <p v-if="busy" class="self-update__hint">{{ t('self_update.busy') }}</p>
       <p v-if="effectiveStatus === 'applied'" class="self-update__hint" role="status" data-testid="self-update-restart">{{ t('self_update.restart_hint') }}</p>
-      <div v-if="!busy && manualDownloadUrl && (effectiveStatus === 'available' || error?.kind === 'apply')" class="self-update__fallback">
+      <div v-if="!busy && manualDownloadUrl && (effectiveStatus === 'available' || (error?.kind === 'apply' && effectiveStatus === 'error'))" class="self-update__fallback">
         <button type="button" class="self-update__fallback-toggle" data-action="self-update-manual-download"
           :aria-expanded="manualExpanded" :aria-controls="manualDownloadId" @click="manualExpanded = !manualExpanded">
           <ChevronForwardOutline aria-hidden="true" />
@@ -47,8 +49,8 @@
         </button>
         <div :id="manualDownloadId" :hidden="!manualExpanded">
           <template v-if="manualExpanded">
-            <p :id="manualWarningId" class="self-update__hint">{{ t('self_update.manual_warning') }}</p>
-            <a :href="manualDownloadUrl" :aria-describedby="manualWarningId" target="_blank" rel="noopener noreferrer">{{ t('self_update.download_archive', { name: assetName }) }}</a>
+            <p :id="manualWarningId" class="self-update__hint">{{ t(isExecutable ? 'self_update.manual_exe_warning' : isArchive ? 'self_update.manual_archive_warning' : 'self_update.manual_warning') }}</p>
+            <a :href="manualDownloadUrl" :aria-describedby="manualWarningId" target="_blank" rel="noopener noreferrer">{{ t('self_update.download_asset', { name: assetName }) }}</a>
           </template>
         </div>
       </div>
@@ -57,10 +59,12 @@
           <n-button data-action="self-update-quit" :disabled="busy" :aria-label="t('self_update.quit')" @click="requestAction('quit')">{{ t('self_update.quit') }}</n-button>
           <n-button data-action="self-update-ignore" secondary :disabled="busy" :aria-label="t('self_update.ignore')" @click="requestAction('ignore')">{{ t('self_update.ignore') }}</n-button>
         </template>
-        <n-button v-if="effectiveStatus === 'error' || checking" data-action="self-update-retry" type="primary" :disabled="busy" :loading="checking"
+        <n-button v-if="effectiveStatus === 'ready' || effectiveStatus === 'restarting'" data-action="self-update-restart-now" type="primary" :disabled="busy" :loading="restarting"
+          :aria-label="t('self_update.restart')" @click="requestAction('restart')">{{ t('self_update.restart') }}</n-button>
+        <n-button v-else-if="effectiveStatus === 'error' || checking" data-action="self-update-retry" type="primary" :disabled="busy" :loading="checking"
           :aria-label="t('btn.retry')" @click="requestAction('retry')">{{ t('btn.retry') }}</n-button>
         <n-button v-else-if="effectiveStatus === 'available' || effectiveStatus === 'updating'" data-action="self-update-update" type="primary" :disabled="busy" :loading="updating"
-          :aria-label="t('self_update.download_install')" @click="requestAction('update')">{{ t('self_update.download_install') }}</n-button>
+          :aria-label="downloadLabel" @click="requestAction('update')">{{ downloadLabel }}</n-button>
       </div>
     </section>
   </div>
@@ -79,6 +83,8 @@ const props = defineProps({
   updating: Boolean,
   checking: Boolean,
   dismissing: Boolean,
+  restarting: Boolean,
+  downloadOnly: { type: Boolean, default: true },
   error: { type: Object, default: null },
   progress: { type: Object, default: null },
   status: { type: String, default: 'available' },
@@ -89,7 +95,7 @@ const props = defineProps({
   returnFocusTo: Object,
   t: { type: Function, required: true },
 });
-const emit = defineEmits(['update', 'ignore', 'quit', 'close', 'retry']);
+const emit = defineEmits(['update', 'restart', 'ignore', 'quit', 'close', 'retry']);
 const panel = ref(null);
 const closeButton = ref(null);
 const submitted = ref(false);
@@ -98,9 +104,14 @@ const titleId = `${useId()}-self-update-title`;
 const descriptionId = `${titleId}-description`;
 const manualDownloadId = `${titleId}-manual`;
 const manualWarningId = `${manualDownloadId}-warning`;
-const busy = computed(() => props.updating || props.checking || props.dismissing || submitted.value);
-const effectiveStatus = computed(() => props.updating ? 'updating' : props.checking ? 'checking' : props.dismissing ? 'dismissing' : props.error ? 'error' : props.status);
+const busy = computed(() => props.updating || props.checking || props.dismissing || props.restarting || props.status === 'restarting' || submitted.value);
+const effectiveStatus = computed(() => props.restarting ? 'restarting'
+  : props.updating ? 'updating' : props.checking ? 'checking' : props.dismissing ? 'dismissing'
+  : ['ready', 'restarting'].includes(props.status) ? props.status : props.error ? 'error' : props.status);
 const title = computed(() => props.t(effectiveStatus.value === 'applied' ? 'self_update.applied_title' : effectiveStatus.value === 'error' ? 'self_update.error_title' : effectiveStatus.value === 'up-to-date' ? 'settings.self_update' : 'self_update.title'));
+const downloadLabel = computed(() => props.t(props.downloadOnly ? 'self_update.download' : 'self_update.download_install'));
+const isExecutable = computed(() => /\.exe$/i.test(props.assetName));
+const isArchive = computed(() => /\.(zip|tar\.gz)$/i.test(props.assetName));
 const downloadPercent = computed(() => props.progress?.totalBytes > 0 && typeof props.progress.percent === 'number' && Number.isFinite(props.progress.percent)
   ? Math.max(0, Math.min(100, props.progress.percent)) : undefined);
 // A legacy response without an authoritative selection can still be applied,
@@ -146,7 +157,7 @@ function onKeydown(event) {
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && (document.activeElement === last || !items.includes(document.activeElement))) { event.preventDefault(); first.focus(); }
 }
-watch(() => [props.show, props.updating, props.checking, props.dismissing, props.status, props.error], () => { submitted.value = false; }, { flush: 'sync' });
+watch(() => [props.show, props.updating, props.checking, props.dismissing, props.restarting, props.status, props.error], () => { submitted.value = false; }, { flush: 'sync' });
 watch([() => props.show, () => props.latest, () => props.platform, () => props.assetName, manualDownloadUrl, busy], () => {
   manualExpanded.value = false;
 }, { flush: 'sync' });

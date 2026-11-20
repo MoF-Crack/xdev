@@ -32,7 +32,7 @@
         <!-- Favorites Page -->
         <FavoritesPage v-else-if="selectedView === 'favorites'" :favorites="favorites" :expanded-name="favVersionExpanded" :installed-versions="favInstalledVers" :available-versions="favAvailableVers" :t="t" :migration-busy="!!migratingAll || !!migratingSingle" @open-detail="openDetailFromFav" @remove-favorite="removeFavorite" @install-latest="installFavLatest" @migrate="migrateTool" @manage-versions="openFavVersionManager" @switch-local="switchToLocal" @use-version="useVersion" @uninstall-version="confirmUninstall" @install="doInstall" @repair="repairInstall" />
         <!-- Settings -->
-        <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :update-checking="selfUpdateChecking" :self-updating="selfUpdating" :update-busy="updateOperating" :update-error="selfUpdateError" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @open-self-update="openSelfUpdate" @retry-self-update="retrySelfUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
+        <SettingsPage v-else-if="selectedView === 'settings'" :t="t" :theme="themeName" :locale="locale" :path-mode="pathMode" :migration-mode="migrationMode" :mirror-config="mirrorConfig" :mirror-test-results="mirrorTestResults" :proxy="proxyModel" :proxy-test-result="proxyTestResult" :proxy-probes="proxyProbes" :import-result="importResult" :update-info="updateInfo" :update-checking="selfUpdateChecking" :self-updating="selfUpdating" :update-busy="updateOperating" :update-restarting="selfUpdateRestarting" :update-download-only="selfUpdateDownloadOnly" :update-error="selfUpdateError" :diag-results="diagResults" :cache-breakdown="cacheBreakdown" :archive-retention="archiveRetention" :sniff-config="sniffConfig" :service-status="serviceStatus" :custom-tools="customTools" :custom-tool-submitting="customToolSubmitting" :custom-tool-preview="customToolPreview" @update:theme="setTheme" @update:locale="setLocale" @update:path-mode="switchPathMode" @update:migration-mode="switchMigrationMode" @mirror-update="updateMirror" @mirror-test="testMirror" @mirror-remove="removeMirror" @mirror-add="addMirrorValues" @mirror-save="saveMirrors" @update:proxy="updateProxy" @proxy-test="testProxy" @proxy-save="saveProxy" @proxy-probe="probeLocalProxies" @apply-proxy-probe="applyProxyProbe" @profile-export="exportProfile" @profile-import="importProfile" @check-update="checkUpdate" @open-self-update="openSelfUpdate" @retry-self-update="retrySelfUpdate" @run-diagnostics="runDiag" @cache-clean="cleanCache" @update:archive-retention="saveArchiveRetention" @update:sniff-config="sniffConfig.value = $event" @save-sniff-strategy="saveSniffStrategy" @install-sniff-service="installSniffService" @uninstall-sniff-service="uninstallSniffService" @refresh-sniff-status="loadSniffServiceStatus" @preview-custom-tool="previewCustomToolVersions" @add-custom-tool="submitAddCustomTool" @remove-custom-tool="removeCustomTool" />
         <!-- Environment Variables Page -->
         <EnvironmentVariablesPage v-else-if="selectedView === 'env-vars'" :t="t" :all-env-vars="allEnvVars" :all-level="envAllLevel" :validation-stats="envValidationStats" :migration-mode="migrationMode" :migration-tools="migrationTools" :migration-results="migrationResults" :migration-busy="!!migratingAll || !!migratingSingle" @update:all-level="setEnvAllLevel" @validate="validateAllEnvVars" @new="newEnvVar" @edit="editEnvVar" @delete="deleteEnvRow" @clean="cleanEnvRow" @clean-all-invalid="cleanAllInvalidEnvVars" @migration-scan="scanForMigration" @migration-single="migrateSingle" @migration-all="migrateAll" />
 
@@ -56,11 +56,11 @@
   <EnvVarEditorDialog :show="showEnvEditor" :editing="editingEnvVar" :browse-directory="browseEnvDir" :t="t" @update:show="showEnvEditor = $event" @save="saveEnvDraft" />
   <!-- One accessible confirmation path for manual and startup self updates. -->
   <SelfUpdateDialog :show="showSelfUpdate" :current="selfUpdateInfo.current" :latest="selfUpdateInfo.latest"
-    :updating="selfUpdating" :checking="selfUpdateChecking" :dismissing="selfUpdateDismissing"
+    :updating="selfUpdating" :checking="selfUpdateChecking" :dismissing="selfUpdateDismissing" :restarting="selfUpdateRestarting"
     :error="selfUpdateError" :progress="selfUpdateProgress" :status="selfUpdateStatus" :source="selfUpdateSource"
     :platform="selfUpdateInfo.platform" :asset-name="selfUpdateInfo.assetName" :download-urls="selfUpdateInfo.downloadUrls"
-    :return-focus-to="selfUpdateTrigger" :t="t"
-    @update="applySelfUpdate" @retry="retrySelfUpdate" @close="closeSelfUpdate" @ignore="ignoreSelfUpdate" @quit="quitSelfUpdate" />
+    :download-only="selfUpdateDownloadOnly" :return-focus-to="selfUpdateTrigger" :t="t"
+    @update="applySelfUpdate" @restart="restartSelfUpdate" @retry="retrySelfUpdate" @close="closeSelfUpdate" @ignore="ignoreSelfUpdate" @quit="quitSelfUpdate" />
   <CommandPalette
     v-model:show="showCommandPalette"
     :options="commandPaletteOptions"
@@ -121,14 +121,15 @@ const { t, locale, setLocale } = useI18n();
 const message = useMessage();
 const {
   info: updateInfo, dialogInfo: selfUpdateInfo, show: showSelfUpdate,
-  checking: selfUpdateChecking, updating: selfUpdating, dismissing: selfUpdateDismissing,
-  busy: updateOperating, error: selfUpdateError, progress: selfUpdateProgress,
+  checking: selfUpdateChecking, updating: selfUpdating, dismissing: selfUpdateDismissing, restarting: selfUpdateRestarting,
+  busy: updateOperating, downloadOnly: selfUpdateDownloadOnly, error: selfUpdateError, progress: selfUpdateProgress,
   source: selfUpdateSource, status: selfUpdateStatus, returnFocusTo: selfUpdateTrigger,
-  check: checkUpdate, open: openSelfUpdate, apply: applySelfUpdate, close: closeSelfUpdate,
+  check: checkUpdate, open: openSelfUpdate, apply: applySelfUpdate, restart: restartSelfUpdate, close: closeSelfUpdate,
   ignore: ignoreSelfUpdate, quit: quitSelfUpdate, retry: retrySelfUpdate, handleEvent: handleSelfUpdateEvent,
 } = useSelfUpdate({ t, message });
 const dialog = useDialog();
-const { isMaximized, minimizeWindow, toggleMaximize, closeWindow } = useWindowChrome();
+const { isMaximized, minimizeWindow, toggleMaximize, closeWindow: closeAppWindow } = useWindowChrome();
+function closeWindow() { if (!selfUpdateRestarting.value) closeAppWindow(); }
 
 onUnmounted(() => {
   window.runtime?.EventsOff?.('dashboardStatsUpdated');

@@ -1,28 +1,30 @@
 import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
 
-const progressPhases = new Set(['downloading', 'verifying', 'extracting', 'installing', 'completed']);
-const emptyInfo = () => ({ current: '', latest: '', hasUpdate: false, applied: false });
+const progressPhases = new Set(['downloading', 'verifying', 'extracting', 'installing', 'completed', 'ready']);
+const emptyInfo = () => ({ current: '', latest: '', hasUpdate: false, applied: false, ready: false, restarting: false });
 
-// One state machine owns manual checks, startup notifications and installation.
-// The existing ApplyUpdate binding rechecks the release before installing it;
-// only its explicit applied=true (or the same authoritative startup event) is
-// installation success. Download completion by itself is not success.
-export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runtime = () => window.runtime } = {}) {
+export function useSelfUpdate({ t, message, app = () => window.go?.gui?.App, runtime = () => window.runtime } = {}) {
   const info = ref(null);
   const show = ref(false);
   const checking = ref(false);
   const updating = ref(false);
+  const restarting = ref(false);
   const dismissing = ref(false);
   const error = ref(null);
   const progress = ref(null);
   const source = ref('manual');
   const returnFocusTo = ref(null);
-  const busy = computed(() => checking.value || updating.value || dismissing.value);
+  const busy = computed(() => checking.value || updating.value || restarting.value || dismissing.value);
   const dialogInfo = computed(() => info.value || emptyInfo());
+  // Older bindings and non-Windows builds still install in the download call.
+  const downloadOnly = computed(() => typeof app()?.PrepareUpdate === 'function'
+    && (!info.value?.platform || String(info.value.platform).startsWith('windows/')));
   const status = computed(() => {
+    if (restarting.value) return 'restarting';
     if (updating.value) return 'updating';
     if (checking.value) return 'checking';
     if (dismissing.value) return 'dismissing';
+    if (info.value?.ready === true) return 'ready';
     if (error.value) return 'error';
     if (info.value?.applied === true) return 'applied';
     if (info.value?.hasUpdate === true) return 'available';
@@ -42,36 +44,45 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
     if (!show.value) returnFocusTo.value = document.activeElement;
   }
   function resultInfo(result, previous = null) {
+    const snapshot = { ...emptyInfo(), ...previous, ...result };
     return {
-      ...emptyInfo(),
-      ...previous,
-      ...result,
+      ...snapshot,
       error: typeof result?.error === 'string' ? result.error : '',
-      applied: result?.applied === true,
+      applied: snapshot.applied === true,
+      ready: snapshot.ready === true && snapshot.applied !== true,
+      restarting: snapshot.restarting === true,
     };
   }
-  function validateResult(result) {
+  function validateObject(result) {
     if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error(t('self_update.invalid_response'));
+    return result;
+  }
+  function validateResult(result) {
+    validateObject(result);
     if (typeof result.error === 'string' && result.error) return result;
-    if (typeof result.hasUpdate !== 'boolean' || (result.hasUpdate && (typeof result.latest !== 'string' || !result.latest)) || (result.applied === true && !result.hasUpdate)) throw new Error(t('self_update.invalid_response'));
+    if (typeof result.hasUpdate !== 'boolean' || (result.hasUpdate && (typeof result.latest !== 'string' || !result.latest))
+      || (!result.hasUpdate && (result.applied === true || result.ready === true))) throw new Error(t('self_update.invalid_response'));
     return result;
   }
   function fail(kind, reason, result) {
     const detail = reason?.message || String(reason || t('self_update.invalid_response'));
-    // A thrown apply/ignore carries no new release snapshot. An actual reply
-    // (even an error) supersedes the old selection, including an omitted asset.
-    const previous = !result && kind !== 'check' ? info.value : null;
-    info.value = { ...resultInfo(result, previous), applied: false, ...(kind === 'check' ? { hasUpdate: false } : {}) };
+    // Only restart failures describe the already prepared candidate. Other
+    // actual replies supersede the prior selection (including omitted assets).
+    const previous = kind === 'restart' || (!result && kind !== 'check') ? info.value : null;
+    info.value = {
+      ...resultInfo(result, previous), applied: false, restarting: false,
+      ready: kind === 'restart' && (result?.ready === true || (result?.ready !== false && previous?.ready === true)),
+      ...(kind === 'check' ? { hasUpdate: false } : {}),
+    };
     error.value = { kind, message: detail };
     show.value = true;
-    notify('error', `${t(kind === 'check' ? 'update_check_failed' : 'self_update.error_title')}: ${detail}`);
+    notify('error', `${t(kind === 'check' ? 'update_check_failed' : kind === 'restart' ? 'self_update.restart_failed' : 'self_update.error_title')}: ${detail}`);
   }
 
   async function check() {
     if (disposed || busy.value) return false;
-    // The running process still reports the old version until the user reopens
-    // XDev. Do not offer to reinstall the same release after a successful apply.
-    if (info.value?.applied === true) return open();
+    // A staged or applied update remains actionable without rechecking.
+    if (info.value?.ready === true || info.value?.applied === true) return open();
     rememberFocus();
     if (!show.value) source.value = 'manual';
     const request = ++revision;
@@ -86,7 +97,7 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
         fail('check', result.error, result);
         return false;
       }
-      info.value = { ...resultInfo(result), applied: false };
+      info.value = { ...resultInfo(result), applied: false, restarting: false };
       if (result.hasUpdate) show.value = true;
       else notify('success', t('up_to_date'));
       return true;
@@ -108,7 +119,7 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
   }
 
   async function apply() {
-    if (disposed || busy.value || info.value?.hasUpdate !== true || info.value?.applied === true || error.value?.kind === 'check') return false;
+    if (disposed || busy.value || info.value?.hasUpdate !== true || info.value.ready || info.value.applied || error.value?.kind === 'check') return false;
     rememberFocus();
     show.value = true;
     const request = ++revision;
@@ -118,23 +129,25 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
     error.value = null;
     progress.value = null;
     try {
-      const result = validateResult(await app().ApplyUpdate());
+      const backend = app();
+      const prepare = typeof backend.PrepareUpdate === 'function';
+      const result = validateResult(await (prepare ? backend.PrepareUpdate() : backend.ApplyUpdate()));
       if (disposed || request !== revision) return false;
       if (result.error) {
         fail('apply', result.error, result);
         return false;
       }
-      info.value = resultInfo(result);
-      if (result.applied === true) {
+      info.value = { ...resultInfo(result), restarting: false };
+      if (info.value.applied) {
         notify('success', t('self_update.applied', { latest: result.latest }));
         return true;
       }
-      if (result.hasUpdate === false) {
-        // The second check can truthfully find no update; no binary was applied.
+      if (info.value.ready) return true;
+      if (!result.hasUpdate) {
         notify('info', t('self_update.no_update_applied'));
         return false;
       }
-      fail('apply', t('self_update.not_applied'), result);
+      fail('apply', t(prepare && downloadOnly.value ? 'self_update.not_ready' : 'self_update.not_applied'), result);
       return false;
     } catch (reason) {
       if (!disposed && request === revision) fail('apply', reason);
@@ -146,6 +159,38 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
     }
   }
 
+  async function restart() {
+    if (disposed || busy.value || info.value?.ready !== true) return false;
+    rememberFocus();
+    show.value = true;
+    operation = 'restart';
+    const request = ++revision;
+    restarting.value = true;
+    error.value = null;
+    progress.value = null;
+    let accepted = false;
+    try {
+      const backend = app();
+      if (typeof backend?.RestartToUpdate !== 'function') throw new Error(t('self_update.restart_unavailable'));
+      const result = validateObject(await backend.RestartToUpdate());
+      if (disposed || request !== revision) return false;
+      if (result.error || result.restarting !== true) {
+        fail('restart', result.error || t('self_update.restart_unconfirmed'), result);
+        return false;
+      }
+      info.value = resultInfo(result, info.value);
+      // The backend owns graceful exit. Stay locked after its acknowledgement.
+      accepted = true;
+      return true;
+    } catch (reason) {
+      if (!disposed && request === revision) fail('restart', reason);
+      return false;
+    } finally {
+      if (operation === 'restart') operation = '';
+      if (!accepted) restarting.value = false;
+    }
+  }
+
   function close() {
     if (disposed || busy.value) return false;
     show.value = false;
@@ -153,7 +198,7 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
   }
 
   async function ignore() {
-    if (disposed || busy.value || info.value?.hasUpdate !== true || info.value?.applied === true) return false;
+    if (disposed || busy.value || info.value?.hasUpdate !== true || info.value.ready || info.value.applied) return false;
     const latest = info.value.latest;
     const request = ++revision;
     operation = 'ignore';
@@ -176,25 +221,24 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
   }
 
   function quit() {
-    if (!close()) return false;
+    if (info.value?.ready === true || !close()) return false;
     runtime()?.WindowClose?.();
     return true;
   }
 
   function retry() {
+    if (info.value?.ready === true) return restart();
     if (error.value?.kind === 'apply' && info.value?.hasUpdate === true) return apply();
     if (error.value?.kind === 'ignore') return ignore();
     return check();
   }
 
   function handleEvent(data) {
-    if (disposed || !data || typeof data !== 'object') return;
+    if (disposed || !data || typeof data !== 'object' || restarting.value || info.value?.ready || info.value?.applied) return;
     if (data.action === 'ask' || data.action === 'notify') {
-      // An older startup check must not replace a manual in-flight operation,
-      // an installed result, or a version the user has already ignored.
-      if (busy.value || info.value?.applied === true || !data.latest || data.latest === ignoredLatest) return;
+      if (busy.value || !data.latest || data.latest === ignoredLatest) return;
       rememberFocus();
-      info.value = resultInfo({ ...data, hasUpdate: true, applied: false });
+      info.value = resultInfo({ ...data, hasUpdate: true, applied: false, ready: false, restarting: false });
       source.value = 'startup';
       error.value = null;
       progress.value = null;
@@ -202,27 +246,21 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
       return;
     }
     if (data.action === 'progress') {
-      if (!progressPhases.has(data.phase) || info.value?.applied === true || operation === 'ignore') return;
-      // Event delivery and the API reply can arrive on different channels. A
-      // delayed manual progress event must not erase its already-returned error
-      // or no-update result and leave the dialog busy forever. Explicit startup
-      // progress can still start a genuinely new automatic operation.
+      if (!progressPhases.has(data.phase) || operation === 'ignore') return;
+      // A delayed manual progress event cannot override its API reply.
       if (manualApplyFinished && operation !== 'apply' && data.source !== 'startup') return;
       if (operation !== 'apply' && !updating.value) {
-        // A real auto-update can start while a manual check is waiting on its
-        // busy response. Its progress is authoritative; drop that late check.
         ++revision;
         rememberFocus();
         source.value = data.source === 'manual' ? 'manual' : 'startup';
       }
-      // Progress is a partial snapshot. Only retain archive metadata if the
-      // event still describes the same release and selected package.
       const previous = info.value;
       const sameCandidate = data.latest && data.latest === previous?.latest
         && (!data.current || data.current === previous.current)
         && (!Object.hasOwn(data, 'platform') || data.platform === previous.platform)
         && (!Object.hasOwn(data, 'assetName') || data.assetName === previous.assetName);
-      info.value = resultInfo({ ...data, hasUpdate: true, applied: false }, sameCandidate ? previous : null);
+      // Progress has no authority to declare installation or a staged update.
+      info.value = resultInfo({ ...data, hasUpdate: true, applied: false, ready: false, restarting: false }, sameCandidate ? previous : null);
       progress.value = {
         phase: data.phase,
         downloadedBytes: Math.max(0, Number(data.downloadedBytes) || 0),
@@ -234,30 +272,28 @@ export function useSelfUpdate({ t, message, app = () => window.go.gui.App, runti
       show.value = true;
       return;
     }
-    if (data.action !== 'applied' && data.action !== 'applied-error') return;
-    // A delayed startup event cannot undo an authoritative installation reply.
-    // The running process still reports its old version until reopened, so
-    // revoking applied would offer a duplicate download/replacement.
-    if (info.value?.applied === true) return;
-    // Manual ApplyUpdate's awaited return owns its terminal outcome and toast.
-    // Startup events do not unlock that local operation early or double-report.
-    if (operation === 'apply' || operation === 'ignore') return;
-    if (data.action === 'applied' && info.value?.applied === true && info.value.latest === data.latest) return;
+    if (!['ready', 'applied', 'applied-error'].includes(data.action) || operation === 'apply' || operation === 'ignore') return;
+    if (data.action === 'ready' && (data.ready !== true || data.applied === true || data.hasUpdate === false || data.error || !data.latest)) return;
     ++revision;
     rememberFocus();
     source.value = 'startup';
     updating.value = false;
+    progress.value = null;
     show.value = true;
-    if (data.action === 'applied' && data.applied === true) {
-      info.value = resultInfo({ ...data, hasUpdate: true, applied: true });
+    if (data.action === 'ready') {
+      info.value = resultInfo({ ...data, hasUpdate: true, applied: false, restarting: false });
+      error.value = null;
+    } else if (data.action === 'applied' && data.applied === true) {
+      info.value = resultInfo({ ...data, hasUpdate: true, applied: true, restarting: false });
       error.value = null;
       notify('success', t('self_update.applied', { latest: data.latest }));
     } else {
-      fail('apply', data.error || t(data.action === 'applied-error' ? 'self_update.apply_failed' : 'self_update.not_applied'), { ...data, hasUpdate: true, applied: false });
+      // Legacy errors often omit hasUpdate; a rollback explicitly sets false.
+      fail('apply', data.error || t(data.action === 'applied-error' ? 'self_update.apply_failed' : 'self_update.not_applied'), { ...data, hasUpdate: data.hasUpdate !== false, applied: false });
     }
   }
 
   function dispose() { disposed = true; ++revision; }
   if (getCurrentScope()) onScopeDispose(dispose);
-  return { info, dialogInfo, show, checking, updating, dismissing, busy, error, progress, source, status, returnFocusTo, check, open, apply, close, ignore, quit, retry, handleEvent, dispose };
+  return { info, dialogInfo, show, checking, updating, restarting, dismissing, busy, downloadOnly, error, progress, source, status, returnFocusTo, check, open, apply, restart, close, ignore, quit, retry, handleEvent, dispose };
 }

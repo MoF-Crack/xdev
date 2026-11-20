@@ -257,6 +257,9 @@ func (a *App) checkForUpdateWith(check func(context.Context, string) (*update.Ch
 		return UpdateCheckResult{Current: version.Version, Error: "an XDev self-update operation is already in progress"}
 	}
 	defer guiSelfUpdateMu.Unlock()
+	if a.preparedUpdate != nil {
+		return a.preparedView
+	}
 	ctx, closeNetwork := a.selfUpdateContext(a.rootContext())
 	defer closeNetwork()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -288,6 +291,9 @@ func (a *App) applyUpdateWith(
 		return UpdateCheckResult{Current: version.Version, Error: "an XDev self-update operation is already in progress"}
 	}
 	defer guiSelfUpdateMu.Unlock()
+	if a.preparedUpdate != nil {
+		return a.preparedView
+	}
 	// The refetch, archive and checksum share this operation's proxy snapshot.
 	ctx, closeNetwork := a.selfUpdateContext(a.rootContext())
 	defer closeNetwork()

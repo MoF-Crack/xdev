@@ -92,9 +92,9 @@ func Check(ctx context.Context, currentVersion string) (*CheckResult, error) {
 		if !allowPrerelease && (release.Prerelease || util.IsPrereleaseVersion(candidate)) {
 			continue
 		}
-		archive, ok := findAsset(release, assetNameForPlatform(candidate))
+		_, selectionErr := SelectedAsset(&CheckResult{LatestVersion: candidate, Release: release})
 		sums, hasSums := findChecksumAsset(release)
-		if !ok || !hasSums || !usableAsset(archive) || !usableAsset(sums) {
+		if selectionErr != nil || !hasSums || !usableAsset(sums) {
 			continue
 		}
 		if result.Release == nil || semverLess(result.LatestVersion, candidate) {
@@ -212,8 +212,8 @@ func ApplyToWithProgress(ctx context.Context, result *CheckResult, exePath strin
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	archivePath := tmpFile.Name()
-	defer os.Remove(archivePath)
+	downloadPath := tmpFile.Name()
+	defer os.Remove(downloadPath)
 
 	progress := &progressReporter{callback: onProgress}
 	if err := downloadReleaseArchive(ctx, asset, tmpFile, progress); err != nil {
@@ -229,18 +229,21 @@ func ApplyToWithProgress(ctx context.Context, result *CheckResult, exePath strin
 	}
 
 	progress.phase("verifying")
-	if err := verifySHA256(ctx, result.Release, asset.Name, archivePath); err != nil {
+	if err := verifySHA256(ctx, result.Release, asset.Name, downloadPath); err != nil {
 		return fmt.Errorf("SHA256 verification failed: %w", err)
 	}
-	progress.phase("extracting")
-	if err := ctx.Err(); err != nil {
-		return err
+	binPath := downloadPath
+	if !strings.HasSuffix(asset.Name, ".exe") {
+		progress.phase("extracting")
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		binPath, err = extractUpdateBinary(downloadPath, asset.Name, tmpDir)
+		if err != nil {
+			return fmt.Errorf("extract update binary: %w", err)
+		}
+		defer os.Remove(binPath)
 	}
-	binPath, err := extractUpdateBinary(archivePath, asset.Name, tmpDir)
-	if err != nil {
-		return fmt.Errorf("extract update binary: %w", err)
-	}
-	defer os.Remove(binPath)
 
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(binPath, 0o755); err != nil {

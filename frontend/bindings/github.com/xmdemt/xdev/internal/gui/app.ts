@@ -853,6 +853,16 @@ export function PauseDownload(taskID: string): $CancellablePromise<void> {
 }
 
 /**
+ * PrepareUpdate downloads and verifies an update without replacing the running
+ * executable. Windows installation is committed only after RestartToUpdate.
+ */
+export function PrepareUpdate(): $CancellablePromise<$models.UpdateCheckResult> {
+    return $Call.ByID(1776101544).then(($result: any) => {
+        return $$createType2($result);
+    });
+}
+
+/**
  * PreviewCustomToolVersions discovers available versions from a remote
  * source without writing any manifest.  Returns a CustomToolResult whose
  * Success flag distinguishes "source reachable, zero versions" from
@@ -914,6 +924,16 @@ export function RemoveFavorite(toolName: string): $CancellablePromise<void> {
  */
 export function RepairInstall(toolName: string, version: string): $CancellablePromise<void> {
     return $Call.ByID(1297884262, toolName, version);
+}
+
+/**
+ * RestartToUpdate arms an independent helper before requesting a graceful quit.
+ * No frontend WindowClose call is allowed to race ahead of helper readiness.
+ */
+export function RestartToUpdate(): $CancellablePromise<$models.UpdateCheckResult> {
+    return $Call.ByID(2968887685).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
