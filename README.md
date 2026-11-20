@@ -2,7 +2,7 @@
 
 > 跨平台开发环境版本管理工具，支持 CLI、TUI 和 GUI 三种操作模式
 >
-> **当前版本：1.0.0-rc.1（RC1）** · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
+> **当前发布候选：1.0.0-rc.2（RC2）** · 正式 CI 与公网升级验证待结果 · 命令名：`xdev` · 模块路径：`github.com/xmdemt/xdev`
 >
 > 仓库：[github.com/MoF-Crack/xdev](https://github.com/MoF-Crack/xdev)
 
@@ -55,36 +55,36 @@ xdev gui        # 显式启动 GUI（等价无参数）
 
 ## 下载
 
-[1.0.0-rc.1 已发布](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1)，Tag 为 `v1.0.0-rc.1`，GitHub Pre-release。正式 CI（[44562550013](https://github.com/MoF-Crack/xdev/actions/runs/44562550013)）中三平台构建、签名、Linux race、在线 E2E、五平台打包和发布均成功；11 项资产均已上传。公开 `SHA256SUMS` 中 10 项安装包摘要与 Release API digest 字段一致。此环境未能完整下载所有安装包逐项核验归档内容；资产与验证详情见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)。
+[RC2 发布候选说明](<docs/releases/1.0.0-rc.2.md>)：版本 `1.0.0-rc.2`，Tag `v1.0.0-rc.2`，按 GitHub Pre-release 发布，Latest 保持 beta.3。正式 RC2 CI、资产上传和 GitHub 公网升级验收待结果；当前已发布版本仍为 [RC1](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1)，其标签与资产未变。
 
-RC1 修复 Windows GUI 启动留下控制台，以及自更新未采用应用代理配置的问题。Windows GUI 在文件日志就绪后释放自身控制台关联，CLI、TUI 与 shim 保留标准输入输出；自更新每次操作使用一份代理配置快照，元数据、归档、`SHA256SUMS` 与资产 API 回退共用该次网络配置。
+RC2 增加 Windows 直接 EXE 下载与「重启并更新」：下载、校验和暂存完成后原程序保持不变，点击重启按钮才交由更新助手等待旧进程退出、备份替换并重新打开。Linux/macOS 继续使用原 tar.gz 更新及手动重新打开流程。
 
-| RC1 发布产物 | 说明 |
+| RC2 预期发布产物（共 12 项） | 说明 |
 |------|------|
-| `xdev-windows-amd64-v1.0.0-rc.1.zip` | Windows 单二进制（GUI+TUI+CLI） |
-| `xdev-linux-amd64-v1.0.0-rc.1.tar.gz` | Linux 单二进制（amd64） |
-| `xdev-linux-arm64-v1.0.0-rc.1.tar.gz` | Linux 单二进制（arm64） |
-| `xdev-darwin-amd64-v1.0.0-rc.1.tar.gz` | macOS 单二进制（Intel） |
-| `xdev-darwin-arm64-v1.0.0-rc.1.tar.gz` | macOS 单二进制（Apple Silicon） |
-| `xdev-1.0.0-rc.1-x86_64.AppImage` | Linux AppImage（amd64） |
-| `xdev-1.0.0-rc.1-aarch64.AppImage` | Linux AppImage（arm64） |
-| `xdev-darwin-arm64-v1.0.0-rc.1.dmg` | macOS（Apple Silicon） |
-| `xdev-1.0.0-rc.1-linux-amd64.deb` | Linux Debian 软件包（amd64） |
-| `xdev-1.0.0-rc.1-linux-amd64.rpm` | Linux RPM 软件包（amd64） |
-| `SHA256SUMS` | 汇总所有平台资产的完整校验和 |
+| `xdev-windows-amd64-v1.0.0-rc.2.exe` | Windows 直接 EXE，优先下载 |
+| `xdev-windows-amd64-v1.0.0-rc.2.zip` | Windows 兼容包，供旧更新器使用 |
+| `xdev-linux-amd64-v1.0.0-rc.2.tar.gz` | Linux 单二进制（amd64） |
+| `xdev-linux-arm64-v1.0.0-rc.2.tar.gz` | Linux 单二进制（arm64） |
+| `xdev-darwin-amd64-v1.0.0-rc.2.tar.gz` | macOS 单二进制（Intel） |
+| `xdev-darwin-arm64-v1.0.0-rc.2.tar.gz` | macOS 单二进制（Apple Silicon） |
+| `xdev-1.0.0-rc.2-x86_64.AppImage` | Linux AppImage（amd64） |
+| `xdev-1.0.0-rc.2-aarch64.AppImage` | Linux AppImage（arm64） |
+| `xdev-darwin-arm64-v1.0.0-rc.2.dmg` | macOS（Apple Silicon） |
+| `xdev-1.0.0-rc.2-linux-amd64.deb` | Linux Debian 软件包（amd64） |
+| `xdev-1.0.0-rc.2-linux-amd64.rpm` | Linux RPM 软件包（amd64） |
+| `SHA256SUMS` | 所有平台资产的 SHA-256 校验和 |
 
-每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。
-本地构建产物位于 `build/bin/xdev.exe`（或 `build/bin/xdev`）；本地测试包不属于公开 Release 资产。
+每个平台只需一个可执行文件：无参数启动 GUI，`xdev tui` 进入 TUI，其余参数作为 CLI 命令。本地测试产物不属于公开 Release 资产。
 
 ## 旧版升级和自更新
 
-**beta.3 的 Release 列表更新器已在发布后实测发现 RC1，无需将 RC1 改为非 Pre-release 或 Latest**。beta.3 用户可在设置中点击「检查更新」，或退出 GUI 后运行 `xdev self update`。手动检查不受启动检查的 24 小时节流限制；发现更新后选择「下载并安装」，即可查看真实下载字节及校验、解压、安装阶段，也可单独下载归档。
+**从公开 beta.3 / RC1 升级**：RC2 资产齐备后，Release 列表更新器可发现这个更高的 Pre-release，无需改变 beta.3 Latest。设置中点击「检查更新」并使用原「下载并安装」，或退出 GUI 后运行 `xdev self update`；这一轮仍下载 ZIP、使用旧界面，安装后自行关闭并重新打开。新按钮在运行 RC2 后生效。beta.3 尚不读取 GUI 代理设置，受限网络下需环境代理或手动下载。
 
-**安装 RC1 之前，beta.3 自更新仍不读取 GUI 设置中的代理。** 受限网络下，即使设置页已配置代理，更新检查或下载仍可能失败；此时可使用标准环境代理，或从 [RC1 Release](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-rc.1) 手动下载对应平台归档。RC1 的应用代理修复在运行新程序后生效。
+**较早的 alpha / beta.2**：其 `/releases/latest` 仍指向 [beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。先经 beta.3 升级，或手动下载 RC2 EXE；`beta` 的 SemVer 预发布含义不变。
 
-较早的 alpha / beta.2 仍只读取 GitHub `/releases/latest`，目前该入口指向 [beta.3](https://github.com/MoF-Crack/xdev/releases/tag/v1.0.0-beta.3)。可先升级到 beta.3，再由新版更新器升级 RC1；也可在 RC1 发布后直接手动下载 RC1。beta.3 的 GitHub Latest 兼容标记继续保留，`beta` 版本号在 SemVer 中仍表示预发布。
+**运行新版后的 Windows GUI**：检查更新 →「下载更新」→ 校验暂存 →「重启并更新」。新更新器优先选择对应版本的直接 EXE，仅在该资产完全不存在时兼容 ZIP；重复、无效或未上传完成的 EXE 会明确报错。下载完成不表示已安装，也不会自动退出。助手重开应用时保留 XDev 主目录、工作目录和 `--no-path-fix` 策略。失败重试与恢复说明见 [RC2 升级步骤](<docs/releases/1.0.0-rc.2.md#升级步骤>)。
 
-手动升级时，使用同一 Release 的 `SHA256SUMS` 核对下载文件，将归档解压到单独目录，退出旧 XDev 后再运行或替换可执行文件，保留原配置目录与已安装工具。下载或校验失败不会覆盖原二进制；安装成功后请自行关闭并重新打开 XDev，当前进程在重新启动前仍运行旧版代码。完整步骤和验证边界见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md>)；历史升级记录见 [beta.3 发布说明](<docs/releases/1.0.0-beta.3.md>)。
+**手动升级**：从同一 Release 下载对应平台文件及 `SHA256SUMS`，校验后退出旧应用，再替换可执行文件；Windows 可直接使用 EXE，ZIP/tar.gz 先解压到单独目录。保留原配置目录与已安装工具，重新运行后用 `xdev version` 核对版本。Linux/macOS 更新后仍需手动重新打开。
 
 ## 新版 GUI 与品牌（1.0.0-beta.2）
 

@@ -3,6 +3,26 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-rc.2] - 2026-11-20
+
+RC2 发布候选，Tag `v1.0.0-rc.2`，按 GitHub Pre-release 发布；Latest 保持 beta.3，公开 RC1 标签与资产未变。正式 RC2 CI、12 项资产上传与 GitHub 公网升级验收待结果，见 [RC2 发布说明](<docs/releases/1.0.0-rc.2.md#发布验证>)。
+
+### Changed
+
+- Windows 发布直接 EXE，并保留 ZIP 供旧更新器使用。新更新器优先选择对应版本 EXE，仅在其完全不存在时兼容 ZIP；重复、无效或未上传完成的 EXE 明确失败。
+- Windows GUI 改为「下载更新 → 校验暂存 → 重启并更新」。准备完成时原程序保持不变；用户确认后，助手等待旧进程退出、备份替换并重开，保留主目录、工作目录与 `--no-path-fix` 策略。
+- 助手启动失败保留就绪状态，可直接重试；暂存丢失或内容变化要求重新下载。替换或重开失败时尝试恢复并启动已校验的旧程序，重开后显示错误。
+
+### Compatibility
+
+- 公开 beta.3 / RC1 客户端可在 RC2 资产齐备后发现它，但升级这一轮仍使用 ZIP 和旧界面，安装后手动重开；新按钮在运行新版后生效。旧 alpha / beta.2 需先经 beta.3，或手动下载 EXE。
+- Linux/macOS 继续原 tar.gz 安装与手动重新打开流程；保留配置、已安装工具及 GUI/TUI/CLI/shim 入口。
+
+### Validation
+
+- 本地 Go 33 个包、`go vet ./...`、前端 58 文件/451 测试、10 项更新 E2E、7 项真实 Windows 进程与 2 项文件保护回归、17 项原生打包契约（0 跳过）通过。
+- 原生 GUI 完整更新链已用本地可信 TLS 与正式 RC1 payload 验证；正式 RC2 CI、公开 RC1 客户端 ZIP 升级及新客户端公网 EXE 下载/确认重启验收仍待结果。
+
 ## [1.0.0-rc.1] - 2026-11-19
 
 RC1 修复 Windows GUI 常驻控制台与自更新代理配置。目标软件版本为 `1.0.0-rc.1`，Tag 为 `v1.0.0-rc.1`，已作为 GitHub Pre-release 发布；正式 CI、签名、Linux race、在线 E2E、五平台打包均通过，11 项资产已上传。公开 SHA256SUMS 与 Release API 摘要一致；受本机网络限制，安装包本体未能全部逐项下载。状态见 [RC1 发布说明](<docs/releases/1.0.0-rc.1.md#发布验证>)。
