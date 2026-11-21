@@ -19,7 +19,10 @@ const fixture = t => {
   mkdirSync(join(dir, 'scripts/release'), { recursive: true });
   mkdirSync(join(dir, 'internal/version'), { recursive: true });
   mkdirSync(join(dir, 'build/windows'), { recursive: true });
-  for (const path of ['scripts/build.mjs', 'scripts/release/native-resources.mjs', 'scripts/release/platform-packages.sh', 'build/windows/info.json', 'build/windows/wails.exe.manifest', 'build/windows/icon.ico', 'build/appicon.png']) copyFileSync(join(root, path), join(dir, path));
+  mkdirSync(join(dir, 'manifests'), { recursive: true });
+  mkdirSync(join(dir, 'build/signed-release-input/manifests'), { recursive: true });
+  mkdirSync(join(dir, 'build/signed-release-input/keys'), { recursive: true });
+  for (const path of ['scripts/build.mjs', 'scripts/release/native-resources.mjs', 'scripts/release/manifest-overlay.mjs', 'scripts/release/platform-packages.sh', 'build/windows/info.json', 'build/windows/wails.exe.manifest', 'build/windows/icon.ico', 'build/appicon.png']) copyFileSync(join(root, path), join(dir, path));
   writeFileSync(join(dir, 'go.mod'), 'module nativefixture\n\ngo 1.26\n\nrequire github.com/wailsapp/wails/v3 v3.1.0\n');
   writeFileSync(join(dir, 'internal/version/version.go'), 'package version\nconst Version = "1.2.3-beta.2"\n');
   return dir;
@@ -29,6 +32,14 @@ const objectFor = arch => {
   result.writeUInt16LE({ amd64: 0x8664, arm64: 0xaa64, '386': 0x14c }[arch]);
   return result;
 };
+
+test('release build fails closed when signed manifest inputs are missing', t => {
+  const dir = fixture(t);
+  const { result, events } = mockBuild(dir, { signedInputs: false });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Release build requires XDEV_RELEASE_SIGNING_INPUT_DIR/);
+  assert.deepEqual(events, []);
+});
 
 test('a missing CLI falls back to the exact go.mod Wails version without changing workflow permissions', () => {
   const calls = [];
@@ -101,13 +112,28 @@ test('generator failure and wrong architecture fail closed without leaving objec
   }
 });
 
-function mockBuild(dir, { os = 'windows', arch = 'arm64', fail = false } = {}) {
+function mockBuild(dir, { os = 'windows', arch = 'arm64', fail = false, signedInputs = true } = {}) {
+  if (signedInputs) {
+    const tracked = join(dir, 'manifests');
+    const staged = join(dir, 'build/signed-release-input/manifests');
+    mkdirSync(tracked, { recursive: true });
+    mkdirSync(staged, { recursive: true });
+    mkdirSync(join(dir, 'build/signed-release-input/keys'), { recursive: true });
+    writeFileSync(join(tracked, 'demo.yaml'), 'checkout yaml');
+    writeFileSync(join(tracked, 'demo.yaml.sig'), 'checkout signature');
+    writeFileSync(join(staged, 'demo.yaml'), 'signed yaml');
+    writeFileSync(join(staged, 'demo.yaml.sig'), 'signed signature');
+    writeFileSync(join(dir, 'build/signed-release-input/keys/pub.key'), 'fixture-key');
+  }
   const mock = join(dir, 'mock-tool.mjs');
   const log = join(dir, 'commands.jsonl');
   writeFileSync(mock, `import { existsSync, readFileSync, writeFileSync, readdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 const args = process.argv.slice(2);
-const event = { args, os: process.env.GOOS, arch: process.env.GOARCH, syso: readdirSync(process.cwd()).filter(n => n.endsWith('.syso')) };
+const event = { args, os: process.env.GOOS, arch: process.env.GOARCH, signedManifestDir: process.env.XDEV_SIGNED_MANIFEST_DIR, syso: readdirSync(process.cwd()).filter(n => n.endsWith('.syso')) };
+const overlayIndex = args.indexOf('-overlay');
+if (overlayIndex >= 0) event.overlay = JSON.parse(readFileSync(args[overlayIndex + 1], 'utf8'));
+if (args[0] === 'version' && args[1] === '-m') { console.log('build\\tvcs.modified=false'); process.exit(0); }
 if(args[0] === 'generate') {
   const flag = n => args[args.indexOf(n)+1];
   event.info = JSON.parse(readFileSync(flag('-info'),'utf8'));
@@ -115,6 +141,7 @@ if(args[0] === 'generate') {
   writeFileSync(flag('-out'),object);
 }
 appendFileSync(process.env.MOCK_LOG,JSON.stringify(event)+'\\n');
+if(args[0] === 'version' && args[1] === '-m') console.log('build\\tvcs.modified=false');
 if(args[0] === 'build') {
   if(process.env.GOOS === 'windows' && !event.syso.some(n => n.endsWith('_windows_'+process.env.GOARCH+'.syso'))) process.exit(8);
   if(process.env.MOCK_FAIL === '1') process.exit(7);
@@ -129,8 +156,9 @@ import { syncBuiltinESMExports } from 'node:module';
 const original = child.spawnSync;
 child.spawnSync = (exe,args,options) => original(process.execPath,[process.env.MOCK_TOOL,...args],{...options,env:{...options.env,NODE_OPTIONS:''},shell:false});
 syncBuiltinESMExports();\n`);
+  const buildEnv = { ...process.env, NODE_OPTIONS: `--import=${JSON.stringify(pathToFileURL(preload).href)}`, MOCK_TOOL: mock, MOCK_LOG: log, MOCK_FAIL: fail ? '1' : '0', WAILS3: 'pinned-wails', GO: 'go', GOOS: os, GOARCH: arch, XDEV_SIGNING_PUBLIC_KEY: signedInputs ? '' : 'fixture-key', XDEV_RELEASE_SIGNING_INPUT_DIR: signedInputs ? 'build/signed-release-input' : '', XDEV_OUTPUT: join(dir, 'binary') };
   const result = spawnSync(process.execPath, [join(dir, 'scripts/build.mjs'), '--skip-audit', '--skip-frontend', '--skip-bindings', '--release'], {
-    cwd: dir, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: `--import=${JSON.stringify(pathToFileURL(preload).href)}`, MOCK_TOOL: mock, MOCK_LOG: log, MOCK_FAIL: fail ? '1' : '0', WAILS3: 'pinned-wails', GO: 'go', GOOS: os, GOARCH: arch, XDEV_SIGNING_PUBLIC_KEY: 'fixture-key', XDEV_OUTPUT: join(dir, 'binary') },
+    cwd: dir, encoding: 'utf8', env: buildEnv,
   });
   return { result, events: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [] };
 }
@@ -143,12 +171,32 @@ test('release --skip-bindings still generates syso before go build and cleans af
     assert.equal(result.status, fail ? 7 : 0, result.stdout + result.stderr);
     assert.deepEqual(events.map(e => e.args[0]), ['test', 'generate', 'build']);
     assert.equal(events[1].args[1], 'syso');
+    assert.ok(events[2].args.includes('-buildvcs=true'));
     assert.equal(events[1].info.info['0000'].ProductVersion, '1.2.3-beta.2');
     assert.equal(events[2].os, 'windows');
     assert.equal(events[2].arch, 'arm64');
     assert.ok(events[2].syso.some(n => n.endsWith('_windows_arm64.syso')));
     assert.deepEqual(readdirSync(dir).filter(n => n.endsWith('.syso')), ['user_windows_amd64.syso']);
   }
+});
+
+test('release build embeds staged signed manifests through an overlay and keeps checkout bytes clean', t => {
+  const dir = fixture(t);
+  const { result, events } = mockBuild(dir, { signedInputs: true });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(events.map(e => e.args[0]), ['test', 'generate', 'build']);
+  assert.ok(events[2].args.includes('-buildvcs=true'));
+  const trackedManifest = join(dir, 'manifests/demo.yaml');
+  const stagedManifest = join(dir, 'build/signed-release-input/manifests/demo.yaml');
+  for (const event of [events[0], events[2]]) {
+    const overlayIndex = event.args.indexOf('-overlay');
+    assert.ok(overlayIndex >= 0, `${event.args[0]} must receive the manifest overlay`);
+    assert.equal(event.overlay.Replace[trackedManifest], stagedManifest);
+    assert.equal(event.signedManifestDir, join(dir, 'build/signed-release-input/manifests'));
+  }
+  assert.equal(readFileSync(trackedManifest, 'utf8'), 'checkout yaml');
+  const overlayPath = events[0].args[events[0].args.indexOf('-overlay') + 1];
+  assert.equal(existsSync(overlayPath), false, 'temporary overlay must be removed after build');
 });
 
 test('a non-Windows GOOS never asks for syso even on a Windows builder', t => {

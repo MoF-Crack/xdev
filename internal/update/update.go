@@ -11,7 +11,9 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -28,12 +30,15 @@ import (
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/shim"
+	"github.com/xmdemt/xdev/internal/signer"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
 const (
-	githubOwner = "MoF-Crack"
-	githubRepo  = "xdev"
+	githubOwner                 = "MoF-Crack"
+	githubRepo                  = "xdev"
+	checksumsSignatureAssetName = "SHA256SUMS.sig"
+	lastLegacyUpdateVersion     = "1.0.0-rc.2"
 )
 
 // ReleaseInfo represents a GitHub release.
@@ -95,6 +100,13 @@ func Check(ctx context.Context, currentVersion string) (*CheckResult, error) {
 		_, selectionErr := SelectedAsset(&CheckResult{LatestVersion: candidate, Release: release})
 		sums, hasSums := findChecksumAsset(release)
 		if selectionErr != nil || !hasSums || !usableAsset(sums) {
+			continue
+		}
+		if _, err := releaseChecksumsSignatureAsset(release); err != nil {
+			// Never install a release whose checksum signature cannot be
+			// authenticated, but leave evidence so a misconfigured release
+			// is diagnosable instead of silently invisible.
+			log.Printf("[update] Skipping release %s: %v", release.TagName, err)
 			continue
 		}
 		if result.Release == nil || semverLess(result.LatestVersion, candidate) {
@@ -535,6 +547,69 @@ func findAsset(release *ReleaseInfo, name string) (Asset, bool) {
 	return found, matches == 1
 }
 
+func releaseChecksumsSignatureAsset(release *ReleaseInfo) (*Asset, error) {
+	if release == nil || !validUpdateVersion(strings.TrimPrefix(release.TagName, "v")) {
+		return nil, errors.New("release checksum verification requires a valid release tag")
+	}
+	var found *Asset
+	for i := range release.Assets {
+		asset := &release.Assets[i]
+		if asset.Name != checksumsSignatureAssetName {
+			continue
+		}
+		if found != nil || !usableAsset(*asset) || asset.Size > 64<<10 {
+			return nil, fmt.Errorf("release %s has ambiguous or invalid %s metadata", release.TagName, checksumsSignatureAssetName)
+		}
+		found = asset
+	}
+	if found == nil && requiresSignedReleaseChecksums(release.TagName) {
+		return nil, fmt.Errorf("release %s is missing its required %s signature", release.TagName, checksumsSignatureAssetName)
+	}
+	return found, nil
+}
+
+func requiresSignedReleaseChecksums(tag string) bool {
+	version := strings.TrimPrefix(tag, "v")
+	return semverLess(lastLegacyUpdateVersion, version)
+}
+
+func verifyReleaseChecksumsSignature(ctx context.Context, release *ReleaseInfo, checksums []byte) error {
+	asset, err := releaseChecksumsSignatureAsset(release)
+	if err != nil || asset == nil {
+		return err
+	}
+	data, err := downloadReleaseChecksums(ctx, *asset)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", checksumsSignatureAssetName, err)
+	}
+	return verifyReleaseChecksumsSignatureBytes(release, checksums, data)
+}
+
+func verifyReleaseChecksumsSignatureBytes(release *ReleaseInfo, checksums, signatureBytes []byte) error {
+	if release == nil {
+		return errors.New("release metadata is missing")
+	}
+	if len(signatureBytes) == 0 {
+		return fmt.Errorf("release %s returned an empty %s signature", release.TagName, checksumsSignatureAssetName)
+	}
+	if len(signatureBytes) > 64<<10 {
+		return fmt.Errorf("%s exceeds 64 KiB", checksumsSignatureAssetName)
+	}
+	signature, err := signer.ParseReleaseChecksumsSignature(signatureBytes)
+	if err != nil {
+		return err
+	}
+	publicKey := signer.RootPublicKey()
+	if len(publicKey) != ed25519.PublicKeySize {
+		return errors.New("release checksum signature cannot be verified: no valid Ed25519 root key is embedded")
+	}
+	repository := "github.com/" + githubOwner + "/" + githubRepo
+	if !signer.VerifyReleaseChecksums(ed25519.PublicKey(publicKey), signature, repository, release.TagName, checksums) {
+		return fmt.Errorf("invalid %s signature for release %s", checksumsSignatureAssetName, release.TagName)
+	}
+	return nil
+}
+
 func findChecksumAsset(release *ReleaseInfo) (Asset, bool) {
 	var found Asset
 	matches := 0
@@ -874,6 +949,10 @@ func verifySHA256(ctx context.Context, release *ReleaseInfo, assetName, filePath
 	}
 
 	// Compute the SHA256 of the downloaded binary.
+	if err := verifyReleaseChecksumsSignature(ctx, release, sumsData); err != nil {
+		return fmt.Errorf("SHA256SUMS signature verification failed: %w", err)
+	}
+
 	actualHash, err := util.FileSHA256(filePath)
 	if err != nil {
 		return fmt.Errorf("compute SHA256 of %s: %w", filePath, err)

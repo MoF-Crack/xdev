@@ -3,6 +3,19 @@
 All notable changes to XDev are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/), adheres to [SemVer](https://semver.org/).
 
+## [1.0.0-rc.3] - 2026-11-22
+
+### Fixed
+
+- 发布产物不再使用 `-s`（剥离 PE 符号表）。实测带 `-s` 的 Windows 桌面产物的写入即被火绒判定为 `TrojanDownloader/Agent.cg` 并删除；同一份源码仅用 `-w` 构建不被判定。判定与签名状态、下载行为、自更新代码均无因果关系，代价为每个平台产物约增大 1.5 MB。
+- 发布构建不再把签名后的清单写回 Git 工作树。此前该做法让发布二进制的 Go 元数据带上 `+dirty` 与 `vcs.modified=true`；现在通过 Go `-overlay` 注入签名清单，并强制校验内嵌字节与签名输入一致、VCS 元数据干净。
+
+### Security
+
+- 自更新新增独立的发布真实性校验：`SHA256SUMS` 由 Ed25519 发布私钥签名成 `SHA256SUMS.sig`，签名覆盖仓库路径、精确 tag 与校验和原始字节；`1.0.0-rc.3` 起客户端在安装前必须验签，缺失或验签失败即拒绝安装。
+- `v1.0.0-rc.2` 及更早的 tag 保持仅比对哈希的旧行为，旧客户端升级路径不受影响。
+- 未注入发布公钥的本地构建不再接受签名 release 的自动更新（验签不可用时失败关闭）。
+
 ## [1.0.0-rc.2] - 2026-11-20
 
 RC2 已作为 GitHub Pre-release 发布，Tag `v1.0.0-rc.2` 指向提交 `15f56231a09972667fae37b096cffca8c549eb07`。正式 CI、签名、五平台打包与发布通过，12 项公开资产已全部下载核验；Latest 保持 beta.3，公开 RC1 标签与资产未变。实际升级验证见 [RC2 发布说明](<docs/releases/1.0.0-rc.2.md#发布验证>)。

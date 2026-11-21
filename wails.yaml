@@ -4,7 +4,7 @@ project:
   name: XDev
   product_name: XDev
   identifier: io.github.xmdemt.xdev
-  version: 1.0.0-rc.2
+  version: 1.0.0-rc.3
   binary_name: xdev
   description: Development Environment Manager
   icon: build/appicon.png

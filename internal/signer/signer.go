@@ -12,7 +12,9 @@ package signer
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,6 +30,74 @@ type ManifestSignature struct {
 	SHA256Map string    `json:"sha256_map"` // JSON: {"os/arch": "sha256:..."}
 	Timestamp time.Time `json:"timestamp"`
 	Signature string    `json:"signature"` // Base64-encoded Ed25519 signature
+}
+
+// ReleaseChecksumsSignature authenticates one release's complete SHA256SUMS
+// bytes. Repository and tag are signed too, preventing cross-project or
+// cross-release replay of a valid checksum file.
+type ReleaseChecksumsSignature struct {
+	Repository string    `json:"repository"`
+	Tag        string    `json:"tag"`
+	SHA256     string    `json:"sha256"`
+	Timestamp  time.Time `json:"timestamp"`
+	Signature  string    `json:"signature"`
+}
+
+const releaseChecksumsDomain = "xdev-release-checksums-v1"
+
+func releaseChecksumsPayload(repository, tag, digest string, timestamp time.Time) []byte {
+	return []byte(releaseChecksumsDomain + "\n" + repository + "\n" + tag + "\n" + digest + "\n" + timestamp.UTC().Format(time.RFC3339))
+}
+
+// SignReleaseChecksums binds exact checksum-file bytes to one repository and tag.
+func SignReleaseChecksums(privKey ed25519.PrivateKey, repository, tag string, checksums []byte) (*ReleaseChecksumsSignature, error) {
+	if len(privKey) != ed25519.PrivateKeySize || strings.TrimSpace(repository) == "" || strings.TrimSpace(tag) == "" {
+		return nil, fmt.Errorf("invalid release signing key, repository or tag")
+	}
+	timestamp := time.Now().UTC()
+	digest := sha256.Sum256(checksums)
+	hexDigest := hex.EncodeToString(digest[:])
+	sig := ed25519.Sign(privKey, releaseChecksumsPayload(repository, tag, hexDigest, timestamp))
+	return &ReleaseChecksumsSignature{
+		Repository: repository,
+		Tag:        tag,
+		SHA256:     hexDigest,
+		Timestamp:  timestamp,
+		Signature:  base64.StdEncoding.EncodeToString(sig),
+	}, nil
+}
+
+// VerifyReleaseChecksums authenticates exact checksum bytes for the expected
+// repository and tag; all metadata fields are covered by the Ed25519 signature.
+func MarshalReleaseChecksumsSignature(signature *ReleaseChecksumsSignature) ([]byte, error) {
+	if signature == nil {
+		return nil, fmt.Errorf("release checksum signature is nil")
+	}
+	return json.MarshalIndent(signature, "", "  ")
+}
+
+func ParseReleaseChecksumsSignature(data []byte) (*ReleaseChecksumsSignature, error) {
+	var signature ReleaseChecksumsSignature
+	if err := json.Unmarshal(data, &signature); err != nil {
+		return nil, fmt.Errorf("parse release checksum signature: %w", err)
+	}
+	return &signature, nil
+}
+
+func VerifyReleaseChecksums(pubKey ed25519.PublicKey, signature *ReleaseChecksumsSignature, repository, tag string, checksums []byte) bool {
+	if len(pubKey) != ed25519.PublicKeySize || signature == nil || signature.Repository != repository || signature.Tag != tag {
+		return false
+	}
+	digest := sha256.Sum256(checksums)
+	hexDigest := hex.EncodeToString(digest[:])
+	if signature.SHA256 != hexDigest || signature.Timestamp.IsZero() {
+		return false
+	}
+	sig, err := base64.StdEncoding.DecodeString(signature.Signature)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(pubKey, releaseChecksumsPayload(repository, tag, hexDigest, signature.Timestamp), sig)
 }
 
 // signaturePayload builds the bytes that get signed.

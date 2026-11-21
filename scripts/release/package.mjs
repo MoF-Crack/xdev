@@ -31,7 +31,7 @@ export async function hashFile(path) {
 }
 export async function checksums(directory,version) {
  const expected=platforms.map(([os,arch])=>archiveName(version,os,arch));
- const names=readdirSync(directory).filter(n=>n!=='SHA256SUMS' && !n.endsWith('.json')).sort();
+ const names=readdirSync(directory).filter(n=>n!=='SHA256SUMS' && n!=='SHA256SUMS.sig' && !n.endsWith('.json')).sort();
  for(const name of expected) if(!names.includes(name)) throw new Error(`Missing required update archive: ${name}`);
  for(const [os,arch] of platforms) {
   if(os!=='windows') continue;

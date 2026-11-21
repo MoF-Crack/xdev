@@ -14,11 +14,12 @@
 //     数据线未完成时跳过，并在输出里说明缺哪些——避免「第一天就红」，
 //     也避免静默假绿（skip 理由带缺失清单）。
 //
-// 这些断言读的是仓库工作树（package main 的测试以仓库根为工作目录）与
-// main.go 的 go:embed 文件系统，因此不依赖任何环境变量或私有密钥。
+// 默认断言读取仓库工作树与 main.go 的 go:embed 文件系统。发布构建可通过
+// XDEV_SIGNED_MANIFEST_DIR 指向独立的签名输入目录，不必覆盖 checkout 中的文件。
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -42,19 +43,30 @@ const (
 	publicKeyRel = "keys/pub.key"
 )
 
+// manifestDiskDir lets release builds validate the staged signed inputs without
+// copying them over the Git checkout. Normal tests keep using manifests/.
+func manifestDiskDir() string {
+	if dir := strings.TrimSpace(os.Getenv("XDEV_SIGNED_MANIFEST_DIR")); dir != "" {
+		return dir
+	}
+	return manifestsDir
+}
+
+func manifestDiskPath(name string) string { return filepath.Join(manifestDiskDir(), name) }
+
 // toolManifestFiles 返回工作树里全部工具 manifest 文件名（跳过 index.yaml 等非工具 YAML）。
 func toolManifestFiles(t *testing.T) []string {
 	t.Helper()
-	entries, err := os.ReadDir(manifestsDir)
+	entries, err := os.ReadDir(manifestDiskDir())
 	if err != nil {
-		t.Fatalf("read %s: %v", manifestsDir, err)
+		t.Fatalf("read %s: %v", manifestDiskDir(), err)
 	}
 	var files []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") || e.Name() == "index.yaml" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(manifestsDir, e.Name()))
+		data, err := os.ReadFile(manifestDiskPath(e.Name()))
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Name(), err)
 		}
@@ -77,9 +89,9 @@ func toolManifestFiles(t *testing.T) []string {
 // 普通 glob 会漏掉它们——这正是历史孤儿签名藏身处）。
 func signatureFilesOnDisk(t *testing.T) []string {
 	t.Helper()
-	entries, err := os.ReadDir(manifestsDir)
+	entries, err := os.ReadDir(manifestDiskDir())
 	if err != nil {
-		t.Fatalf("read %s: %v", manifestsDir, err)
+		t.Fatalf("read %s: %v", manifestDiskDir(), err)
 	}
 	var sigs []string
 	for _, e := range entries {
@@ -119,7 +131,7 @@ func TestManifestsTree_NoOrphanSignatures(t *testing.T) {
 	var orphans []string
 	for _, sig := range signatureFilesOnDisk(t) {
 		yamlName := strings.TrimSuffix(sig, ".sig")
-		if _, err := os.Stat(filepath.Join(manifestsDir, yamlName)); err != nil {
+		if _, err := os.Stat(manifestDiskPath(yamlName)); err != nil {
 			orphans = append(orphans, sig)
 		}
 	}
@@ -155,6 +167,54 @@ func verifyPublicKey(t *testing.T) (ed25519.PublicKey, string) {
 
 // TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey：内嵌签名必须可解析、
 // 可验签，且每个内嵌 .sig 都有对应的内嵌 .yaml。
+func TestEmbeddedReleaseInputsMatchStagedFiles(t *testing.T) {
+	stagedDir := strings.TrimSpace(os.Getenv("XDEV_SIGNED_MANIFEST_DIR"))
+	if stagedDir == "" {
+		t.Skip("release staged manifest directory is not configured")
+	}
+	entries, err := os.ReadDir(stagedDir)
+	if err != nil {
+		t.Fatalf("read staged manifests %s: %v", stagedDir, err)
+	}
+	var yamlNames, signatureNames []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		switch {
+		case strings.HasSuffix(name, ".yaml"):
+			yamlNames = append(yamlNames, name)
+		case strings.HasSuffix(name, ".yaml.sig"):
+			signatureNames = append(signatureNames, name)
+		default:
+			continue
+		}
+		staged, err := os.ReadFile(filepath.Join(stagedDir, name))
+		if err != nil {
+			t.Fatalf("read staged input %s: %v", name, err)
+		}
+		embedded, err := fs.ReadFile(manifestFS, manifestsDir+"/"+name)
+		if strings.HasSuffix(name, ".yaml.sig") {
+			embedded, err = fs.ReadFile(sigFS, manifestsDir+"/"+name)
+		}
+		if err != nil {
+			t.Fatalf("read embedded input %s: %v", name, err)
+		}
+		if !bytes.Equal(embedded, staged) {
+			t.Errorf("embedded %s differs from its staged signed release input", name)
+		}
+	}
+	sort.Strings(yamlNames)
+	sort.Strings(signatureNames)
+	if got := listEmbedded(t, manifestFS, ".yaml"); strings.Join(got, "\n") != strings.Join(yamlNames, "\n") {
+		t.Errorf("embedded manifest set differs from staged inputs: embedded=%v staged=%v", got, yamlNames)
+	}
+	if got := listEmbedded(t, sigFS, ".yaml.sig"); strings.Join(got, "\n") != strings.Join(signatureNames, "\n") {
+		t.Errorf("embedded signature set differs from staged inputs: embedded=%v staged=%v", got, signatureNames)
+	}
+}
+
 func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
 	pub, keySource := verifyPublicKey(t)
 	embeddedYAML := map[string]bool{}
@@ -189,7 +249,7 @@ func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
 
 // TestIndexYaml_CoversAllToolManifests（P2-15 / D-15）：索引必须与工具清单同步。
 func TestIndexYaml_CoversAllToolManifests(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(manifestsDir, "index.yaml"))
+	data, err := os.ReadFile(manifestDiskPath("index.yaml"))
 	if err != nil {
 		t.Fatalf("read index.yaml: %v", err)
 	}
@@ -232,7 +292,7 @@ func TestIndexYaml_CoversAllToolManifests(t *testing.T) {
 			continue
 		}
 		// 条目 name 必须等于 manifest 里声明的 name（防复制粘贴错名）。
-		raw, err := os.ReadFile(filepath.Join(manifestsDir, manifestFile))
+		raw, err := os.ReadFile(manifestDiskPath(manifestFile))
 		if err != nil {
 			t.Errorf("read %s: %v", manifestFile, err)
 			continue
@@ -283,7 +343,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 	var signable []signableTool
 	var hashless []string
 	for _, f := range files {
-		raw, err := os.ReadFile(filepath.Join(manifestsDir, f))
+		raw, err := os.ReadFile(manifestDiskPath(f))
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
@@ -301,7 +361,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 	// Pass 2：unsigned 只从**可签**集合里收集（无哈希工具不要求 .sig）。
 	var unsigned []string
 	for _, s := range signable {
-		if _, err := os.Stat(filepath.Join(manifestsDir, s.file+".sig")); err != nil {
+		if _, err := os.Stat(manifestDiskPath(s.file + ".sig")); err != nil {
 			unsigned = append(unsigned, s.file)
 		}
 	}
@@ -317,7 +377,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 
 	for _, s := range signable {
 		f, tool := s.file, s.tool
-		sigPath := filepath.Join(manifestsDir, f+".sig")
+		sigPath := manifestDiskPath(f + ".sig")
 		ms, err := signer.ReadSignatureFile(sigPath)
 		if err != nil {
 			t.Errorf("read %s: %v", sigPath, err)
@@ -360,7 +420,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 	// 无哈希工具的边界③自检：签名端会跳过它们，因此**不应**存在 .sig（有则说明
 	// 豁免口径漂移，需人工确认）。放在 skip 之后：数据线未完成时同样不误报。
 	for _, f := range hashless {
-		if _, err := os.Stat(filepath.Join(manifestsDir, f+".sig")); err == nil {
+		if _, err := os.Stat(manifestDiskPath(f + ".sig")); err == nil {
 			t.Errorf("%s 无任何可用哈希却存在 .sig —— 签名端会跳过它，请明确豁免口径 (边界③)", f)
 		}
 	}
@@ -374,7 +434,7 @@ func TestManifestSignatureCoverage(t *testing.T) {
 // （Windows-only 工具在 Linux CI 上同样必须通过）：这正是 mingw 曾经的形态，
 // 实测（2026-09-13）时 52 个工具里只有它整体缺 url/format。
 func TestManifests_EveryToolHasCompleteArchive(t *testing.T) {
-	tools, err := manifest.LoadToolManifests(manifestsDir)
+	tools, err := manifest.LoadToolManifests(manifestDiskDir())
 	if err != nil {
 		t.Fatalf("load manifests: %v", err)
 	}

@@ -8,6 +8,7 @@
 # Build output
 bin/
 build/bin/
+build/signed-release-input/
 dist/
 .wails/
 build/download-audit-*.json

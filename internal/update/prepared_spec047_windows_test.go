@@ -74,7 +74,7 @@ func TestSpec047PrepareRejectsChecksumAndInvalidPEWithoutChangingTarget(t *testi
 		{"not-a-pe", []byte("downloaded text cannot be executed"), false, "PE"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			name := rawExeNameForTarget("47.0.0", runtime.GOARCH)
+			name := rawExeNameForTarget("1.0.0-rc.2", runtime.GOARCH)
 			server := useUpdateTLSFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/payload" {
 					_, _ = w.Write(tc.payload)
@@ -86,7 +86,7 @@ func TestSpec047PrepareRejectsChecksumAndInvalidPEWithoutChangingTarget(t *testi
 				}
 				fmt.Fprintf(w, "%x  %s\n", sum, name)
 			})
-			result := &CheckResult{LatestVersion: "47.0.0", HasUpdate: true, Release: &ReleaseInfo{Assets: []Asset{{Name: name, BrowserDownloadURL: server.URL + "/payload", Size: int64(len(tc.payload))}, {Name: "SHA256SUMS", BrowserDownloadURL: server.URL + "/sums", Size: 100}}}}
+			result := &CheckResult{LatestVersion: "1.0.0-rc.2", HasUpdate: true, Release: &ReleaseInfo{TagName: "v1.0.0-rc.2", Assets: []Asset{{Name: name, BrowserDownloadURL: server.URL + "/payload", Size: int64(len(tc.payload))}, {Name: "SHA256SUMS", BrowserDownloadURL: server.URL + "/sums", Size: 100}}}}
 			target := filepath.Join(t.TempDir(), "xdev.exe")
 			old := []byte("old program")
 			if err := os.WriteFile(target, old, 0600); err != nil {

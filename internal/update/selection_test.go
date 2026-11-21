@@ -182,8 +182,10 @@ func TestCheckWindowsRawExecutableRelease(t *testing.T) {
 		{"only release page link", []Asset{sums}, "1.1.0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			signature := Asset{Name: checksumsSignatureAssetName, BrowserDownloadURL: "https://example.test/SHA256SUMS.sig", Size: 250}
+			assets := append(append([]Asset(nil), tc.assets...), signature)
 			releases := []map[string]any{
-				{"tag_name": "v2.0.0", "html_url": "https://example.test/releases/tag/v2.0.0", "assets": tc.assets},
+				{"tag_name": "v2.0.0", "html_url": "https://example.test/releases/tag/v2.0.0", "assets": assets},
 				releaseFixture("v1.1.0", false),
 			}
 			useUpdateTLSFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +215,7 @@ func TestApplyWindowsRawExecutableVerifiesBeforeReplacing(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Apply selects the executing platform")
 	}
-	const version = "2.0.0-rc.1"
+	const version = "1.0.0-rc.2"
 	rawName := "xdev-windows-" + runtime.GOARCH + "-v" + version + ".exe"
 	zipName := assetNameForPlatform(version)
 	payload := []byte("MZ raw executable fixture, not a ZIP")

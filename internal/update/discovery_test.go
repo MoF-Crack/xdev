@@ -50,6 +50,7 @@ func releaseFixture(tag string, prerelease bool) map[string]any {
 		"assets": []Asset{
 			{Name: assetNameForPlatform(tag), BrowserDownloadURL: "https://github.com/MoF-Crack/xdev/releases/download/" + tag + "/archive", Size: 100},
 			{Name: "SHA256SUMS", BrowserDownloadURL: "https://github.com/MoF-Crack/xdev/releases/download/" + tag + "/SHA256SUMS", Size: 100},
+			{Name: checksumsSignatureAssetName, BrowserDownloadURL: "https://github.com/MoF-Crack/xdev/releases/download/" + tag + "/SHA256SUMS.sig", Size: 250},
 		},
 	}
 }

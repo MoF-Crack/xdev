@@ -24,8 +24,12 @@ func selectedAssetForTarget(result *CheckResult, goos, goarch string) (Asset, er
 	if result == nil || result.Release == nil {
 		return Asset{}, fmt.Errorf("no release info available")
 	}
-	if !validUpdateVersion(strings.TrimPrefix(result.LatestVersion, "v")) {
+	version := strings.TrimPrefix(result.LatestVersion, "v")
+	if !validUpdateVersion(version) {
 		return Asset{}, fmt.Errorf("invalid update version %q", result.LatestVersion)
+	}
+	if strings.TrimPrefix(result.Release.TagName, "v") != version {
+		return Asset{}, fmt.Errorf("release tag %q does not match update version %q", result.Release.TagName, result.LatestVersion)
 	}
 	if goos == "windows" {
 		name := rawExeNameForTarget(result.LatestVersion, goarch)

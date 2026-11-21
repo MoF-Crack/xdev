@@ -157,7 +157,9 @@ wails3 generate bindings -f '-tags desktop,bindings' -ts -d frontend/bindings ./
 # Linux 使用 -tags desktop,bindings,gtk3
 ```
 
-发布构建由 CI 先生成一份统一签名输入，再供所有平台使用。`node scripts/build.mjs --release` 会要求公钥并强制检查清单签名覆盖；缺少签名不能以跳过测试的方式发布。普通本地构建不能代替生产签名流程。
+发布构建由 CI 先生成一份统一签名输入，再供所有平台使用。`node scripts/build.mjs --release` 必须设置 `XDEV_RELEASE_SIGNING_INPUT_DIR`，指向包含 `manifests/*.yaml`、`manifests/*.yaml.sig` 和 `keys/pub.key` 的输入根目录；缺少目录、任一清单/签名文件或公钥时构建会失败。构建使用 Go overlay 把这些字节嵌入产物，不覆盖 checkout 中的源码；随后强制校验内嵌字节与签名输入一致，并要求 Go VCS 元数据报告干净发布来源。缺少签名不能以跳过测试的方式发布。普通本地构建不能代替生产签名流程。
+
+更新通道另有一层与清单无关的发布真实性校验：release 汇总出 `SHA256SUMS` 后，CI 用同一把 Ed25519 发布私钥签出 `SHA256SUMS.sig`，签名内容覆盖仓库路径、release tag 和 `SHA256SUMS` 的原始字节。`v1.0.0-rc.2` 及更早的 tag 按旧行为只校验哈希；`v1.0.0-rc.3` 起，客户端在安装前必须先验签，缺失、重复、无法解析或验签失败的 release 一律不安装（只在日志中记录跳过原因）。由于验签依赖内嵌公钥，未注入发布公钥的本地构建不会接受签名 release 的自动更新。
 
 ## 6. 验证安装
 

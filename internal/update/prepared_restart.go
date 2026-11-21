@@ -169,6 +169,9 @@ func verifyPreparedRestartDownload(ctx context.Context, release *ReleaseInfo, as
 	if err != nil {
 		return "", fmt.Errorf("download SHA256SUMS: %w", err)
 	}
+	if err := verifyReleaseChecksumsSignature(ctx, release, data); err != nil {
+		return "", fmt.Errorf("SHA256SUMS signature verification failed: %w", err)
+	}
 	want, err := parseSHA256SUMS(string(data), assetName)
 	if err != nil {
 		return "", err

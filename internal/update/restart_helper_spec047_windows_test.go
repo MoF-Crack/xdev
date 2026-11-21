@@ -30,7 +30,7 @@ const (
 	spec047Relaunch = "--spec047-test-relaunch"
 	spec047Fixture  = "XDEV_SPEC047_RESTART_FIXTURE"
 	spec047Cert     = "XDEV_SPEC047_RESTART_CERT"
-	spec047Version  = "47.0.0"
+	spec047Version  = "1.0.0-rc.2"
 )
 
 type spec047ParentReport struct {
@@ -160,7 +160,7 @@ func spec047AssetName(archive bool) string {
 }
 
 func spec047CheckResult(baseURL, mode string, archive bool) *CheckResult {
-	return &CheckResult{CurrentVersion: "46.0.0", LatestVersion: spec047Version, HasUpdate: true, Release: &ReleaseInfo{
+	return &CheckResult{CurrentVersion: "1.0.0-rc.1", LatestVersion: spec047Version, HasUpdate: true, Release: &ReleaseInfo{
 		TagName: "v" + spec047Version,
 		Assets: []Asset{
 			{Name: spec047AssetName(archive), BrowserDownloadURL: baseURL + "/" + mode + "/payload", Size: 1},

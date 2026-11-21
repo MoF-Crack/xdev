@@ -13,6 +13,37 @@ import (
 	"time"
 )
 
+func TestReleaseChecksumsSignatureBindsRepositoryTagAndBytes(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksums := []byte("abc123  xdev-windows-amd64-v1.0.0-rc.3.exe\n")
+	sig, err := SignReleaseChecksums(priv, "github.com/MoF-Crack/xdev", "v1.0.0-rc.3", checksums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyReleaseChecksums(pub, sig, "github.com/MoF-Crack/xdev", "v1.0.0-rc.3", checksums) {
+		t.Fatal("signature did not verify for original release inputs")
+	}
+	if VerifyReleaseChecksums(pub, sig, "github.com/attacker/xdev", "v1.0.0-rc.3", checksums) {
+		t.Fatal("signature verified for a different repository")
+	}
+	if VerifyReleaseChecksums(pub, sig, "github.com/MoF-Crack/xdev", "v1.0.0-rc.4", checksums) {
+		t.Fatal("signature verified for a different tag")
+	}
+	if VerifyReleaseChecksums(pub, sig, "github.com/MoF-Crack/xdev", "v1.0.0-rc.3", append(checksums, 'x')) {
+		t.Fatal("signature verified for modified checksum bytes")
+	}
+	wrongPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if VerifyReleaseChecksums(wrongPub, sig, "github.com/MoF-Crack/xdev", "v1.0.0-rc.3", checksums) {
+		t.Fatal("signature verified under an untrusted key")
+	}
+}
+
 func TestGenerateKeyPair(t *testing.T) {
 	dir := t.TempDir()
 	pubPath := filepath.Join(dir, "pub.key")
