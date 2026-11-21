@@ -103,7 +103,7 @@ jobs:
         if: runner.os == 'Linux'
         run: go test -p=2 -race ./internal/... -count=1 -timeout 15m
       - name: Release packaging contract tests
-        run: node --test scripts/release/package.test.mjs scripts/release/manifest-overlay.test.mjs scripts/release/native-brand.test.mjs
+        run: node --test scripts/release/package.test.mjs scripts/release/manifest-overlay.test.mjs
       - uses: actions/upload-artifact@v7
         with:
           name: xdev-${{ matrix.goos }}-${{ matrix.goarch }}

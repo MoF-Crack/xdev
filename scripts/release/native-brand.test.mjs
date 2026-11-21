@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,7 +10,9 @@ import { archiveName, pack, platforms } from './package.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const temp = t => {
-  const dir = mkdtempSync(join(tmpdir(), 'xdev-native-test-'));
+  // Canonicalize: macOS tmpdir (/var/folders/...) is a symlink to /private/var,
+  // and the overlay assertions compare resolved paths.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'xdev-native-test-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 };

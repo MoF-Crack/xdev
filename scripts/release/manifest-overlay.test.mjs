@@ -1,13 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createManifestOverlay, removeManifestOverlay } from './manifest-overlay.mjs';
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'xdev-manifest-overlay-test-'));
+  // macOS tmpdir is /var/folders/... which is a symlink to /private/var/...;
+  // canonicalize so path assertions compare the same strings the code resolves.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'xdev-manifest-overlay-test-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const tracked = join(root, 'repo', 'manifests');
   const signed = join(root, 'signed', 'manifests');
@@ -58,7 +60,7 @@ test('manifest overlay admits new signatures only for existing manifests', t => 
 });
 
 test('real Go overlay embeds signed bytes while keeping Git VCS metadata clean', t => {
-  const base = mkdtempSync(join(tmpdir(), 'xdev-go-overlay-integration-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'xdev-go-overlay-integration-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const repo = join(base, 'repo');
   const trackedManifests = join(repo, 'manifests');
