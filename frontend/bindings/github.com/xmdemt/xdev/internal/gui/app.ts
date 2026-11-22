@@ -146,13 +146,17 @@ export function CleanCache(category: string): $CancellablePromise<void> {
 }
 
 /**
- * CleanCacheCategory 按分类删除缓存文件，分类规则与 GetCacheBreakdown 完全一致
- * （单一来源 cache_classify.go 的 cacheEntryCategory）：
- * "archives" | "shaFiles" | "partFiles" | "scanCache" | "otherFiles" | "all"。
- * 仅删除文件，不删除目录。有实际删除时刷新明细缓存。未知分类返回错误。
+ * CleanCacheCategory keeps the error-only Wails contract. Partial failures
+ * include the actual deletion count and the number of busy generations.
  */
 export function CleanCacheCategory(category: string): $CancellablePromise<void> {
     return $Call.ByID(1461316775, category);
+}
+
+export function CleanCacheCategoryResult(category: string): $CancellablePromise<$models.CacheCleanupReport> {
+    return $Call.ByID(3392546622, category).then(($result: any) => {
+        return $$createType8($result);
+    });
 }
 
 export function CleanEnvVarPath(name: string, level: string): $CancellablePromise<void> {
@@ -167,9 +171,8 @@ export function CleanupDownloadTempFiles(): $CancellablePromise<void> {
 }
 
 /**
- * CleanupExpiredArchives 删除超过保留期限的归档（7d/30d 策略）。
- * 依据文件 ModTime；immediate/forever 策略跳过（不自动删）。返回删除数量。
- * 同时删除归档的 .sha256/.part 伴生文件；删除后刷新明细缓存。
+ * CleanupExpiredArchives preserves the Wails return type. Partial failures are
+ * logged along with accurate counts by finishCacheCleanup.
  */
 export function CleanupExpiredArchives(): $CancellablePromise<number> {
     return $Call.ByID(568002688);
@@ -180,7 +183,7 @@ export function CleanupExpiredArchives(): $CancellablePromise<number> {
  */
 export function CreateRemoteInstance(adapter: string, image: string, sshHost: string, sshPort: number, sshUser: string, sshKeyPath: string, sshPassword: string): $CancellablePromise<$models.RemoteCreateResult | null> {
     return $Call.ByID(3439558015, adapter, image, sshHost, sshPort, sshUser, sshKeyPath, sshPassword).then(($result: any) => {
-        return $$createType9($result);
+        return $$createType10($result);
     });
 }
 
@@ -191,13 +194,14 @@ export function DeactivateHook(): $CancellablePromise<void> {
     return $Call.ByID(3080972991);
 }
 
-/**
- * DeleteCacheFile 删除缓存目录下的单个文件，并顺带删除同名伴生文件
- * （<file>.sha256 与 <file>.part）。path 必须位于 CacheDir 内（防目录穿越），
- * 且不能是目录。文件不存在时视为幂等成功。有实际删除时刷新明细缓存。
- */
 export function DeleteCacheFile(path: string): $CancellablePromise<void> {
     return $Call.ByID(3768139099, path);
+}
+
+export function DeleteCacheFileResult(path: string): $CancellablePromise<$models.CacheCleanupReport> {
+    return $Call.ByID(3953229522, path).then(($result: any) => {
+        return $$createType8($result);
+    });
 }
 
 /**
@@ -255,7 +259,7 @@ export function ExportProfile(filePath: string): $CancellablePromise<void> {
  */
 export function FixLocalVersions(): $CancellablePromise<$models.FixedVersion[]> {
     return $Call.ByID(1872243717).then(($result: any) => {
-        return $$createType11($result);
+        return $$createType12($result);
     });
 }
 
@@ -264,13 +268,13 @@ export function FixLocalVersions(): $CancellablePromise<$models.FixedVersion[]> 
  */
 export function GetAboutInfo(): $CancellablePromise<$models.AboutInfo> {
     return $Call.ByID(3463823715).then(($result: any) => {
-        return $$createType12($result);
+        return $$createType13($result);
     });
 }
 
 export function GetAllEnvVars(level: string): $CancellablePromise<$models.EnvVarInfo[]> {
     return $Call.ByID(1183926442, level).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType15($result);
     });
 }
 
@@ -292,7 +296,7 @@ export function GetArchiveRetention(): $CancellablePromise<string> {
  */
 export function GetAvailableUpdates(): $CancellablePromise<$models.UpdateInfo[]> {
     return $Call.ByID(35231365).then(($result: any) => {
-        return $$createType16($result);
+        return $$createType17($result);
     });
 }
 
@@ -305,7 +309,7 @@ export function GetAvailableUpdates(): $CancellablePromise<$models.UpdateInfo[]>
  */
 export function GetAvailableVersions(toolName: string): $CancellablePromise<$models.VersionInfo[]> {
     return $Call.ByID(2403415916, toolName).then(($result: any) => {
-        return $$createType18($result);
+        return $$createType19($result);
     });
 }
 
@@ -316,7 +320,7 @@ export function GetAvailableVersions(toolName: string): $CancellablePromise<$mod
  */
 export function GetBootstrapState(): $CancellablePromise<$models.BootstrapState> {
     return $Call.ByID(824591505).then(($result: any) => {
-        return $$createType19($result);
+        return $$createType20($result);
     });
 }
 
@@ -325,7 +329,7 @@ export function GetBootstrapState(): $CancellablePromise<$models.BootstrapState>
  */
 export function GetCacheBreakdown(): $CancellablePromise<$models.CacheBreakdown> {
     return $Call.ByID(3007329863).then(($result: any) => {
-        return $$createType20($result);
+        return $$createType21($result);
     });
 }
 
@@ -340,7 +344,7 @@ export function GetCacheBreakdown(): $CancellablePromise<$models.CacheBreakdown>
  */
 export function GetCacheSizeBreakdown(): $CancellablePromise<$models.DiskUsageEntry[]> {
     return $Call.ByID(2528143684).then(($result: any) => {
-        return $$createType22($result);
+        return $$createType23($result);
     });
 }
 
@@ -349,7 +353,7 @@ export function GetCacheSizeBreakdown(): $CancellablePromise<$models.DiskUsageEn
  */
 export function GetCategories(): $CancellablePromise<$models.CategoryInfo[]> {
     return $Call.ByID(261764430).then(($result: any) => {
-        return $$createType24($result);
+        return $$createType25($result);
     });
 }
 
@@ -358,7 +362,7 @@ export function GetCategories(): $CancellablePromise<$models.CategoryInfo[]> {
  */
 export function GetConfig(): $CancellablePromise<$models.ConfigInfo> {
     return $Call.ByID(35981848).then(($result: any) => {
-        return $$createType25($result);
+        return $$createType26($result);
     });
 }
 
@@ -371,7 +375,7 @@ export function GetConfig(): $CancellablePromise<$models.ConfigInfo> {
  */
 export function GetDashboardStats(): $CancellablePromise<$models.DashboardStats> {
     return $Call.ByID(1921796949).then(($result: any) => {
-        return $$createType26($result);
+        return $$createType27($result);
     });
 }
 
@@ -385,7 +389,7 @@ export function GetDashboardStats(): $CancellablePromise<$models.DashboardStats>
  */
 export function GetDebugInfo(): $CancellablePromise<$models.DebugInfo> {
     return $Call.ByID(2472235553).then(($result: any) => {
-        return $$createType27($result);
+        return $$createType28($result);
     });
 }
 
@@ -394,7 +398,7 @@ export function GetDebugInfo(): $CancellablePromise<$models.DebugInfo> {
  */
 export function GetDownloadTasks(): $CancellablePromise<$models.DownloadTaskInfo[]> {
     return $Call.ByID(1029598248).then(($result: any) => {
-        return $$createType29($result);
+        return $$createType30($result);
     });
 }
 
@@ -403,13 +407,13 @@ export function GetDownloadTasks(): $CancellablePromise<$models.DownloadTaskInfo
  */
 export function GetDrives(): $CancellablePromise<$models.DriveInfoJSON[]> {
     return $Call.ByID(3313059555).then(($result: any) => {
-        return $$createType31($result);
+        return $$createType32($result);
     });
 }
 
 export function GetEnvVars(): $CancellablePromise<$models.EnvVarInfo[]> {
     return $Call.ByID(1626603323).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType15($result);
     });
 }
 
@@ -418,7 +422,7 @@ export function GetEnvVars(): $CancellablePromise<$models.EnvVarInfo[]> {
  */
 export function GetFavorites(): $CancellablePromise<$models.FavoriteInfo[]> {
     return $Call.ByID(4266886899).then(($result: any) => {
-        return $$createType33($result);
+        return $$createType34($result);
     });
 }
 
@@ -427,13 +431,13 @@ export function GetFavorites(): $CancellablePromise<$models.FavoriteInfo[]> {
  */
 export function GetIgnoredTools(): $CancellablePromise<$models.IgnoredToolInfo[]> {
     return $Call.ByID(3267621375).then(($result: any) => {
-        return $$createType35($result);
+        return $$createType36($result);
     });
 }
 
 export function GetInstallSession(sessionID: string): $CancellablePromise<$models.InstallSession> {
     return $Call.ByID(2487404167, sessionID).then(($result: any) => {
-        return $$createType36($result);
+        return $$createType37($result);
     });
 }
 
@@ -445,7 +449,7 @@ export function GetInstallSession(sessionID: string): $CancellablePromise<$model
  */
 export function GetInstallSizeBreakdown(): $CancellablePromise<$models.DiskUsageEntry[]> {
     return $Call.ByID(996682791).then(($result: any) => {
-        return $$createType22($result);
+        return $$createType23($result);
     });
 }
 
@@ -456,7 +460,7 @@ export function GetInstallSizeBreakdown(): $CancellablePromise<$models.DiskUsage
  */
 export function GetInstalledVersions(toolName: string): $CancellablePromise<$models.VersionInfo[]> {
     return $Call.ByID(1154727897, toolName).then(($result: any) => {
-        return $$createType18($result);
+        return $$createType19($result);
     });
 }
 
@@ -465,7 +469,7 @@ export function GetInstalledVersions(toolName: string): $CancellablePromise<$mod
  */
 export function GetIsolateStatus(): $CancellablePromise<$models.IsolateStatus | null> {
     return $Call.ByID(501120749).then(($result: any) => {
-        return $$createType38($result);
+        return $$createType39($result);
     });
 }
 
@@ -478,7 +482,7 @@ export function GetIsolateStatus(): $CancellablePromise<$models.IsolateStatus | 
  */
 export function GetLastSelection(): $CancellablePromise<{ [_ in string]?: string }> {
     return $Call.ByID(265667060).then(($result: any) => {
-        return $$createType39($result);
+        return $$createType40($result);
     });
 }
 
@@ -523,13 +527,13 @@ export function GetMigrationMode(): $CancellablePromise<string> {
  */
 export function GetMirrorConfig(): $CancellablePromise<{ [_ in string]?: string }> {
     return $Call.ByID(1774578147).then(($result: any) => {
-        return $$createType39($result);
+        return $$createType40($result);
     });
 }
 
 export function GetOSEnvVars(level: string): $CancellablePromise<$models.EnvVarInfo[]> {
     return $Call.ByID(3159344389, level).then(($result: any) => {
-        return $$createType14($result);
+        return $$createType15($result);
     });
 }
 
@@ -541,7 +545,7 @@ export function GetOSEnvVars(level: string): $CancellablePromise<$models.EnvVarI
  */
 export function GetPackageManagers(): $CancellablePromise<$models.PackageManagerInfo[]> {
     return $Call.ByID(3575645610).then(($result: any) => {
-        return $$createType41($result);
+        return $$createType42($result);
     });
 }
 
@@ -557,7 +561,7 @@ export function GetPathMode(): $CancellablePromise<string> {
  */
 export function GetProxyConfig(): $CancellablePromise<$models.ProxyInfo> {
     return $Call.ByID(663666500).then(($result: any) => {
-        return $$createType42($result);
+        return $$createType43($result);
     });
 }
 
@@ -569,7 +573,7 @@ export function GetProxyConfig(): $CancellablePromise<$models.ProxyInfo> {
  */
 export function GetSniffConfig(): $CancellablePromise<$models.SniffConfigInfo | null> {
     return $Call.ByID(435146780).then(($result: any) => {
-        return $$createType44($result);
+        return $$createType45($result);
     });
 }
 
@@ -583,7 +587,7 @@ export function GetSniffConfig(): $CancellablePromise<$models.SniffConfigInfo | 
  */
 export function GetToolsByCategory(category: string): $CancellablePromise<$models.ToolInfo[]> {
     return $Call.ByID(3985461016, category).then(($result: any) => {
-        return $$createType46($result);
+        return $$createType47($result);
     });
 }
 
@@ -610,7 +614,7 @@ export function IgnoreTool(name: string, kind: string, path: string): $Cancellab
  */
 export function ImportProfile(filePath: string): $CancellablePromise<$models.ImportResult> {
     return $Call.ByID(4239709232, filePath).then(($result: any) => {
-        return $$createType47($result);
+        return $$createType48($result);
     });
 }
 
@@ -633,6 +637,10 @@ export function InstallPackageManager(toolName: string): $CancellablePromise<voi
     return $Call.ByID(1088240998, toolName);
 }
 
+export function InstallPackageManagerTrusted(name: string, digest: string): $CancellablePromise<void> {
+    return $Call.ByID(153699957, name, digest);
+}
+
 /**
  * InstallSniffService installs the platform scheduled sniff service.
  */
@@ -650,6 +658,10 @@ export function InstallSniffService(schedule: string): $CancellablePromise<void>
  */
 export function InstallSubTool(toolName: string, method: string): $CancellablePromise<void> {
     return $Call.ByID(3975437203, toolName, method);
+}
+
+export function InstallSubToolTrusted(name: string, method: string, digest: string): $CancellablePromise<void> {
+    return $Call.ByID(3433419494, name, method, digest);
 }
 
 /**
@@ -772,16 +784,26 @@ export function LaunchTool(toolName: string): $CancellablePromise<void> {
  */
 export function ListCustomTools(): $CancellablePromise<$models.CustomToolInfo[]> {
     return $Call.ByID(1240216492).then(($result: any) => {
-        return $$createType49($result);
+        return $$createType50($result);
     });
 }
 
 /**
- * ListRemoteInstances 列出远程环境实例
+ * ListRemoteInstances preserves the original bridge for older consumers.
  */
 export function ListRemoteInstances(): $CancellablePromise<$models.RemoteInstanceInfo[]> {
     return $Call.ByID(2113257164).then(($result: any) => {
-        return $$createType51($result);
+        return $$createType52($result);
+    });
+}
+
+/**
+ * ListRemoteInstancesWithDiagnostics shares the CLI's instance store and returns
+ * one snapshot containing healthy rows and every per-file diagnostic.
+ */
+export function ListRemoteInstancesWithDiagnostics(): $CancellablePromise<$models.RemoteInstanceListResult> {
+    return $Call.ByID(1042512968).then(($result: any) => {
+        return $$createType53($result);
     });
 }
 
@@ -791,12 +813,13 @@ export function ListRemoteInstances(): $CancellablePromise<$models.RemoteInstanc
  */
 export function MigrateAllLocalTools(mode: string): $CancellablePromise<$models.MigrationResult[]> {
     return $Call.ByID(447430372, mode).then(($result: any) => {
-        return $$createType53($result);
+        return $$createType55($result);
     });
 }
 
 /**
- * MigrateLegacyDir 执行旧版目录迁移，将旧目录内容复制到新目录并删除旧目录。
+ * MigrateLegacyDir copies and verifies the selected legacy root, commits the
+ * new config selection, and keeps the old tree for recovery.
  */
 export function MigrateLegacyDir(legacyDir: string): $CancellablePromise<void> {
     return $Call.ByID(1931320747, legacyDir);
@@ -852,6 +875,12 @@ export function PauseDownload(taskID: string): $CancellablePromise<void> {
     return $Call.ByID(1058124940, taskID);
 }
 
+export function PlanPackageManager(name: string): $CancellablePromise<$models.PMTrustPlan> {
+    return $Call.ByID(2904499502, name).then(($result: any) => {
+        return $$createType56($result);
+    });
+}
+
 /**
  * PrepareUpdate downloads and verifies an update without replacing the running
  * executable. Windows installation is committed only after RestartToUpdate.
@@ -886,7 +915,7 @@ export function PreviewCustomToolVersions(sourceURL: string, sourceType: string,
  */
 export function PreviewInstall(toolName: string, version: string): $CancellablePromise<$models.InstallPreview> {
     return $Call.ByID(2115751173, toolName, version).then(($result: any) => {
-        return $$createType54($result);
+        return $$createType57($result);
     });
 }
 
@@ -899,7 +928,7 @@ export function PreviewInstall(toolName: string, version: string): $CancellableP
  */
 export function ProbeLocalProxies(): $CancellablePromise<$models.ProxyProbeResult[]> {
     return $Call.ByID(2977923453).then(($result: any) => {
-        return $$createType56($result);
+        return $$createType59($result);
     });
 }
 
@@ -948,7 +977,7 @@ export function ResumeDownload(taskID: string): $CancellablePromise<void> {
  */
 export function RunDiagnostics(): $CancellablePromise<$models.DiagnosticResult[]> {
     return $Call.ByID(3810649481).then(($result: any) => {
-        return $$createType58($result);
+        return $$createType61($result);
     });
 }
 
@@ -968,7 +997,7 @@ export function SaveLastSelection(installDir: string, drive: string): $Cancellab
  */
 export function ScanLegacyDir(): $CancellablePromise<localmigrate$0.LegacyDirInfo[]> {
     return $Call.ByID(178733079).then(($result: any) => {
-        return $$createType60($result);
+        return $$createType63($result);
     });
 }
 
@@ -980,7 +1009,7 @@ export function ScanLegacyDir(): $CancellablePromise<localmigrate$0.LegacyDirInf
  */
 export function ScanLocalEnvironments(): $CancellablePromise<$models.ToolInfo[]> {
     return $Call.ByID(1887984656).then(($result: any) => {
-        return $$createType46($result);
+        return $$createType47($result);
     });
 }
 
@@ -990,7 +1019,7 @@ export function ScanLocalEnvironments(): $CancellablePromise<$models.ToolInfo[]>
  */
 export function ScanLocalEnvironmentsForMigration(): $CancellablePromise<localmigrate$0.LocalTool[]> {
     return $Call.ByID(202785937).then(($result: any) => {
-        return $$createType62($result);
+        return $$createType65($result);
     });
 }
 
@@ -1001,7 +1030,7 @@ export function ScanLocalEnvironmentsForMigration(): $CancellablePromise<localmi
  */
 export function ScanLocalTools(): $CancellablePromise<$models.LocalToolInfo[]> {
     return $Call.ByID(2879847641).then(($result: any) => {
-        return $$createType64($result);
+        return $$createType67($result);
     });
 }
 
@@ -1079,7 +1108,7 @@ export function SniffNow(tool: string): $CancellablePromise<void> {
  */
 export function SniffServiceStatus(): $CancellablePromise<$models.ServiceStatusInfo | null> {
     return $Call.ByID(1004101879).then(($result: any) => {
-        return $$createType66($result);
+        return $$createType69($result);
     });
 }
 
@@ -1105,7 +1134,7 @@ export function SwitchToXdevVersion(toolName: string, version: string): $Cancell
  */
 export function TestMirrorConnectivity(mirrorURL: string): $CancellablePromise<$models.ProxyTestResult> {
     return $Call.ByID(4250423346, mirrorURL).then(($result: any) => {
-        return $$createType67($result);
+        return $$createType70($result);
     });
 }
 
@@ -1114,7 +1143,7 @@ export function TestMirrorConnectivity(mirrorURL: string): $CancellablePromise<$
  */
 export function TestProxy(proxyURL: string, testURL: string): $CancellablePromise<$models.ProxyTestResult> {
     return $Call.ByID(1468024798, proxyURL, testURL).then(($result: any) => {
-        return $$createType67($result);
+        return $$createType70($result);
     });
 }
 
@@ -1123,7 +1152,7 @@ export function TestProxy(proxyURL: string, testURL: string): $CancellablePromis
  */
 export function TestSSHConnection(host: string, port: number, user: string, keyPath: string, password: string): $CancellablePromise<$models.SSHTestResult | null> {
     return $Call.ByID(1824150048, host, port, user, keyPath, password).then(($result: any) => {
-        return $$createType69($result);
+        return $$createType72($result);
     });
 }
 
@@ -1183,65 +1212,68 @@ const $$createType4 = $models.DependencyStatus.createFrom;
 const $$createType5 = $Create.Array($$createType4);
 const $$createType6 = $models.CleanResult.createFrom;
 const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = $models.RemoteCreateResult.createFrom;
-const $$createType9 = $Create.Nullable($$createType8);
-const $$createType10 = $models.FixedVersion.createFrom;
-const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = $models.AboutInfo.createFrom;
-const $$createType13 = $models.EnvVarInfo.createFrom;
-const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = $models.UpdateInfo.createFrom;
-const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = $models.VersionInfo.createFrom;
-const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = $models.BootstrapState.createFrom;
-const $$createType20 = $models.CacheBreakdown.createFrom;
-const $$createType21 = $models.DiskUsageEntry.createFrom;
-const $$createType22 = $Create.Array($$createType21);
-const $$createType23 = $models.CategoryInfo.createFrom;
-const $$createType24 = $Create.Array($$createType23);
-const $$createType25 = $models.ConfigInfo.createFrom;
-const $$createType26 = $models.DashboardStats.createFrom;
-const $$createType27 = $models.DebugInfo.createFrom;
-const $$createType28 = $models.DownloadTaskInfo.createFrom;
-const $$createType29 = $Create.Array($$createType28);
-const $$createType30 = $models.DriveInfoJSON.createFrom;
-const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = $models.FavoriteInfo.createFrom;
-const $$createType33 = $Create.Array($$createType32);
-const $$createType34 = $models.IgnoredToolInfo.createFrom;
-const $$createType35 = $Create.Array($$createType34);
-const $$createType36 = $models.InstallSession.createFrom;
-const $$createType37 = $models.IsolateStatus.createFrom;
-const $$createType38 = $Create.Nullable($$createType37);
-const $$createType39 = $Create.Map($Create.Any, $Create.Any);
-const $$createType40 = $models.PackageManagerInfo.createFrom;
-const $$createType41 = $Create.Array($$createType40);
-const $$createType42 = $models.ProxyInfo.createFrom;
-const $$createType43 = $models.SniffConfigInfo.createFrom;
-const $$createType44 = $Create.Nullable($$createType43);
-const $$createType45 = $models.ToolInfo.createFrom;
-const $$createType46 = $Create.Array($$createType45);
-const $$createType47 = $models.ImportResult.createFrom;
-const $$createType48 = $models.CustomToolInfo.createFrom;
-const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = $models.RemoteInstanceInfo.createFrom;
-const $$createType51 = $Create.Array($$createType50);
-const $$createType52 = $models.MigrationResult.createFrom;
-const $$createType53 = $Create.Array($$createType52);
-const $$createType54 = $models.InstallPreview.createFrom;
-const $$createType55 = $models.ProxyProbeResult.createFrom;
-const $$createType56 = $Create.Array($$createType55);
-const $$createType57 = $models.DiagnosticResult.createFrom;
-const $$createType58 = $Create.Array($$createType57);
-const $$createType59 = localmigrate$0.LegacyDirInfo.createFrom;
-const $$createType60 = $Create.Array($$createType59);
-const $$createType61 = localmigrate$0.LocalTool.createFrom;
-const $$createType62 = $Create.Array($$createType61);
-const $$createType63 = $models.LocalToolInfo.createFrom;
-const $$createType64 = $Create.Array($$createType63);
-const $$createType65 = $models.ServiceStatusInfo.createFrom;
-const $$createType66 = $Create.Nullable($$createType65);
-const $$createType67 = $models.ProxyTestResult.createFrom;
-const $$createType68 = $models.SSHTestResult.createFrom;
+const $$createType8 = $models.CacheCleanupReport.createFrom;
+const $$createType9 = $models.RemoteCreateResult.createFrom;
+const $$createType10 = $Create.Nullable($$createType9);
+const $$createType11 = $models.FixedVersion.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = $models.AboutInfo.createFrom;
+const $$createType14 = $models.EnvVarInfo.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = $models.UpdateInfo.createFrom;
+const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = $models.VersionInfo.createFrom;
+const $$createType19 = $Create.Array($$createType18);
+const $$createType20 = $models.BootstrapState.createFrom;
+const $$createType21 = $models.CacheBreakdown.createFrom;
+const $$createType22 = $models.DiskUsageEntry.createFrom;
+const $$createType23 = $Create.Array($$createType22);
+const $$createType24 = $models.CategoryInfo.createFrom;
+const $$createType25 = $Create.Array($$createType24);
+const $$createType26 = $models.ConfigInfo.createFrom;
+const $$createType27 = $models.DashboardStats.createFrom;
+const $$createType28 = $models.DebugInfo.createFrom;
+const $$createType29 = $models.DownloadTaskInfo.createFrom;
+const $$createType30 = $Create.Array($$createType29);
+const $$createType31 = $models.DriveInfoJSON.createFrom;
+const $$createType32 = $Create.Array($$createType31);
+const $$createType33 = $models.FavoriteInfo.createFrom;
+const $$createType34 = $Create.Array($$createType33);
+const $$createType35 = $models.IgnoredToolInfo.createFrom;
+const $$createType36 = $Create.Array($$createType35);
+const $$createType37 = $models.InstallSession.createFrom;
+const $$createType38 = $models.IsolateStatus.createFrom;
+const $$createType39 = $Create.Nullable($$createType38);
+const $$createType40 = $Create.Map($Create.Any, $Create.Any);
+const $$createType41 = $models.PackageManagerInfo.createFrom;
+const $$createType42 = $Create.Array($$createType41);
+const $$createType43 = $models.ProxyInfo.createFrom;
+const $$createType44 = $models.SniffConfigInfo.createFrom;
+const $$createType45 = $Create.Nullable($$createType44);
+const $$createType46 = $models.ToolInfo.createFrom;
+const $$createType47 = $Create.Array($$createType46);
+const $$createType48 = $models.ImportResult.createFrom;
+const $$createType49 = $models.CustomToolInfo.createFrom;
+const $$createType50 = $Create.Array($$createType49);
+const $$createType51 = $models.RemoteInstanceInfo.createFrom;
+const $$createType52 = $Create.Array($$createType51);
+const $$createType53 = $models.RemoteInstanceListResult.createFrom;
+const $$createType54 = $models.MigrationResult.createFrom;
+const $$createType55 = $Create.Array($$createType54);
+const $$createType56 = $models.PMTrustPlan.createFrom;
+const $$createType57 = $models.InstallPreview.createFrom;
+const $$createType58 = $models.ProxyProbeResult.createFrom;
+const $$createType59 = $Create.Array($$createType58);
+const $$createType60 = $models.DiagnosticResult.createFrom;
+const $$createType61 = $Create.Array($$createType60);
+const $$createType62 = localmigrate$0.LegacyDirInfo.createFrom;
+const $$createType63 = $Create.Array($$createType62);
+const $$createType64 = localmigrate$0.LocalTool.createFrom;
+const $$createType65 = $Create.Array($$createType64);
+const $$createType66 = $models.LocalToolInfo.createFrom;
+const $$createType67 = $Create.Array($$createType66);
+const $$createType68 = $models.ServiceStatusInfo.createFrom;
 const $$createType69 = $Create.Nullable($$createType68);
+const $$createType70 = $models.ProxyTestResult.createFrom;
+const $$createType71 = $models.SSHTestResult.createFrom;
+const $$createType72 = $Create.Nullable($$createType71);

@@ -238,6 +238,8 @@ export function createInitializedWailsBrowserMocks() {
     TestProxy: async (...args) => { window.__wailsCalls.TestProxy.push(args); return { success: true, message: 'Connected' }; },
     RunDiagnostics: async () => { window.__wailsCalls.RunDiagnostics++; return [{ check: 'PATH', path: 'D:\\XDev', ok: true }]; },
     CleanCache: async (...args) => { window.__wailsCalls.CleanCache.push(args); },
+    CleanCacheCategoryResult: async (...args) => { window.__wailsCalls.CleanCacheCategoryResult.push(args); return { removed: 1, busy: 0, failed: 0, detail: '' }; },
+    DeleteCacheFileResult: async (...args) => { window.__wailsCalls.DeleteCacheFileResult.push(args); return { removed: 1, busy: 0, failed: 0, detail: '' }; },
     CheckEnvVarExists: async () => false,
     SetEnvVar: async (...args) => { window.__wailsCalls.SetEnvVar.push(args); },
     DeleteEnvVarEntry: async (...args) => { window.__wailsCalls.DeleteEnvVarEntry.push(args); },
@@ -249,6 +251,7 @@ export function createInitializedWailsBrowserMocks() {
     IsolateExec: async (...args) => { window.__wailsCalls.IsolateExec.push(args); return 'v22'; },
     IsolateTeardown: async (...args) => { window.__wailsCalls.IsolateTeardown.push(args); },
     ListRemoteInstances: async () => [{ id: 'remote-1', adapter: 'docker', status: 'running', addresses: ['C:\\remote'] }],
+    ListRemoteInstancesWithDiagnostics: async () => ({ instances: await window.go.gui.App.ListRemoteInstances(), diagnostics: [] }),
     CreateRemoteInstance: async (...args) => { window.__wailsCalls.CreateRemoteInstance.push(args); return { message: 'created' }; },
     ExecRemoteInstance: async (...args) => { window.__wailsCalls.ExecRemoteInstance.push(args); return 'remote output'; },
     DestroyRemoteInstance: async (...args) => { window.__wailsCalls.DestroyRemoteInstance.push(args); },
@@ -345,7 +348,7 @@ export function createInitializedWailsBrowserMocks() {
   });
   window.__wailsEmit = (name, data) => listeners[name]?.forEach((fn) => fn(data));
   window.__wailsUnexpected = [];
-  window.__wailsCalls = { StartInstall: [], CancelInstall: [], InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [], CheckForUpdate: [], PrepareUpdate: [], RestartToUpdate: [], ApplyUpdate: [], IgnoreSelfUpdate: [], WindowClose: 0 };
+  window.__wailsCalls = { StartInstall: [], CancelInstall: [], InstallTool: [], InstallToolConfirmed: [], InstallToolWithForm: [], PauseDownload: [], ResumeDownload: [], CancelDownload: [], InstallPackageManager: 0, UpdatePackageManager: 0, AddFavorite: 0, RemoveFavorite: 0, SetPathMode: [], TestMirrorConnectivity: [], SetMirrorConfig: [], SetProxyConfig: [], TestProxy: [], RunDiagnostics: 0, CleanCache: [], CleanCacheCategoryResult: [], DeleteCacheFileResult: [], SetEnvVar: [], DeleteEnvVarEntry: [], ScanMigration: 0, MigrateSingle: [], MigrateAll: 0, IsolateSetup: [], IsolateExec: [], IsolateTeardown: [], CreateRemoteInstance: [], ExecRemoteInstance: [], DestroyRemoteInstance: [], PreviewCustomToolVersions: [], AddCustomTool: [], RemoveCustomTool: [], LaunchTool: [], ToolCommand: [], CheckForUpdate: [], PrepareUpdate: [], RestartToUpdate: [], ApplyUpdate: [], IgnoreSelfUpdate: [], WindowClose: 0 };
   window.go = { gui: { App: app } };
   window.runtime = runtime;
 }

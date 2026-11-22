@@ -114,17 +114,7 @@ func GenerateKeyPair(pubPath, privPath string) error {
 		return fmt.Errorf("generate key pair: %w", err)
 	}
 
-	// Write public key (base64-encoded, 32 bytes)
-	if err := os.WriteFile(pubPath, []byte(base64.StdEncoding.EncodeToString(pub)), 0o644); err != nil {
-		return fmt.Errorf("write public key: %w", err)
-	}
-
-	// Write private key (base64-encoded, 64 bytes) with restricted permissions
-	if err := os.WriteFile(privPath, []byte(base64.StdEncoding.EncodeToString(priv)), 0o600); err != nil {
-		return fmt.Errorf("write private key: %w", err)
-	}
-
-	return nil
+	return createPair(pubPath, privPath, pub, priv)
 }
 
 // LoadPrivateKey reads a base64-encoded Ed25519 private key from file.
@@ -176,6 +166,9 @@ func SignManifest(privKey ed25519.PrivateKey, tool, sha256Map string) (*Manifest
 
 // VerifySignature verifies a manifest signature against a public key.
 func VerifySignature(pubKey ed25519.PublicKey, ms *ManifestSignature) bool {
+	if len(pubKey) != ed25519.PublicKeySize || ms == nil {
+		return false
+	}
 	sigBytes, err := base64.StdEncoding.DecodeString(ms.Signature)
 	if err != nil {
 		return false

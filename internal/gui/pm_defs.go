@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"fmt"
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/pm"
 )
@@ -19,6 +20,7 @@ import (
 // 把 92 处全改成 pm.Def 字段名会制造一次高风险的大范围机械改动，
 // 而收益仅是少一个转换函数。这里选择保留内部类型 + 一次性转换。
 type pmDef struct {
+	definition                     pm.Def
 	name, displayName, description string
 	detectCmd                      string
 	detectArgs                     []string
@@ -56,6 +58,7 @@ func fromPM(d pm.Def) pmDef {
 		})
 	}
 	return pmDef{
+		definition:     d,
 		name:           d.Name,
 		displayName:    d.DisplayName,
 		description:    d.Description,
@@ -73,15 +76,8 @@ func fromPM(d pm.Def) pmDef {
 	}
 }
 
-// packageManagerDefs 返回包管理器定义列表（GetPackageManagers 共享）。
-//
-// 2026-10-25：数据源改为 manifests/package-managers.yaml（经 internal/pm
-// 加载，缺失或损坏时回退到内置定义）。函数签名保持不变，因此既有
-// 调用点无需改动。
-//
-// 为什么这里自己 config.Load 而不是取 App.cfg：本函数是**包级**函数
-// （无接收者），而 92 处调用点中有几处在 App 方法外。config.Load 内部
-// 有缓存，额外开销可忽略。
+// Legacy fixture accessor. App methods always use the active App config and
+// propagate external catalog errors instead of substituting builtin commands.
 func packageManagerDefs() []pmDef {
 	dir := ""
 	if cfg, err := config.Load(""); err == nil {
@@ -92,10 +88,73 @@ func packageManagerDefs() []pmDef {
 
 // packageManagerDefsFrom 按指定 manifest 目录加载定义（测试用）。
 func packageManagerDefsFrom(manifestDir string) []pmDef {
-	defs := pm.LoadOrDefault(manifestDir)
+	defs, err := loadPMViews(manifestDir)
+	if err != nil {
+		logInfo("[PM] %v", err)
+		return nil
+	}
+	return defs
+}
+
+func (a *App) pmCatalog() ([]pmDef, error) { return loadPMViews(a.getCfg().Core.ManifestDir) }
+func loadPMViews(dir string) ([]pmDef, error) {
+	defs, err := pm.Load(dir)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]pmDef, 0, len(defs))
 	for _, d := range defs {
 		out = append(out, fromPM(d))
 	}
-	return out
+	return out, nil
+}
+
+func (a *App) lookupPM(name string) (pmDef, bool, error) {
+	defs, err := a.pmCatalog()
+	if err != nil {
+		return pmDef{}, false, err
+	}
+	for _, d := range defs {
+		if d.name == name {
+			return d, true, nil
+		}
+	}
+	return pmDef{}, false, nil
+}
+
+type PMTrustPlan struct {
+	Source  string `json:"source"`
+	Path    string `json:"path"`
+	Digest  string `json:"digest"`
+	Summary string `json:"summary"`
+}
+
+func (a *App) PlanPackageManager(name string) (PMTrustPlan, error) {
+	d, ok, err := a.lookupPM(name)
+	if err != nil {
+		return PMTrustPlan{}, err
+	}
+	if !ok {
+		return PMTrustPlan{}, fmt.Errorf("unknown package manager %q", name)
+	}
+	if !pmPlatformMatches(d.platform) {
+		return PMTrustPlan{}, fmt.Errorf("unsupported platform: %q", d.platform)
+	}
+	o := d.definition.Origin
+	return PMTrustPlan{o.Kind, o.Path, o.Digest, d.definition.Summary()}, nil
+}
+func (a *App) InstallPackageManagerTrusted(name, digest string) error {
+	return a.install(InstallSpec{Tool: name, Kind: "package-manager", PMDigest: digest})
+}
+func (a *App) InstallSubToolTrusted(name, method, digest string) error {
+	return a.install(InstallSpec{Tool: name, Method: method, Kind: "sub-tool", PMDigest: digest})
+}
+func (d pmDef) checkExecution(digest string) error {
+	if err := d.definition.Origin.Authorize(digest); err != nil {
+		return err
+	}
+	if !pmPlatformMatches(d.platform) {
+		return fmt.Errorf("%s 不支持当前平台 %q", d.name, d.platform)
+	}
+	return nil
 }

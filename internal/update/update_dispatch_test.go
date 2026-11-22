@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/xmdemt/xdev/internal/config"
+	"github.com/xmdemt/xdev/internal/shim"
 )
 
 // P2-B：两次提取的暂存名必须不同（并发更新器各写各的文件），
@@ -79,7 +80,11 @@ func TestRefreshShimDispatchers_ReroutesStaleShims(t *testing.T) {
 	}
 	// 现存「旧分发器」（模拟 Activate 时刻的旧硬链接/copy——现在内容是旧的）。
 	stale := filepath.Join(shimDir, "git.exe")
-	if err := os.WriteFile(stale, []byte("OLD-DISPATCHER"), 0o755); err != nil {
+	oldSrc := filepath.Join(t.TempDir(), "xdev-old.exe")
+	if err := os.WriteFile(oldSrc, []byte("OLD-DISPATCHER"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := shim.InstallShim(shimDir, "git.exe", oldSrc); err != nil {
 		t.Fatal(err)
 	}
 	// 非分发器文件不能被碰。
@@ -126,7 +131,7 @@ func TestRefreshShimDispatchers_UnixSymlinkRetarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	link := filepath.Join(shimDir, "npm")
-	if err := os.Symlink(oldSrc, link); err != nil {
+	if err := shim.InstallShim(shimDir, "npm", oldSrc); err != nil {
 		t.Fatal(err)
 	}
 

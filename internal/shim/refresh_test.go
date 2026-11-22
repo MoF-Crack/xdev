@@ -25,9 +25,13 @@ func makeStaleShimDir(t *testing.T) (shimDir, newSrc string) {
 		t.Fatal(err)
 	}
 
-	// 旧分发器（模拟 Activate 时期的旧硬链接/copy——现在内容是旧的）
-	for _, name := range []string{"npm", "npm.exe", "git.exe"} {
-		if err := os.WriteFile(filepath.Join(shimDir, name), []byte("OLD-DISPATCHER-v1"), 0o755); err != nil {
+	// Real installation establishes ownership before a dispatcher becomes stale.
+	oldSrc := filepath.Join(t.TempDir(), "old-xdev.exe")
+	if err := os.WriteFile(oldSrc, []byte("OLD-DISPATCHER-v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"npm", "git.exe"} {
+		if err := InstallShim(shimDir, name, oldSrc); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,7 +145,7 @@ func TestRefreshDispatchers_UnixSymlink(t *testing.T) {
 	}
 	// 现存符号链接 → 旧源
 	link := filepath.Join(shimDir, "npm")
-	if err := os.Symlink(oldSrc, link); err != nil {
+	if err := InstallShim(shimDir, "npm", oldSrc); err != nil {
 		t.Fatal(err)
 	}
 	// 普通文件（非符号链接）→ 不碰

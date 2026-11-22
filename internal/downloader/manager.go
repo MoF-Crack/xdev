@@ -42,11 +42,13 @@ type Task struct {
 	BatchTotal   int            `json:"batchTotal,omitempty"`
 
 	// 内部字段
+	parent   context.Context // survives pause/resume for this logical request
 	ctx      context.Context
 	cancel   context.CancelFunc
 	opts     Options
 	mu       sync.Mutex
-	pausedAt int64 // 暂停时已下载的字节数
+	cancelMu sync.Mutex // serialize UI cancellation with the request owner's final cleanup
+	pausedAt int64      // 暂停时已下载的字节数
 
 	// pauseRequested 是「暂停 vs 取消」的**权威判据**（F-14）。
 	//
@@ -117,14 +119,29 @@ func NewManager() *Manager {
 
 // StartDownload 启动一个新的下载任务
 func (m *Manager) StartDownload(id, tool, ver string, opts Options) error {
+	return m.StartDownloadContext(context.Background(), id, tool, ver, opts)
+}
+
+// StartDownloadContext binds every generation of the task to its request.
+func (m *Manager) StartDownloadContext(parent context.Context, id, tool, ver string, opts Options) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	if _, exists := m.tasks[id]; exists {
 		m.mu.Unlock()
 		return fmt.Errorf("download task %s already exists", id)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	if opts.ToolName == "" {
+		opts.ToolName = tool
+	}
+	if opts.Version == "" {
+		opts.Version = ver
+	}
+	ctx, cancel := context.WithCancel(parent)
 	task := &Task{
+		parent:  parent,
 		ID:      id,
 		Tool:    tool,
 		Version: ver,
@@ -137,27 +154,25 @@ func (m *Manager) StartDownload(id, tool, ver string, opts Options) error {
 		done:    make(chan struct{}),
 	}
 	m.tasks[id] = task
+	go m.runDownload(task, ctx, task.done, opts)
 	m.mu.Unlock()
-
-	go m.runDownload(task)
 	return nil
 }
 
 // runDownload 执行下载
-func (m *Manager) runDownload(task *Task) {
+func (m *Manager) runDownload(task *Task, dlCtx context.Context, done chan struct{}, opts Options) {
 	// 退出时关闭 done，让 Cancel 知道「写入句柄已释放、可以安全删 .part」。
 	// 必须在函数最开头 defer，保证任何 return 路径（含 superseded 分支）都关闭。
-	if task.done != nil {
-		defer close(task.done)
-	}
-	// 如果批量下载，在 ProgressDesc 前加 [N/M] 前缀
+	defer close(done)
+	task.mu.Lock()
 	if task.BatchTotal > 0 {
-		task.opts.ProgressDesc = fmt.Sprintf("[%d/%d] %s", task.BatchIndex, task.BatchTotal, task.opts.ProgressDesc)
+		opts.ProgressDesc = fmt.Sprintf("[%d/%d] %s", task.BatchIndex, task.BatchTotal, opts.ProgressDesc)
 	}
+	task.mu.Unlock()
 
 	// 包装 OnProgress 回调以更新任务状态
-	originalProgress := task.opts.OnProgress
-	task.opts.OnProgress = func(downloaded, total int64, elapsed time.Duration) {
+	originalProgress := opts.OnProgress
+	opts.OnProgress = func(downloaded, total int64, elapsed time.Duration) {
 		task.mu.Lock()
 		task.Downloaded = downloaded
 		task.Total = total
@@ -174,8 +189,8 @@ func (m *Manager) runDownload(task *Task) {
 	}
 
 	// 包装 OnProgressEx 回调以更新任务状态（含 speed/eta）
-	originalProgressEx := task.opts.OnProgressEx
-	task.opts.OnProgressEx = func(downloaded, total int64, speed int64, eta time.Duration) {
+	originalProgressEx := opts.OnProgressEx
+	opts.OnProgressEx = func(downloaded, total int64, speed int64, eta time.Duration) {
 		task.mu.Lock()
 		task.Downloaded = downloaded
 		task.Total = total
@@ -195,22 +210,14 @@ func (m *Manager) runDownload(task *Task) {
 		}
 	}
 
-	// Ticket 21 (P1-02): capture the context THIS goroutine runs under.
-	// Pause/Resume/Cancel replace task.ctx; a late-finishing goroutine from
-	// a previous generation must not overwrite the state the newer
-	// generation has already established.
-	task.mu.Lock()
-	dlCtx := task.ctx
-	task.mu.Unlock()
-
-	err := Download(dlCtx, task.opts)
+	err := Download(dlCtx, opts)
 
 	task.mu.Lock()
 	// Superseded generation: the task moved on (Pause → Resume, or Cancel
 	// already wrote a terminal state). Stay silent — writing here is what
 	// used to resurrect "Cancelled" after a pause, deleting the .part file
 	// the resumed download was using.
-	if task.ctx != dlCtx {
+	if task.ctx != dlCtx || task.Status == StatusCancelled {
 		task.mu.Unlock()
 		log.Printf("[download] 上一代下载 goroutine 收尾（已过期，跳过终态写入）")
 		return
@@ -228,18 +235,10 @@ func (m *Manager) runDownload(task *Task) {
 				task.Downloaded = task.pausedAt
 			} else {
 				task.Status = StatusCancelled
-				// 取消时清理临时文件（F-12：按 URL 分代，全部代 + 历史命名）。
-				// Ticket 21 (N-06): log instead of silently ignoring — on
-				// Windows the writer may still hold the handle. The
-				// .part.lock takeover semantics make the residue harmless.
-				for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
-					// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
-					discardPart(partPath)
-					if _, statErr := os.Stat(partPath); statErr == nil {
-						log.Printf("[download] WARNING: 取消后删除临时文件失败 %s", partPath)
-					}
+				if err := removePartialFiles(task.opts.Dest, task.opts.Fallbacks()...); err != nil {
+					task.ErrorMessage = err.Error()
+					log.Printf("[download] cancel cleanup: %v", err)
 				}
-				log.Printf("[download] 已取消下载并清理临时文件: %s", task.opts.Dest)
 			}
 		} else {
 			task.Status = StatusFailed
@@ -312,8 +311,16 @@ func (m *Manager) Resume(id string) error {
 		return fmt.Errorf("cannot resume task in status %s", task.Status)
 	}
 
-	// 创建新的 context
-	ctx, cancel := context.WithCancel(context.Background())
+	// Resume inherits the same request lifetime as the original generation.
+	parent := task.parent
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		task.mu.Unlock()
+		return err
+	}
+	ctx, cancel := context.WithCancel(parent)
 	task.ctx = ctx
 	task.cancel = cancel
 	task.Status = StatusDownloading
@@ -323,15 +330,8 @@ func (m *Manager) Resume(id string) error {
 	// 否则新 goroutine 退出时会对已关闭的 channel 再 close → panic。
 	// （2026-10-25：首版修复未重建，TestPause_ImmediatelyResume_Works 捕获）
 	task.done = make(chan struct{})
+	go m.runDownload(task, ctx, task.done, task.opts)
 	task.mu.Unlock()
-
-	// Resume starts a NEW download goroutine generation while the paused one
-	// may still be unwinding: its final Write can land after the fresh
-	// goroutine seeks, interleaving one stale block into the new transfer.
-	// This residual window is accepted and documented (ticket 21): the
-	// SHA-256 gate (or the TOFU pin) rejects the resulting archive, and the
-	// .part.lock (P1-01) keeps two live writers out of the same file.
-	go m.runDownload(task)
 	log.Printf("[download] 恢复下载: %s", id)
 	return nil
 }
@@ -353,8 +353,10 @@ func (m *Manager) Cancel(id string) error {
 		return fmt.Errorf("download task %s not found", id)
 	}
 
+	task.cancelMu.Lock()
+	defer task.cancelMu.Unlock()
 	task.mu.Lock()
-	if task.Status == StatusCompleted || task.Status == StatusCancelled {
+	if task.Status == StatusCompleted {
 		task.mu.Unlock()
 		return nil
 	}
@@ -380,16 +382,7 @@ func (m *Manager) Cancel(id string) error {
 			log.Printf("[download] WARNING: 等待下载 goroutine 退出超时，仍尝试清理 %s", task.opts.Dest)
 		}
 	}
-	for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
-		// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
-		discardPart(partPath)
-		if _, statErr := os.Stat(partPath); statErr == nil {
-			log.Printf("[download] WARNING: 删除临时文件失败 %s（下次下载将接管该残留）", partPath)
-		}
-	}
-
-	log.Printf("[download] 取消下载并清理临时文件: %s", id)
-	return nil
+	return removePartialFiles(task.opts.Dest, task.opts.Fallbacks()...)
 }
 
 // GetTask 获取下载任务状态
@@ -453,15 +446,9 @@ func (m *Manager) CleanupOnExit() {
 		task.mu.Unlock()
 
 		if active {
-			// 清理临时文件（F-12：按 URL 分代，全部代 + 历史命名）
-			// P2-5（Round 10）：走 discardPart，连带清掉 .meta。
-			for _, partPath := range partPathsFor(task.opts.Dest, task.opts.Fallbacks()...) {
-				discardPart(partPath)
-				if _, statErr := os.Stat(partPath); statErr == nil {
-					log.Printf("[download] WARNING: 退出清理删除临时文件失败 %s", partPath)
-				}
+			if err := removePartialFiles(task.opts.Dest, task.opts.Fallbacks()...); err != nil {
+				log.Printf("[download] exit cleanup %s: %v", id, err)
 			}
-			log.Printf("[download] 退出清理: 取消下载 %s 并删除临时文件 %s", id, task.opts.Dest)
 		}
 	}
 }
@@ -491,36 +478,10 @@ func HasPartialFile(dest string) bool {
 	return len(partialPathsInDir(dest)) > 0
 }
 
-// CleanupPartialFile 清理该 dest 下所有分代的 .part 残留（含历史未分代命名）
-// 以及它们的 .part.lock。不存在时返回 nil，方便调用方幂等重试。
-//
-// P2-5：锁文件也必须清 —— util.AcquireFileLock 创建的 <part>.lock 修复前没有
-// 任何代码删除（H15：清理后仍剩 2 个 .part.lock）。被活跃下载持有的锁不会被删
-// （见 removePartLockIfUnheld）。
+// CleanupPartialFile removes data and validator files under the writer's lock.
 func CleanupPartialFile(dest string) error {
-	var firstErr error
-	for _, p := range partialPathsInDir(dest) {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && firstErr == nil {
-			firstErr = err
-		}
-		if err := removePartLockIfUnheld(p + ".lock"); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	// 「.part 已删但锁还在」的孤儿锁：按目录扫描分代锁名。
-	for _, l := range partialLockPathsInDir(dest) {
-		if err := removePartLockIfUnheld(l); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	// P2-5（Round 10）：孤儿 .meta 同样要清 —— 否则「GUI 清缓存」之后目录里
-	// 仍残留上一代内容的 ETag，下一次续传会误报 content changed。
-	for _, mp := range partialMetaPathsInDir(dest) {
-		if err := os.Remove(mp); err != nil && !os.IsNotExist(err) && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	_, err := CleanupPartialFileResult(dest)
+	return err
 }
 
 // partialPathsInDir 返回该 dest 下存在的全部 .part 路径：
@@ -573,77 +534,6 @@ func isPartGeneration(gen string) bool {
 	return true
 }
 
-// partialLockPathsInDir 返回该 dest 下存在的全部分代 .part.lock 路径
-// （含历史未分代命名 <dest>.part.lock）。
-//
-// P2-5：与 partialPathsInDir 同款「按目录扫描 + 前缀匹配」策略（刻意不用
-// filepath.Glob —— dest 里的 `[`、`*`、`?` 会被当元字符而静默失配）。
-// 单独存在是因为「.part 已被删、只剩锁」是最常见的孤儿形态：只扫 .part 的
-// partialPathsInDir 在那种情况下返回空列表，锁就永远清不掉。
-func partialLockPathsInDir(dest string) []string {
-	paths := make([]string, 0, 2)
-	if _, err := os.Stat(dest + ".part.lock"); err == nil {
-		paths = append(paths, dest+".part.lock")
-	}
-	dir := filepath.Dir(dest)
-	prefix := filepath.Base(dest) + "."
-	const suffix = ".part.lock"
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return paths
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
-			continue
-		}
-		if isPartGeneration(strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)) {
-			paths = append(paths, filepath.Join(dir, name))
-		}
-	}
-	return paths
-}
-
-// partialMetaPathsInDir 返回该 dest 下存在的全部内容身份旁路文件
-// （`<dest>.part.meta` 与分代 `<dest>.<16hex>.part.meta`）。
-//
-// 第十轮审计 P2-5（P2）：`.meta` 此前没有任何目录级清扫路径 ——
-// `CleanupPartialFile` 只扫 `*.part`、`CleanupAllPartialsInDir` 只扫
-// `*.part` + `*.part.lock`。审计实测「GUI 清缓存」后目录仍残留
-// `archive.zip.<gen>.part.meta`。
-//
-// 与 partialPathsInDir 同款「按目录扫描 + 前缀匹配」策略（刻意不用
-// filepath.Glob —— dest 里的 `[`、`*`、`?` 会被当元字符而静默失配）。
-func partialMetaPathsInDir(dest string) []string {
-	paths := make([]string, 0, 2)
-	if _, err := os.Stat(partValidatorFor(dest + ".part")); err == nil {
-		paths = append(paths, partValidatorFor(dest+".part"))
-	}
-	dir := filepath.Dir(dest)
-	prefix := filepath.Base(dest) + "."
-	const suffix = ".part.meta"
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return paths
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
-			continue
-		}
-		if isPartGeneration(strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)) {
-			paths = append(paths, filepath.Join(dir, name))
-		}
-	}
-	return paths
-}
-
 // maxPartialFileSize 返回给定路径中最大的文件大小（都不存在则为 0）。
 func maxPartialFileSize(paths []string) int64 {
 	var max int64
@@ -672,50 +562,8 @@ func partialBytesForTask(task *Task) int64 {
 	return max
 }
 
-// CleanupAllPartialsInDir 清理指定目录下所有 .part 文件及其 .part.lock。
-//
-// F-12：分代命名形如 <archive>.zip.<16hex>.part，仍以 .part 结尾，因此原来
-// 的 "*.part" glob 依然同时覆盖分代命名与历史未分代命名，无需改动。
-//
-// P2-5：锁文件（<part>.lock）也要清 —— 修复前它们没有任何代码删除，
-// 目录级清理后仍会剩下孤儿锁。被活跃下载持有的锁不会被删
-// （见 removePartLockIfUnheld）。
+// CleanupAllPartialsInDir retains the historical error-only API.
 func CleanupAllPartialsInDir(dir string) error {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.part"))
-	if err != nil {
-		return err
-	}
-	for _, m := range matches {
-		os.Remove(m)
-		log.Printf("[download] 清理临时文件: %s", m)
-		if lockErr := removePartLockIfUnheld(m + ".lock"); lockErr != nil {
-			log.Printf("[download] WARNING: 清理锁文件失败 %s.lock: %v", m, lockErr)
-		}
-	}
-	// 「.part 已删但锁还在」的孤儿锁：glob "*.part.lock" 不匹配 "*.part"，
-	// 必须单独扫一遍。
-	locks, err := filepath.Glob(filepath.Join(dir, "*.part.lock"))
-	if err != nil {
-		return err
-	}
-	for _, l := range locks {
-		if err := removePartLockIfUnheld(l); err != nil {
-			log.Printf("[download] WARNING: 清理锁文件失败 %s: %v", l, err)
-		}
-	}
-	// P2-5（Round 10）：孤儿 .meta（内容身份校验器）也要清。它不匹配 "*.part"
-	// 也不匹配 "*.part.lock"，此前**没有任何**目录级清扫路径覆盖它 —— 审计实测
-	// 「GUI 清缓存」（本函数）之后目录里仍残留 `archive.zip.<gen>.part.meta`。
-	metas, err := filepath.Glob(filepath.Join(dir, "*.part.meta"))
-	if err != nil {
-		return err
-	}
-	for _, mp := range metas {
-		if err := os.Remove(mp); err != nil && !os.IsNotExist(err) {
-			log.Printf("[download] WARNING: 清理校验器旁路文件失败 %s: %v", mp, err)
-		} else {
-			log.Printf("[download] 清理校验器旁路文件: %s", mp)
-		}
-	}
-	return nil
+	_, err := CleanupAllPartialsInDirResult(dir)
+	return err
 }

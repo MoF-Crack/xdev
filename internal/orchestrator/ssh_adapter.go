@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +33,11 @@ func NewSSHAdapter(target SSHTarget) (*SSHAdapter, error) {
 	if target.Host == "" {
 		return nil, fmt.Errorf("SSH target host is required")
 	}
-	target = normalizeTarget(target)
+	var err error
+	target, err = prepareSSHTarget(target)
+	if err != nil {
+		return nil, err
+	}
 	// Check that ssh is available
 	sshBin := sshBinary()
 	if _, err := exec.LookPath(sshBin); err != nil {
@@ -60,6 +66,32 @@ func normalizeTarget(t SSHTarget) SSHTarget {
 		t.Port = 22
 	}
 	return t
+}
+
+// prepareSSHTarget fixes explicitly selected files to the caller's current
+// directory before the first connection. Empty paths keep OpenSSH defaults.
+func prepareSSHTarget(t SSHTarget) (SSHTarget, error) {
+	t = normalizeTarget(t)
+	for _, field := range []struct {
+		name string
+		path *string
+	}{{"key", &t.KeyPath}, {"known_hosts", &t.KnownHosts}} {
+		if *field.path == "" {
+			continue
+		}
+		if strings.HasPrefix(*field.path, "~") {
+			return SSHTarget{}, fmt.Errorf("SSH %s path requires an explicit filesystem path; reconfigure the connection", field.name)
+		}
+		absolute, err := filepath.Abs(*field.path)
+		if err != nil {
+			return SSHTarget{}, fmt.Errorf("resolve SSH %s path: %w", field.name, err)
+		}
+		*field.path = absolute
+	}
+	if err := validateSSHTarget(t); err != nil {
+		return SSHTarget{}, err
+	}
+	return t, nil
 }
 
 func (s *SSHAdapter) Name() string { return "ssh" }
@@ -110,6 +142,9 @@ func (s *SSHAdapter) runSSH(ctx context.Context, args ...string) ([]byte, []byte
 
 // TestConnection verifies the SSH connection by running `echo ok`.
 func (s *SSHAdapter) TestConnection(ctx context.Context) error {
+	if err := s.requireTarget(); err != nil {
+		return err
+	}
 	out, _, err := s.runSSH(ctx, s.sshArgs("echo", "ok")...)
 	if err != nil {
 		return fmt.Errorf("ssh connect test failed: %w", err)
@@ -129,8 +164,8 @@ func (s *SSHAdapter) Create(ctx context.Context, spec *EnvironmentSpec) (*Instan
 	// The Host guard keeps an explicitly constructed target (NewSSHAdapter /
 	// CLI flag / GUI prefill) intact — the spec never overwrites it.
 	if spec != nil && spec.SSHTarget.Host != "" && s.target.Host == "" {
-		t := normalizeTarget(spec.SSHTarget)
-		if err := validateSSHTarget(t); err != nil {
+		t, err := prepareSSHTarget(spec.SSHTarget)
+		if err != nil {
 			return nil, err
 		}
 		s.target = t
@@ -141,8 +176,9 @@ func (s *SSHAdapter) Create(ctx context.Context, spec *EnvironmentSpec) (*Instan
 		return nil, err
 	}
 
-	addr := fmt.Sprintf("%s:%d", s.target.Host, s.target.Port)
+	addr := net.JoinHostPort(s.target.Host, fmt.Sprint(s.target.Port))
 	return &Instance{
+		SSH:       connectionForTarget(s.target),
 		ID:        s.instanceID(),
 		Status:    "running",
 		Addresses: []string{addr},
@@ -173,6 +209,9 @@ func (s *SSHAdapter) Exec(ctx context.Context, id string, cmd []string) (*ExecRe
 		return nil, fmt.Errorf("empty command")
 	}
 
+	if err := s.requireTarget(); err != nil {
+		return &ExecResult{ExitCode: 1}, err
+	}
 	sshArgs := s.sshArgs(cmd...)
 	// Password path: run through sshpass via runSSH. Ticket 02 (P1-32):
 	// ExitCode must reflect the real exit status and stderr must be
@@ -196,6 +235,9 @@ func (s *SSHAdapter) Exec(ctx context.Context, id string, cmd []string) (*ExecRe
 // ConnectInteractive runs `ssh -t` with stdin/stdout/stderr wired to
 // the terminal (Spec 032). Password auth still uses sshpass.
 func (s *SSHAdapter) ConnectInteractive(ctx context.Context, id string, shell []string) error {
+	if err := s.requireTarget(); err != nil {
+		return err
+	}
 	args := append([]string{"-t"}, s.sshArgs(shell...)...)
 	var c *exec.Cmd
 	if s.target.Password != "" {
@@ -257,9 +299,18 @@ func (s *SSHAdapter) sshArgs(cmd ...string) []string {
 	return args
 }
 
-// instanceID generates a stable ID from the SSH target.
+// instanceID is a stable opaque index. Target fields are recovered from the
+// connection record, never from this filename (host/user may contain hyphens).
 func (s *SSHAdapter) instanceID() string {
-	return fmt.Sprintf("ssh-%s-%s-%d", s.target.User, s.target.Host, s.target.Port)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", s.target.User, s.target.Host, s.target.Port)))
+	return fmt.Sprintf("ssh-%x", sum[:16])
+}
+
+func (s *SSHAdapter) requireTarget() error {
+	if s.target.Host == "" || s.target.User == "" || s.target.Port < 1 {
+		return fmt.Errorf("SSH connection host/port/user is missing; restore or reconfigure the instance")
+	}
+	return validateSSHTarget(s.target)
 }
 
 // sshBinary returns the name of the SSH executable.

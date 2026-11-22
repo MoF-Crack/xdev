@@ -38,7 +38,7 @@
 
         <IsolationPage v-else-if="selectedView === 'isolate'" :t="t" :status="isolateStatus" :loading="isolateLoading" :error="isolateError" :output="isolateExecOutput" :operating="isolateOperating" @setup="isolateSetup" @exec="isolateExec" @teardown="isolateTeardown" />
 
-        <RemoteDevelopmentPage v-else-if="selectedView === 'remote'" :t="t" :instances="remoteInstances" :loading="remoteLoading" :error="remoteError" :creating="remoteCreating" :operating="remoteOperating" :outputs="remoteOutputs" :browse-file="browseRemoteKey" :test-ssh="testSSHConnection" @list="loadRemoteInstances" @create="createRemoteInstance" @copy-address="copyRemoteAddress" @exec="execRemoteInstance" @destroy="destroyRemoteInstance" />
+        <RemoteDevelopmentPage v-else-if="selectedView === 'remote'" :t="t" :instances="remoteInstances" :diagnostics="remoteDiagnostics" :loading="remoteLoading" :error="remoteError" :creating="remoteCreating" :operating="remoteOperating" :outputs="remoteOutputs" :browse-file="browseRemoteKey" :test-ssh="testSSHConnection" @list="loadRemoteInstances" @create="createRemoteInstance" @copy-address="copyRemoteAddress" @exec="execRemoteInstance" @destroy="destroyRemoteInstance" />
 
         <AboutPage v-else-if="selectedView === 'about'" :t="t" :info="aboutInfo" @check-update="checkUpdate" />
 
@@ -106,6 +106,7 @@ import { useTools } from './composables/useTools.js';
 import { useNotifications } from './composables/useNotifications.js';
 import { usePackageManagers } from './composables/usePackageManagers.js';
 import { useWindowChrome } from './composables/useWindowChrome.js';
+import { useCacheCleanup } from './composables/useCacheCleanup.js';
 import { useSniffSession } from './composables/useSniffSession.js';
 import { useSelfUpdate } from './composables/useSelfUpdate.js';
 import AppShell from './layouts/AppShell.vue';
@@ -441,6 +442,7 @@ const isolateOperating = computed(() => isolateSetupLoading.value || isolateExec
 
 // Remote state
 const remoteInstances = ref([]);
+const remoteDiagnostics = ref([]);
 const remoteLoading = ref(false);
 const remoteError = ref(null);
 const remoteCreating = ref(false);
@@ -665,7 +667,9 @@ async function loadRemoteInstances() {
   remoteLoading.value = true;
   remoteError.value = null;
   try {
-    remoteInstances.value = await window.go.gui.App.ListRemoteInstances();
+    const snapshot = await window.go.gui.App.ListRemoteInstancesWithDiagnostics();
+    remoteInstances.value = snapshot.instances;
+    remoteDiagnostics.value = snapshot.diagnostics;
   } catch (e) {
     remoteError.value = e;
     console.error('Failed to load remote instances:', e);
@@ -908,27 +912,9 @@ async function showCacheSize() {
   }
 }
 
-async function cleanCacheCategory(category) {
-  try {
-    await window.go.gui.App.CleanCacheCategory(category);
-    message.success(t('cache.clean_success'));
-    await showCacheSize();
-    await loadDashboard();
-  } catch (e) {
-    message.error(t('cache.clean_failed') + ': ' + e);
-  }
-}
-
-async function deleteCacheFile(entry) {
-  try {
-    await window.go.gui.App.DeleteCacheFile(entry.path);
-    message.success(t('cache.clean_success'));
-    await showCacheSize();
-    await loadDashboard();
-  } catch (e) {
-    message.error(t('cache.clean_failed') + ': ' + e);
-  }
-}
+const { cleanCache, cleanCacheCategory, deleteCacheFile } = useCacheCleanup({
+  t, message, showCacheSize, loadCacheBreakdown, loadDashboard,
+});
 
 async function loadAboutInfo() {
   try {
@@ -1442,17 +1428,6 @@ async function removeCustomTool(name) {
   } catch (e) {
     console.error('Remove custom tool failed:', e);
     message.error(t('custom_tools.remove_failed') + ': ' + e);
-  }
-}
-
-async function cleanCache(category) {
-  try {
-    await window.go.gui.App.CleanCache(category);
-    message.success(t('cache.clean_success'));
-    await loadCacheBreakdown();
-    await loadDashboard();
-  } catch (e) {
-    message.error(t('cache.clean_failed') + ': ' + e);
   }
 }
 

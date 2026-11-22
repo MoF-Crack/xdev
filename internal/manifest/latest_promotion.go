@@ -40,15 +40,22 @@ type PromoteOptions struct {
 // CanPromoteLatest 是 CanPromoteLatestWithOptions 的默认形式：
 // 允许预发布同通道推进，**要求**候选可安装。
 func CanPromoteLatest(versions []Version, candidate, current string, allowPrerelease bool) bool {
-	return CanPromoteLatestWithOptions(versions, candidate, current, PromoteOptions{
-		AllowPrerelease: allowPrerelease,
-		RequireArchives: true,
-	})
+	return CanPromoteToolLatest("", versions, candidate, current, allowPrerelease)
 }
 
-// CanPromoteLatestWithOptions 是完整形式。
 func CanPromoteLatestWithOptions(versions []Version, candidate, current string, opts PromoteOptions) bool {
-	if candidate == "" || candidate == current {
+	return CanPromoteToolLatestWithOptions("", versions, candidate, current, opts)
+}
+
+// CanPromoteToolLatest requires a usable archive and strictly newer release.
+func CanPromoteToolLatest(toolName string, versions []Version, candidate, current string, allowPrerelease bool) bool {
+	return CanPromoteToolLatestWithOptions(toolName, versions, candidate, current, PromoteOptions{AllowPrerelease: allowPrerelease, RequireArchives: true})
+}
+
+// CanPromoteToolLatestWithOptions compares release precedence independently
+// of presentation tie breaks. Unknown labels cannot authorize a promotion.
+func CanPromoteToolLatestWithOptions(toolName string, versions []Version, candidate, current string, opts PromoteOptions) bool {
+	if !IsComparableToolVersion(toolName, candidate) || candidate == current {
 		return false
 	}
 
@@ -62,20 +69,24 @@ func CanPromoteLatestWithOptions(versions []Version, candidate, current string, 
 	}
 
 	// 条件 3：预发布通道。
-	if IsPrerelease(candidate) && !opts.AllowPrerelease {
-		return false
+	if IsPrerelease(candidate) {
+		if !opts.AllowPrerelease {
+			return false
+		}
+		if current != "" {
+			cur, exists := findVersion(versions, current)
+			if !IsPrerelease(current) || (exists && cur.Stable) || util.PrereleaseChannel(candidate) != util.PrereleaseChannel(current) {
+				return false
+			}
+		}
 	}
 
 	// 条件 2：严格更新（全序）。
 	if current == "" {
 		return true
 	}
-	cur, ok := findVersion(versions, current)
-	if !ok {
-		// 当前 latest 不在列表里（可能是手写的旧值）：只要候选可安装就推进。
-		return true
-	}
-	return VersionReleaseNewer(cand, cur)
+	order, comparable := CompareToolVersions(toolName, candidate, current)
+	return comparable && order > 0
 }
 
 // IsPrerelease 报告版本串是否为预发布（含 '-' 的 SemVer）。

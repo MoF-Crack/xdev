@@ -71,7 +71,7 @@ func TestF05_ForceRemovalHappensAfterDownloadNotBefore(t *testing.T) {
 
 	// 3. 下载仍必须经 downloader.Manager（GUI 需要 pause/resume/cancel），
 	//    且通过 DownloadFunc 钩子交给 installer —— 不能绕开 installer 自己下载。
-	if !strings.Contains(s, "a.dlMgr.StartDownload(") {
+	if !strings.Contains(s, "a.dlMgr.StartDownloadContext(") {
 		t.Error("GUI 下载必须经 downloader.Manager（进度对话框需要 pause/resume/cancel）")
 	}
 	if !strings.Contains(s, "DownloadFunc:") {

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -534,9 +535,9 @@ func TestExtract_DMG_DetachFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "detach") {
 		t.Fatalf("want detach error, got %v", err)
 	}
-	// .app 已复制但错误仍返回。
-	if !fileExists(filepath.Join(dstDir, "TestApp.app", "Contents", "Info.plist")) {
-		t.Error("expected .app copied before detach failure surfaced")
+	// detach must succeed before publication.
+	if fileExists(filepath.Join(dstDir, "TestApp.app", "Contents", "Info.plist")) {
+		t.Error("published .app despite detach failure")
 	}
 	lines := mockCmdLog(t, logPath)
 	// 顺序：attach → detach → detach -force。
@@ -597,15 +598,10 @@ func TestExtract_DMG_CopyFailure(t *testing.T) {
 	old := hdiutilCmd
 	hdiutilCmd = filepath.Join(tmpDir, "mock-hdiutil")
 	defer func() { hdiutilCmd = old }()
-	// ditto mock 恒失败：ditto 失败必须返回错误（绝不降级 CopyDir）。
-	oldDitto := dittoCmd
-	dittoCmd = filepath.Join(tmpDir, "mock-ditto")
-	defer func() { dittoCmd = oldDitto }()
-	if err := os.WriteFile(filepath.Join(tmpDir, "mock-ditto"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
-	err := Extract(filepath.Join(tmpDir, "app.dmg"), dstDir, "dmg", 0)
+	limits := DefaultBudget()
+	limits.MaxFileBytes = 1
+	err := ExtractWithOptions(context.Background(), filepath.Join(tmpDir, "app.dmg"), dstDir, "dmg", 0, limits)
 	if err == nil || !strings.Contains(err.Error(), "copy") {
 		t.Fatalf("want copy error, got %v", err)
 	}
@@ -613,14 +609,8 @@ func TestExtract_DMG_CopyFailure(t *testing.T) {
 	assertAttachThenDetach(t, mockCmdLog(t, logPath))
 }
 
-// TestCopyAppBundle_DittoPreservesSymlinks verifies the ditto copy path
-// preserves symlinks inside .app bundles (Electron/IDE frameworks),
-// using the dittoCmd hook override (023-A3-01). Skipped on non-darwin
-// (shell-script mock + symlink fixture require a Unix filesystem).
-func TestCopyAppBundle_DittoPreservesSymlinks(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("ditto symlink fixture requires darwin")
-	}
+// A typical framework link must remain a relative link, not a duplicate file.
+func TestCopyAppBundlePreservesSymlinks(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcApp := filepath.Join(tmpDir, "src", "Sample.app")
 	// 真实框架放在 .app 内部；符号链接用相对路径指向它（Electron 典型布局）。
@@ -634,24 +624,11 @@ func TestCopyAppBundle_DittoPreservesSymlinks(t *testing.T) {
 	// 相对符号链接：Contents/Frameworks/Sample.framework → Real.framework。
 	linkPath := filepath.Join(srcApp, "Contents", "Frameworks", "Sample.framework")
 	if err := os.Symlink("Real.framework", linkPath); err != nil {
-		t.Fatal(err)
+		t.Skip(err)
 	}
-	// mock ditto：先建目标父目录，再 cp -R 保留符号链接，并传播 cp 退出码。
-	mock := filepath.Join(tmpDir, "mock-ditto")
-	script := "#!/bin/sh\n" +
-		"mkdir -p \"$(dirname \"$2\")\"\n" +
-		"cp -R \"$1\" \"$2\"\n" +
-		"exit $?\n"
-	if err := os.WriteFile(mock, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := dittoCmd
-	dittoCmd = mock
-	defer func() { dittoCmd = old }()
-
 	dstApp := filepath.Join(tmpDir, "dst", "Sample.app")
-	if err := copyAppBundle(srcApp, dstApp); err != nil {
-		t.Fatalf("copyAppBundle: %v", err)
+	if _, err := copyAppsFromMount(filepath.Dir(srcApp), filepath.Dir(dstApp)); err != nil {
+		t.Fatal(err)
 	}
 	// 符号链接必须保留（util.CopyDir 会跳过符号链接）。
 	copiedLink := filepath.Join(dstApp, "Contents", "Frameworks", "Sample.framework")
@@ -668,39 +645,6 @@ func TestCopyAppBundle_DittoPreservesSymlinks(t *testing.T) {
 	}
 	if !fileExists(filepath.Join(dstApp, "Contents", "Frameworks", "Real.framework", "lib.dylib")) {
 		t.Error("expected real framework copied")
-	}
-}
-
-// TestCopyAppBundle_DittoFailure verifies a ditto copy failure surfaces as
-// an error — no silent fallback to util.CopyDir (which would skip symlinks
-// and produce a broken .app) (023-R1). Runs wherever the hook is overridden.
-func TestCopyAppBundle_DittoFailure(t *testing.T) {
-	tmpDir := t.TempDir()
-	srcApp := filepath.Join(tmpDir, "src", "Sample.app")
-	if err := os.MkdirAll(srcApp, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(srcApp, "file.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// mock ditto 恒失败。
-	mock := filepath.Join(tmpDir, "mock-ditto")
-	if err := os.WriteFile(mock, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := dittoCmd
-	dittoCmd = mock
-	defer func() { dittoCmd = old }()
-
-	err := copyAppBundle(srcApp, filepath.Join(tmpDir, "dst", "Sample.app"))
-	if err == nil {
-		t.Fatal("expected ditto failure to surface as error (no silent CopyDir fallback)")
-	}
-	if !strings.Contains(err.Error(), "ditto") {
-		t.Errorf("error should mention ditto: %v", err)
-	}
-	if fileExists(filepath.Join(tmpDir, "dst", "Sample.app", "file.txt")) {
-		t.Error("no partial copy expected after ditto failure")
 	}
 }
 

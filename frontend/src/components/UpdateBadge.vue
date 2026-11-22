@@ -17,7 +17,7 @@
       <n-list v-else size="small">
         <n-list-item v-for="u in updates" :key="u.tool">
           <div class="update-item">
-            <div><strong>{{ u.tool }}</strong><div class="update-version">{{ u.currentVersion }} → {{ u.latestVersion }}</div></div>
+            <div><strong>{{ u.tool }}</strong><div class="update-version">{{ u.currentVersion }} → {{ u.latestVersion }}</div><small v-if="u.stale">{{ t('updates.cached_refresh', { reason: u.refreshError || u.refreshStatus }) }}</small></div>
             <div class="update-actions">
               <n-button size="tiny" type="primary" :loading="installing[u.tool]" @click="$emit('install', u)">{{ t('updates.install') }}</n-button>
               <n-button size="tiny" secondary @click="$emit('ignore', u)">{{ t('updates.ignore') }}</n-button>

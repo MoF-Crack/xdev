@@ -95,37 +95,70 @@ func newSnifferRegistry() *SnifferRegistry {
 // registry order: explicit remote: configuration > ArchivePattern
 // derivation > unsupported (FR-005).
 func (r *SnifferRegistry) Sniff(ctx context.Context, t *manifest.Tool) ([]DiscoveredVersion, error) {
+	if s := r.match(t); s != nil {
+		return s.Sniff(ctx, t)
+	}
+	return nil, nil
+}
+
+func (r *SnifferRegistry) match(t *manifest.Tool) Sniffer {
 	for _, s := range r.sniffers {
 		if s.Supports(t) {
-			return s.Sniff(ctx, t)
+			return s
 		}
 	}
-	// No snifter supports this tool — it is unsupported.  Return
-	// empty without error so the caller can record it as such.
-	return nil, nil
+	return nil
 }
 
 // SniffCache is the on-disk cache format stored at
 // $XMDEV_HOME/cache/sniff-cache.json (FR-008).
 type SniffCache struct {
-	Tools       map[string]ToolSniffResult `json:"tools"`
-	RateLimit   RateLimitState             `json:"rate_limit"`
-	LastSniffAt time.Time                  `json:"last_sniff_at"`
-	Partial     bool                       `json:"partial"`
-	Stale       bool                       `json:"stale"` // true when remote failed and cache is from a previous run
+	SchemaVersion int                        `json:"schema_version,omitempty"`
+	Tools         map[string]ToolSniffResult `json:"tools"`
+	RateLimit     RateLimitState             `json:"rate_limit"`
+	LastAttempt   time.Time                  `json:"last_attempt"`
+	LastSuccess   time.Time                  `json:"last_success"`
+	Status        SniffStatus                `json:"status,omitempty"`
+	RetryAfter    time.Time                  `json:"retry_after"`
+	PendingKnown  bool                       `json:"pending_known,omitempty"` // distinguishes a known empty set from an unknown legacy scope
+	Pending       []string                   `json:"pending,omitempty"`
+	LastSniffAt   time.Time                  `json:"last_sniff_at"` // compatibility alias for LastSuccess
+	Partial       bool                       `json:"partial"`
+	Stale         bool                       `json:"stale"`
 }
 
 // ToolSniffResult records the last sniff result for a single tool.
 type ToolSniffResult struct {
-	LastSniff   time.Time `json:"last_sniff"`
-	Etag        string    `json:"etag"`
-	Versions    []string  `json:"versions"`
-	Unsupported bool      `json:"unsupported"`
-	Error       string    `json:"error,omitempty"`
+	LastAttempt    time.Time   `json:"last_attempt"`
+	SuccessAttempt time.Time   `json:"success_attempt"` // request identity of retained success
+	LastSuccess    time.Time   `json:"last_success"`
+	Status         SniffStatus `json:"status,omitempty"`
+	RetryAfter     time.Time   `json:"retry_after"`
+	Failures       int         `json:"failures,omitempty"`
+	LastSniff      time.Time   `json:"last_sniff"` // compatibility alias for LastSuccess
+	Etag           string      `json:"etag"`
+	Versions       []string    `json:"versions"`
+	Unsupported    bool        `json:"unsupported"`
+	Error          string      `json:"error,omitempty"`
 }
+
+// SniffStatus describes the latest operation, independently of the retained
+// successful snapshot. A failed refresh can still have useful Versions.
+type SniffStatus string
+
+const (
+	SniffSuccess     SniffStatus = "success"
+	SniffRunning     SniffStatus = "running"
+	SniffFailed      SniffStatus = "failed"
+	SniffCanceled    SniffStatus = "canceled"
+	SniffRateLimited SniffStatus = "rate_limited"
+	SniffDeferred    SniffStatus = "deferred"
+	SniffUnsupported SniffStatus = "unsupported"
+)
 
 // RateLimitState holds the cross-process token bucket state.
 type RateLimitState struct {
-	Remaining int       `json:"remaining"`
-	ResetAt   time.Time `json:"reset_at"`
+	Remaining  int       `json:"remaining"`
+	ResetAt    time.Time `json:"reset_at"`
+	LastRefill time.Time `json:"last_refill,omitempty"`
 }

@@ -24,7 +24,7 @@ import (
 )
 
 // Global scheduler reference for startup-strategy lifecycle management.
-// Set by root.go's OnInitialize and used by ShutdownSniffScheduler.
+// Set by root.go's PersistentPreRunE and used by ShutdownSniffScheduler.
 var sniffScheduler *discovery.Scheduler
 
 // Global context for the running command.
@@ -87,6 +87,19 @@ func loadCatalogAndRegistry() (*manifest.Catalog, *plugin.Registry) {
 // unsupportedToolErr returns a standard error for an unknown tool name.
 func unsupportedToolErr(name string) error {
 	return fmt.Errorf("unsupported tool %q (run 'xdev available')", name)
+}
+
+// Preview configuration deliberately skips network setup and scheduler creation:
+// even constructing a scheduler can create a cache directory and lock file.
+func initPreviewContext(xmdeDir string, verbose, noColor, noPathFix bool) error {
+	cfg, err := config.LoadReadOnly(xmdeDir)
+	if err != nil {
+		return fmt.Errorf("load preview config: %w", err)
+	}
+	globalCtx = runCtx{cfg: cfg, xmdeDir: xmdeDir, verbose: verbose, noColor: noColor, noPathFix: noPathFix, initialized: true}
+	sniffScheduler = nil
+	startupSniffMounted = false
+	return nil
 }
 
 func initContext(xmdeDir string, verbose, noColor, noPathFix bool) {

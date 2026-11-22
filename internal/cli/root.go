@@ -110,24 +110,20 @@ Short aliases you can add to your shell rc:
 	root.PersistentFlags().BoolVar(&flagNoPathFix, "no-path-fix", false,
 		"do not auto-prompt to fix PATH issues during install/use")
 
-	// bind persistent pre-run so every subcommand can rely on cfg being loaded
-	cobra.OnInitialize(func() {
-		initContext(flagXMDevDir, flagVerbose, flagNoColor, flagNoPathFix)
-		// 票 34（P1-30 / E-11）：此处只构建 Scheduler 句柄（供
-		// ShutdownSniffScheduler 刷缓存，startupCancel==nil 时 Shutdown 秒退），
-		// 不再无条件调用 OnStartup——`xdev hook`/`xdev env`/一次性子命令
-		// 此前也会 spawn 后台嗅探。启动嗅探改由三个交互入口经
-		// PersistentPreRunE 显式挂载（见 mountStartupSniff / isInteractiveEntry）。
-		cfg := Cfg()
-		sniffScheduler = discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
-	})
-
 	// 票 34（P1-30 / E-11）：startup / interval 策略的启动嗅探只挂交互入口
 	// （无参 TUI = root 自身、xdev tui、xdev gui）。用命令身份判定而不是在
 	// 各 RunE 里逐点插入，使「恰好三入口」在单一位置可见（守卫测试
 	// startup_sniff_test.go 直接断言本函数与命令名清单）。
 	// 零参 GUI（main.go 的 len(os.Args)<=1 → runGUI）不走 Cobra，保持无嗅探。
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		// Decide from the executing command after Cobra parsed its flags. Global
+		// OnInitialize callbacks cannot distinguish a preview and run across roots.
+		if isPMPreview(cmd) {
+			return initPreviewContext(flagXMDevDir, flagVerbose, flagNoColor, flagNoPathFix)
+		}
+		initContext(flagXMDevDir, flagVerbose, flagNoColor, flagNoPathFix)
+		cfg := Cfg()
+		sniffScheduler = discovery.NewScheduler(&cfg.Sniff, cfg.Core.CacheDir, cfg.Core.ManifestDir)
 		if isInteractiveEntry(cmd) {
 			// 启动嗅探在后台运行，其逐工具日志不能盖住 TUI；先重定向到日志文件。
 			redirectInteractiveLogs()

@@ -7,7 +7,7 @@
 //  1. 平台：dep.Platforms 非空且不含当前 GOOS/"any" → 不满足（平台原因）；
 //  2. 存在性：xdev 已装（current/<tool> 生效）优先；否则 exec.LookPath
 //     （跳过 xdev shim/install 目录——那是 xdev 自身的软链，不算外部安装）；
-//  3. 版本：dep.MinVersion 非空且检测到可解析版本 → CompareSemver 比较；
+//  3. 版本：dep.MinVersion 非空且检测到可解析版本 → 按依赖工具的版本规则比较；
 //     版本未知/不可解析 → 宽松判定"存在即满足"（记录原因，不误报）。
 //
 // 注意：getVersion 会派生子进程（2s 超时），本 API 用于详情页按需调用，
@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/xmdemt/xdev/internal/manifest"
-	"github.com/xmdemt/xdev/internal/util"
 )
 
 // DependencyStatus 单个依赖约束的检查结果。
@@ -95,13 +94,14 @@ func (a *App) checkDependency(d manifest.Dependency) DependencyStatus {
 
 	// 3. 版本检查：MinVersion 非空时才比较（加载时已清空非法 MinVersion）。
 	if d.MinVersion != "" {
-		if ver == "" || !looksLikeVersion(ver) {
+		order, comparable := manifest.CompareToolVersions(d.Tool, ver, d.MinVersion)
+		if !comparable {
 			// 版本未知/不可解析 → 存在即满足（宽松，记录原因）。
 			st.Satisfied = true
 			st.ReasonCode = "version_unknown"
 			return st
 		}
-		if util.CompareSemver(ver, d.MinVersion) < 0 {
+		if order < 0 {
 			st.ReasonCode = "version_low"
 			st.ReasonParams = map[string]string{"installed": ver, "required": d.MinVersion}
 			return st
@@ -149,26 +149,4 @@ func platformMatches(platforms []string) bool {
 		}
 	}
 	return false
-}
-
-// looksLikeVersion 宽松判断版本串是否可比较（数字开头，容忍 "v" 前缀）。
-// CompareSemver 对垃圾串隐式返回 0 比较，需先做轻量预检避免误报"版本过低"。
-// 至少要求首段为纯数字（如 "22.0.0"、"v1.2.3"），拒绝 "22oops"、"r29" 等非 semver 串。
-func looksLikeVersion(s string) bool {
-	s = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "v"))
-	if s == "" {
-		return false
-	}
-	// 首段（到第一个 "." 或末尾）必须全为数字。
-	end := strings.IndexByte(s, '.')
-	first := s
-	if end > 0 {
-		first = s[:end]
-	}
-	for _, c := range first {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return len(first) > 0
 }

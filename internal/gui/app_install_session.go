@@ -202,8 +202,10 @@ func (a *App) StartInstall(spec InstallSpec) (string, error) {
 			if spec.Kind == "sub-tool" {
 				err = a.installSubToolContext(ctx, spec)
 			} else {
-				pm, _ := findPMDefByName(spec.Tool)
-				err = a.installPackageManagerViaScriptContext(ctx, pm)
+				err = spec.pmDefinition.checkExecution(spec.PMDigest)
+				if err == nil {
+					err = a.installPackageManagerViaScriptContext(ctx, *spec.pmDefinition)
+				}
 			}
 			return err
 		default:
@@ -226,20 +228,39 @@ func (a *App) normalizeInstallSpec(spec InstallSpec) (InstallSpec, string, error
 	resource := spec.Tool
 	switch spec.Kind {
 	case "package-manager":
-		pm, found := findPMDefByName(spec.Tool)
-		if found && pm.installCommand != "" {
-			break
+		pm, found, err := a.lookupPM(spec.Tool)
+		if err != nil {
+			return spec, "", err
 		}
-		if found && pm.toolName != "" {
-			spec.Tool = pm.toolName
+		if found {
+			if err := pm.checkExecution(spec.PMDigest); err != nil {
+				return spec, "", err
+			}
+			spec.pmDefinition = &pm
+			if pm.installCommand != "" {
+				break
+			}
+			if pm.definition.Origin.Authorize("") != nil {
+				return spec, "", fmt.Errorf("%s has no script installation", spec.Tool)
+			}
+			if pm.toolName != "" {
+				spec.Tool = pm.toolName
+			}
 		}
 		spec.Kind = "tool"
 		resource = spec.Tool
 	case "sub-tool":
-		pm, found := findPMDefByName(spec.Tool)
+		pm, found, err := a.lookupPM(spec.Tool)
+		if err != nil {
+			return spec, "", err
+		}
 		if !found {
 			return spec, "", fmt.Errorf("unknown sub-tool %q", spec.Tool)
 		}
+		if err := pm.checkExecution(spec.PMDigest); err != nil {
+			return spec, "", err
+		}
+		spec.pmDefinition = &pm
 		// Corepack/npm modify the parent Node installation; pip modifies
 		// Python. Use the actual writer's resource, not the UI alias.
 		resource = pm.parentTool

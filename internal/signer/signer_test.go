@@ -273,11 +273,7 @@ func TestRootPublicKey_Placeholder(t *testing.T) {
 	}
 }
 
-// TestRootPublicKey_CorruptValueLogsAndReturnsNil (F-48): a corrupt
-// embedded key (bad base64, or decodable but not 32 bytes) must still
-// return nil — the documented "verification disabled" semantics — and
-// must log an ERROR-level warning instead of failing silently.
-func TestRootPublicKey_CorruptValueLogsAndReturnsNil(t *testing.T) {
+func TestRootPublicKey_CorruptValueRefused(t *testing.T) {
 	cases := []struct {
 		name string
 		b64  string
@@ -300,11 +296,11 @@ func TestRootPublicKey_CorruptValueLogsAndReturnsNil(t *testing.T) {
 				log.SetFlags(prevFlags)
 			}()
 
-			if got := RootPublicKey(); got != nil {
-				t.Errorf("RootPublicKey() = %v, want nil for corrupt key", got)
+			if got := RootPublicKey(); got == nil {
+				t.Error("bad key must not select absent branch")
 			}
-			if HasRootKey() {
-				t.Error("HasRootKey() = true, want false for corrupt key")
+			if !HasRootKey() {
+				t.Error("bad key must still require verification")
 			}
 			out := buf.String()
 			if !strings.Contains(out, "ERROR") {

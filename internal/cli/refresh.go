@@ -74,7 +74,12 @@ func refreshOne(cmd *cobra.Command, toolName string) error {
 		return unsupportedToolErr(toolName)
 	}
 
-	versions := t2.Versions()
+	ranked := append([]manifest.Version(nil), t2.VersionList...)
+	manifest.SortToolVersionsByRelease(toolName, ranked)
+	versions := make([]string, 0, len(ranked))
+	for _, v := range ranked {
+		versions = append(versions, v.Version)
+	}
 	totalCount := len(versions)
 	added := totalCount - existingCount
 	if added < 0 {
@@ -86,26 +91,8 @@ func refreshOne(cmd *cobra.Command, toolName string) error {
 		return nil
 	}
 
-	// Update the latest field **only when it advances**.
-	//
-	// F-29（P1）：修复前是无条件 `t2.Latest = versions[0]`，而
-	// t2.Versions() 返回的是 manifest.VersionList 的**磁盘顺序**
-	// （LoadToolManifests 只按文件名排序工具、不按版本新旧排序，
-	// 见 internal/manifest/index.go:91）——磁盘上版本列表若不是降序
-	// （手工编辑、合并遗留、外部工具写入），这一行就会把 latest
-	// **静默降级**成列表里的第一个（往往是旧版本），进而让
-	// `xdev install <tool>`（默认版本 = latest）装回旧版本。
-	//
-	// 现在：newestVersion 走 manifest.SortVersionsByRelease 的**全序**
-	// （semver 主键 → 发布日期次键 → 原串末键，票 27 的实现）。
-	//
-	// 第八轮审计 R8-2：写回门**必须复用同一个全序**。旧实现用
-	// `util.CompareSemver(candidate, current) > 0` 做门，与 newestVersion 是两套
-	// 排序：数字段相同、发布日期不同时（真实语料 clion/goland/webstorm 的
-	// `2026.2` vs `2026.2.0.1`），全序判「更新」而 CompareSemver 判「相等」，
-	// latest **永远推不上去**且无任何提示。现在两者都用
-	// manifest.VersionReleaseNewer，从根上消除分裂。
-	if candidate := newestVersion(t2.VersionList); shouldUpdateLatest(t2.VersionList, candidate, t2.Latest) {
+	// Release precedence selects the candidate; promotion also requires a usable archive.
+	if candidate := newestToolVersion(toolName, t2.VersionList); shouldUpdateToolLatest(toolName, t2.VersionList, candidate, t2.Latest) {
 		previous := t2.Latest
 		t2.Latest = candidate
 		// 第七轮审计 F-29：写回必须走**文本级外科写**，不能整文件 MarshalTool 重排
@@ -133,43 +120,32 @@ func refreshOne(cmd *cobra.Command, toolName string) error {
 	return nil
 }
 
-// newestVersion 返回 versions 里「最新」的那个版本串（空列表返回 ""）。
-//
-// F-29（P1）：判据是 manifest.SortVersionsByRelease 的**全序**（票 27：
-// semver 主键 → 发布日期次键 → 原串末键），而不是磁盘顺序——旧 refresh 用
-// `versions[0]` 取最高版本，在磁盘列表非降序时会把 latest 静默降级。
-//
-// 在副本上排序，不改动调用方的切片（refresh 随后还要用它打印预览）。
+// newestVersion retains the generic numeric scheme for existing callers.
 func newestVersion(versions []manifest.Version) string {
-	if len(versions) == 0 {
-		return ""
-	}
-	sorted := make([]manifest.Version, len(versions))
-	copy(sorted, versions)
-	manifest.SortVersionsByRelease(sorted)
-	return sorted[0].Version
+	return newestToolVersion("", versions)
 }
 
-// shouldUpdateLatest 报告 candidate 是否应当**替换**当前的 latest 值。
-//
-// 2026-10-26（架构评估修复）：本函数改为委托 manifest.CanPromoteLatest ——
-// 与 discovery/scheduler.go 共用**同一个**判据。修复前两处各写一套：
-// 这里是 VersionReleaseNewer 全序，scheduler 是 util.CompareSemver，
-// 而且两边都**不检查候选是否可安装**。
-//
-// 新增的关键条件：候选必须带结构完整的 archive。否则嗅探发现的占位版本
-// （只有版本号、无 archives）会被推成 latest，而 `xdev install <tool>`
-// 默认就装 latest —— 直接失败。实测命中 android-ndk（r29 → "30"）。
-//
-// 保留原有语义：候选等于现值时不写回（少一次无谓的文件改动，
-// 也就少一次抹掉注释的机会）。
+func newestToolVersion(tool string, versions []manifest.Version) string {
+	values := make([]string, 0, len(versions))
+	for _, v := range versions {
+		values = append(values, v.Version)
+	}
+	latest, _ := manifest.NewestToolVersion(tool, values)
+	return latest
+}
+
+// shouldUpdateLatest retains the generic numeric scheme for existing callers.
 func shouldUpdateLatest(versions []manifest.Version, candidate, current string) bool {
+	return shouldUpdateToolLatest("", versions, candidate, current)
+}
+
+func shouldUpdateToolLatest(tool string, versions []manifest.Version, candidate, current string) bool {
 	// refresh 的候选来自“已发现版本”列表，预发布处理与 scheduler 一致：
 	// 稳定 latest 不被预发布劫持，同一预发布通道内允许推进。
 	allowPre := current == "" ||
 		(manifest.IsPrerelease(current) &&
 			util.PrereleaseChannel(candidate) == util.PrereleaseChannel(current))
-	return manifest.CanPromoteLatest(versions, candidate, current, allowPre)
+	return manifest.CanPromoteToolLatest(tool, versions, candidate, current, allowPre)
 }
 
 func refreshAll(cmd *cobra.Command) error {

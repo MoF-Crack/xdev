@@ -63,6 +63,7 @@ import (
 	"unsafe"
 
 	"github.com/xmdemt/xdev/internal/util"
+	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -157,6 +158,7 @@ func UseInMemoryUserPathForTesting(initial string) (get func() string, restore f
 	prevLockFn := userPathLockPathFn
 
 	inMemoryUserPathMu.Lock()
+	prevStore := inMemoryUserPath
 	inMemoryUserPath = &store
 	userPathReadFn = func() (string, error) {
 		inMemoryUserPathMu.Lock()
@@ -184,7 +186,7 @@ func UseInMemoryUserPathForTesting(initial string) (get func() string, restore f
 		},
 		func() {
 			inMemoryUserPathMu.Lock()
-			inMemoryUserPath = nil
+			inMemoryUserPath = prevStore
 			userPathReadFn = prevRead
 			userPathWriteFn = prevWrite
 			inMemoryUserPathMu.Unlock()
@@ -195,45 +197,6 @@ func UseInMemoryUserPathForTesting(initial string) (get func() string, restore f
 		}
 }
 
-// withUserPathLock serializes PATH read-modify-write cycles across
-// processes. Security (L-2 fix): every PATH mutator does
-// read-registry → modify → write-registry; concurrent xdev processes
-// (GUI + CLI, or two CLI invocations) could otherwise drop each other's
-// entries. The lock file lives under ~/.xdev/.locks — a fixed, user-owned
-// location that does not depend on config resolution.
-//
-// # Reentrancy (A-11, Round 9)
-//
-// The underlying util.AcquireFileLock is an OS byte-range lock
-// (Windows LockFileEx / Unix flock) and is **not** reentrant. Re-acquiring
-// the same lock file from the same process fails, so before this fix a
-// nested call stalled for the full 10s contention timeout and then took the
-// err != nil branch below — i.e. it logged "degraded" and ran its critical
-// section with **no cross-process serialization at all** (the exact PATH
-// lost-update this lock exists to prevent), plus a 10s UI freeze.
-//
-// The measured behaviour, and why the guard is shaped the way it is:
-//
-//   - same goroutine, nested → the inner acquire fails only after the full
-//     10s contention timeout (verified: elapsed=10.08s plus the
-//     "userpath lock degraded" WARN), so the inner critical section ran
-//     **unserialized** — the PATH lost-update this lock exists to prevent —
-//     and the caller (GUI) froze for 10s;
-//   - same process, a *different* goroutine → the inner acquire fails
-//     immediately instead (verified: two 300ms critical sections took 604ms
-//     total, i.e. the second caller waited out the first one's section rather
-//     than the 10s timeout) and then degrades. That shape is therefore
-//     unchanged here: it is genuinely cross-critical-section contention, and
-//     the existing 10s-then-degrade contract (relied on by the lock-location
-//     degradation guard) stays in force.
-//
-// Only the same-goroutine case is intercepted, so the cross-process lock is
-// still taken by exactly the goroutine that owns each critical section and
-// the existing concurrency guards (TestConcurrentPathRMW_NoLostWrite,
-// TestTransformUserPath_ConcurrentLockedMutators_NoLostWrite) keep exercising
-// the real lock. Holders are identified by goroutine id + depth; a bare
-// sync.Mutex is NOT usable because a repeated Lock() from the same goroutine
-// self-deadlocks — precisely the failure mode A-11 reports.
 // WithUserPathLock 是 withUserPathLock 的导出形式，供 env 包外的调用方
 // （如 internal/localmigrate 的旧版目录清理）复用同一把用户 PATH 锁。
 //
@@ -245,67 +208,64 @@ func WithUserPathLock(fn func() error) error {
 }
 
 func withUserPathLock(fn func() error) error {
-	// Depth is consulted first: when this goroutine already holds the lock,
-	// userPathLockDepth is non-zero, so the fast path needs no extra state.
-	if userPathLockDepth > 0 && userPathLockGID == curGoroutineID() {
-		// Nested call on the goroutine that holds the cross-process lock: the
-		// outer frame already serializes this critical section, so running fn
-		// here keeps the guarantee. Re-acquiring the lock file would stall 10s
-		// and then silently run fn with no serialization at all.
-		userPathLockMu.Lock()
-		userPathLockDepth++
-		userPathLockMu.Unlock()
-		defer func() {
-			userPathLockMu.Lock()
-			userPathLockDepth--
-			userPathLockMu.Unlock()
-		}()
-		return fn()
-	}
+	return runWithUserPathLock(fn, false)
+}
 
-	lockPath, pathErr := userPathLockPathFn()
-	if pathErr != nil {
-		// Cannot resolve the lock location — degrade to the unprotected
-		// call rather than failing PATH management entirely.
-		log.Printf("[env] WARN: userpath lock degraded (cannot resolve home dir): %v — proceeding without cross-process PATH serialization", pathErr)
-		return fn()
-	}
-	fl, err := util.AcquireFileLock(lockPath, 10*time.Second)
-	if err != nil {
-		// Contention beyond 10s: proceed without the lock (the registry
-		// write itself is atomic; only the read-modify-write window races).
-		log.Printf("[env] WARN: userpath lock degraded (acquire %s: %v) — proceeding without cross-process PATH serialization", lockPath, err)
-		return fn()
-	}
-	defer fl.Release()
+// Transactions must never compensate registry values without owning the lock.
+func withUserEnvTransactionLock(fn func() error) error {
+	return runWithUserPathLock(fn, true)
+}
 
-	// Record the holder only once the lock is actually held: a degraded call
-	// does not hold anything, and must not be mistaken for a holder by a
-	// nested call (which would then run with no lock at all, silently).
+func runWithUserPathLock(fn func() error, requireFileLock bool) error {
 	gid := curGoroutineID()
 	userPathLockMu.Lock()
-	userPathLockGID = gid
-	userPathLockDepth = 1
+	if gid != 0 && userPathLockGID == gid && userPathLockDepth > 0 {
+		if requireFileLock && !userPathFileLocked {
+			userPathLockMu.Unlock()
+			return fmt.Errorf("user environment transaction requires the cross-process lock")
+		}
+		userPathLockDepth++
+		userPathLockMu.Unlock()
+		defer func() { userPathLockMu.Lock(); userPathLockDepth--; userPathLockMu.Unlock() }()
+		return fn()
+	}
+	userPathLockMu.Unlock()
+
+	// Queue local writers first. Otherwise a burst of goroutines exhausts the
+	// file-lock timeout and they all perform an unprotected read-modify-write.
+	userPathLocalWriter.Lock()
+	defer userPathLocalWriter.Unlock()
+	lockPath, err := userPathLockPathFn()
+	if err == nil {
+		fl, lockErr := util.AcquireFileLock(lockPath, 10*time.Second)
+		err = lockErr
+		if err == nil {
+			defer fl.Release()
+		}
+	}
+	if err != nil {
+		if requireFileLock {
+			return fmt.Errorf("lock user environment: %w", err)
+		}
+		log.Printf("[env] WARN: userpath lock degraded: %v — proceeding without cross-process PATH serialization", err)
+	}
+	userPathLockMu.Lock()
+	userPathLockGID, userPathLockDepth, userPathFileLocked = gid, 1, err == nil
 	userPathLockMu.Unlock()
 	defer func() {
 		userPathLockMu.Lock()
-		userPathLockDepth = 0
-		userPathLockGID = 0
+		userPathLockGID, userPathLockDepth, userPathFileLocked = 0, 0, false
 		userPathLockMu.Unlock()
 	}()
-
 	return fn()
 }
 
-// userPathLockMu guards userPathLockGID / userPathLockDepth, which implement
-// the same-goroutine reentrancy guard described on withUserPathLock. Reads of
-// the pair on the fast path are deliberately lock-free: only the owning
-// goroutine can observe its own non-zero depth, and it publishes both fields
-// under the mutex before any nested call can run.
 var (
-	userPathLockMu    sync.Mutex
-	userPathLockGID   uint64
-	userPathLockDepth int
+	userPathLocalWriter sync.Mutex
+	userPathLockMu      sync.Mutex // protects ownership and nesting depth
+	userPathLockGID     uint64
+	userPathLockDepth   int
+	userPathFileLocked  bool
 )
 
 // curGoroutineID extracts the current goroutine's id from the runtime stack
@@ -617,70 +577,11 @@ func ReadUserPath() (string, error) {
 
 // readUserPathFromRegistry 是真实的注册表实现（HKCU\Environment\Path）。
 func readUserPathFromRegistry() (string, error) {
-	var key uintptr
-	envName, err := syscall.UTF16PtrFromString(`Environment`)
-	if err != nil {
-		return "", err
-	}
-
-	ret, _, _ := procRegOpenKeyExW.Call(
-		_HKEY_CURRENT_USER,
-		uintptr(unsafe.Pointer(envName)),
-		0,
-		_KEY_QUERY_VALUE,
-		uintptr(unsafe.Pointer(&key)),
-	)
-	if ret != 0 {
-		return "", fmt.Errorf("RegOpenKeyExW failed: error %d", ret)
-	}
-	defer procRegCloseKey.Call(key)
-
-	// First call to get the size
-	valueName, err := syscall.UTF16PtrFromString("Path")
-	if err != nil {
-		return "", err
-	}
-
-	var bufSize uint32
-	var valType uint32
-	ret, _, _ = procRegQueryValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(valueName)),
-		0,
-		uintptr(unsafe.Pointer(&valType)),
-		0,
-		uintptr(unsafe.Pointer(&bufSize)),
-	)
-	if ret == _ERROR_FILE_NOT_FOUND {
-		return "", nil
-	}
-	if ret != 0 && ret != _ERROR_MORE_DATA {
-		return "", fmt.Errorf("RegQueryValueExW (size) failed: error %d", ret)
-	}
-
-	if bufSize == 0 {
-		return "", nil
-	}
-
-	// Second call to get the actual data
-	buf := make([]uint16, bufSize/2+1)
-	ret, _, _ = procRegQueryValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(valueName)),
-		0,
-		uintptr(unsafe.Pointer(&valType)),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&bufSize)),
-	)
-	if ret != 0 {
-		return "", fmt.Errorf("RegQueryValueExW (read) failed: error %d", ret)
-	}
-
-	return syscall.UTF16ToString(buf), nil
+	return readRegistryPath(registry.CURRENT_USER, `Environment`)
 }
 
 // WriteUserPath writes the "Path" value to HKCU\Environment as
-// REG_EXPAND_SZ so that %USERPROFILE% etc. are expanded at runtime.
+// its existing string type (REG_EXPAND_SZ for a previously absent PATH).
 // Security (M-2): Rejects paths that exceed the Windows environment block
 // limit (~32,767 characters) to prevent silent truncation by CreateProcess.
 //
@@ -740,7 +641,11 @@ func TransformUserPath(transform func(current string) (next string, changed bool
 			changed = false
 			return lerr
 		}
-		return WriteUserPath(next)
+		if err := WriteUserPath(next); err != nil {
+			changed = false
+			return err
+		}
+		return nil
 	})
 	if err == nil && changed {
 		BroadcastEnvironmentChange()
@@ -775,7 +680,11 @@ func TransformSystemPath(transform func(current string) (next string, changed bo
 			changed = false
 			return lerr
 		}
-		return WriteSystemPath(next)
+		if err := WriteSystemPath(next); err != nil {
+			changed = false
+			return err
+		}
+		return nil
 	})
 	if err == nil && changed {
 		BroadcastEnvironmentChange()
@@ -810,46 +719,7 @@ func writeUserPathFromRegistry(path string) error {
 	if err := checkPathLength(path); err != nil {
 		return err
 	}
-	var key uintptr
-	envName, err := syscall.UTF16PtrFromString(`Environment`)
-	if err != nil {
-		return err
-	}
-
-	ret, _, _ := procRegOpenKeyExW.Call(
-		_HKEY_CURRENT_USER,
-		uintptr(unsafe.Pointer(envName)),
-		0,
-		_KEY_SET_VALUE,
-		uintptr(unsafe.Pointer(&key)),
-	)
-	if ret != 0 {
-		return fmt.Errorf("RegOpenKeyExW (set) failed: error %d", ret)
-	}
-	defer procRegCloseKey.Call(key)
-
-	utf16, err := syscall.UTF16FromString(path)
-	if err != nil {
-		return err
-	}
-	valueName, err := syscall.UTF16PtrFromString("Path")
-	if err != nil {
-		return err
-	}
-
-	bufSize := uint32(len(utf16)) * 2
-	ret, _, _ = procRegSetValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(valueName)),
-		0,
-		_REG_EXPAND_SZ,
-		uintptr(unsafe.Pointer(&utf16[0])),
-		uintptr(bufSize),
-	)
-	if ret != 0 {
-		return fmt.Errorf("RegSetValueExW failed: error %d", ret)
-	}
-	return nil
+	return writeRegistryPath(registry.CURRENT_USER, `Environment`, path)
 }
 
 // allowedEnvVarNames is kept as a local alias for util.AllowedEnvVarNames
@@ -1188,7 +1058,7 @@ func GetUserEnvVar(name string) (string, error) {
 // Used by the installer for env vars declared in tool manifests.
 func GetUserEnvVarTrusted(name string) (string, error) {
 	all := GetAllUserEnvVars()
-	v, ok := all[name]
+	v, ok := lookupUserEnv(all, name)
 	if !ok {
 		return "", fmt.Errorf("env var %q not found", name)
 	}
@@ -1208,7 +1078,7 @@ func GetUserEnvVarsBatch(names []string) (map[string]string, error) {
 	all := GetAllUserEnvVars()
 	result := make(map[string]string, len(names))
 	for _, n := range names {
-		result[n] = all[n]
+		result[n], _ = lookupUserEnv(all, n)
 	}
 	return result, nil
 }
@@ -1651,68 +1521,9 @@ func EnumEnvVars(level string) ([]EnvPair, error) {
 
 // ReadSystemPath reads the "Path" value from HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment.
 // Returns "" if the value does not exist. Requires admin privileges for write access.
-func ReadSystemPath() (string, error) {
-	var key uintptr
-	envName, err := syscall.UTF16PtrFromString(`SYSTEM\CurrentControlSet\Control\Session Manager\Environment`)
-	if err != nil {
-		return "", err
-	}
+func ReadSystemPath() (string, error) { return systemPathReadFn() }
 
-	ret, _, _ := procRegOpenKeyExW.Call(
-		_HKEY_LOCAL_MACHINE,
-		uintptr(unsafe.Pointer(envName)),
-		0,
-		_KEY_QUERY_VALUE,
-		uintptr(unsafe.Pointer(&key)),
-	)
-	if ret != 0 {
-		return "", fmt.Errorf("RegOpenKeyExW HKLM failed: error %d (may need admin privileges)", ret)
-	}
-	defer procRegCloseKey.Call(key)
-
-	valueName, err := syscall.UTF16PtrFromString("Path")
-	if err != nil {
-		return "", err
-	}
-
-	var bufSize uint32
-	var valType uint32
-	ret, _, _ = procRegQueryValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(valueName)),
-		0,
-		uintptr(unsafe.Pointer(&valType)),
-		0,
-		uintptr(unsafe.Pointer(&bufSize)),
-	)
-	if ret == _ERROR_FILE_NOT_FOUND {
-		return "", nil
-	}
-	if ret != 0 && ret != _ERROR_MORE_DATA {
-		return "", fmt.Errorf("RegQueryValueExW HKLM (size) failed: error %d", ret)
-	}
-
-	if bufSize == 0 {
-		return "", nil
-	}
-
-	buf := make([]uint16, bufSize/2+1)
-	ret, _, _ = procRegQueryValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(valueName)),
-		0,
-		uintptr(unsafe.Pointer(&valType)),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&bufSize)),
-	)
-	if ret != 0 {
-		return "", fmt.Errorf("RegQueryValueExW HKLM (read) failed: error %d", ret)
-	}
-
-	return syscall.UTF16ToString(buf), nil
-}
-
-// WriteSystemPath writes the "Path" value to HKLM\...\Environment as REG_EXPAND_SZ.
+// WriteSystemPath writes the "Path" value to HKLM\...\Environment with its existing string type.
 // Requires admin privileges.
 //
 // 审查 S-04（2026-10-24）：长度闸门下沉到本函数内部。此前只有
@@ -1720,145 +1531,31 @@ func ReadSystemPath() (string, error) {
 // SetEnvVar(machine) 直调本函数时跳过了检查，超限值会被 CreateProcess
 // 静默截断。放在这里即成为单一判据，新增调用点自动受约束。
 func WriteSystemPath(path string) error {
-	if lerr := checkPathLength(path); lerr != nil {
-		return lerr
-	}
-	// 测试防污染闸门（见 realUserRegistryMutationCount 的文档）：真实写尝试计数。
-	realUserRegistryMutationCount.Add(1)
-	var key uintptr
-	envName, err := syscall.UTF16PtrFromString(`SYSTEM\CurrentControlSet\Control\Session Manager\Environment`)
-	if err != nil {
+	if err := checkPathLength(path); err != nil {
 		return err
 	}
-
-	ret, _, _ := procRegOpenKeyExW.Call(
-		_HKEY_LOCAL_MACHINE,
-		uintptr(unsafe.Pointer(envName)),
-		0,
-		_KEY_SET_VALUE,
-		uintptr(unsafe.Pointer(&key)),
-	)
-	if ret != 0 {
-		return fmt.Errorf("RegOpenKeyExW HKLM (set) failed: error %d (may need admin privileges)", ret)
-	}
-	defer procRegCloseKey.Call(key)
-
-	utf16, err := syscall.UTF16FromString(path)
-	if err != nil {
-		return err
-	}
-	valueName, err := syscall.UTF16PtrFromString("Path")
-	if err != nil {
-		return err
-	}
-
-	bufSize := uint32(len(utf16)) * 2
-	ret, _, _ = procRegSetValueExW.Call(
-		key,
-		uintptr(unsafe.Pointer(valueName)),
-		0,
-		_REG_EXPAND_SZ,
-		uintptr(unsafe.Pointer(&utf16[0])),
-		uintptr(bufSize),
-	)
-	if ret != 0 {
-		return fmt.Errorf("RegSetValueExW HKLM failed: error %d", ret)
-	}
-	return nil
+	return systemPathWriteFn(path)
 }
 
-// CleanupSystemPath cleans up the system PATH by:
-//  1. Fixing double-backslash paths (\\)
-//  2. Removing quoted entries
-//  3. Removing corrupted entries (e.g. entries that start with " but don't end with ")
-//
-// Returns (changed, error). Requires admin privileges to write.
-//
-// Ticket 10 (audit-fixes / P0-11): the whole read-modify-write cycle runs
-// under withUserPathLock, like the other PATH mutators — two concurrent
-// xdev processes previously raced the registry and silently rolled back
-// each other's entries. The same lock as the user-PATH writers is reused
-// deliberately: the registry keys differ, so this only adds serialization
-// (no deadlock risk).
+// CleanupSystemPath repairs ordinary drive-path entries inside the existing
+// cross-process lock. The registry write still requires administrative access.
 func CleanupSystemPath() (bool, error) {
-	var changed bool
-	err := withUserPathLock(func() error {
-		c, err := cleanupSystemPathLocked()
-		changed = c
-		return err
+	return TransformSystemPath(func(current string) (string, bool, error) {
+		next := cleanWindowsSystemPath(current)
+		return next, next != current, nil
 	})
-	return changed, err
-}
-
-func cleanupSystemPathLocked() (bool, error) {
-	current, err := ReadSystemPath()
-	if err != nil {
-		return false, err
-	}
-
-	parts := strings.Split(current, ";")
-	var cleanParts []string
-	changed := false
-
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed == "" {
-			changed = true
-			continue
-		}
-
-		// Fix double-backslash
-		if strings.Contains(trimmed, "\\\\") {
-			trimmed = strings.ReplaceAll(trimmed, "\\\\", "\\")
-			changed = true
-		}
-
-		// Remove surrounding quotes
-		if (strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"")) ||
-			(strings.HasPrefix(trimmed, "'") && strings.HasSuffix(trimmed, "'")) {
-			trimmed = trimmed[1 : len(trimmed)-1]
-			changed = true
-		}
-
-		// Skip corrupted entries that start with quote but don't close it
-		// e.g. "D:\\Env\\jdk17\bin;D:\\Env\\jdk17\lib"
-		if strings.HasPrefix(trimmed, "\"") && !strings.HasSuffix(trimmed, "\"") {
-			// This is a corrupted entry — the quote opened but never closed,
-			// meaning it swallowed the next entry. Try to split it.
-			// Remove the leading quote
-			trimmed = strings.TrimPrefix(trimmed, "\"")
-			changed = true
-		}
-
-		if trimmed == "" {
-			changed = true
-			continue
-		}
-
-		cleanParts = append(cleanParts, trimmed)
-	}
-
-	if changed {
-		newPath := strings.Join(cleanParts, ";")
-		if err := WriteSystemPath(newPath); err != nil {
-			return false, err
-		}
-		BroadcastEnvironmentChange()
-	}
-
-	return changed, nil
 }
 
 // CleanupUserPath cleans up the user PATH by removing xdev-owned entries
 // that are anchored at the given home directory:
 //  1. Removing <home>\install\ subtree entries (always)
-//  2. Removing <home>\current\ subtree entries — only in shim mode,
+//  2. Removing <home>\current\ subtree entries — only in shim/auto mode,
 //     except <home>\current\xdev (the xdev self junction)
 //  3. Removing the bare home root entry itself
 //  4. Removing legacy xmdevenvmt entries (historical substrings, kept
 //     intentionally — see release note)
-//  5. Fixing double-backslash paths (\\) and quoted entries
-//  6. Ensuring shimDir is the first entry (shim mode only)
+//  5. Repairing redundant separators in ordinary local drive entries
+//  6. Ensuring shimDir is the first entry (shim/auto modes)
 //
 // Ticket 11 (audit-fixes / P0-13): the match used to be drive-agnostic
 // substring rules ("\xdev\install\", "\xdev\current\" plus isXDevRoot
@@ -1867,171 +1564,19 @@ func cleanupSystemPathLocked() (bool, error) {
 // The rules are now anchored at the caller-provided home; nothing outside
 // home is ever touched (except the documented legacy substrings).
 //
-// pathMode should be "shim" or "direct".
+// pathMode accepts "shim", "auto" and "direct".
 // Returns true if any changes were made.
 //
 // Ticket 10 (audit-fixes / P0-11): the whole read-modify-write cycle runs
 // under withUserPathLock, like the other PATH mutators.
 func CleanupUserPath(home, shimDir, pathMode string) (bool, error) {
-	var changed bool
-	err := withUserPathLock(func() error {
-		c, err := cleanupUserPathLocked(home, shimDir, pathMode)
-		changed = c
-		return err
-	})
-	return changed, err
-}
-
-func cleanupUserPathLocked(home, shimDir, pathMode string) (bool, error) {
-	// 第九轮审计 A-13（P2）：**空锚点必须保守退出**。
-	//
-	// 缺陷原形：filepath.Clean("") 返回 "."，于是 home/shimDir 为空时锚点退化
-	// 为 "."：
-	//   - `normalized == homeClean` 对 PATH 里任何 `.` 条目为真 → 删除与 xdev
-	//     无关的 `.`（实测 "…;.;C:\Tools;…" → ";…;C:\Tools;…"）；
-	//   - shim 前插逻辑认为 "." 不在列表里 → 前插一个**空条目**（等价于 CWD）。
-	//
-	// 选择「直接 (false, nil)」而不是「换个更保守的锚点」：home/shimDir 为空
-	// 时调用方没有给出任何可判定的归属边界，本函数**无法区分**哪些条目属于
-	// xdev —— 任何猜测（跳过 home 锚定只做 legacy 子串清理、或按 shim 名匹配）
-	// 都仍然会删掉用户条目。全量保留是唯一不产生误删的语义，也符合 ticket 11
-	// 「nothing outside home is ever touched」的既定原则：没有 home 就没有
-	// 「outside home」的判据。
-	//
-	// 前置条件由调用方保证（doctor/install/GUI 均传 cfg.Core.XMDevDir /
-	// cfg.Core.ShimDir，为空说明配置尚未解析）；此处保守退出会把问题暴露给
-	// 调用方，而不是静默破坏用户 PATH。
 	if strings.TrimSpace(home) == "" || strings.TrimSpace(shimDir) == "" {
 		return false, nil
 	}
-
-	current, err := ReadUserPath()
-	if err != nil {
-		return false, err
-	}
-
-	parts := strings.Split(current, ";")
-	var cleanParts []string
-	changed := false
-	shimDirClean := strings.ToLower(filepath.Clean(shimDir))
-
-	// Home-anchored match prefixes (ticket 11 / P0-13).
-	homeClean := strings.ToLower(filepath.Clean(home))
-	sep := string(os.PathSeparator)
-	homeInstallPrefix := homeClean + sep + "install" + sep
-	homeCurrentPrefix := homeClean + sep + "current" + sep
-	homeCurrentXdev := homeClean + sep + "current" + sep + "xdev"
-
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed == "" {
-			changed = true
-			continue
-		}
-
-		// Fix double-backslash
-		if strings.Contains(trimmed, "\\\\") {
-			trimmed = strings.ReplaceAll(trimmed, "\\\\", "\\")
-			changed = true
-		}
-
-		// Remove surrounding quotes
-		trimmed = strings.Trim(trimmed, "\"")
-
-		normalized := strings.ToLower(filepath.Clean(trimmed))
-
-		// Skip <home>\install\ subtree entries (e.g. E:\XDev\install\java\25)
-		if strings.HasPrefix(normalized, homeInstallPrefix) {
-			changed = true
-			continue
-		}
-
-		// Skip <home>\current\ subtree entries (e.g. E:\XDev\current\java\bin)
-		// Only in shim mode — in direct mode these are needed.
-		// 但保留 <home>\current\xdev（xdev 自身的 junction 路径）
-		if pathMode == "shim" && strings.HasPrefix(normalized, homeCurrentPrefix) && normalized != homeCurrentXdev {
-			changed = true
-			continue
-		}
-
-		// Skip the bare home root entry itself (e.g. E:\XDev) — the old
-		// implementation copied xdev.exe into the root and added the root
-		// to PATH; the current layout uses current/xdev instead. Unlike
-		// the old isXDevRoot rule, ONLY the actual home is matched.
-		if normalized == homeClean {
-			changed = true
-			continue
-		}
-
-		// Skip legacy xmdevenvmt shim paths (historical substrings —
-		// documented release-note exception)
-		if strings.Contains(normalized, "\\ximulocaldev\\xmdevenvmt\\shims") {
-			changed = true
-			continue
-		}
-
-		// Skip legacy xmdevenvmt source/build directory entries
-		if strings.Contains(normalized, "\\reverseeng\\xmdevenvmt") {
-			changed = true
-			continue
-		}
-
-		// Skip leftover InitConfig deadlock-test TempDir entries that
-		// previous test runs wrote into the real user PATH.
-		if strings.Contains(normalized, "\\testinitconfig_nodeadlock") {
-			changed = true
-			continue
-		}
-
-		cleanParts = append(cleanParts, trimmed)
-	}
-
-	// Ensure shim directory is first (shim mode only)
-	if pathMode == "shim" {
-		hasShimDir := false
-		for _, p := range cleanParts {
-			if strings.ToLower(filepath.Clean(p)) == shimDirClean {
-				hasShimDir = true
-				break
-			}
-		}
-		if !hasShimDir {
-			cleanParts = append([]string{shimDir}, cleanParts...)
-			changed = true
-		} else if strings.ToLower(filepath.Clean(cleanParts[0])) != shimDirClean {
-			// shim dir exists but not first, move it to front
-			var rest []string
-			for _, p := range cleanParts {
-				if strings.ToLower(filepath.Clean(p)) == shimDirClean {
-					continue
-				}
-				rest = append(rest, p)
-			}
-			cleanParts = append([]string{shimDir}, rest...)
-			changed = true
-		}
-	} else {
-		// direct mode: remove shim directory from PATH (not needed)
-		var withoutShim []string
-		for _, p := range cleanParts {
-			if strings.ToLower(filepath.Clean(p)) == shimDirClean {
-				changed = true
-				continue
-			}
-			withoutShim = append(withoutShim, p)
-		}
-		cleanParts = withoutShim
-	}
-
-	if changed {
-		newPath := strings.Join(cleanParts, ";")
-		if err := WriteUserPath(newPath); err != nil {
-			return false, err
-		}
-		BroadcastEnvironmentChange()
-	}
-
-	return changed, nil
+	return TransformUserPath(func(current string) (string, bool, error) {
+		next := cleanWindowsUserPath(current, home, shimDir, pathMode)
+		return next, next != current, nil
+	})
 }
 
 // isXDevRoot 判断路径是否为 XDev 根目录（如 E:\XDev）
@@ -2062,6 +1607,10 @@ func isXDevRoot(normalized string) bool {
 // terminal. This is a best-effort notification — Windows does not
 // guarantee that all running processes receive WM_SETTINGCHANGE.
 func BroadcastEnvironmentChange() {
+	environmentBroadcastFn()
+}
+
+func broadcastEnvironmentChangeToWindows() {
 	user32 := syscall.NewLazyDLL("user32.dll")
 	sendMsg := user32.NewProc("SendMessageTimeoutW")
 
@@ -2163,8 +1712,9 @@ var (
 // inMemoryUserEnvStore 是测试注入的内存用户环境后端（map + 互斥锁）。
 // 三个方法与接缝函数的签名一一对应。
 type inMemoryUserEnvStore struct {
-	mu   sync.Mutex
-	vars map[string]string
+	mu    sync.Mutex
+	vars  map[string]string
+	types map[string]uint32
 }
 
 func (s *inMemoryUserEnvStore) enumerate() map[string]string {
@@ -2177,17 +1727,51 @@ func (s *inMemoryUserEnvStore) enumerate() map[string]string {
 	return out
 }
 
-func (s *inMemoryUserEnvStore) write(name, value string) error {
+func (s *inMemoryUserEnvStore) snapshot(name string) (UserEnvSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for original, raw := range s.vars {
+		if strings.EqualFold(original, name) {
+			typ := s.types[original]
+			if typ == 0 {
+				typ = UserEnvExpandString
+			}
+			return UserEnvSnapshot{Exists: true, Name: original, Raw: raw, Type: typ}, nil
+		}
+	}
+	return UserEnvSnapshot{}, nil
+}
+
+func (s *inMemoryUserEnvStore) write(name, value string) error {
+	return s.writeTyped(name, value, UserEnvExpandString)
+}
+
+func (s *inMemoryUserEnvStore) writeTyped(name, value string, typ uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for original := range s.vars {
+		if strings.EqualFold(original, name) {
+			name = original
+			break
+		}
+	}
+	if s.types == nil {
+		s.types = make(map[string]uint32)
+	}
 	s.vars[name] = value
+	s.types[name] = typ
 	return nil
 }
 
 func (s *inMemoryUserEnvStore) del(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.vars, name)
+	for original := range s.vars {
+		if strings.EqualFold(original, name) {
+			delete(s.vars, original)
+			delete(s.types, original)
+		}
+	}
 	return nil
 }
 
@@ -2208,11 +1792,14 @@ func UseInMemoryUserEnvForTesting(vars map[string]string) (restore func()) {
 		store.vars[k] = v
 	}
 	prevEnum, prevWrite, prevDelete := getAllUserEnvVarsFn, userEnvWriteFn, userEnvDeleteFn
+	prevSnapshot, prevTyped := userEnvSnapshotFn, userEnvTypedWriteFn
+	userEnvSnapshotFn, userEnvTypedWriteFn = store.snapshot, store.writeTyped
 	getAllUserEnvVarsFn = store.enumerate
 	userEnvWriteFn = store.write
 	userEnvDeleteFn = store.del
 	return func() {
 		getAllUserEnvVarsFn, userEnvWriteFn, userEnvDeleteFn = prevEnum, prevWrite, prevDelete
+		userEnvSnapshotFn, userEnvTypedWriteFn = prevSnapshot, prevTyped
 	}
 }
 

@@ -3,9 +3,9 @@ package project
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/resolver"
 	"github.com/xmdemt/xdev/internal/util"
 )
@@ -33,10 +33,26 @@ func ResolveInstalled(installRoot, tool, spec string) (string, bool) {
 	// ListVersionDirNames 已过滤掉非版本目录
 	// （gopath / export_templates / unsafe-version-blocked 等）。
 	versions, err := util.ListVersionDirNames(toolDir)
-	if err != nil || len(versions) == 0 {
+	if err != nil {
+		return "", false
+	}
+	return resolveInstalledVersions(tool, spec, versions)
+}
+
+func resolveInstalledVersions(tool, spec string, versions []string) (string, bool) {
+	if tool == "" || spec == "" || len(versions) == 0 {
 		return "", false
 	}
 
+	// NDK public release aliases are exact directory pins, including revisions such as r27c.
+	if tool == "android-ndk" && strings.HasPrefix(spec, "r") && manifest.IsComparableToolVersion(tool, spec) {
+		for _, v := range versions {
+			if v == spec {
+				return v, true
+			}
+		}
+		return "", false
+	}
 	sp, err := resolver.Parse(spec)
 	if err != nil {
 		return "", false
@@ -53,27 +69,32 @@ func ResolveInstalled(installRoot, tool, spec string) (string, bool) {
 		return "", false
 	}
 
-	// latest / lts / range：在已安装集合上取最高匹配。
-	// latest/lts 需要调用方传入具体值；这里没有远端信息，
-	// 传空串让 resolver 走「available 里的最高者」分支。
-	if resolved, err := resolver.Resolve(sp, versions, "", ""); err == nil && resolved != "" {
-		for _, v := range versions {
-			if v == resolved {
-				return v, true
-			}
+	if sp.Kind == resolver.KindLatest || sp.Kind == resolver.KindLTS {
+		return manifest.NewestToolVersion(tool, versions)
+	}
+
+	// Keep the generic constraint grammar and membership rules. Rank only
+	// matching directory names using the same precedence as update consumers.
+	var matches []string
+	for _, v := range versions {
+		if _, err := resolver.Resolve(sp, []string{v}, "", ""); err == nil {
+			matches = append(matches, v)
 		}
+	}
+	if best, ok := manifest.NewestToolVersion(tool, matches); ok {
+		return best, true
 	}
 
 	// resolver 未命中时的兜底：按数值降序取第一个满足前缀的。
 	// 覆盖 resolver 对非标准版本串（如 "21.0.1+9"）解析失败的情况。
-	return fallbackMatch(versions, spec)
+	return fallbackMatch(tool, versions, spec)
 }
 
 // fallbackMatch 在 resolver 解析失败时做保守匹配。
 //
 // 只处理「规格是版本前缀」这一种情况（3.11 → 3.11.x），
 // 其余一律不匹配 —— 宁可不切版本，也不要切到用户没预期的版本。
-func fallbackMatch(versions []string, spec string) (string, bool) {
+func fallbackMatch(tool string, versions []string, spec string) (string, bool) {
 	spec = strings.TrimSpace(strings.TrimPrefix(spec, "v"))
 	if spec == "" {
 		return "", false
@@ -84,13 +105,7 @@ func fallbackMatch(versions []string, spec string) (string, bool) {
 			matched = append(matched, v)
 		}
 	}
-	if len(matched) == 0 {
-		return "", false
-	}
-	sort.Slice(matched, func(i, j int) bool {
-		return util.CompareSemver(matched[i], matched[j]) > 0
-	})
-	return matched[0], true
+	return manifest.NewestToolVersion(tool, matched)
 }
 
 // DirFor 返回某个工具版本的安装目录（绝对路径）。

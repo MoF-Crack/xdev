@@ -15,6 +15,8 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/discovery"
+	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -237,6 +239,16 @@ Output format:
 	}
 }
 
+func sniffRefreshDiagnostic(result discovery.ToolSniffResult) string {
+	if result.Error != "" {
+		return result.Error
+	}
+	if result.Status != discovery.SniffSuccess {
+		return string(result.Status)
+	}
+	return ""
+}
+
 // showUpdates reads the sniff cache and displays tools with upgrades.
 func showUpdates(cmd *cobra.Command) error {
 	cfg := Cfg()
@@ -257,9 +269,8 @@ func showUpdates(cmd *cobra.Command) error {
 		return fmt.Errorf("parse sniff cache: %w", err)
 	}
 
-	// Load the manifest catalog to know which tools exist and their installed versions.
+	// Use the catalog's shared install root for inactive tools.
 	cat := loadCatalog()
-	_ = cat // retained for future use (tool manifest comparison)
 
 	installDir := cfg.Core.InstallDir
 	type upgrade struct {
@@ -270,51 +281,36 @@ func showUpdates(cmd *cobra.Command) error {
 	var upgrades []upgrade
 
 	for toolName, result := range cache.Tools {
-		if result.Unsupported || result.Error != "" || len(result.Versions) == 0 {
+		if diag := sniffRefreshDiagnostic(result); diag != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "%s refresh: %s\n", toolName, diag)
+		}
+		latest, found := manifest.NewestToolVersion(toolName, result.Versions)
+		if !found {
 			continue
 		}
-
-		// Check if the tool is installed.
-		toolDir := filepath.Join(installDir, toolName)
-		if _, err := os.Stat(toolDir); os.IsNotExist(err) {
-			continue
-		}
-
-		// Find the active (installed) version.
 		active, ok := util.ActiveVersion(cfg.Core.XMDevDir, toolName)
 		if !ok {
-			// Try to find any installed version.
-			entries, err := os.ReadDir(toolDir)
-			if err != nil || len(entries) == 0 {
+			if _, err := util.SafeName(toolName); err != nil {
 				continue
 			}
-			// Sort by name descending to get latest.
-			sort.Slice(entries, func(i, j int) bool {
-				return entries[i].Name() > entries[j].Name()
-			})
-			active = entries[0].Name()
-		}
-
-		// Sort available versions (highest first).
-		avail := result.Versions
-		sort.Slice(avail, func(i, j int) bool {
-			return util.CompareSemver(avail[i], avail[j]) > 0
-		})
-
-		if len(avail) > 0 {
-			latest := avail[0]
-			if util.CompareSemver(latest, active) > 0 {
-				upgrades = append(upgrades, upgrade{
-					Tool:      toolName,
-					Installed: active,
-					Available: latest,
-				})
+			toolDir := filepath.Join(installDir, toolName)
+			if t, exists := cat.Tool(toolName); exists && t.InstallRoot != "" {
+				candidateDir, err := plugin.NewGeneric(t).InstallDir(installDir, latest)
+				if err != nil {
+					continue
+				}
+				toolDir = filepath.Dir(candidateDir)
 			}
+			versions, _ := util.ListVersionDirNames(toolDir)
+			active, _ = manifest.NewestToolVersion(toolName, versions)
+		}
+		if order, comparable := manifest.CompareToolVersions(toolName, latest, active); comparable && order > 0 {
+			upgrades = append(upgrades, upgrade{Tool: toolName, Installed: active, Available: latest})
 		}
 	}
 
 	if len(upgrades) == 0 {
-		fmt.Println("All tools up to date.")
+		fmt.Println("No upgrades found in cached results.")
 		return nil
 	}
 

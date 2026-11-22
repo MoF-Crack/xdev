@@ -16,11 +16,15 @@ import (
 // 本测试让任何一边的修改都必须同步到另一边。
 func TestBuiltinMatchesYAML(t *testing.T) {
 	dir := repoManifestsDir(t)
-	defs, err := Load(dir)
+	data, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defs, err := parse(data, FileName)
 	if err != nil {
 		t.Fatalf("Load(%s): %v", dir, err)
 	}
-	builtin := Builtin()
+	builtin := builtinDefs()
 
 	if len(defs) != len(builtin) {
 		t.Fatalf("条目数不一致: YAML=%d builtin=%d", len(defs), len(builtin))
@@ -47,7 +51,11 @@ func TestBuiltinMatchesYAML(t *testing.T) {
 // TestLoad_RealFile 确认仓库里的数据文件能被正确解析。
 func TestLoad_RealFile(t *testing.T) {
 	dir := repoManifestsDir(t)
-	defs, err := Load(dir)
+	data, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defs, err := parse(data, FileName)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -69,29 +77,17 @@ func TestLoad_RealFile(t *testing.T) {
 	}
 }
 
-// TestLoad_MissingFile 确认文件缺失时返回错误（供 LoadOrDefault 回退）。
-func TestLoad_MissingFile(t *testing.T) {
-	if _, err := Load(t.TempDir()); err == nil {
-		t.Error("文件不存在时应返回错误")
-	}
-}
-
-// TestLoadOrDefault_FallsBack 确认任何加载失败都回退到内置定义。
-func TestLoadOrDefault_FallsBack(t *testing.T) {
-	// 空目录 → 文件不存在 → 回退
-	defs := LoadOrDefault(t.TempDir())
-	if len(defs) == 0 {
-		t.Fatal("应回退到内置定义，得到空")
-	}
-
-	// 损坏的 YAML → 回退
+func TestLoad_MissingOnlyFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte("package_managers: [broken\n"), 0o644); err != nil {
+	defs, err := Load(dir)
+	if err != nil || len(defs) == 0 || defs[0].Origin.Kind != "builtin" {
+		t.Fatalf("missing: %v %v", defs, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, FileName), []byte("package_managers: [broken\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	defs = LoadOrDefault(dir)
-	if len(defs) == 0 {
-		t.Fatal("YAML 损坏时应回退到内置定义")
+	if _, err := Load(dir); err == nil {
+		t.Fatal("damaged external PM catalog accepted")
 	}
 }
 

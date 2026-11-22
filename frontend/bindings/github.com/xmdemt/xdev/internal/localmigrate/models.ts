@@ -6,17 +6,10 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
- * LegacyDirInfo 描述一个发现的旧版目录
+ * LegacyDirInfo describes an old root and its suggested replacement.
  */
 export class LegacyDirInfo {
-    /**
-     * 旧目录完整路径，如 E:\XimuLocalDev\xmdevenvmt
-     */
     "path": string;
-
-    /**
-     * 对应的新目录路径，如 E:\XDev
-     */
     "newPath": string;
 
     /** Creates a new LegacyDirInfo instance. */

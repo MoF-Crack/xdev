@@ -55,6 +55,12 @@
       </SectionCard>
 
       <SectionCard :title="t('remote.instances')">
+        <section v-if="diagnostics.length" data-role="remote-diagnostics" role="status" aria-live="polite">
+          <h3>{{t('remote.instance_diagnostics')}}</h3>
+          <p v-for="(diagnostic, index) in diagnostics" :key="diagnostic.path + ':' + index">
+            <span v-if="diagnostic.path">{{diagnostic.path}}: </span>{{diagnostic.message}}
+          </p>
+        </section>
         <article v-for="inst in instances" :key="inst.id" :data-instance="inst.id">
           <h3>{{inst.id}} <StatusBadge :tone="inst.status==='running'?'success':'neutral'">{{inst.status}}</StatusBadge></h3>
           <CopyableValue v-for="path in inst.addresses||[]" :key="path" :value="path" :copy-label="t('remote.copy_address')"/>
@@ -84,6 +90,7 @@ import StatusBadge from '../components/StatusBadge.vue';
 const props = defineProps({
   t: { type: Function, required: true },
   instances: { type: Array, default: () => [] },
+  diagnostics: { type: Array, default: () => [] },
   loading: Boolean,
   error: [String, Error],
   creating: Boolean,

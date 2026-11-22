@@ -2,11 +2,13 @@ package installer
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 
 	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/pathmode"
 	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/util"
 )
@@ -75,6 +77,8 @@ type activationPlan struct {
 	envVarsWritten bool
 }
 
+func (plan *activationPlan) usesShims() bool { return pathmode.UsesShims(plan.pathMode) }
+
 // planActivate 计算一次激活要做什么。**纯计算，不写磁盘。**
 //
 // 返回的 plan 在 apply 之前就可被测试检视 —— 这是把
@@ -115,13 +119,12 @@ func (i *Installer) planActivate(p plugin.Plugin, installPath, ver string) (*act
 		}
 	}
 
-	switch plan.pathMode {
-	case "direct":
+	if !plan.usesShims() {
 		// direct：把 current/<tool>/bin 与 manifest 的 path_append 写进 PATH。
 		currentToolDir := filepath.Join(currentDir, p.Name())
 		plan.binPaths = append(env.ToolBinPaths(p.Name(), currentToolDir),
 			p.PathAppend(installPath)...)
-	default: // shim / auto：创建 shim
+	} else { // shim / auto：创建 shim
 		for _, name := range p.Shims() {
 			if err := util.ValidateShimName(name); err != nil {
 				// F-26：非法 shim 名跳过而非中止整个激活 —— 一个坏名字
@@ -150,7 +153,9 @@ func (i *Installer) rollback(plan *activationPlan, p plugin.Plugin) {
 	}
 	// 1. 撤销 env 变量写入。
 	if plan.envVarsWritten {
-		i.removeUserEnvVars(p)
+		if err := i.removeUserEnvVars(p); err != nil {
+			log.Printf("[install] rollback user environment cleanup: %v", err)
+		}
 		plan.envVarsWritten = false
 	}
 

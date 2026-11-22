@@ -79,10 +79,18 @@ func newConfigSetCmd() *cobra.Command {
 		Short: "Update a config value and save the file",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := configSet(Cfg(), args[0], args[1]); err != nil {
-				return err
-			}
-			if err := Cfg().Save(); err != nil {
+			cfg := Cfg()
+			if args[0] == "core.xmdevenv_dir" {
+				if err := validateLocalAbsPath(args[1]); err != nil {
+					return err
+				}
+				if err := cfg.SwitchRoot(args[1]); err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "Selected a new root; existing installations were kept at the previous root. Derived directory overrides were reset.")
+			} else if err := cfg.Update(func(next *config.Config) error {
+				return configSet(next, args[0], args[1])
+			}); err != nil {
 				return err
 			}
 			fmt.Printf("✔ %s = %s\n", args[0], args[1])
@@ -128,6 +136,13 @@ func configSet(cfg *config.Config, key, value string) error {
 	section, field := parts[0], parts[1]
 	switch section {
 	case "core":
+		if field == "xmdevenv_dir" {
+			if err := validateLocalAbsPath(value); err != nil {
+				return err
+			}
+			cfg.SetRootDir(value)
+			return nil
+		}
 		return setCoreField(&cfg.Core, field, value)
 	case "path":
 		return setPathField(&cfg.Path, field, value)

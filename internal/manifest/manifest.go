@@ -17,8 +17,7 @@
 //  2. Disk directory — $XMDEV_HOME/manifests/ for user-customized manifests
 //  3. Repository-relative — manifests/ in the source tree (dev mode)
 //
-// LoadCatalogCached() loads from the first available source and caches
-// the result in memory for the process lifetime.
+// LoadCatalogCached caches the merged catalog on disk.
 //
 // # Remote Version Discovery
 //
@@ -41,10 +40,6 @@
 package manifest
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -56,8 +51,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/xmdemt/xdev/internal/util"
 	"gopkg.in/yaml.v3"
@@ -311,6 +304,9 @@ func (a Archive) Installable() bool {
 // installable on Linux instead of 48. Normalizing both sides also keeps
 // fixtures/manifests that spell linux as "amd64" working.
 func CanonicalArch(goos, goarch string) string {
+	if goarch == "x86_64" && goos == "windows" {
+		return "amd64"
+	}
 	if goarch == "amd64" && (goos == "linux" || goos == "darwin") {
 		return "x86_64"
 	}
@@ -320,19 +316,8 @@ func CanonicalArch(goos, goarch string) string {
 // Installable reports whether this version can be installed on the given
 // platform (os/arch matching follows the manifest convention: "any" matches).
 func (v Version) Installable(goos, goarch string) bool {
-	wantArch := CanonicalArch(goos, goarch)
-	for _, a := range v.Archives {
-		if a.OS != goos && a.OS != "any" {
-			continue
-		}
-		if a.Arch != "any" && CanonicalArch(goos, a.Arch) != wantArch {
-			continue
-		}
-		if a.Installable() {
-			return true
-		}
-	}
-	return false
+	_, ok := v.ArchiveForCurrent(goos, goarch)
+	return ok
 }
 
 // HasInstallableVersion reports whether at least one version is installable on
@@ -421,111 +406,11 @@ type Catalog struct {
 	tools map[string]*Tool
 }
 
-// LoadCatalog loads every manifests/<tool>.yaml in the given directory.
-//
-// When embedded manifests are available (via InitEmbedded), this function
-// returns a merged catalog: embedded as the base, overlaid with on-disk
-// manifests from dir (top-level and third-party/). For tools in both
-// sources, embedded versions retain their trusted fields and new disk
-// versions are appended. A valid, installable disk latest advances the
-// default only when newer and in the allowed release channel. Tools found
-// only in one source are retained as declared.
-//
-// If the requested directory does not exist OR is empty, we
-// transparently fall back to the repo-relative manifests/ directory
-// (development mode).  This keeps the first-run experience working
-// even before the user has populated their personal manifest cache.
-func LoadCatalog(dir string) (*Catalog, error) {
-	if embeddedFS != nil {
-		return loadMergedCatalog(dir)
-	}
+// LoadCatalog loads embedded and on-disk manifests. Without an embedded base,
+// an absent or empty disk collection falls back to the development checkout.
+func LoadCatalog(dir string) (*Catalog, error) { return LoadCatalogCached(dir, "") }
 
-	// Loading and caching must choose the same source, including a directory
-	// containing only third-party manifests (which is not an empty source).
-	dir = resolveManifestDir(dir)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		// No manifests anywhere: keep first-run commands usable.
-		return &Catalog{tools: map[string]*Tool{}}, nil
-	}
-	return loadFromDir(dir)
-}
-
-// loadMergedCatalog loads embedded manifests as the base, then overlays
-// on-disk manifests from dir. For tools in both sources the merge is
-// EMBEDDED-FIRST: the embedded VersionList is the base and only disk
-// versions not already present are appended; all other fields
-// (DisplayName, Shims, EnvVars, archives of existing versions, ...) come
-// from the embedded copy. A disk edit of a built-in field therefore has
-// NO effect — the practical attack/change surface of an on-disk override
-// is a NEW version entry (audit-fixes ticket 13 note; corrected here
-// because the previous wording claimed "disk as override", the opposite
-// of the implementation).
-func loadMergedCatalog(dir string) (*Catalog, error) {
-	// Step 1: Load embedded catalog as the base.
-	embedded, err := loadFromEmbedded()
-	if err != nil {
-		return nil, fmt.Errorf("load embedded manifests: %w", err)
-	}
-
-	// Step 2: Load on-disk manifests (Spec 024: parallel; single-file
-	// failures are skipped, mirroring the original `continue` semantics).
-	// 确定性保证（L3 审查修复）：并行解析到按索引保存的 slice，g.Wait()
-	// 后按目录顺序串行写入 disk map（重复 Tool.Name 后胜出——与原串行一致）。
-	disk := &Catalog{tools: map[string]*Tool{}}
-	if _, statErr := os.Stat(dir); statErr == nil {
-		// 2026-10-26（架构评估修复）：收集逻辑已抽到 collectManifestRefs，
-		// 与 loadFromDir 共用同一份 —— 两个加载出口各自实现一次正是
-		// 本缺陷的成因（修了一个、漏了另一个）。
-		refs, collectErr := collectManifestRefs(dir)
-		if collectErr != nil {
-			return nil, collectErr
-		}
-
-		n := len(refs)
-		results := make([]*Tool, n)
-		g, _ := errgroup.WithContext(context.Background())
-		sem := make(chan struct{}, parallelLoadConcurrency)
-		for i := range refs {
-			i := i
-			sem <- struct{}{}
-			g.Go(func() error {
-				defer func() { <-sem }()
-				name := refs[i].name
-				path := filepath.Join(refs[i].dir, name)
-				data, readErr := os.ReadFile(path)
-				if readErr != nil {
-					// D-06（审计 P1-11）：容错语义保留（坏的单条跳过，
-					// 不影响整体加载），但必须可见——静默跳过时坏
-					// manifest 完全查不出原因（用户只看到工具"不见了"）。
-					// log 包自带互斥，可安全用于这里的并行 goroutine。
-					log.Printf("[manifest] WARNING: skip unreadable %s: %v", name, readErr)
-					return nil // 单文件读失败跳过（与原 continue 一致）
-				}
-				var t Tool
-				if err := yaml.Unmarshal(data, &t); err != nil {
-					// D-06（审计 P1-11）：同上，解析失败也只跳过该条 +
-					// 告警，不回退为整体加载失败。
-					log.Printf("[manifest] WARNING: skip unparseable %s: %v", name, err)
-					return nil // 单文件解析失败跳过（与原 continue 一致）
-				}
-				if t.Name == "" {
-					t.Name = strings.TrimSuffix(name, ".yaml")
-				}
-				t.ValidateDepends()
-				t.ValidateFormFactor()
-				results[i] = &t
-				return nil
-			})
-		}
-		_ = g.Wait() // 错误忽略（单文件失败跳过，与原 continue 语义一致）
-		// 按收集顺序串行写入（重复名后胜出：顶层先、third-party 后）。
-		for i := 0; i < n; i++ {
-			if results[i] != nil {
-				disk.tools[results[i].Name] = results[i]
-			}
-		}
-	}
-
+func mergeCatalogs(embedded, disk *Catalog) *Catalog {
 	// Step 3: Merge.  Start with embedded, then apply disk overrides.
 	for name, diskTool := range disk.tools {
 		if embeddedTool, exists := embedded.tools[name]; exists {
@@ -548,12 +433,12 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 					existingVersions[dv.Version] = true
 				}
 			}
-			SortVersionsByRelease(merged.VersionList)
-			// Pin the embedded effective default before sorting appended versions:
-			// DefaultVersion also falls back to LTS / the first list entry.
+			SortToolVersionsByRelease(name, merged.VersionList)
+			// Preserve the trusted effective default before appended versions can
+			// change the first-entry fallback. Only an accepted disk latest moves it.
 			current := embeddedTool.DefaultVersion()
 			merged.Latest = current
-			if canPromoteCatalogLatest(merged.VersionList, diskTool.Latest, current) {
+			if CanPromoteToolLatest(name, merged.VersionList, diskTool.Latest, current, true) {
 				merged.Latest = diskTool.Latest
 			}
 			// 形态字段按 disk-override 策略合并（Spec 023 T-A6，B2-A6-04）：
@@ -573,7 +458,7 @@ func loadMergedCatalog(dir string) (*Catalog, error) {
 	}
 
 	embedded.markInstallability()
-	return embedded, nil
+	return embedded
 }
 
 // loadOneFile 封装"读字节 + 解析 + 校验"的单文件处理逻辑，
@@ -600,119 +485,14 @@ func loadOneFile(filename string, read func() ([]byte, error)) (*Tool, error) {
 // 大目录下同时打开过多文件描述符。
 const parallelLoadConcurrency = 8
 
-// loadFromDir reads every .yaml file in dir and returns a Catalog.
-// Spec 024：用 errgroup 并行读取+解析，并发度限制到 8。
-//
-// 确定性保证（L3 审查修复）：
-//   - 并行解析到按文件索引保存的 slice，g.Wait() 后按目录顺序串行写入
-//     catalog map，重复 Tool.Name 时"后文件胜出"——与原串行实现一致。
-//   - 错误按目录顺序返回第一个遇到的错误（而非最先完成的 goroutine 错误）。
-//   - 不在首个错误时 cancel 其他 goroutine：manifest 为小体积本地文件，
-//     全量解析成本可接受，确定性优先于提前取消。
+// loadFromDir is the strict, disk-only loader (no fallback).
 func loadFromDir(dir string) (*Catalog, error) {
-	refs, err := collectManifestRefs(dir)
+	files, err := collectSource(os.DirFS(dir), "disk")
 	if err != nil {
 		return nil, err
 	}
-
-	n := len(refs)
-	results := make([]*Tool, n)
-	errs := make([]error, n)
-
-	g, _ := errgroup.WithContext(context.Background())
-	sem := make(chan struct{}, parallelLoadConcurrency)
-
-	for i := range refs {
-		i := i
-		sem <- struct{}{}
-		g.Go(func() error {
-			defer func() { <-sem }()
-			name := refs[i].name
-			path := filepath.Join(refs[i].dir, name)
-			t, perr := loadOneFile(name, func() ([]byte, error) {
-				return os.ReadFile(path)
-			})
-			if perr != nil {
-				errs[i] = perr
-				return nil // 收集错误，按目录顺序处理（不在首错时 cancel）
-			}
-			results[i] = t
-			return nil
-		})
-	}
-	_ = g.Wait()
-
-	// 按收集顺序处理：返回第一个遇到的错误；否则写入 map（重复名后胜出）。
-	c := &Catalog{tools: map[string]*Tool{}}
-	for i := 0; i < n; i++ {
-		if errs[i] != nil {
-			return nil, errs[i]
-		}
-		if results[i] != nil {
-			c.tools[results[i].Name] = results[i]
-		}
-	}
-	c.markInstallability()
-	return c, nil
-}
-
-// manifestRef 是一个待加载的清单文件位置。
-type manifestRef struct{ dir, name string }
-
-// collectManifestRefs 收集 dir 下要加载的清单文件：
-//
-//  1. dir 顶层的 *.yaml；
-//  2. dir/third-party/ 子目录的 *.yaml（**仅**这个子目录，不递归）。
-//
-// # 为什么必须包含 third-party/（2026-10-26 架构评估修复）
-//
-// `xdev manifest add` / `manifest update` 把第三方清单写进
-// <ManifestDir>/third-party/（见 cli.thirdPartyManifestDir）。
-// 修复前两个加载出口（loadFromDir / loadMergedCatalog）都只读顶层并
-// `if e.IsDir() { continue }` 跳过全部子目录，于是「✔ added manifest」
-// 的清单**永远不会出现在 catalog 里** —— 用户加了工具却发现不存在，
-// 且没有任何错误提示。
-//
-// # 为什么只认 third-party/ 而不递归
-//
-// manifest 目录是用户可写的。若递归所有子目录，用户在 manifests/ 下
-// 建个备份目录或仓库副本，就会把重复/过期的工具定义一起加载进来。
-// 只认这一个约定目录，语义明确且可控。
-//
-// # 收集顺序
-//
-// 顶层先、third-party 后。同名工具时**后收集者胜出**（调用方按顺序
-// 写入 map），因此用户显式添加的第三方清单可以覆盖同名磁盘清单。
-func collectManifestRefs(dir string) ([]manifestRef, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read manifest dir %s: %w", dir, err)
-	}
-
-	var refs []manifestRef
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		refs = append(refs, manifestRef{dir: dir, name: e.Name()})
-	}
-
-	thirdPartyDir := filepath.Join(dir, thirdPartySubdir)
-	if fi, statErr := os.Stat(thirdPartyDir); statErr == nil && fi.IsDir() {
-		if tpEntries, readErr := os.ReadDir(thirdPartyDir); readErr == nil {
-			for _, e := range tpEntries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-					continue
-				}
-				refs = append(refs, manifestRef{dir: thirdPartyDir, name: e.Name()})
-			}
-		} else {
-			// 子目录不可读不致命（可能权限/瞬时错误），但要可见。
-			log.Printf("[manifest] WARNING: cannot read %s: %v", thirdPartyDir, readErr)
-		}
-	}
-
-	return refs, nil
+	catalog, _, err := parseSource(files, false)
+	return catalog, err
 }
 
 // thirdPartySubdir 是第三方清单的约定子目录名。
@@ -781,59 +561,12 @@ func (t *Tool) Versions() []string {
 	return out
 }
 
-// SortVersionsByRelease orders versions newest-first using the total order
-// implemented by versionReleaseNewer. Used after sniff-merge so
-// available-version lists are not YAML-append order.
-func SortVersionsByRelease(versions []Version) {
-	sort.SliceStable(versions, func(i, j int) bool {
-		return versionReleaseNewer(versions[i], versions[j])
-	})
-}
+// SortVersionsByRelease applies the ordinary numeric release scheme.
+func SortVersionsByRelease(versions []Version) { SortToolVersionsByRelease("", versions) }
 
-// versionReleaseNewer is the comparator behind SortVersionsByRelease
-// (audit-fixes ticket 27 / P1-10).
-//
-// Keys, in order:
-//  1. semver (SemVer 2.0.0, pre-release aware) — the PRIMARY key;
-//  2. release date — a tie-break only, with a missing date counting as the
-//     zero time so a dated entry sorts before an undated one;
-//  3. the raw version string — final deterministic tie-break.
-//
-// The pre-fix comparator put the DATE first. That relation is NOT
-// transitive on real manifest data: with A(1.0.0, 2024-06), B(2.0.0,
-// 2024-01) and C(1.5.0, no date) it yields A>B (date), B>C (semver), C>A
-// (semver) — a cycle. Sort order then depended on input order, and the
-// list top (used for `latest` and UpdatePackageManager) could resolve to an
-// OLDER version merely because its release string was newer. Ordering by
-// the (semver, date, string) tuple is a total order by construction.
-func versionReleaseNewer(a, b Version) bool {
-	if c := util.CompareSemver(a.Version, b.Version); c != 0 {
-		return c > 0
-	}
-	ta, oka := parseReleaseDate(a.Release)
-	tb, okb := parseReleaseDate(b.Release)
-	if oka != okb {
-		// Equal semver, only one side carries a date: the dated entry
-		// sorts first (an absent date is the zero time).
-		return oka
-	}
-	if oka && okb && !ta.Equal(tb) {
-		return ta.After(tb)
-	}
-	return a.Version > b.Version
-}
-
-// VersionReleaseNewer 报告 a 是否应当排在 b 之前，使用与 SortVersionsByRelease
-// **完全相同**的全序（semver → 发布日期 → 原串）。
-//
-// 第八轮审计 R8-2：`xdev refresh` 原先用 `newestVersion`（本全序）挑出候选，
-// 却用 `util.CompareSemver` 做写回门 —— 两套排序不一致。数字段相同、发布日期
-// 不同时（真实语料：clion/goland/webstorm 的 `2026.2` vs `2026.2.0.1`），全序判
-// 「更新」而 CompareSemver 判「相等」，于是 latest **永远推不上去**，且没有任何
-// 提示。导出本函数让写回门复用同一判据，从根上消除两套排序的分裂。
-func VersionReleaseNewer(a, b Version) bool {
-	return versionReleaseNewer(a, b)
-}
+// VersionReleaseNewer compares display order with the ordinary release scheme.
+func VersionReleaseNewer(a, b Version) bool { return versionReleaseNewer(a, b) }
+func versionReleaseNewer(a, b Version) bool { return toolReleaseNewer("", a, b) }
 
 func parseReleaseDate(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
@@ -862,102 +595,38 @@ func (t *Tool) FindVersion(v string) (*Version, bool) {
 // current platform, falling back to "any" if no exact match exists.
 // The Form field is ignored (legacy form-agnostic selection).
 func (v *Version) ArchiveForCurrent(osName, arch string) (*Archive, bool) {
-	return v.archiveFormAgnostic(osName, arch)
+	return v.ArchiveForCurrentWithForm(osName, arch, "")
 }
 
-// archiveFormAgnostic implements the legacy form-agnostic selection:
-//  1. exact os+arch
-//  2. os + any arch
-//  3. any os
-//
-// It is shared by ArchiveForCurrent and by ArchiveForCurrentWithForm
-// with an empty formFilter. Spec 028: this must NOT delegate back to
-// ArchiveForCurrentWithForm — that caused infinite mutual recursion
-// (fatal error: stack overflow) on every archive resolution.
-func (v *Version) archiveFormAgnostic(osName, arch string) (*Archive, bool) {
-	// 1. exact os+arch
+// ArchiveForCurrentWithForm ranks installable candidates by platform first
+// (exact OS/arch, exact OS/any arch, any OS), then exact form before generic.
+// An empty form accepts all forms. Equal ranks retain manifest order.
+func (v *Version) ArchiveForCurrentWithForm(osName, arch, form string) (*Archive, bool) {
+	var best *Archive
+	bestRank := 6
+	wantArch := CanonicalArch(osName, arch)
 	for i := range v.Archives {
 		a := &v.Archives[i]
-		if a.OS == osName && a.Arch == arch {
-			return a, true
+		if !a.Installable() || (a.OS != osName && a.OS != "any") || (a.Arch != "any" && CanonicalArch(osName, a.Arch) != wantArch) {
+			continue
+		}
+		rank := 0
+		if a.OS != osName {
+			rank = 4
+		} else if a.Arch == "any" {
+			rank = 2
+		}
+		if form != "" && a.Form != form {
+			if a.Form != "" {
+				continue
+			}
+			rank++
+		}
+		if rank < bestRank {
+			best, bestRank = a, rank
 		}
 	}
-	// 2. os + any arch
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == osName && a.Arch == "any" {
-			return a, true
-		}
-	}
-	// 3. any os
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == "any" {
-			return a, true
-		}
-	}
-	return nil, false
-}
-
-// ArchiveForCurrentWithForm is like ArchiveForCurrent but additionally
-// filters by form factor (Spec 025). When formFilter is non-empty:
-//  1. exact os+arch+form match
-//  2. os+arch with Form=="" (form-agnostic archive, backward compatible)
-//  3. os+any+form
-//  4. os+any with Form==""
-//  5. any os+form
-//  6. any os with Form=="" (existing fallback)
-//
-// When formFilter is empty, behaves identically to ArchiveForCurrent
-// (ignores Form field entirely) via archiveFormAgnostic — no recursion.
-func (v *Version) ArchiveForCurrentWithForm(osName, arch, formFilter string) (*Archive, bool) {
-	if formFilter == "" {
-		return v.archiveFormAgnostic(osName, arch)
-	}
-	// formFilter != "": prefer exact form, allow Form=="" fallback
-	// Pass 1: exact os+arch+form
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == osName && a.Arch == arch && a.Form == formFilter {
-			return a, true
-		}
-	}
-	// Pass 2: exact os+arch with Form=="" (form-agnostic)
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == osName && a.Arch == arch && a.Form == "" {
-			return a, true
-		}
-	}
-	// Pass 3: os+any+form
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == osName && a.Arch == "any" && a.Form == formFilter {
-			return a, true
-		}
-	}
-	// Pass 4: os+any with Form==""
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == osName && a.Arch == "any" && a.Form == "" {
-			return a, true
-		}
-	}
-	// Pass 5: any os+form
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == "any" && a.Form == formFilter {
-			return a, true
-		}
-	}
-	// Pass 6: any os with Form==""
-	for i := range v.Archives {
-		a := &v.Archives[i]
-		if a.OS == "any" && a.Form == "" {
-			return a, true
-		}
-	}
-	return nil, false
+	return best, best != nil
 }
 
 // DefaultVersion returns Latest, falling back to LTS, then the first
@@ -1238,233 +907,4 @@ func detectFormat(url string) string {
 	default:
 		return "zip"
 	}
-}
-
-// --- Catalog caching ---
-
-// cachedCatalog is the JSON-serializable form of a Catalog used for
-// disk-based caching.  The internal map is converted to a sorted slice
-// so the serialization is deterministic.
-type cachedCatalog struct {
-	Tools []*Tool `json:"tools"`
-}
-
-// LoadCatalogCached works like LoadCatalog but uses a disk-based cache
-// to avoid re-parsing YAML files on every invocation.
-//
-// If cacheDir is empty, caching is skipped and LoadCatalog is called
-// directly (backward compatible).  The cache file is stored at
-// <cacheDir>/manifest-cache.dat and is validated against a fingerprint
-// of the manifest directory (file names + mod times + sizes).
-func LoadCatalogCached(manifestDir string, cacheDir string) (*Catalog, error) {
-	if cacheDir == "" {
-		return LoadCatalog(manifestDir)
-	}
-
-	// When embedded manifests are available, use the executable's
-	// modification time as the base fingerprint, AND include the
-	// on-disk manifest directory fingerprint so that sniff-discovered
-	// updates invalidate the cache (SC-001).
-	var fp string
-	if embeddedFS != nil {
-		// Base: executable modtime (embedded manifest freshness).
-		if exe, err := os.Executable(); err == nil {
-			if info, err := os.Stat(exe); err == nil {
-				fp = fmt.Sprintf("embedded:%d:%d", info.ModTime().UnixNano(), info.Size())
-			}
-		}
-		if fp == "" {
-			fp = "embedded:unknown"
-		}
-		// Extend: include on-disk manifest directory fingerprint if it exists.
-		if diskFP, err := fingerprintDiskDir(manifestDir); err == nil {
-			fp += "|disk:" + diskFP
-		} else {
-			fp += "|disk:missing"
-		}
-	} else {
-		// Resolve the actual directory that will be used for loading,
-		// so the fingerprint matches the real source of truth.
-		actualDir := resolveManifestDir(manifestDir)
-		fp = fingerprintDir(actualDir)
-	}
-	cachePath := filepath.Join(cacheDir, "manifest-cache.dat")
-
-	// Try to read the cached catalog.
-	if data, err := os.ReadFile(cachePath); err == nil {
-		var entry struct {
-			Fingerprint string        `json:"fingerprint"`
-			Catalog     cachedCatalog `json:"catalog"`
-		}
-		if json.Unmarshal(data, &entry) == nil && entry.Fingerprint == fp {
-			// Cache hit — reconstruct the Catalog.
-			c := &Catalog{tools: map[string]*Tool{}}
-			for _, t := range entry.Catalog.Tools {
-				c.tools[t.Name] = t
-			}
-			return c, nil
-		}
-	}
-
-	// Cache miss — load from disk the slow way.
-	cat, err := LoadCatalog(manifestDir)
-	if err != nil {
-		return nil, err
-	}
-
-	// Write cache atomically.
-	if err := os.MkdirAll(cacheDir, 0o755); err == nil {
-		tools := cat.Tools() // already sorted by name
-		entry := struct {
-			Fingerprint string        `json:"fingerprint"`
-			Catalog     cachedCatalog `json:"catalog"`
-		}{
-			Fingerprint: fp,
-			Catalog:     cachedCatalog{Tools: tools},
-		}
-		if data, err := json.Marshal(entry); err == nil {
-			if err := util.AtomicWriteFile(cachePath, data, 0o644); err != nil {
-				log.Printf("[manifest] failed to write cache %s: %v", cachePath, err)
-			}
-		}
-	}
-
-	return cat, nil
-}
-
-// resolveManifestDir selects the disk source for both loading and caching.
-// Only a missing directory or an empty manifest source permits fallback;
-// other read errors must reach the loader instead of hiding broken sources.
-func resolveManifestDir(dir string) string {
-	refs, err := collectManifestRefs(dir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return dir
-	}
-	if len(refs) == 0 {
-		if alt, ok := repoManifestDir(); ok {
-			return alt
-		}
-	}
-	return dir
-}
-
-// loadFromEmbedded reads all YAML manifests baked into the binary.
-// Spec 024：用 errgroup 并行解析，并发度限制到 8。
-//
-// 确定性保证（L3 审查修复）：
-//   - 并行解析到按文件索引保存的 slice，g.Wait() 后按 entries 顺序串行
-//     写入 catalog map（重复 Tool.Name 后胜出——与原串行一致）。
-//   - 错误按 entries 顺序返回第一个遇到的错误。
-//   - 保留原"read embedded"与"parse embedded"两类错误前缀（L3 阻塞项3）。
-func loadFromEmbedded() (*Catalog, error) {
-	entries, err := fs.ReadDir(embeddedFS, ".")
-	if err != nil {
-		return nil, fmt.Errorf("read embedded manifests: %w", err)
-	}
-
-	var yamlNames []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		yamlNames = append(yamlNames, e.Name())
-	}
-
-	n := len(yamlNames)
-	results := make([]*Tool, n)
-	errs := make([]error, n)
-
-	g, _ := errgroup.WithContext(context.Background())
-	sem := make(chan struct{}, parallelLoadConcurrency)
-
-	for i, name := range yamlNames {
-		i, name := i, name
-		sem <- struct{}{}
-		g.Go(func() error {
-			defer func() { <-sem }()
-			data, readErr := fs.ReadFile(embeddedFS, name)
-			if readErr != nil {
-				errs[i] = fmt.Errorf("read embedded %s: %w", name, readErr)
-				return nil
-			}
-			var t Tool
-			if uerr := yaml.Unmarshal(data, &t); uerr != nil {
-				errs[i] = fmt.Errorf("parse embedded %s: %w", name, uerr)
-				return nil
-			}
-			if t.Name == "" {
-				t.Name = strings.TrimSuffix(name, ".yaml")
-			}
-			t.ValidateDepends()
-			t.ValidateFormFactor()
-			results[i] = &t
-			return nil
-		})
-	}
-	_ = g.Wait()
-
-	// 按 entries 顺序处理：返回第一个错误；否则写入 map（重复名后胜出）。
-	c := &Catalog{tools: map[string]*Tool{}}
-	for i := 0; i < n; i++ {
-		if errs[i] != nil {
-			return nil, errs[i]
-		}
-		if results[i] != nil {
-			c.tools[results[i].Name] = results[i]
-		}
-	}
-	c.markInstallability()
-	return c, nil
-}
-
-// fingerprintDir hashes the selected source paths, modification times and
-// sizes without re-reading YAML contents. File changes must update metadata.
-func fingerprintDir(dir string) string { return computeFingerprint(dir) }
-
-// fingerprintDiskDir is like fingerprintDir but returns an empty string
-// (no error) when the directory does not exist, allowing callers to
-// embed it in composite fingerprints.
-func fingerprintDiskDir(dir string) (string, error) {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return "", nil
-	}
-	return computeFingerprint(dir), nil
-}
-
-// computeFingerprint is the shared implementation.
-func computeFingerprint(dir string) string {
-	// Use the loader's exact source set and precedence, not a second directory
-	// walk that can silently omit third-party additions, updates or removals.
-	refs, err := collectManifestRefs(dir)
-	if err != nil {
-		// If we can't read the dir, the fingerprint will be unique
-		// each time, effectively disabling the cache.
-		return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
-	}
-
-	root, err := filepath.Abs(dir)
-	if err != nil {
-		return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
-	}
-	var sb strings.Builder
-	// Version the fingerprint so caches written by the top-level-only loader
-	// are invalidated even when no third-party file has been added yet.
-	fmt.Fprintf(&sb, "catalog-v2:%q\n", root)
-	for _, ref := range refs {
-		path := filepath.Join(ref.dir, ref.name)
-		info, err := os.Stat(path)
-		if err != nil {
-			return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return fmt.Sprintf("err:%v:%d", err, time.Now().UnixNano())
-		}
-		// Include the relative directory: foo.yaml and third-party/foo.yaml
-		// are distinct sources even with identical names, mtimes and sizes.
-		fmt.Fprintf(&sb, "%q:%d:%d\n", filepath.ToSlash(rel), info.ModTime().UnixNano(), info.Size())
-	}
-
-	h := sha256.Sum256([]byte(sb.String()))
-	return fmt.Sprintf("%x", h[:16])
 }

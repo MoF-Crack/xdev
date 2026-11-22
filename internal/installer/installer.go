@@ -197,6 +197,7 @@ type InstallResult struct {
 	URL         string // Archive upstream URL (pre-mirror), for lockfile pinning
 	SHA256      string // Archive SHA-256 (may be empty when manifest omits it)
 	InstallPath string // Local installation directory
+	ArchivePath string // Exact selected cache archive; empty for npm installs
 	Activated   bool   // Whether the version was set as active
 
 	// TOFUWarning is set when the archive had an empty or placeholder SHA-256
@@ -512,6 +513,13 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 	resSpec := spec
 	resURL := arch.URL
 	resSHA := arch.SHA256
+	archivePath := ""
+	if ResolveKind(arch) != manifest.InstallKindNPM {
+		archivePath, err = i.selectedCacheArchivePath(p.Name(), ver, arch)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Ticket 26 (A-07): force reinstall defers the removal of the existing
 	// install tree until the replacement archive has been downloaded and
@@ -551,7 +559,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			log.Printf("[install] Already installed at %s", installPath)
 			if opts.NoActivate {
 				log.Printf("[install] NoActivate set, skipping activation")
-				return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: false}, nil
+				return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, ArchivePath: archivePath, Activated: false}, nil
 			}
 			if err := beginInstallCommit(ctx, opts); err != nil {
 				return nil, err
@@ -564,7 +572,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 				return nil, err
 			}
 			log.Printf("[install] Activation complete: %s@%s", p.Name(), ver)
-			return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: true}, nil
+			return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, ArchivePath: archivePath, Activated: true}, nil
 		}
 	}
 
@@ -656,7 +664,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 
 	if opts.NoActivate {
 		log.Printf("[install] NoActivate set, skipping activation")
-		return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: false}, nil
+		return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, ArchivePath: archivePath, Activated: false}, nil
 	}
 
 	log.Printf("[install] Starting activation")
@@ -681,6 +689,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 			URL:             resURL,
 			SHA256:          resSHA,
 			InstallPath:     installPath,
+			ArchivePath:     archivePath,
 			Activated:       false,
 			ActivationError: err.Error(),
 		}, nil
@@ -689,7 +698,7 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 		onProgress(PhaseActivating, 100, "", "")
 	}
 	log.Printf("[install] Install complete: %s@%s -> %s", p.Name(), ver, installPath)
-	return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, Activated: true}, nil
+	return &InstallResult{Tool: p.Name(), Version: ver, Spec: resSpec, URL: resURL, SHA256: resSHA, InstallPath: installPath, ArchivePath: archivePath, Activated: true}, nil
 }
 
 // downloadWithProgress downloads the archive for a tool version, applying
@@ -701,7 +710,19 @@ func (i *Installer) InstallWithProgress(ctx context.Context, p plugin.Plugin, sp
 //   - Fallback URLs: the original upstream URL and mirror_url are tried if the
 //     primary (mirrored) URL fails
 //   - Progress reporting via the onProgress callback
-func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, opts InstallOptions) error {
+func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, a *manifest.Archive, onProgress ProgressCallback, opts InstallOptions) (resultErr error) {
+	req := downloader.NewAuditRequest(downloader.AuditEntry{Tool: tool, Version: ver, Source: "download"})
+	defer func() { req.Finish(resultErr) }()
+	if _, err := signer.RootPublicKeyChecked(); err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("invalid request: missing archive")
+	}
+	req.Update(downloader.AuditEntry{URL: a.URL, Source: "download"})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	batchIndex, batchTotal := opts.BatchIndex, opts.BatchTotal
 	// F-25: reject an unsafe tool/version BEFORE anything touches the cache.
 	// 上面的 cacheArchivePath 已经给出精确错误；这里改用 E 版本并把诊断错误也
@@ -760,14 +781,11 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 					if onProgress != nil {
 						onProgress(PhaseDownloading, 100, "", "")
 					}
-					downloader.LogAudit(downloader.AuditEntry{
-						Tool:     tool,
-						Version:  ver,
-						URL:      a.URL,
-						SHA256:   cacheHash,
-						Source:   "cache",
-						Verified: true,
-					})
+					info, err := os.Stat(dest)
+					if err != nil {
+						return fmt.Errorf("stat cached archive: %w", err)
+					}
+					req.Update(downloader.AuditEntry{URL: a.URL, SHA256: cacheHash, Source: "cache", Verified: true, Size: info.Size()})
 					return nil
 				}
 			}
@@ -786,12 +804,15 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 				if onProgress != nil {
 					onProgress(PhaseDownloading, 100, "", "")
 				}
-				downloader.LogAudit(downloader.AuditEntry{
-					Tool:    tool,
-					Version: ver,
-					URL:     a.URL,
-					Source:  "cache",
-				})
+				info, err := os.Stat(dest)
+				if err != nil {
+					return fmt.Errorf("stat cached archive: %w", err)
+				}
+				cacheHash, err := util.FileSHA256(dest)
+				if err != nil {
+					return fmt.Errorf("hash cached archive: %w", err)
+				}
+				req.Update(downloader.AuditEntry{URL: a.URL, Source: "cache", SHA256: cacheHash, Size: info.Size()})
 				// TOFU: If the archive had an empty or placeholder SHA-256, compute
 				// the actual hash from the cached file and write to on-disk manifest.
 				if a.SHA256 == "" || util.IsAllZeroHash(a.SHA256) {
@@ -827,6 +848,7 @@ func (i *Installer) downloadWithProgress(ctx context.Context, tool, ver string, 
 		toolManifest = p.Manifest()
 	}
 	dlOpts := downloader.Options{
+		Audit:                req,
 		URL:                  url,
 		Dest:                 dest,
 		ExpectedSHA:          a.SHA256,
@@ -1321,6 +1343,16 @@ func (i *Installer) cacheArchivePath(tool, ver, format string) (string, error) {
 // path components to remove (e.g. strip=1 removes the top-level directory
 // common in Go and Python archives).
 func (i *Installer) extract(tool string, a *manifest.Archive, ver, dest string) error {
+	return i.extractWithContext(context.Background(), tool, a, ver, dest)
+}
+
+func (i *Installer) extractWithContext(ctx context.Context, tool string, a *manifest.Archive, ver, dest string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("missing archive for extraction")
+	}
 	// The cache filename uses the tool name (matching downloadWithProgress).
 	// F-25: the name is validated so a traversal version cannot read/write
 	// outside CacheDir.
@@ -1339,24 +1371,15 @@ func (i *Installer) extract(tool string, a *manifest.Archive, ver, dest string) 
 		return fmt.Errorf("cache miss: %s not found — clear the cache entry and reinstall (`xdev install %s@%s`)", src, tool, ver)
 	}
 	log.Printf("[install] Extracting: src=%s dest=%s format=%s strip=%d", src, dest, a.Format, a.Strip)
-	err = extractor.Extract(src, dest, a.Format, a.Strip)
+	budget, err := extractor.ConfiguredBudget()
 	if err != nil {
-		log.Printf("[install] ERROR: extraction failed: %v", err)
-		// F-23: a failed extraction can leave a partially written tree
-		// behind (e.g. the archive's first entry extracts, a later one is
-		// corrupt). Because VerifyInstallIntegrity only requires AT LEAST
-		// ONE declared shim to be present, such a leftover tree looked
-		// "completely installed" to the next run — which then skipped the
-		// download/extract entirely and activated garbage. Remove the
-		// partial tree so a retry starts clean.
-		//
-		// RemoveAll is safe here: `dest` is the install tree, never the
-		// current/<tool> link (extraction targets install/<tool>/<ver>).
-		if rmErr := os.RemoveAll(dest); rmErr != nil {
-			log.Printf("[install] WARNING: failed to clean partial install tree %s: %v", dest, rmErr)
-		} else {
-			log.Printf("[install] Removed partial install tree after extraction failure: %s", dest)
-		}
+		return fmt.Errorf("extraction budget: %w", err)
+	}
+	err = extractor.ExtractWithOptions(ctx, src, dest, a.Format, a.Strip, budget)
+	if err != nil {
+		// The extractor owns its private staging directory. Never remove dest
+		// here: a failed preflight may have rejected an existing healthy tree.
+		log.Printf("[install] ERROR: extraction failed (previous target preserved): %v", err)
 	} else {
 		log.Printf("[install] Extraction complete: %s", dest)
 	}
@@ -1403,7 +1426,7 @@ func (i *Installer) installByKind(ctx context.Context, p plugin.Plugin, a *manif
 	case manifest.InstallKindNPM:
 		return i.installViaNPM(ctx, p, a, ver, installPath)
 	default:
-		return i.extract(p.Name(), a, ver, installPath)
+		return i.extractWithContext(ctx, p.Name(), a, ver, installPath)
 	}
 }
 
@@ -1617,7 +1640,7 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 		log.Printf("[install] ERROR: all link methods failed for %s -> %s: %v", plan.currentLink, installPath, err)
 		removeLinkEntry(tmpLink, i.cfg.Core.XMDevDir)
 		// 旧链接从未被触碰 —— 无需恢复。
-		return fmt.Errorf("symlink %s -> %s (all link methods failed: %v)", plan.currentLink, installPath, err)
+		return fmt.Errorf("symlink %s -> %s (all link methods failed): %w", plan.currentLink, installPath, err)
 	}
 
 	// 新链接已就绪，换入。removeLinkEntry 只解链、不跟进安装树。
@@ -1632,8 +1655,7 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 	plan.linkSwapped = true
 
 	// --- Step 2: 按 path.mode 分派 ---
-	switch plan.pathMode {
-	case "direct":
+	if !plan.usesShims() {
 		if len(plan.binPaths) > 0 {
 			if plan.noEnvWrite {
 				log.Printf("[install] Skipping AddCurrentBinPaths (noEnvWrite=true)")
@@ -1647,7 +1669,7 @@ func (i *Installer) Activate(p plugin.Plugin, installPath, ver string) error {
 			}
 		}
 		log.Printf("[install] Direct mode: skipping shim creation, using PATH entries instead")
-	default: // shim / auto
+	} else { // shim / auto
 		shimExe := i.ResolveShimExe()
 		log.Printf("[install] Creating shims in %s (exe=%s)", i.cfg.Core.ShimDir, shimExe)
 		// F-26：非法 shim 名在 plan 阶段已被过滤，这里只会遇到合法名。
@@ -1803,8 +1825,13 @@ func removeLinkEntry(path, xmdeHome string) {
 		log.Printf("[install] WARNING: cannot create residue archive dir: %v — falling back to in-place rename", staleErr)
 		stale = path + ".stale-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
-	if rerr := os.Rename(path, stale); rerr != nil {
+	if rerr := renameLegacyDirectory(path, stale, fi); rerr != nil {
 		log.Printf("[install] WARNING: failed to remove legacy directory %s: %v", path, rerr)
+		return
+	}
+	moved, movedErr := os.Lstat(stale)
+	if movedErr != nil || !isLegacyRealDir(moved) || !os.SameFile(fi, moved) {
+		log.Printf("[install] WARNING: legacy residue changed identity or type at %s; leaving it untouched: %v", stale, movedErr)
 		return
 	}
 	log.Printf("[install] removed legacy CopyDir directory at %s (moved to %s)", path, stale)
@@ -1889,67 +1916,17 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 		log.Printf("[install] Skipping persistent env var writes (non-Windows: not supported)")
 		return nil
 	}
-	// Save original values for potential rollback
-	originals := make(map[string]string)
-	var firstErr error
-	var written []string
-
+	managed := make(map[string]string, len(vars))
 	for name, value := range vars {
-		if name == "PATH" {
-			continue // PATH 由 shim 管理，不写入
+		if strings.EqualFold(name, "PATH") {
+			continue // PATH is managed separately by the activation plan.
 		}
-		// 2026-10-25 修复（P0-3）：写侧必须与删侧对齐白名单。
-		//
-		// 旧行为：写侧只靠 SetUserEnvVarTrusted 做语法/保护变量校验，**不过白名单**；
-		// 删侧（removeUserEnvVars:2386）却用 util.IsAllowedEnvVarName 过滤。
-		// 后果：manifest 声明了白名单外的变量（新工具/用户自定义 manifest/Lua 插件）时
-		//   写成功 → 卸载时被跳过 → 永久残留；
-		//   且 EnrichFromRegistry 也只合并白名单变量 → shim 子进程读不到。
-		// 表现为「变量写了但没用、删又删不掉」。
-		//
-		// 现改为写侧同样拒绝：显式报错（触发回滚）而不是静默写入一个永远删不掉的变量。
 		if !util.IsAllowedEnvVarName(name) {
-			log.Printf("[install] ERROR: refusing to write non-whitelisted env var %q "+
-				"(add it to util.AllowedEnvVarNames if it is intentional)", name)
-			firstErr = fmt.Errorf("env var %q is not in the allowed whitelist", name)
-			break
+			return fmt.Errorf("env var %q is not in the allowed whitelist", name)
 		}
-		// Save current value for rollback
-		if cur, err := env.GetUserEnvVarTrusted(name); err == nil {
-			originals[name] = cur
-		}
-		if err := env.SetUserEnvVarTrusted(name, value); err != nil {
-			log.Printf("[install] ERROR: failed to set user env var %s: %v", name, err)
-			firstErr = err
-			break
-		} else {
-			log.Printf("[install] Set user env var: %s=%s", name, value)
-			written = append(written, name)
-		}
+		managed[name] = value
 	}
-
-	if firstErr != nil {
-		// Rollback: restore original values for all vars we successfully wrote
-		log.Printf("[install] Rolling back %d env var writes due to failure", len(written))
-		for _, name := range written {
-			if orig, ok := originals[name]; ok {
-				// P2-4（第六轮审计）：回滚必须用 Restore 变体——原值先于 xdev 存在
-				//（用户自己的 GOROOT=C:\Go / 含 %VAR% 的原值），对回滚值复跑 X-08
-				// 写时校验会拒绝恢复，导致「安装失败 + manifest 值留驻 + 用户原值
-				// 永久丢失」的更坏终态。
-				if err := env.SetUserEnvVarRestore(name, orig); err != nil {
-					log.Printf("[install] WARNING: failed to rollback env var %s: %v", name, err)
-				}
-			} else {
-				// Wasn't set before — try to delete
-				if err := env.DeleteUserEnvVarTrusted(name); err != nil {
-					log.Printf("[install] WARNING: failed to delete env var %s during rollback: %v", name, err)
-				}
-			}
-		}
-		return fmt.Errorf("failed to set env vars (rolled back %d): %w", len(written), firstErr)
-	}
-	return nil
+	return env.ApplyUserEnvVars(managed)
 }
 
 // ExtractAndActivate 解压（或运行安装器）已下载的缓存文件并激活工具。
@@ -1963,6 +1940,16 @@ func (i *Installer) setUserEnvVars(vars map[string]string) error {
 //   - err != nil 且解压已成功：err 是激活错误（版本已安装）
 //   - err != nil 且解压失败：err 是解压错误（版本未安装）
 func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
+	return i.ExtractAndActivateWithContext(context.Background(), p, a, ver, installPath)
+}
+
+func (i *Installer) ExtractAndActivateWithContext(ctx context.Context, p plugin.Plugin, a *manifest.Archive, ver, installPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if a == nil {
+		return fmt.Errorf("missing archive for extraction")
+	}
 	// Ticket 19 (audit-fixes / B-02, A-04): the ENTIRE pre-activation span —
 	// extraction, the executable/script installer run, the integrity gate and
 	// the post-install hook — runs under the same per-tool lock used by
@@ -1992,7 +1979,7 @@ func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver
 		case manifest.InstallKindExecutable, manifest.InstallKindScript:
 			// 可执行/脚本安装器：运行安装器（含 SHA/sidecar pin 校验），
 			// 跳过解压与完整性硬门（安装器可能异步/在 installPath 外写文件）。
-			if err := i.runInstaller(context.Background(), p, a, ver, installPath); err != nil {
+			if err := i.runInstaller(ctx, p, a, ver, installPath); err != nil {
 				return fmt.Errorf("installer run failed: %w", err)
 			}
 		case manifest.InstallKindNPM:
@@ -2000,7 +1987,17 @@ func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver
 			// InstallNPMPackage（预检 → npm install → 完整性门 → 激活）。
 			return fmt.Errorf("npm-kind tool %s must be installed via InstallNPMPackage (no archive to extract)", p.Name())
 		default:
-			if err := i.extract(p.Name(), a, ver, installPath); err != nil {
+			// Repeated calls are idempotent only for an already verified install.
+			// An incomplete nonempty tree is not silently merged or deleted.
+			entries, readErr := os.ReadDir(installPath)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				return readErr
+			}
+			if len(entries) > 0 {
+				if err := ensureInstallIntegrity(p, installPath, a.Strip); err != nil {
+					return fmt.Errorf("existing install requires explicit repair (left unchanged): %w", err)
+				}
+			} else if err := i.extractWithContext(ctx, p.Name(), a, ver, installPath); err != nil {
 				return fmt.Errorf("extraction failed: %w", err)
 			}
 			// Hard gate after extract (same as InstallWithProgress): broken trees
@@ -2012,7 +2009,7 @@ func (i *Installer) ExtractAndActivate(p plugin.Plugin, a *manifest.Archive, ver
 			}
 		}
 		// Post-install hook — run even if activation will fail later.
-		if err := p.PostInstall(context.Background(), installPath); err != nil {
+		if err := p.PostInstall(ctx, installPath); err != nil {
 			log.Printf("[install] WARNING: post-install hook failed for %s@%s: %v", p.Name(), ver, err)
 		}
 		return nil
@@ -2148,9 +2145,14 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 
 	// 确认可删后再停用：让后续启动不再指向待删目录。
 	if activeVer == ver {
-		_ = p.Deactivate(target)
+		if err := p.Deactivate(target); err != nil {
+			return fmt.Errorf("uninstall %s@%s deactivate: %w", p.Name(), ver, err)
+		}
+		defer shim.InvalidateShimIndex()
+		if err := i.removeShims(p); err != nil {
+			return fmt.Errorf("uninstall %s@%s remove shims: %w", p.Name(), ver, err)
+		}
 	}
-	i.removeShims(p)
 
 	// 1. Remove the installation directory
 	if err := os.RemoveAll(target); err != nil {
@@ -2169,14 +2171,16 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	if activeVer == ver {
 		// Remove the current symlink
 		currentLink := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
-		_ = os.Remove(currentLink)
+		if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("uninstall %s@%s remove current link: %w", p.Name(), ver, err)
+		}
 		log.Printf("[install] Removed current symlink for %s", p.Name())
 
 		// Try to re-point to another installed version
 		if otherVer := i.findOtherVersion(p); otherVer != "" {
 			otherPath, dirErr := p.InstallDir(i.cfg.Core.InstallDir, otherVer)
 			if dirErr != nil {
-				return dirErr
+				return fmt.Errorf("uninstall %s@%s resolve fallback %s: %w", p.Name(), ver, otherVer, dirErr)
 			}
 			log.Printf("[install] Re-pointing %s to %s@%s", p.Name(), p.Name(), otherVer)
 			// Ticket 03 (audit-fixes / P0-05): Release the uninstall lock
@@ -2194,7 +2198,7 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 			// remainder of Uninstall only touches shim-index memory state.
 			lock.Release()
 			if err := i.Activate(p, otherPath, otherVer); err != nil {
-				log.Printf("[install] WARNING: failed to re-activate %s@%s: %v", p.Name(), otherVer, err)
+				return fmt.Errorf("uninstall %s@%s re-activate %s: %w", p.Name(), ver, otherVer, err)
 			}
 		} else {
 			// No other version: clean up shims
@@ -2203,7 +2207,7 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 			// 的**写入方** WriteEnvFragment 早已无任何调用方（死代码，已删）。
 			// 删除一个从未被写过的文件是纯粹的无效操作，一并移除。
 			log.Printf("[install] No other version of %s, cleaning up shims and env", p.Name())
-			i.removeShims(p)
+			var cleanupErrors []error
 			// Security (M-1): Clean up user-level environment variables (JAVA_HOME, GOROOT, etc.)
 			// that were set during Activate. These point to the now-deleted installation
 			// and would cause errors if left in the registry.
@@ -2215,22 +2219,27 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 			// 在分支末尾广播一次覆盖 env 删除与（可能的）direct 模式 PATH 清理。
 			envTouched := false
 			if !i.noEnvWrite {
-				i.removeUserEnvVars(p)
+				if err := i.removeUserEnvVars(p); err != nil {
+					cleanupErrors = append(cleanupErrors, err)
+				}
 				envTouched = true
 			}
 			// direct 模式：从 PATH 中移除 current/<tool> 的 bin 子目录
-			if i.cfg.GetPathMode() == "direct" {
+			if !i.noEnvWrite && i.cfg.GetPathMode() == "direct" {
 				currentDir := filepath.Join(i.cfg.Core.XMDevDir, "current", p.Name())
 				binPaths := env.ToolBinPaths(p.Name(), currentDir)
 				if len(binPaths) > 0 {
 					if err := env.RemoveCurrentBinPaths(binPaths); err != nil {
-						log.Printf("[install] WARNING: failed to remove current bin paths from PATH: %v", err)
+						cleanupErrors = append(cleanupErrors, fmt.Errorf("remove current bin paths: %w", err))
 					}
 				}
 			}
 			if envTouched {
 				env.BroadcastEnvironmentChange()
 				log.Printf("[install] Broadcast environment change after %s env cleanup", p.Name())
+			}
+			if err := errors.Join(cleanupErrors...); err != nil {
+				return fmt.Errorf("uninstall %s@%s cleanup: %w", p.Name(), ver, err)
 			}
 		}
 	}
@@ -2240,8 +2249,11 @@ func (i *Installer) Uninstall(p plugin.Plugin, ver string) error {
 	// 第十二轮审计（Round 11 报告 §七-④）：卸载成功后同样回收 `.stale-*` 残留。
 	// 卸载是产生残留的另一条主要路径（removeLinkEntry 的 rename+RemoveAll 可能
 	// 因文件被占用而只完成 rename），在这里补一次覆盖。
+	// 非活动卸载不触碰 current/shim 目录，包括其中的历史残留。
 	// best-effort：失败绝不影响卸载结果。
-	_ = shim.ReapStaleResidue(i.cfg.Core.XMDevDir)
+	if activeVer == ver {
+		_ = shim.ReapStaleResidue(i.cfg.Core.XMDevDir)
+	}
 	return nil
 }
 
@@ -2262,7 +2274,7 @@ func (i *Installer) IsUpgradeAvailable(toolName string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if util.CompareSemver(latest, current) > 0 {
+	if cmp, comparable := manifest.CompareToolVersions(toolName, latest, current); comparable && cmp > 0 {
 		return latest, true
 	}
 	return "", false
@@ -2305,22 +2317,21 @@ func (i *Installer) currentVersion(toolName string) (string, bool) {
 // findOtherVersion returns the latest installed version of a tool
 // (excluding the one being uninstalled), or "" if none exist.
 func (i *Installer) findOtherVersion(p plugin.Plugin) string {
-	dir := filepath.Join(i.cfg.Core.InstallDir, p.Name())
-	versions, err := util.ListVersionDirNames(dir)
+	// Ask the plugin for its layout, including manifest install_root. A
+	// validated known version is only a path anchor, not an ordering fallback.
+	anchor := p.DefaultVersion()
+	if _, err := util.SafeName(anchor); err != nil {
+		return ""
+	}
+	path, err := p.InstallDir(i.cfg.Core.InstallDir, anchor)
 	if err != nil {
 		return ""
 	}
-	var best string
-	for _, v := range versions {
-		if best == "" {
-			best = v
-			continue
-		}
-		// Compare using semver, not lexicographic ordering
-		if util.CompareSemver(v, best) > 0 {
-			best = v
-		}
+	versions, err := util.ListVersionDirNames(filepath.Dir(path))
+	if err != nil {
+		return ""
 	}
+	best, _ := manifest.NewestToolVersion(p.Name(), versions)
 	return best
 }
 
@@ -2404,27 +2415,32 @@ func isFileLockedError(err error) bool {
 // Security (F-08 / D11): names failing shim validation are skipped
 // (never used as paths), so legacy/corrupt entries cannot be targeted
 // via traversal — while valid legacy entries are still removed.
-func (i *Installer) removeShims(p plugin.Plugin) {
+func (i *Installer) removeShims(p plugin.Plugin) error {
+	var failures []error
 	for _, name := range p.Shims() {
 		if err := util.ValidateShimName(name); err != nil {
 			log.Printf("[install] WARNING: skipping shim removal for invalid name %q: %v", name, err)
 			continue
 		}
-		shimPath := filepath.Join(i.cfg.Core.ShimDir, name)
-		_ = os.Remove(shimPath)
-		// Windows also has .exe variant
-		if runtime.GOOS == "windows" {
-			_ = os.Remove(shimPath + ".exe")
+		paths := []string{filepath.Join(i.cfg.Core.ShimDir, name)}
+		if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+			paths = append(paths, paths[0]+".exe")
 		}
-		log.Printf("[install] Removed shim: %s", name)
+		for _, path := range paths {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				failures = append(failures, fmt.Errorf("remove shim %s: %w", path, err))
+			}
+		}
 	}
+	return errors.Join(failures...)
 }
 
 // removeUserEnvVars deletes the user-level environment variables that were
 // set by this tool during Activate. Security (M-1): Without this cleanup,
 // uninstalling the last version of a tool leaves orphan env vars (e.g.,
 // JAVA_HOME pointing to a deleted directory) in the Windows registry.
-func (i *Installer) removeUserEnvVars(p plugin.Plugin) {
+func (i *Installer) removeUserEnvVars(p plugin.Plugin) error {
+	var failures []error
 	// We don't have the installPath anymore (it was removed), but we can
 	// infer the env var names from the plugin's EnvVars method by providing
 	// a placeholder path. The keys are what matter, not the values.
@@ -2440,10 +2456,12 @@ func (i *Installer) removeUserEnvVars(p plugin.Plugin) {
 		}
 		if err := env.DeleteUserEnvVar(name); err != nil {
 			log.Printf("[install] WARNING: failed to delete user env var %s: %v", name, err)
+			failures = append(failures, fmt.Errorf("delete user env var %s: %w", name, err))
 		} else {
 			log.Printf("[install] Deleted user env var: %s", name)
 		}
 	}
+	return errors.Join(failures...)
 }
 
 // fallbackLink tries, in order:

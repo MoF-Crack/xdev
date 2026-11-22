@@ -783,7 +783,6 @@ func loadSniffUpdates(cfg *config.Config) []struct {
 		return nil
 	}
 
-	installDir := cfg.Core.InstallDir
 	var updates []struct {
 		Tool      string
 		Installed string
@@ -791,27 +790,13 @@ func loadSniffUpdates(cfg *config.Config) []struct {
 	}
 
 	for toolName, result := range cache.Tools {
-		if result.Unsupported || result.Error != "" || len(result.Versions) == 0 {
-			continue
-		}
-		// Check if tool is installed.
-		toolDir := filepath.Join(installDir, toolName)
-		if _, err := os.Stat(toolDir); os.IsNotExist(err) {
-			continue
-		}
-		// Find installed version.
-		active, ok := activeVersion(toolName)
+		// The current link also covers tools installed under a shared install_root.
+		active, ok := util.ActiveVersion(cfg.Core.XMDevDir, toolName)
 		if !ok {
 			continue
 		}
-		// Find latest sniffed version.
-		latest := result.Versions[0]
-		for _, v := range result.Versions[1:] {
-			if util.CompareSemver(v, latest) > 0 {
-				latest = v
-			}
-		}
-		if util.CompareSemver(latest, active) > 0 {
+		latest, _ := manifest.NewestToolVersion(toolName, result.Versions)
+		if order, comparable := manifest.CompareToolVersions(toolName, latest, active); comparable && order > 0 {
 			updates = append(updates, struct {
 				Tool      string
 				Installed string

@@ -23,18 +23,13 @@ import (
 	"testing"
 )
 
-// buildBin returns the path to the compiled xdev binary used as the
-// system-under-test. It prefers build/bin/xdev(.exe), falling back to
-// the stdlib `go test` helper package (none here). Tests skip if the
-// binary is missing so `go test ./internal/...` (without -tags) still
-// works.
+// buildBin returns the host-native build/bin desktop product. Shared Windows/
+// WSL workspaces may contain both products; never run a foreign executable or
+// a legacy version merely because it appears first in a candidate list.
+// Missing products remain a documented prerequisite, not an alternate binary.
 func buildBin(t *testing.T) string {
 	t.Helper()
-	cands := []string{
-		filepath.Join("..", "..", "build", "bin", "xdev.exe"),
-		filepath.Join("..", "..", "build", "bin", "xdev"),
-		filepath.Join("..", "..", "xdev-1.1.7.exe"),
-	}
+	cands := buildBinCandidates(runtime.GOOS)
 	for _, c := range cands {
 		if abs, err := filepath.Abs(c); err == nil {
 			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
@@ -44,6 +39,30 @@ func buildBin(t *testing.T) string {
 	}
 	t.Skipf("xdev binary not found in build/bin; run build.sh first (checked relative candidates)")
 	return ""
+}
+
+func buildBinCandidates(goos string) []string {
+	name := "xdev"
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return []string{filepath.Join("..", "..", "build", "bin", name)}
+}
+
+func TestBuildBinCandidatesUseHostProduct(t *testing.T) {
+	for _, goos := range []string{"windows", "linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			candidates := buildBinCandidates(goos)
+			name := "xdev"
+			if goos == "windows" {
+				name += ".exe"
+			}
+			want := filepath.Join("..", "..", "build", "bin", name)
+			if len(candidates) != 1 || candidates[0] != want {
+				t.Fatalf("host product selection = %v, want only %s", candidates, want)
+			}
+		})
+	}
 }
 
 // run executes the xdev binary with the given global flags + args, in dir.

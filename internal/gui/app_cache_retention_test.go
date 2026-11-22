@@ -80,7 +80,7 @@ func TestApplyArchiveRetention_ImmediateDeletes(t *testing.T) {
 	writeSizedFile(t, filepath.Join(tmp, "cache", "go-cache.dat"), 10) // 元数据，不得删除
 	writeSizedFile(t, filepath.Join(tmp, "cache", "llvm-22.1.8.tar.xz"), 200)
 
-	app.applyArchiveRetention("go")
+	app.applyArchiveRetention("go", "1.26.5", "zip")
 
 	for _, gone := range []string{"go-1.26.5.zip", "go-1.26.5.zip.sha256", "go-1.26.5.zip.part"} {
 		if _, err := os.Stat(filepath.Join(tmp, "cache", gone)); err == nil {
@@ -96,6 +96,29 @@ func TestApplyArchiveRetention_ImmediateDeletes(t *testing.T) {
 
 // TestApplyArchiveRetention_Keep verifies 7d/30d/forever policies keep the
 // archives after install.
+func TestRemediationE_RetentionPreservesSiblingTool(t *testing.T) {
+	app, root := retentionApp(t)
+	dir := filepath.Join(root, "cache")
+	target := "android-platform-35.zip"
+	sibling := "android-platform-tools-35.zip"
+	for _, base := range []string{target, sibling} {
+		for _, suffix := range []string{"", ".sha256", ".0123456789abcdef.part", ".0123456789abcdef.part.meta"} {
+			writeSizedFile(t, filepath.Join(dir, base+suffix), 5)
+		}
+	}
+	if err := app.applyArchiveRetention("android-platform", "35", "zip"); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", ".sha256", ".0123456789abcdef.part", ".0123456789abcdef.part.meta"} {
+		if _, err := os.Stat(filepath.Join(dir, target+suffix)); !os.IsNotExist(err) {
+			t.Errorf("target still present %s: %v", suffix, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, sibling+suffix)); err != nil {
+			t.Errorf("sibling lost %s: %v", suffix, err)
+		}
+	}
+}
+
 func TestApplyArchiveRetention_Keep(t *testing.T) {
 	app, tmp := retentionApp(t)
 	app.cfg.Core.ArchiveRetention = "7d"
@@ -103,7 +126,7 @@ func TestApplyArchiveRetention_Keep(t *testing.T) {
 	writeSizedFile(t, filepath.Join(tmp, "cache", "go-1.26.5.zip"), 100)
 	writeSizedFile(t, filepath.Join(tmp, "cache", "go-1.26.5.zip.sha256"), 20)
 
-	app.applyArchiveRetention("go")
+	app.applyArchiveRetention("go", "1.26.5", "zip")
 
 	for _, name := range []string{"go-1.26.5.zip", "go-1.26.5.zip.sha256"} {
 		if _, err := os.Stat(filepath.Join(tmp, "cache", name)); err != nil {

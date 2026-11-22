@@ -121,8 +121,8 @@ func (d *DockerAdapter) Exec(ctx context.Context, id string, cmd []string) (*Exe
 	// element starting with "-" is never parsed as a docker exec option
 	// (mirrors the N-14 guard on docker run).
 	args := append([]string{"exec", "--", id}, cmd...)
-	result, _ := util.RunCommand(ctx, "docker", args...)
-	return &result, nil
+	result, err := util.RunCommand(ctx, "docker", args...)
+	return &result, err
 }
 
 // ConnectInteractive runs `docker exec -it` with stdin/stdout/stderr

@@ -15,6 +15,7 @@ type Instance struct {
 	Status    string            `json:"status"`    // "running" | "stopped" | "creating"
 	Addresses []string          `json:"addresses"` // IP/hostname endpoints
 	Metadata  map[string]string `json:"metadata"`
+	SSH       *SSHConnection    `json:"ssh,omitempty"` // versioned non-sensitive connection record
 }
 
 // Adapter is the interface for remote environment backends.

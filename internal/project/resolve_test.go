@@ -17,6 +17,23 @@ func makeVersions(t *testing.T, installRoot, tool string, versions ...string) {
 	}
 }
 
+func TestD18_ProjectNDKPinsAndRanking(t *testing.T) {
+	root := t.TempDir()
+	makeVersions(t, root, "android-ndk", "r26", "r27c", "27.2.12479018", "r29", "broken99")
+	for spec, want := range map[string]string{"latest": "r29", "lts": "r29", "r27c": "r27c", "r26": "r26", "27.2.12479018": "27.2.12479018", "r28": "", "broken99": ""} {
+		got, ok := ResolveInstalled(root, "android-ndk", spec)
+		if got != want || ok != (want != "") {
+			t.Errorf("%s = %q,%v want %q", spec, got, ok, want)
+		}
+	}
+	makeVersions(t, root, "other", "r29", "broken99")
+	for _, spec := range []string{"r29", "latest"} {
+		if v, ok := ResolveInstalled(root, "other", spec); ok {
+			t.Errorf("unexpected version for other@%s: %s", spec, v)
+		}
+	}
+}
+
 func TestResolveInstalled_Exact(t *testing.T) {
 	root := t.TempDir()
 	makeVersions(t, root, "python", "3.10.4", "3.11.9", "3.12.1")

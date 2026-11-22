@@ -1,44 +1,4 @@
-// Package extractor unpacks archives (zip, tar.gz, tar.xz, tar.bz2,
-// tar.zst, 7z) to a target directory with security validation.
-//
-// # Supported Formats
-//
-//   - zip       (Windows embeddable Python, Node, etc.)
-//   - tar       (raw .tar)
-//   - tar.gz    (gzip-compressed tar)
-//   - tar.xz    (xz-compressed tar)
-//   - tar.bz2   (bzip2-compressed tar)
-//   - tar.zst   (zstandard-compressed tar — via external zstd command)
-//   - 7z        (7-Zip format — via external 7z command)
-//   - exe       (NSIS/Inno Setup installers — extracted via 7z)
-//   - pkg       (macOS installer packages — extracted via pkgutil)
-//   - dmg       (macOS disk images — mounted and copied)
-//
-// # Security
-//
-// All extraction methods include zip-slip / tar-slip protection:
-//   - extractZip and extractTarFromReader validate every file path with
-//     isSafePath() before writing. If an unsafe path is detected, the
-//     entire destination directory is removed (os.RemoveAll) and an
-//     error is returned.
-//   - extract7z runs a post-extraction validation (validateExtraction)
-//     that walks the extracted tree and verifies all files are within
-//     the destination directory. It also detects hard links (nlink>1),
-//     device files, named pipes, and sockets.
-//   - isSafePath uses case-insensitive comparison on Windows (EqualFold)
-//     and checks for ".." path traversal via filepath.Rel.
-//
-// # Strip Parameter
-//
-// The strip parameter controls how many leading path components to remove.
-// For example, with strip=1, "go1.22.0/bin/go" becomes "bin/go".
-// This is commonly needed for Go and Python archives that wrap their
-// contents in a top-level version-named directory.
-//
-// # Zip Bomb Protection
-//
-// maxDecompressSize (1 GiB per file) limits the total decompressed bytes
-// to prevent zip bomb attacks. Files exceeding this limit are rejected.
+// Package extractor expands structural archive records into private staging.
 package extractor
 
 import (
@@ -46,8 +6,10 @@ import (
 	"archive/zip"
 	"compress/bzip2"
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
+	"github.com/xmdemt/xdev/internal/util"
 	"io"
 	"log"
 	"os"
@@ -55,70 +17,201 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/xmdemt/xdev/internal/util"
+	"time"
 )
 
-// maxDecompressSize limits the total decompressed bytes per file to
-// prevent zip bombs (1 GB per file).
-const maxDecompressSize = 1 << 30 // 1 GiB
-
-// Security (M-11): Total extraction size limit across all files
-const maxTotalExtractSize int64 = 10 << 30 // 10 GiB total across all files
-
-// Extract unpacks src to dst.
-//
-// strip is the number of leading path components to discard (used to
-// skip the top-level directory inside most upstream tarballs).
+// Extract uses the standard archive limits. See ExtractWithOptions for larger trusted archives.
 func Extract(src, dst, format string, strip int) error {
-	// F-20: strip comes straight from the manifest and was previously
-	// unvalidated end to end. A negative value reached parts[strip:] and
-	// panicked with "slice bounds out of range [-1:]", crashing the whole
-	// install. Reject it here (defence in depth — stripPath also clamps).
-	if strip < 0 {
-		return fmt.Errorf("invalid strip value %d: must be >= 0", strip)
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	var err error
-	switch strings.ToLower(format) {
-	case "zip":
-		err = extractZip(src, dst, strip)
-	case "tar":
-		err = extractTar(src, dst, strip, nil)
-	case "tar.gz", "tgz":
-		err = extractTar(src, dst, strip, gzipReaderAdapter)
-	case "tar.xz", "txz":
-		err = extractTarXZ(src, dst, strip)
-	case "tar.bz2", "tbz2":
-		err = extractTar(src, dst, strip, bzip2ReaderAdapter)
-	case "tar.zst", "tzst":
-		err = extractTarZst(src, dst, strip)
-	case "7z":
-		err = extract7z(src, dst)
-	case "exe":
-		// NSIS/Inno Setup installers can be extracted by 7z
-		err = extract7z(src, dst)
-	case "pkg":
-		// macOS .pkg is xar-based; try 7z extraction as fallback
-		err = extract7z(src, dst)
-	case "dmg":
-		// macOS disk image — hdiutil attach → copy .app → detach
-		err = extractDmg(src, dst)
-	case "appimage":
-		// AppImage 是单文件可执行镜像（不是归档）：原样落盘并补执行位。
-		err = extractAppImage(src, dst)
-	default:
-		return fmt.Errorf("unsupported format %q", format)
-	}
+	limits, err := ConfiguredBudget()
 	if err != nil {
 		return err
 	}
-	// Windows 打的 zip / 7z 不带 POSIX 权限位：Go 的 archive/zip 会报 0666，
-	// 解出的二进制在 Linux 上直接 EACCES（内置 manifest 有 40 处 linux+zip）。
-	ensureExecutableBits(dst)
+	return ExtractWithOptions(context.Background(), src, dst, format, strip, limits)
+}
+func (x *extraction) unpack(src, format string, strip int) error {
+	switch strings.ToLower(format) {
+	case "zip":
+		return x.zip(src, strip)
+	case "7z", "exe", "pkg":
+		return x.container(src, format, strip)
+	case "dmg":
+		return x.extractDmg(src)
+	case "appimage":
+		out, err := x.entry(filepath.Base(src), 0)
+		if err != nil {
+			return err
+		}
+		if err = x.copyRegular(src, out, 0755); err != nil {
+			return err
+		}
+		return os.Chmod(out, 0755)
+	case "tar.xz", "txz", "tar.zst", "tzst":
+		var r readCloser
+		var err error
+		if strings.HasSuffix(strings.ToLower(format), "xz") {
+			r, err = newXZReader(src)
+		} else {
+			r, err = newZstdReader(src)
+		}
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		return x.tar(r, strip)
+	case "tar", "tar.gz", "tgz", "tar.bz2", "tbz2":
+		f, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		var r io.Reader = f
+		switch strings.ToLower(format) {
+		case "tar.gz", "tgz":
+			g, e := gzip.NewReader(f)
+			if e != nil {
+				return e
+			}
+			defer g.Close()
+			r = g
+		case "tar.bz2", "tbz2":
+			r = bzip2.NewReader(f)
+		}
+		return x.tar(r, strip)
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+func (x *extraction) copyRegular(src, out string, mode os.FileMode) error {
+	in, e := os.Open(src)
+	if e != nil {
+		return e
+	}
+	defer in.Close()
+	fi, e := in.Stat()
+	if e != nil {
+		return e
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", src)
+	}
+	return x.file(out, mode, fi.Size(), in)
+}
+func extractZip(src, dst string, strip int) error { return Extract(src, dst, "zip", max(strip, 0)) }
+func (x *extraction) zip(src string, strip int) error {
+	r, e := zip.OpenReader(src)
+	if e != nil {
+		return e
+	}
+	defer r.Close()
+	for _, f := range r.File {
+		out, e := x.entry(f.Name, strip)
+		if e != nil {
+			return fmt.Errorf("zip slip: %w", e)
+		}
+		if out == "" {
+			continue
+		}
+		if f.FileInfo().IsDir() {
+			if e = os.MkdirAll(out, 0755); e != nil {
+				return e
+			}
+			continue
+		}
+		if !f.Mode().IsRegular() {
+			return fmt.Errorf("unsupported ZIP member type: %s", f.Name)
+		}
+		if e = x.checkSize(int64(f.UncompressedSize64)); e != nil {
+			return e
+		}
+		in, e := f.Open()
+		if e != nil {
+			return e
+		}
+		e = errors.Join(x.file(out, f.Mode(), int64(f.UncompressedSize64), in), in.Close())
+		if e != nil {
+			return e
+		}
+	}
 	return nil
+}
+
+type cancelReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r cancelReader) Read(p []byte) (int, error) {
+	if e := r.ctx.Err(); e != nil {
+		return 0, e
+	}
+	return r.r.Read(p)
+}
+func (x *extraction) tar(r io.Reader, strip int) error {
+	tr := tar.NewReader(cancelReader{x.ctx, r})
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			return nil
+		}
+		if e != nil {
+			return e
+		}
+		out, e := x.entry(h.Name, strip)
+		if e != nil {
+			return fmt.Errorf("tar slip: %w", e)
+		}
+		if e = x.checkSize(h.Size); e != nil {
+			return e
+		}
+		if out == "" {
+			continue
+		}
+		switch h.Typeflag {
+		case tar.TypeDir:
+			e = os.MkdirAll(out, 0755)
+		case tar.TypeReg, tar.TypeRegA:
+			e = x.file(out, h.FileInfo().Mode(), h.Size, tr)
+		case tar.TypeSymlink:
+			e = x.symlink(x.dst, out, h.Linkname)
+		case tar.TypeLink:
+			// Count the member once; revalidate the full raw archive-relative target.
+			x.entries--
+			target, err := x.entry(h.Linkname, strip)
+			if err != nil {
+				return err
+			}
+			if target == "" {
+				continue
+			}
+			fi, err := os.Lstat(target)
+			if os.IsNotExist(err) {
+				log.Printf("[extractor] skipping missing hard link target %q", h.Linkname)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !fi.Mode().IsRegular() {
+				return fmt.Errorf("invalid hard link target %q", h.Linkname)
+			}
+			if e = x.checkSize(fi.Size()); e != nil {
+				return e
+			}
+			if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
+				return e
+			}
+			if e = os.Link(target, out); e != nil {
+				e = x.copyRegular(target, out, fi.Mode())
+			} else {
+				x.total += fi.Size()
+			}
+		default:
+			return fmt.Errorf("unsupported tar entry type %d: %q", h.Typeflag, h.Name)
+		}
+		if e != nil {
+			return e
+		}
+	}
 }
 
 // hdiutilCmd is the hdiutil command used by extractDmg. It is a package
@@ -126,26 +219,23 @@ func Extract(src, dst, format string, strip int) error {
 // the zstd/xz external-command fallbacks).
 var hdiutilCmd = "hdiutil"
 
-// defaultDittoCmd is the macOS ditto binary path used to copy .app bundles
-// (preserves symlinks/metadata, unlike a plain recursive copy).
-const defaultDittoCmd = "/usr/bin/ditto"
-
-// dittoCmd is overridable by tests (same hook pattern as hdiutilCmd).
-var dittoCmd = defaultDittoCmd
-
 // detachDMG unmounts the image at mountDir: first a normal detach, then a
 // forced detach (-force) if the first attempt fails. Returns a joined error
 // when both attempts fail. 若 hdiutil 本身不可执行（exec.Error，如命令不存在），
 // -force 同样无意义，直接返回原错误。
 func detachDMG(mountDir string) error {
-	first := exec.Command(hdiutilCmd, "detach", mountDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	first := exec.CommandContext(ctx, hdiutilCmd, "detach", mountDir)
 	util.HideWindow(first)
 	if err := first.Run(); err == nil {
 		return nil
 	} else if isExecNotFound(err) {
 		return fmt.Errorf("hdiutil detach %s: %w", mountDir, err)
 	} else {
-		force := exec.Command(hdiutilCmd, "detach", "-force", mountDir)
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel2()
+		force := exec.CommandContext(ctx2, hdiutilCmd, "detach", "-force", mountDir)
 		util.HideWindow(force)
 		err2 := force.Run()
 		if err2 == nil {
@@ -172,7 +262,7 @@ func isExecNotFound(err error) bool {
 //   - attach 失败：尽力 detach 已知挂载点（可能部分挂载）后返回 attach 错误；
 //   - detach 失败：先普通 detach，再尝试 detach -force，仍失败则并入返回值，
 //     避免"解包成功但镜像残留挂载"。
-func extractDmg(src, dst string) (retErr error) {
+func (x *extraction) extractDmg(src string) (retErr error) {
 	if runtime.GOOS != "darwin" {
 		return fmt.Errorf("dmg extraction is only supported on macOS (current: %s)", runtime.GOOS)
 	}
@@ -184,10 +274,10 @@ func extractDmg(src, dst string) (retErr error) {
 		return fmt.Errorf("create dmg mount dir: %w", err)
 	}
 	// 清理：无论成败都移除挂载点目录。
-	defer os.RemoveAll(mountDir)
+	defer os.Remove(mountDir)
 
 	// hdiutil attach -nobrowse -readonly -mountpoint <mountDir> <src>
-	attach := exec.Command(hdiutilCmd, "attach", "-nobrowse", "-readonly", "-mountpoint", mountDir, src)
+	attach := exec.CommandContext(x.ctx, hdiutilCmd, "attach", "-nobrowse", "-readonly", "-mountpoint", mountDir, src)
 	util.HideWindow(attach)
 	attach.Stdout = os.Stderr
 	attach.Stderr = os.Stderr
@@ -210,7 +300,7 @@ func extractDmg(src, dst string) (retErr error) {
 	}()
 
 	// 复制挂载点下所有 .app 包到 dst（dmg 通常含一个 .app）。
-	copied, err := copyAppsFromMount(mountDir, dst)
+	copied, err := x.copyAppsFromMount(mountDir)
 	if err != nil {
 		return err
 	}
@@ -220,153 +310,6 @@ func extractDmg(src, dst string) (retErr error) {
 	return nil
 }
 
-// copyAppsFromMount copies every ".app" directory under mountDir into dst.
-// It returns the number of .app bundles copied. 独立函数便于在非 macOS
-// 平台用假挂载目录做单元测试（无需 hdiutil）。
-func copyAppsFromMount(mountDir, dst string) (int, error) {
-	entries, err := os.ReadDir(mountDir)
-	if err != nil {
-		return 0, fmt.Errorf("read dmg mount %s: %w", mountDir, err)
-	}
-	copied := 0
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".app") {
-			continue
-		}
-		if err := copyAppBundle(filepath.Join(mountDir, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-			return copied, fmt.Errorf("copy %s from dmg: %w", e.Name(), err)
-		}
-		copied++
-	}
-	return copied, nil
-}
-
-// copyAppBundle copies one .app bundle from the dmg mount into dstApp.
-//
-// macOS 上使用 /usr/bin/ditto（保留符号链接/元数据——Electron/IDE 包内含
-// framework 符号链接，util.CopyDir 会跳过符号链接）。ditto 是 macOS 平台
-// 先决条件：失败即返回错误，绝不静默降级为 CopyDir（否则 .app 会"复制成功"
-// 但符号链接损坏，解包结果不可用）。仅非 darwin（且未覆盖 dittoCmd 测试
-// 钩子）时使用 util.CopyDir 兜底（跨平台单测路径）。
-func copyAppBundle(srcApp, dstApp string) error {
-	if runtime.GOOS == "darwin" || dittoCmd != defaultDittoCmd {
-		c := exec.Command(dittoCmd, srcApp, dstApp)
-		util.HideWindow(c)
-		c.Stdout = os.Stderr
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("ditto copy %s: %w", srcApp, err)
-		}
-		return nil
-	}
-	return util.CopyDir(srcApp, dstApp)
-}
-
-func extractZip(src, dst string, strip int) error {
-	r, err := zip.OpenReader(src)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	var totalExtracted int64
-	for _, f := range r.File {
-		rel, ok := stripPath(f.Name, strip)
-		if !ok {
-			continue
-		}
-		// Ticket 38 (P2-02): reject archive-relative absolute/UNC names at
-		// the rel level — isSafePath now tolerates an UNC destination, so
-		// this is where a "\\server\share" ENTRY is stopped.
-		if filepath.IsAbs(rel) || strings.HasPrefix(rel, `\\`) {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("zip slip: entry %q has an absolute/UNC name", f.Name)
-		}
-		// P3-6: per-COMPONENT validation. Only checking the final component
-		// let `bin./evil.txt` silently fold into `bin/` (two distinct
-		// directories merged) and `sub/NUL/x.txt` fail later with an opaque
-		// OS error. The error names both the entry and the offending
-		// component so the archive can actually be fixed.
-		if bad := badComponent(rel); bad != "" {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("zip slip: entry %q contains an invalid path component %q (Windows reserved name, or trailing dot/space that would fold it onto another name)", f.Name, bad)
-		}
-		out := filepath.Join(dst, rel)
-		if !isSafePath(dst, out) {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("zip slip: path %q escapes destination %q", f.Name, dst)
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(util.ToLongPath(out), 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(util.ToLongPath(filepath.Dir(out)), 0o755); err != nil {
-			return err
-		}
-		n, err := unzipFile(f, util.ToLongPath(out))
-		if err != nil {
-			return err
-		}
-		totalExtracted += n
-		// Security (M-11): Check total extraction size
-		if totalExtracted > maxTotalExtractSize {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("total extraction size exceeds %d bytes limit (zip bomb protection)", maxTotalExtractSize)
-		}
-	}
-	return nil
-}
-
-func unzipFile(f *zip.File, dst string) (int64, error) {
-	in, err := f.Open()
-	if err != nil {
-		return 0, err
-	}
-	defer in.Close()
-	// Ticket 26 (A-08): use Mode().Perm() — the raw Mode() carries the
-	// setuid/setgid/sticky and type bits, and passing them to OpenFile let a
-	// hostile archive drop a setuid-root binary into the install tree.
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode().Perm())
-	if err != nil {
-		return 0, err
-	}
-	defer out.Close()
-	n, err := io.Copy(out, io.LimitReader(in, maxDecompressSize+1))
-	if err != nil {
-		return 0, err
-	}
-	if n > maxDecompressSize {
-		return 0, fmt.Errorf("file %s exceeds max decompression size (%d bytes)", dst, maxDecompressSize)
-	}
-	return n, nil
-}
-
-// extractAppImage copies a single-file AppImage into dst and marks it
-// executable. AppImages are self-contained executable images, not archives.
-func extractAppImage(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	name := filepath.Base(src)
-	outPath := filepath.Join(dst, name)
-	out, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	n, err := io.Copy(out, io.LimitReader(in, maxDecompressSize+1))
-	if err != nil {
-		return err
-	}
-	if n > maxDecompressSize {
-		return fmt.Errorf("file %s exceeds max decompression size (%d bytes)", outPath, maxDecompressSize)
-	}
-	return os.Chmod(outPath, 0o755)
-}
-
 // ensureExecutableBits restores the POSIX execute bit for archives that cannot
 // carry it. Go's archive/zip reports 0666 for entries created on FAT/Windows,
 // so extracted binaries land non-executable and every shim exec fails with
@@ -374,12 +317,18 @@ func extractAppImage(src, dst string) error {
 //
 // Heuristic: files under a "bin" directory, files without an extension, and
 // common executable extensions get 0755. Anything else is left untouched.
-func ensureExecutableBits(root string) {
+func ensureExecutableBits(ctx context.Context, root string) error {
 	if runtime.GOOS == "windows" {
-		return
+		return nil
 	}
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
 			return nil
 		}
 		if info.Mode().Perm()&0o111 != 0 {
@@ -396,336 +345,8 @@ func ensureExecutableBits(root string) {
 				return nil
 			}
 		}
-		_ = os.Chmod(path, 0o755)
-		return nil
+		return os.Chmod(path, 0o755)
 	})
-}
-
-func extractTar(src, dst string, strip int, decompress func(io.Reader) (io.ReadCloser, error)) error {
-	f, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	var srcR io.Reader = f
-	if decompress != nil {
-		rc, err := decompress(srcR)
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-		srcR = rc
-	}
-	return extractTarFromReader(srcR, dst, strip)
-}
-
-// extractTarXZ extracts a .tar.xz archive. It first tries the
-// Go-native xz decoder via the github.com/xi2/xz package. If that
-// is not available (not compiled in), it falls back to the system
-// xz command.
-func extractTarXZ(src, dst string, strip int) error {
-	// Try native Go xz first
-	if dec, err := newXZReader(src); err == nil {
-		defer dec.Close()
-		return extractTarFromReader(dec, dst, strip)
-	}
-	// Fallback: use system xz command
-	return extractViaCommand("xz", []string{"-dc"}, src, dst, strip)
-}
-
-// extractTarZst extracts a .tar.zst archive using the system zstd
-// command. If zstd is not available, returns an error.
-func extractTarZst(src, dst string, strip int) error {
-	// Try native Go zstd first
-	if dec, err := newZstdReader(src); err == nil {
-		defer dec.Close()
-		return extractTarFromReader(dec, dst, strip)
-	}
-	// Fallback: use system zstd command
-	return extractViaCommand("zstd", []string{"-dc"}, src, dst, strip)
-}
-
-// extract7z extracts a .7z archive using the system 7z command.
-//
-// Security (C-6): Unlike the built-in zip/tar extractors, the 7z command
-// does not enforce path containment. To prevent zip-slip attacks where
-// files escape the destination directory, we first list the archive
-// contents and validate all paths BEFORE extracting. This prevents
-// escaped files from ever being written to disk.
-func extract7z(src, dst string) error {
-	// Try 7z command first, then 7za
-	for _, cmd := range []string{"7z", "7za"} {
-		if _, err := exec.LookPath(cmd); err == nil {
-			// Security (C-6): Pre-validate archive contents before extraction.
-			// List the archive and check that every entry path stays within dst.
-			if err := validate7zArchive(cmd, src, dst); err != nil {
-				return fmt.Errorf("7z archive contains unsafe paths: %w", err)
-			}
-
-			// Now extract — all paths have been pre-validated
-			c := exec.Command(cmd, "x", src, "-o"+dst, "-y")
-			// Ticket 38 (P2-26): hide the console window (no-op off Windows).
-			util.HideWindow(c)
-			c.Stdout = os.Stderr
-			c.Stderr = os.Stderr
-			if err := c.Run(); err != nil {
-				return err
-			}
-			// Post-extraction validation as defense-in-depth
-			if err := validateExtraction(dst); err != nil {
-				if rmErr := os.RemoveAll(dst); rmErr != nil {
-					log.Printf("[extractor] WARNING: failed to clean up after validation failure: %v", rmErr)
-				}
-				return fmt.Errorf("7z extraction validation failed (cleaned up): %w", err)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("7z extraction requires a 7z command: install p7zip-full (Debian/Ubuntu: apt install p7zip-full), p7zip (macOS: brew install p7zip) or 7-Zip (Windows), or use a tar/zip archive")
-}
-
-// validate7zArchive lists the contents of a 7z archive and validates
-// that every file path would be extracted within the destination directory.
-// This prevents zip-slip attacks where 7z would write files outside dst.
-func validate7zArchive(cmd, src, dst string) error {
-	// Use "7z l -slt" to list archive contents in a machine-readable format.
-	// Each entry is separated by blank lines, with "Path = <value>" lines.
-	c := exec.Command(cmd, "l", "-slt", src)
-	// Ticket 38 (P2-26): hide the console window (no-op off Windows).
-	util.HideWindow(c)
-	output, err := c.Output()
-	if err != nil {
-		return fmt.Errorf("list archive contents: %w", err)
-	}
-
-	absDst, err := filepath.Abs(filepath.Clean(dst))
-	if err != nil {
-		return fmt.Errorf("resolve destination: %w", err)
-	}
-
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Look for "Path = <value>" lines in the 7z listing output
-		if !strings.HasPrefix(line, "Path = ") {
-			continue
-		}
-		entryPath := strings.TrimPrefix(line, "Path = ")
-		// Skip the archive itself (7z lists the archive as the first entry)
-		if entryPath == "" || entryPath == src {
-			continue
-		}
-		// Check that this entry would land within dst
-		resolved := filepath.Join(absDst, entryPath)
-		if !isSafePath(absDst, resolved) {
-			return fmt.Errorf("entry %q escapes destination directory", entryPath)
-		}
-	}
-	return nil
-}
-
-// validateExtraction walks dst and verifies that no symlinks, hard links,
-// or special files escape the destination directory. This is a post-hoc
-// check for extractors (like 7z) that don't provide per-file path validation.
-func validateExtraction(dst string) error {
-	_, err := filepath.Abs(filepath.Clean(dst))
-	if err != nil {
-		return fmt.Errorf("validate extraction: %w", err)
-	}
-	return filepath.Walk(dst, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		mode := info.Mode()
-		// Reject special file types that could be used for exploitation
-		if mode&os.ModeDevice != 0 {
-			return fmt.Errorf("unsafe device file: %s", path)
-		}
-		if mode&os.ModeNamedPipe != 0 {
-			return fmt.Errorf("unsafe named pipe: %s", path)
-		}
-		if mode&os.ModeSocket != 0 {
-			return fmt.Errorf("unsafe socket: %s", path)
-		}
-		// Check for hard links (nlink > 1 on regular files)
-		if mode.IsRegular() && info.Sys() != nil {
-			if nlink := getNlink(info); nlink > 1 {
-				return fmt.Errorf("unsafe hard link (nlink=%d): %s", nlink, path)
-			}
-		}
-		// Check for symlinks that might escape dst
-		if mode&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				return nil // skip unreadable symlinks
-			}
-			if filepath.IsAbs(target) {
-				return fmt.Errorf("unsafe symlink: %s -> absolute target %s", path, target)
-			}
-			resolved := filepath.Join(filepath.Dir(path), target)
-			if !isSafePath(dst, resolved) {
-				return fmt.Errorf("unsafe symlink: %s -> target %s escapes destination", path, target)
-			}
-		}
-		return nil
-	})
-}
-
-// extractViaCommand uses an external command to decompress, then
-// pipes the output through the tar extractor.
-func extractViaCommand(cmdName string, args []string, src, dst string, strip int) error {
-	cmdArgs := append(args, src)
-	cmd := exec.Command(cmdName, cmdArgs...)
-	// Ticket 38 (P2-26): hide the console window (no-op off Windows).
-	util.HideWindow(cmd)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("%s pipe: %w", cmdName, err)
-	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("%s start: %w", cmdName, err)
-	}
-	err = extractTarFromReader(stdout, dst, strip)
-	stdout.Close()
-	if waitErr := cmd.Wait(); waitErr != nil {
-		if err == nil {
-			return fmt.Errorf("%s wait: %w", cmdName, waitErr)
-		}
-	}
-	return err
-}
-
-// extractTarFromReader reads tar data from r and extracts to dst.
-//
-// Security (H-1): Before writing each entry, we check that no parent
-// directory of the output path is a symlink. This prevents cross-entry
-// symlink traversal where a previous entry creates a symlink that
-// causes a later entry to write outside dst.
-func extractTarFromReader(r io.Reader, dst string, strip int) error {
-	tr := tar.NewReader(r)
-	var totalExtracted int64
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		rel, ok := stripPath(hdr.Name, strip)
-		if !ok {
-			continue
-		}
-		// Ticket 38 (P2-02): same rel-level absolute/UNC rejection as the zip
-		// path (see extractZip).
-		if filepath.IsAbs(rel) || strings.HasPrefix(rel, `\\`) {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("tar slip: entry %q has an absolute/UNC name", hdr.Name)
-		}
-		// P3-6: per-COMPONENT validation — see extractZip for the rationale.
-		if bad := badComponent(rel); bad != "" {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("tar slip: entry %q contains an invalid path component %q (Windows reserved name, or trailing dot/space that would fold it onto another name)", hdr.Name, bad)
-		}
-		out := filepath.Join(dst, rel)
-		if !isSafePath(dst, out) {
-			_ = os.RemoveAll(dst)
-			return fmt.Errorf("tar slip: path %q escapes destination %q", hdr.Name, dst)
-		}
-		// Security (H-1): Check that no ancestor of out is a symlink.
-		// A previous tar entry could have created a symlink at a parent
-		// directory, causing this write to land outside dst even though
-		// the lexical path appears safe.
-		if err := checkNoSymlinkAncestor(dst, out); err != nil {
-			return fmt.Errorf("tar slip: cannot write %q: %w", hdr.Name, err)
-		}
-		mode := hdr.FileInfo().Mode()
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(util.ToLongPath(out), mode.Perm()); err != nil {
-				return err
-			}
-		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(util.ToLongPath(filepath.Dir(out)), 0o755); err != nil {
-				return err
-			}
-			w, err := os.OpenFile(util.ToLongPath(out), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-			if err != nil {
-				return err
-			}
-			n, err := io.Copy(w, io.LimitReader(tr, maxDecompressSize+1))
-			if err != nil {
-				w.Close()
-				return err
-			}
-			if n > maxDecompressSize {
-				w.Close()
-				return fmt.Errorf("file %s exceeds max decompression size (%d bytes)", hdr.Name, maxDecompressSize)
-			}
-			w.Close()
-			totalExtracted += n
-			// Security (M-11): Check total extraction size
-			if totalExtracted > maxTotalExtractSize {
-				_ = os.RemoveAll(dst)
-				return fmt.Errorf("total extraction size exceeds %d bytes limit (zip bomb protection)", maxTotalExtractSize)
-			}
-		case tar.TypeSymlink:
-			// Validate symlink target stays within dst
-			linkTarget := hdr.Linkname
-			if filepath.IsAbs(linkTarget) {
-				return fmt.Errorf("tar slip: symlink %q has absolute target %q", hdr.Name, linkTarget)
-			}
-			resolvedTarget := filepath.Join(filepath.Dir(out), linkTarget)
-			if !isSafePath(dst, resolvedTarget) {
-				return fmt.Errorf("tar slip: symlink %q target %q escapes destination %q", hdr.Name, linkTarget, dst)
-			}
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(out)
-			if err := os.Symlink(linkTarget, out); err != nil {
-				return err
-			}
-		case tar.TypeLink:
-			// Ticket 38 (P2-01): hard links had NO case here, so they were
-			// silently dropped — archives that deduplicate files with links
-			// (common in Go/Python distributions) came out incomplete.
-			//
-			// hdr.Linkname is an ARCHIVE path (relative to the archive root)
-			// and must be stripped exactly like hdr.Name — NOT resolved
-			// against the entry's directory the way a symlink target is
-			// (that is the POSIX distinction between the two types).
-			linkRel, linkOK := stripPath(hdr.Linkname, strip)
-			if !linkOK {
-				log.Printf("[extractor] WARNING: hard link %q target %q lies outside the stripped prefix — skipping", hdr.Name, hdr.Linkname)
-				continue
-			}
-			linkTargetPath := filepath.Join(dst, linkRel)
-			if !isSafePath(dst, linkTargetPath) {
-				return fmt.Errorf("tar slip: hard link %q target %q escapes destination %q", hdr.Name, hdr.Linkname, dst)
-			}
-			// tar writes members in order, so the target normally exists
-			// already; a missing target is skipped with a warning rather
-			// than failing the whole extraction.
-			if _, statErr := os.Stat(util.ToLongPath(linkTargetPath)); statErr != nil {
-				log.Printf("[extractor] WARNING: hard link %q target %q not present — skipping link", hdr.Name, linkRel)
-				continue
-			}
-			if err := os.MkdirAll(util.ToLongPath(filepath.Dir(out)), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(util.ToLongPath(out))
-			if linkErr := os.Link(util.ToLongPath(linkTargetPath), util.ToLongPath(out)); linkErr != nil {
-				// Cross-device links, filesystems without link support or
-				// Windows ACLs can all refuse — copy instead of losing data.
-				log.Printf("[extractor] WARNING: hard link %q -> %q failed (%v) — copying instead", hdr.Name, linkRel, linkErr)
-				if copyErr := util.CopyFile(util.ToLongPath(linkTargetPath), util.ToLongPath(out)); copyErr != nil {
-					return fmt.Errorf("hard link %q: link failed (%v) and copy fallback failed: %w", hdr.Name, linkErr, copyErr)
-				}
-			}
-		}
-	}
-	return nil
 }
 
 // checkNoSymlinkAncestor verifies that no component of the output path
@@ -766,8 +387,10 @@ func checkNoSymlinkAncestor(dst, out string) error {
 		current = filepath.Join(current, part)
 		fi, err := os.Lstat(current)
 		if err != nil {
-			// Path doesn't exist yet — can't be a symlink
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("parent directory %q is a symlink — possible traversal attack", current)
@@ -986,10 +609,3 @@ func gzipReaderAdapter(r io.Reader) (io.ReadCloser, error) {
 func bzip2ReaderAdapter(r io.Reader) (io.ReadCloser, error) {
 	return io.NopCloser(bzip2.NewReader(r)), nil
 }
-
-// ---- Native xz/zstd support (optional, via build tags) ----
-// These are implemented in separate files with build tags:
-//   - xz_go.go    - pure Go xz decoder (uses github.com/xi2/xz)
-//   - xz_fallback.go - stub when xz package is not available
-//   - zstd_go.go  - pure Go zstd decoder (uses github.com/klauspost/compress/zstd)
-//   - zstd_fallback.go - stub when zstd package is not available

@@ -43,6 +43,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -64,6 +65,8 @@ import (
 
 // Options controls a single download.
 type Options struct {
+	// Audit optionally delegates the single final event to an outer request owner.
+	Audit        *AuditRequest
 	URL          string
 	Dest         string
 	ExpectedSHA  string // empty = skip verification
@@ -171,12 +174,23 @@ func (o Options) Fallbacks() []string {
 //
 // If the primary URL fails with HTTP 404/403/410, FallbackURLs are
 // tried in order before giving up.
-func Download(ctx context.Context, opts Options) error {
+func Download(ctx context.Context, opts Options) (resultErr error) {
+	if opts.Audit == nil {
+		opts.Audit = NewAuditRequest(AuditEntry{Tool: opts.ToolName, Version: opts.Version, URL: opts.URL, Source: "download"})
+		defer func() { opts.Audit.Finish(resultErr) }()
+	}
+	opts.Audit.attempt(opts.URL, false)
 	log.Printf("[download] Starting download: url=%s dest=%s", sanitizedURL(opts.URL), opts.Dest)
+
+	if _, err := signer.RootPublicKeyChecked(); err != nil {
+		opts.Audit.setClass("signature")
+		return err
+	}
 
 	// Verify manifest signature before download if present
 	if len(opts.ManifestSignature) > 0 {
 		if err := verifyManifestSignature(opts); err != nil {
+			opts.Audit.setClass("signature")
 			log.Printf("[download] ERROR: manifest signature verification failed: %v", err)
 			return fmt.Errorf("manifest signature verification failed: %w", err)
 		}
@@ -210,6 +224,7 @@ func Download(ctx context.Context, opts Options) error {
 		return fmt.Errorf("empty destination")
 	}
 	if err := os.MkdirAll(filepath.Dir(opts.Dest), 0o755); err != nil {
+		opts.Audit.setClass("filesystem")
 		log.Printf("[download] ERROR: failed to create dest directory %s: %v", filepath.Dir(opts.Dest), err)
 		return err
 	}
@@ -283,6 +298,9 @@ func Download(ctx context.Context, opts Options) error {
 	// client. This makes a dead/misconfigured proxy fail fast instead of
 	// burning MaxRetries per URL, and still succeeds when the target is
 	// reachable directly.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if opts.ProxyURL != "" || proxyFailed {
 		notifyStatus(opts, "Proxy unreachable — retrying directly (no proxy)")
 		log.Printf("[download] Proxy failed; retrying all URLs without a proxy")
@@ -301,6 +319,9 @@ func Download(ctx context.Context, opts Options) error {
 			// Actionable hint only when proxy-connection errors were
 			// actually observed (dead/misconfigured proxy), not when the
 			// proxy worked and the target simply 404'd.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if opts.ProxyURL != "" && proxyFailed {
 				// F-17：代理 URL 的 userinfo 是合法配置（认证代理），
 				// 绝不能出现在用户可见的错误里。
@@ -320,15 +341,24 @@ func Download(ctx context.Context, opts Options) error {
 // failures and whether any failure was proxy-related.
 func tryURLList(ctx context.Context, opts Options, urls []string, notifyFallback bool) (ok bool, failures []string, proxyFailed bool) {
 	for urlIdx, tryURL := range urls {
+		if ctx.Err() != nil {
+			break
+		}
+		if tryURL != opts.URL {
+			opts.Audit.markFallback()
+		}
 		if urlIdx > 0 && notifyFallback {
 			log.Printf("[download] Trying fallback URL #%d: %s", urlIdx, sanitizedURL(tryURL))
 			notifyStatus(opts, "Trying fallback URL #%d: %s", urlIdx, shortHost(tryURL))
 		}
 		timeoutCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-		err := downloadWithRetries(timeoutCtx, opts, tryURL)
+		err := downloadWithRetries(timeoutCtx, opts, tryURL, !notifyFallback)
 		cancel()
 		if err == nil {
 			return true, nil, false
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			opts.Audit.setClass("timeout")
 		}
 		if isProxyError(err) {
 			proxyFailed = true
@@ -494,78 +524,10 @@ func partPathsFor(dest string, urls ...string) []string {
 	return paths
 }
 
-// removePartLockIfUnheld 尽力删除一个 .part.lock，但**只在能证明它没被别的
-// 下载进程持有时**才删。
-//
-// 为什么不能无条件删：LockFileEx/flock 的排他锁是「按文件」的。如果另一个
-// xdev 进程正持有 L，我们却把 L 从目录里删掉，它锁住的就变成一个已解除链接的
-// inode；下一个进程会新建同名 L 并成功加锁 → 两个进程同时写同一个 .part
-// （正是 P1-01 的互斥语义要防的事）。因此先用 0 超时试探性获取：拿得到说明
-// 无人持有，释放后即可安全删除；拿不到说明有活跃下载，保持原样。
-func removePartLockIfUnheld(lockPath string) error {
-	if _, err := os.Stat(lockPath); err != nil {
-		return nil // 不存在（或不可读）：无可清理
-	}
-	fl, err := util.AcquireFileLock(lockPath, 0)
-	if err != nil {
-		return nil // 被活跃下载持有 —— 绝不删除
-	}
-	_ = fl.Release()
-	if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-// removePartResidueIfUnheld 删除一份 .part 残留及其 .part.lock，但同样**只在
-// 能证明该 .part 没有被活跃下载持有时**才动手。
-//
-// 这一点对「成功收尾时清理失败候选的代」尤其重要：同一 dest 下，主 URL 与
-// 回退 URL 各有独立的分代与锁，两个下载可以同时在跑（互斥锁是按分代的）。
-// 无条件删会把**别人在途的 .part** 从目录里抽走（Windows 上删除会失败、
-// Unix 上写进已解除链接的 inode），所以先试探锁：拿不到就原样保留。
-func removePartResidueIfUnheld(partPath string) error {
-	if _, err := os.Stat(partPath); err != nil {
-		// 没有 .part：仍清掉可能残留的孤儿锁与孤儿校验器（P2-6）。
-		_ = os.Remove(partPathValidatorSuffix(partPath))
-		return removePartLockIfUnheld(partPath + ".lock")
-	}
-	fl, err := util.AcquireFileLock(partPath+".lock", 0)
-	if err != nil {
-		return nil // 有活跃下载持有 —— 不动它的 .part
-	}
-	_ = fl.Release()
-
-	var firstErr error
-	if err := os.Remove(partPath); err != nil && !os.IsNotExist(err) {
-		firstErr = err
-	}
-	// P2-6：内容身份旁路文件与 .part 同生共死。
-	_ = os.Remove(partValidatorFor(partPath))
-	if err := os.Remove(partPath + ".lock"); err != nil && !os.IsNotExist(err) && firstErr == nil {
-		firstErr = err
-	}
-	return firstErr
-}
-
-// partPathValidatorSuffix 返回某份 .part 的校验器旁路路径。
-// 抽成函数只是为了让 removePartResidueIfUnheld 的「无 .part」分支读起来不绕。
-func partPathValidatorSuffix(partPath string) string { return partValidatorFor(partPath) }
-
-// removePartialFiles 删除给定 dest/URL 组合的全部 .part 残留与 .part.lock
-// （best-effort，不存在的路径不算错误；被活跃下载持有的分代保持原样）。
-// 返回首个错误，供调用方记日志。
-//
-// P2-5：调用方是「本次下载成功收尾」——必须把**失败候选 URL** 留下的代与
-// 锁一起清掉，否则 dest 已生成但目录里永久残留 <other-url>.part / .part.lock。
+// removePartialFiles limits task cleanup to its own candidate URLs and legacy data.
 func removePartialFiles(dest string, urls ...string) error {
-	var firstErr error
-	for _, p := range partPathsFor(dest, urls...) {
-		if err := removePartResidueIfUnheld(p); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
+	_, err := cleanupPartialPaths(partPathsFor(dest, urls...))
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -807,7 +769,7 @@ func isNotFoundError(err error) bool {
 }
 
 // downloadWithRetries tries to download from a single URL with retries.
-func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error {
+func downloadWithRetries(ctx context.Context, opts Options, tryURL string, direct bool) error {
 	urlOpts := opts
 	urlOpts.URL = tryURL
 
@@ -815,6 +777,7 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 	for attempt := 1; attempt <= opts.MaxRetries; attempt++ {
 		log.Printf("[download] Attempt %d/%d for %s", attempt, opts.MaxRetries, sanitizedURL(tryURL))
 		notifyStatus(opts, "Attempt %d/%d for %s", attempt, opts.MaxRetries, shortHost(tryURL))
+		opts.Audit.attempt(tryURL, direct)
 		err := downloadOnce(ctx, urlOpts)
 		if err == nil {
 			log.Printf("[download] Download completed successfully: %s", opts.Dest)
@@ -831,6 +794,9 @@ func downloadWithRetries(ctx context.Context, opts Options, tryURL string) error
 		// The caller (Download) retries the whole URL list directly once.
 		if isProxyError(err) {
 			return err
+		}
+		if attempt == opts.MaxRetries {
+			break
 		}
 		select {
 		case <-time.After(time.Duration(attempt) * time.Second):
@@ -861,7 +827,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	// inventory conclusion).
 	partLock, lockErr := util.AcquireFileLock(partPath+".lock", 1*time.Second)
 	if lockErr != nil {
-		return fmt.Errorf("another download is already in progress for %s (lock %s: %w) — retry once it finishes, or delete the .part/.part.lock files if no download is running", opts.ProgressDesc, partPath+".lock", lockErr)
+		return fmt.Errorf("another download is already in progress for %s (lock %s: %w) — retry once it finishes", opts.ProgressDesc, partPath+".lock", lockErr)
 	}
 	defer partLock.Release()
 
@@ -888,11 +854,11 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			f, openErr = os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 		}
 	}
-	defer f.Close()
 	if openErr != nil {
 		log.Printf("[download] ERROR: failed to open partial file %s: %v", partPath, openErr)
 		return openErr
 	}
+	defer f.Close()
 	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
 		fromBytes = fi.Size()
 		log.Printf("[download] Resuming from %d bytes (partial file exists)", fromBytes)
@@ -949,6 +915,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	log.Printf("[download] Sending HTTP GET request to %s", sanitizedURL(opts.URL))
 	resp, err := opts.Client.Do(req)
 	if err != nil {
+		opts.Audit.setClass("network")
 		log.Printf("[download] ERROR: HTTP request failed: %s", sanitizedReason(err))
 		return err
 	}
@@ -998,6 +965,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 			resp.Body.Close()
 			// written=0：本次响应没有写入任何字节（完整内容已在 .part 里），
 			// finalizeDownload 会把既有内容补喂给 hasher。
+			opts.Audit.progress(fromBytes, true)
 			return finalizeDownload(opts, partPath, f, sha256.New(), fromBytes, 0)
 		}
 		// 无法证明本地就是完整文件（无残留 / 服务端未确认 total）：删掉 .part
@@ -1010,6 +978,7 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	}
 
 	if resp.StatusCode/100 != 2 {
+		opts.Audit.setClass("http")
 		log.Printf("[download] ERROR: non-2xx status code %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 		return fmt.Errorf("HTTP %d for %s", resp.StatusCode, sanitizedURL(opts.URL))
 	}
@@ -1180,7 +1149,14 @@ func downloadOnce(ctx context.Context, opts Options) error {
 	}
 	log.Printf("[download] Writing to %s (total expected: %d bytes)", partPath, writer.total)
 	written, err := io.Copy(writer, resp.Body)
+	opts.Audit.progress(fromBytes+written, fromBytes > 0)
+	// A cancelled chunked response can end in clean EOF. Preserve the
+	// partial for resume instead of publishing an incomplete archive.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if err != nil {
+		opts.Audit.setClass("network")
 		f.Close()
 		log.Printf("[download] ERROR: write failed after %d bytes: %v", written, err)
 		return err
@@ -1322,6 +1298,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 				parts := strings.Fields(strings.TrimSpace(string(sidecarData)))
 				if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
 					if !strings.EqualFold(gotHash, parts[0]) {
+						opts.Audit.setClass("tofu")
 						log.Printf("[download] ERROR: sha256 mismatch with cached sidecar pin! cached=%s got=%s", parts[0], gotHash)
 						discardPart(partPath)
 						return fmt.Errorf("sha256 mismatch with cached sidecar pin: expected %s, got %s", parts[0], gotHash)
@@ -1340,6 +1317,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 			}
 		} else {
 			if !strings.EqualFold(gotHash, expectedSHA) {
+				opts.Audit.setClass("checksum")
 				log.Printf("[download] ERROR: sha256 mismatch! expected=%s got=%s", expectedSHA, gotHash)
 				discardPart(partPath)
 				return fmt.Errorf("sha256 mismatch: expected %s, got %s", expectedSHA, gotHash)
@@ -1365,6 +1343,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 			parts := strings.Fields(strings.TrimSpace(string(sidecarHash)))
 			if len(parts) >= 1 && !util.IsAllZeroHash(parts[0]) {
 				if !strings.EqualFold(gotHash, parts[0]) {
+					opts.Audit.setClass("tofu")
 					log.Printf("[download] ERROR: sha256 mismatch with cached hash! cached=%s got=%s", parts[0], gotHash)
 					discardPart(partPath)
 					return fmt.Errorf("sha256 mismatch with cached hash: expected %s, got %s", parts[0], gotHash)
@@ -1383,6 +1362,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 
 	// Atomic rename
 	if err := os.Rename(partPath, opts.Dest); err != nil {
+		opts.Audit.setClass("rename")
 		log.Printf("[download] ERROR: failed to rename %s -> %s: %v", partPath, opts.Dest, err)
 		return err
 	}
@@ -1391,14 +1371,7 @@ func finalizeDownload(opts Options, partPath string, f *os.File, hasher hash.Has
 	// P2-6：内容身份旁路文件只服务于「未完成的 .part」，收尾后即作废。
 	_ = os.Remove(partValidatorFor(partPath))
 
-	// Audit log
-	LogAudit(AuditEntry{
-		URL:      opts.URL,
-		SHA256:   gotHash,
-		Source:   sourceType(fromBytes),
-		Verified: expectedSHA != "" && !util.IsAllZeroHash(expectedSHA),
-		Size:     written + fromBytes,
-	})
+	opts.Audit.success(gotHash, expectedSHA != "" && !util.IsAllZeroHash(expectedSHA), written+fromBytes)
 
 	return nil
 }
@@ -1489,7 +1462,10 @@ func verifyManifestSignature(opts Options) error {
 		}
 	}
 
-	rootPub := signer.RootPublicKey()
+	rootPub, keyErr := signer.RootPublicKeyChecked()
+	if keyErr != nil {
+		return keyErr
+	}
 	if rootPub == nil {
 		// No root key embedded — skip verification but warn loudly
 		log.Printf("[download] ⚠ WARNING: manifest signature verification is DISABLED (no root public key embedded) — download integrity cannot be verified")
@@ -1617,20 +1593,12 @@ func verifySHAInMapForVersion(sha256MapJSON, version, osArch, expectedSHA string
 	return false
 }
 
-// sourceType returns the download source type for audit logging.
-func sourceType(fromBytes int64) string {
-	if fromBytes > 0 {
-		return "resume"
-	}
-	return "download"
-}
-
 // validateDownloadURL 是下载前的 URL 安全校验（scheme + SSRF）。
 //
 // 审查 S-10（2026-10-24）：此前只检查 scheme，没有 SSRF 私网拦截，
 // 而 remote 包的 discoverJSON/discoverHTML 都调了 util.IsSafeExternalURL ——
 // 基线不一致。恶意第三方 manifest 可让 xdev 对内网 https 地址发起 GET 并落盘
-//（重定向目标已被 SecureRedirectCheck 逐跳覆盖，但首跳 URL 不打）。
+// （重定向目标已被 SecureRedirectCheck 逐跳覆盖，但首跳 URL 不打）。
 //
 // 两个刻意的不对称（与 util.IsSafeExternalURL 不同）：
 //  1. **放行回环地址**：本机服务（Ollama 等）与本地测试服务器都是合法下载源；

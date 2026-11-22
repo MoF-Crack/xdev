@@ -22,13 +22,11 @@
 //
 // Then replace rootPublicKeyB64 with the contents of pub.key.
 //
-// # Placeholder Key
+// # Development builds
 //
-// The default value of rootPublicKeyB64 is "REPLACE_WITH_REAL_PUBLIC_KEY".
-// When this placeholder is detected, RootPublicKey() returns nil and a
-// WARNING is logged. The downloader skips signature verification in this
-// case, which means downloads are NOT integrity-verified — this is
-// acceptable for development but a security risk in production.
+// Only a genuinely empty root selects the unkeyed development mode. A
+// configured but malformed root is a configuration error, never an opt-out.
+// Expected archive hashes are independent of this setting.
 //
 // # Signature Format
 //
@@ -57,11 +55,7 @@ import (
 // linker: the build succeeds, this variable stays empty, and signature
 // verification is silently disabled.
 //
-// When empty or equal to the placeholder "REPLACE_WITH_REAL_PUBLIC_KEY",
-// RootPublicKey() returns nil and signature verification is disabled.
-// Generate a key pair with:
-//
-//	xdev keygen --pub-key manifests/pub.key --priv-key keys/priv.key
+// An empty value selects unkeyed development mode.
 var rootPublicKeyB64 = ""
 
 // embeddedSignaturesFS can be set at compile time to embed .sig files
@@ -74,37 +68,35 @@ func SetEmbeddedSignaturesFS(fsys embed.FS) {
 	embeddedSignaturesFS = fsys
 }
 
-// RootPublicKey returns the embedded Ed25519 public key.
-// Returns nil if the key has not been set (empty string or placeholder).
-// When nil is returned, manifest signature verification is skipped,
-// which means downloads are NOT integrity-verified — this is a
-// security risk in production deployments.
-//
-// The key can be injected at build time via -ldflags (FULL import path —
-// a short path is silently ignored by the linker):
-//
-//	go build -ldflags "-X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=<key>" .
+// RootPublicKey is the legacy accessor: only an absent key returns nil.
+// New consumers should propagate errors from RootPublicKeyChecked.
 func RootPublicKey() []byte {
-	if rootPublicKeyB64 == "" || rootPublicKeyB64 == "REPLACE_WITH_REAL_PUBLIC_KEY" {
-		if rootPublicKeyB64 == "" {
-			log.Printf("[signer] WARNING: no public key embedded (rootPublicKeyB64 is empty); set via -ldflags or code — manifest signature verification is DISABLED")
-		} else {
-			log.Printf("[signer] WARNING: no real public key embedded (placeholder detected); manifest signature verification is DISABLED — downloads will not be integrity-verified")
-		}
-		return nil
-	}
-	pub, err := base64.StdEncoding.DecodeString(rootPublicKeyB64)
-	if err != nil || len(pub) != 32 {
-		log.Printf("[signer] ERROR: embedded root public key is corrupt (base64 decode failed or decoded length %d != 32 bytes); manifest signature verification is DISABLED — downloads will not be integrity-verified", len(pub))
-		return nil
+	pub, err := RootPublicKeyChecked()
+	if err != nil {
+		log.Printf("[signer] ERROR: %v", err)
+		// Compatibility with callers which used nil to select unsigned mode.
+		// An invalid-size, non-nil key cannot verify any signature.
+		return []byte{}
 	}
 	return pub
 }
 
-// HasRootKey reports whether a real root public key is embedded.
-func HasRootKey() bool {
-	return RootPublicKey() != nil
+// RootPublicKeyChecked distinguishes an unkeyed development build (nil, nil)
+// from a broken trust configuration. Even a textual placeholder is an error.
+func RootPublicKeyChecked() ([]byte, error) {
+	if rootPublicKeyB64 == "" {
+		return nil, nil
+	}
+	pub, err := base64.StdEncoding.Strict().DecodeString(rootPublicKeyB64)
+	if err != nil || len(pub) != 32 || base64.StdEncoding.EncodeToString(pub) != rootPublicKeyB64 {
+		return nil, fmt.Errorf("invalid embedded Ed25519 root public key; refusing to trust signatures (expected canonical base64 of 32 bytes)")
+	}
+	return pub, nil
 }
+
+// HasRootKey reports whether the build requires verification (also true for
+// malformed nonempty roots; they must never relax integrity requirements).
+func HasRootKey() bool { return rootPublicKeyB64 != "" }
 
 // SetRootPublicKeyForTesting overrides the embedded root public key at
 // runtime (base64-encoded 32-byte Ed25519 public key). Tests use it to

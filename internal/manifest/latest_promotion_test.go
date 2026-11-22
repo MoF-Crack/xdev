@@ -117,7 +117,7 @@ func TestLatestPromotion_UsesSingleJudge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(src, "manifest.CanPromoteLatest") {
+	if !contains(src, "manifest.CanPromoteToolLatestWithOptions(") {
 		t.Error("discovery/scheduler.go 必须用 manifest.CanPromoteLatest（或其 WithOptions 形式）做晋升判据")
 	}
 	if contains(src, "util.CompareSemver(dv.Version") {
@@ -129,8 +129,8 @@ func TestLatestPromotion_UsesSingleJudge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(rsrc, "manifest.CanPromoteLatest(") {
-		t.Error("cli/refresh.go 必须用 manifest.CanPromoteLatest 做晋升判据")
+	if !contains(rsrc, "manifest.CanPromoteToolLatest(") {
+		t.Error("cli/refresh.go 必须用 manifest.CanPromoteToolLatest 做工具级晋升判断")
 	}
 }
 

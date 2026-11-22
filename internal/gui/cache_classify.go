@@ -7,30 +7,19 @@
 // 消除各处后缀表与分类规则的重复与分歧。
 package gui
 
-import "strings"
+import (
+	"github.com/xmdemt/xdev/internal/downloader"
+	"strings"
+)
 
 // archiveSuffixes 是下载归档/安装包扩展名（含多段扩展名如 .tar.xz）。
 //
 // 注意：xdev 自身的元数据/辅助文件（.json/.dat/.lock/.sha256/.part/.txt/.log）
 // 不属于归档 —— 归档表刻意不含这些尾缀，避免误删或误分类（Spec 021 D2
 // 统一了此前 parseCacheName 的旧表曾包含 .dat 的分歧）。
-var archiveSuffixes = []string{
-	".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst", ".tar.lz4",
-	".zip", ".tgz", ".txz", ".tbz2", ".tar", ".gz", ".xz", ".bz2", ".zst",
-	".7z", ".rar", ".exe", ".msi", ".dmg", ".pkg", ".jar", ".sh", ".bin",
-}
+var archiveSuffixes = downloader.ArchiveCacheSuffixes()
 
-// isArchiveName 判断缓存文件名是否为下载归档/安装包。
-// 与 GetCacheBreakdown / CleanCache / 保留策略 / 清理 API 共用。
-func isArchiveName(name string) bool {
-	lower := strings.ToLower(name)
-	for _, suffix := range archiveSuffixes {
-		if strings.HasSuffix(lower, suffix) {
-			return true
-		}
-	}
-	return false
-}
+func isArchiveName(name string) bool { return downloader.IsArchiveCacheName(name) }
 
 // cacheEntryCategory 返回缓存文件所属分类，与设置页 GetCacheBreakdown 的
 // 分类规则完全一致：isArchiveName → "archives"；.sha256 → "shaFiles"；
@@ -41,7 +30,7 @@ func cacheEntryCategory(name string) string {
 		return "archives"
 	case strings.HasSuffix(name, ".sha256"):
 		return "shaFiles"
-	case strings.HasSuffix(name, ".part"):
+	case isPartialData(name):
 		return "partFiles"
 	case name == "tool_scan_cache.json":
 		return "scanCache"

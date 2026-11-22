@@ -22,6 +22,15 @@ describe('RemoteDevelopmentPage', () => {
     expect(wrapper.emitted('destroy')[0]).toEqual(['docker', 'one']);
   });
 
+  it('shows per-file diagnostics while retaining healthy instances and output', () => {
+    const diagnostic = { path: 'fixtures/instances/broken.json', kind: 'instance', message: 'invalid instance JSON' };
+    const wrapper = mount(RemoteDevelopmentPage, { props: { t, instances, diagnostics: [diagnostic], outputs: { one: 'exit 23\nstdout\nstderr' } } });
+    expect(wrapper.get('[data-role="remote-diagnostics"]').text()).toContain(diagnostic.path);
+    expect(wrapper.get('[data-role="remote-diagnostics"]').text()).toContain(diagnostic.message);
+    expect(wrapper.findAll('[data-instance]')).toHaveLength(2);
+    expect(wrapper.findAllComponents({ name: 'CopyableValue' }).map((c) => c.props('value'))).toContain('exit 23\nstdout\nstderr');
+  });
+
   it('labels every remote form field', () => {
     const wrapper = mount(RemoteDevelopmentPage, { props: { t, instances } });
     expect(wrapper.findAll('input,select').every((field) => field.attributes('aria-label') || field.element.labels?.length)).toBe(true);

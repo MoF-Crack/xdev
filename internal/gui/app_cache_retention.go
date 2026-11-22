@@ -5,68 +5,62 @@
 package gui
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
+	"github.com/xmdemt/xdev/internal/downloader"
+	"github.com/xmdemt/xdev/internal/util"
 )
 
-// applyArchiveRetention 按配置策略处理安装成功后的缓存归档。
-// immediate → 删除该工具全部归档（含 .sha256/.part 伴生文件）；
-// 7d/30d/forever → 保留（7d/30d 由 CleanupExpiredArchives 启动兜底清理）。
-// 归档判定复用 cache_classify.go 的 isArchiveName（Spec 021 D2）。
-func (a *App) applyArchiveRetention(toolName string) {
+// applyArchiveRetention removes the selected archive and its owned sidecars.
+// Tool names and versions may themselves contain hyphens; prefix scans cannot
+// identify ownership (e.g. android-platform and android-platform-tools).
+func (a *App) applyArchiveRetention(tool, version, format string) error {
 	cfg := a.getCfg()
-	if cfg == nil {
-		return
+	if cfg == nil || cfg.GetArchiveRetention() != "immediate" {
+		return nil
 	}
-	switch cfg.GetArchiveRetention() {
-	case "immediate":
-		removed := 0
-		pattern := filepath.Join(cfg.Core.CacheDir, toolName+"-*")
-		matches, _ := filepath.Glob(pattern)
-		for _, f := range matches {
-			base := filepath.Base(f)
-			// 确保文件名以 toolName- 开头后跟版本号，避免误删其他工具
-			if !strings.HasPrefix(base, toolName+"-") {
-				continue
-			}
-			switch {
-			case isArchiveName(base):
-				// 归档本体 + 伴生文件（.sha256/.part）。
-				if err := os.Remove(f); err == nil {
-					removed++
-				} else if !os.IsNotExist(err) {
-					logWarn("[cache-retention] remove %s failed: %v", f, err)
-				}
-				removed += removeArchiveCompanions(f)
-			case strings.HasSuffix(strings.ToLower(base), ".sha256"),
-				strings.HasSuffix(strings.ToLower(base), ".part"):
-				// 孤立伴生文件（无归档本体）也一并删除。
-				if err := os.Remove(f); err == nil {
-					removed++
-				} else if !os.IsNotExist(err) {
-					logWarn("[cache-retention] remove %s failed: %v", f, err)
-				}
-			}
+	for _, component := range []string{tool, version, format} {
+		if _, err := util.SafeName(component); err != nil {
+			return a.finishCacheCleanup(downloader.CleanupResult{Failed: 1}, fmt.Errorf("invalid cache filename component: %w", err))
 		}
-		if removed > 0 {
-			logInfo("[cache-retention] immediate: removed %d archive file(s) for %s", removed, toolName)
-		}
-	default:
-		logInfo("[cache-retention] policy %q: keeping archives for %s", cfg.GetArchiveRetention(), toolName)
 	}
+	filename := tool + "-" + version + "." + format
+	result, err := removeCacheArchive(filepath.Join(cfg.Core.CacheDir, filename))
+	return a.finishCacheCleanup(result, err)
 }
 
-// CleanupExpiredArchives 删除超过保留期限的归档（7d/30d 策略）。
-// 依据文件 ModTime；immediate/forever 策略跳过（不自动删）。返回删除数量。
-// 同时删除归档的 .sha256/.part 伴生文件；删除后刷新明细缓存。
+// applyArchivePathRetention uses the installer's exact selected cache path,
+// including form-specific names and already-cached downloads.
+func (a *App) applyArchivePathRetention(path string) error {
+	cfg := a.getCfg()
+	if cfg == nil || cfg.GetArchiveRetention() != "immediate" {
+		return nil
+	}
+	if err := util.ValidateAbsPathUnder(cfg.Core.CacheDir, path); err != nil {
+		return a.finishCacheCleanup(downloader.CleanupResult{Failed: 1}, err)
+	}
+	result, err := removeCacheArchive(path)
+	return a.finishCacheCleanup(result, err)
+}
+
+// CleanupExpiredArchives preserves the Wails return type. Partial failures are
+// logged along with accurate counts by finishCacheCleanup.
 func (a *App) CleanupExpiredArchives() int {
+	result, err := a.cleanupExpiredArchives()
+	_ = a.finishCacheCleanup(result, err)
+	return result.Deleted
+}
+
+func (a *App) cleanupExpiredArchives() (downloader.CleanupResult, error) {
+	var result downloader.CleanupResult
 	cfg := a.getCfg()
 	if cfg == nil {
-		return 0
+		return result, nil
 	}
 	var retention time.Duration
 	switch cfg.GetArchiveRetention() {
@@ -75,48 +69,36 @@ func (a *App) CleanupExpiredArchives() int {
 	case "30d":
 		retention = 30 * 24 * time.Hour
 	default:
-		return 0 // immediate/forever：不自动清理
+		return result, nil
 	}
-
-	entries, err := os.ReadDir(cfg.Core.CacheDir)
+	entries, err := downloader.ReadCacheDir(cfg.Core.CacheDir)
+	if os.IsNotExist(err) {
+		return result, nil
+	}
 	if err != nil {
-		return 0
+		return downloader.CleanupResult{Failed: 1}, err
 	}
-
-	removed := 0
-	var toRemove []string
-	for _, e := range entries {
-		if e.IsDir() {
+	for _, entry := range entries {
+		if entry.IsDir() || !isArchiveName(entry.Name()) {
 			continue
 		}
-		name := e.Name()
-		if !isArchiveName(name) {
-			// 元数据（.json/.dat/.lock/.sha256/.txt）不参与清理
+		info, e := entry.Info()
+		if os.IsNotExist(e) {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
+		if e != nil {
+			result.Failed++
+			err = errors.Join(err, e)
 			continue
 		}
 		if time.Since(info.ModTime()) <= retention {
 			continue
 		}
-		toRemove = append(toRemove, filepath.Join(cfg.Core.CacheDir, name))
+		r, e := removeCacheArchive(filepath.Join(cfg.Core.CacheDir, entry.Name()))
+		result.Add(r)
+		err = errors.Join(err, e)
 	}
-	for _, p := range toRemove {
-		if err := os.Remove(p); err == nil {
-			removed++
-		} else if !os.IsNotExist(err) {
-			logWarn("[cache-retention] remove %s failed: %v", p, err)
-		}
-		// 伴生文件：校验与下载中间态（best-effort）。
-		removed += removeArchiveCompanions(p)
-	}
-	if removed > 0 {
-		logInfo("[cache-retention] removed %d expired archive file(s) (policy %s)", removed, cfg.GetArchiveRetention())
-		a.InvalidateSizeBreakdown()
-	}
-	return removed
+	return result, err
 }
 
 // GetArchiveRetention 返回当前保留策略（"immediate"|"7d"|"30d"|"forever"）。

@@ -51,7 +51,7 @@ func TestDeleteCacheFile(t *testing.T) {
 	if err := app.DeleteCacheFile(zipPath); err != nil {
 		t.Fatalf("DeleteCacheFile failed: %v", err)
 	}
-	assertCacheFiles(t, filepath.Join(tmp, "cache"), "llvm-22.1.8.tar.xz")
+	assertCacheFiles(t, filepath.Join(tmp, "cache"), "llvm-22.1.8.tar.xz", "go-1.26.5.zip.part.lock")
 
 	// Idempotent: deleting an already-gone file is not an error.
 	if err := app.DeleteCacheFile(zipPath); err != nil {
@@ -171,20 +171,20 @@ func TestCleanCacheCategory(t *testing.T) {
 	if err := app.CleanCacheCategory("partFiles"); err != nil {
 		t.Fatal(err)
 	}
-	assertCacheFiles(t, cacheDir,
+	assertCacheFiles(t, cacheDir, "go-1.26.5.zip.part.lock",
 		"favorites.json", "manifest-cache.dat", "sniff-cache.json", "tool_scan_cache.json")
 
 	// scanCache: only tool_scan_cache.json.
 	if err := app.CleanCacheCategory("scanCache"); err != nil {
 		t.Fatal(err)
 	}
-	assertCacheFiles(t, cacheDir, "favorites.json", "manifest-cache.dat", "sniff-cache.json")
+	assertCacheFiles(t, cacheDir, "go-1.26.5.zip.part.lock", "favorites.json", "manifest-cache.dat", "sniff-cache.json")
 
 	// otherFiles: every remaining non-archive/non-sidecar file.
 	if err := app.CleanCacheCategory("otherFiles"); err != nil {
 		t.Fatal(err)
 	}
-	assertCacheFiles(t, cacheDir)
+	assertCacheFiles(t, cacheDir, "go-1.26.5.zip.part.lock")
 
 	// all: recreate and remove only the REAL cache (archives / .sha256 / .part).
 	//
@@ -200,7 +200,7 @@ func TestCleanCacheCategory(t *testing.T) {
 	if err := app.CleanCacheCategory("all"); err != nil {
 		t.Fatal(err)
 	}
-	assertCacheFiles(t, cacheDir,
+	assertCacheFiles(t, cacheDir, "go-1.26.5.zip.part.lock",
 		"favorites.json", "manifest-cache.dat", "sniff-cache.json", "tool_scan_cache.json")
 
 	// The subdir (and its content) must have survived everything.

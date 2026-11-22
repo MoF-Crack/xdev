@@ -194,12 +194,26 @@ func lookupProjectVersion(xmdeHome, alias string, args []string) (string, string
 		return "", "", false // 无项目配置（或读取失败）—— 正常路径
 	}
 
-	installRoot := filepath.Join(xmdeHome, "install")
+	appCfg, err := config.LoadReadOnly(xmdeHome)
+	if err != nil {
+		return "", "", false
+	}
+	cat, err := manifest.LoadCatalogCached(appCfg.Core.ManifestDir, appCfg.Core.CacheDir)
+	if err != nil {
+		return "", "", false
+	}
+	reg := plugin.BuildRegistry(cat, filepath.Join(appCfg.Core.XMDevDir, "plugins"))
+	resolveDir := func(toolName, spec string) (string, bool) {
+		p, ok := reg.Get(toolName)
+		if !ok {
+			return "", false
+		}
+		return project.ResolvePluginInstalled(appCfg.Core.InstallDir, p, spec)
+	}
 
 	// 情形 1：alias 本身就是被声明的工具。
 	if spec, ok := cfg.Spec(alias); ok {
-		if ver, ok := project.ResolveInstalled(installRoot, alias, spec); ok {
-			dir := project.DirFor(installRoot, alias, ver)
+		if dir, ok := resolveDir(alias, spec); ok {
 			if target, found := FindInDir(dir, alias); found {
 				return target, alias, true
 			}
@@ -212,11 +226,10 @@ func lookupProjectVersion(xmdeHome, alias string, args []string) (string, string
 	// 情形 2：alias 属于某个被声明的工具（npm → node）。
 	for _, toolName := range cfg.ToolNames() {
 		spec, _ := cfg.Spec(toolName)
-		ver, ok := project.ResolveInstalled(installRoot, toolName, spec)
+		dir, ok := resolveDir(toolName, spec)
 		if !ok {
 			continue
 		}
-		dir := project.DirFor(installRoot, toolName, ver)
 		if target, found := FindInDir(dir, alias); found {
 			return target, toolName, true
 		}
@@ -845,18 +858,38 @@ func InstallShim(shimDir, name, selfPath string) error {
 	if err := os.MkdirAll(shimDir, 0o755); err != nil {
 		return err
 	}
-	if os.PathSeparator == '\\' {
-		if err := installShimWindows(selfPath, filepath.Join(shimDir, name)); err != nil {
+	lock, err := lockDispatchers(shimDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	selfPath, err = filepath.Abs(selfPath)
+	if err != nil {
+		return err
+	}
+	digest, err := dispatcherDigest(selfPath)
+	if err != nil {
+		return err
+	}
+	names := []string{name}
+	if os.PathSeparator == '\\' && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		names = append(names, name+".exe")
+	}
+	for _, entry := range names {
+		dst := filepath.Join(shimDir, entry)
+		if os.PathSeparator == '\\' {
+			err = installShimWindows(selfPath, dst)
+		} else {
+			err = installShimUnix(selfPath, dst)
+		}
+		if err != nil {
 			return err
 		}
-		if !strings.HasSuffix(strings.ToLower(name), ".exe") {
-			if err := installShimWindows(selfPath, filepath.Join(shimDir, name+".exe")); err != nil {
-				return err
-			}
+		if err := writeDispatcherRecord(shimDir, dispatcherRecord{Schema: 1, Name: entry, Source: selfPath, SHA256: digest}); err != nil {
+			return fmt.Errorf("record dispatcher %s ownership: %w", entry, err)
 		}
-		return nil
 	}
-	return installShimUnix(selfPath, filepath.Join(shimDir, name))
+	return nil
 }
 
 // installShimUnix 在 Unix 上创建/替换 shim 符号链接。

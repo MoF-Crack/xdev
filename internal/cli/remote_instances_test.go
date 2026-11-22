@@ -129,7 +129,7 @@ func TestGUIRemoteListSharesInstanceStore(t *testing.T) {
 		t.Fatalf("read gui/app_project.go: %v", err)
 	}
 	text := string(src)
-	for _, want := range []string{`"instances"`, `".json"`, "orchestrator.Instance"} {
+	for _, want := range []string{"orchestrator.ListInstancesWithDiagnostics(", "func (a *App) ListRemoteInstances()", "a.ListRemoteInstancesWithDiagnostics().Instances"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("internal/gui/app_project.go no longer contains %s — the GUI and CLI instance stores have drifted apart (C-08)", want)
 		}

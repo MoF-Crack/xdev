@@ -78,62 +78,40 @@ func (e *LuaEngine) effectiveMemLimit() uint64 {
 type cachedVM struct {
 	L  *lua.LState
 	mu sync.Mutex
-	// poisoned marks a VM whose state is no longer trustworthy: a call
-	// timed out but the plugin code keeps running on it from an orphan
-	// goroutine (票 20 / F-04), so a second caller sharing the LState
-	// would corrupt its stack. Written by the call helpers under mu,
-	// read by vmFor under mu.
+	// A VM that failed mid-call is rebuilt on the next use. Contending
+	// callers share the result of one cache initialization, including errors.
 	poisoned bool
+	initErr  error
 }
 
 // loadTimeout is the maximum time allowed for a plugin's top-level chunk
 // (L.DoFile). 第十轮审计 P1-2：此前加载阶段**完全没有超时**。
 const loadTimeout = 5 * time.Second
 
-// loadProtected 在**有超时**的独立 goroutine 里执行插件顶层代码（L.DoFile）。
-//
-// 第十轮审计 P1-2（P1）：M-12 的三处超时全部在**调用期**（`L.CallByParam`），
-// 而 `L.DoFile` 是裸调用 —— 插件顶层写 `while true do end` 就能让 CLI/TUI/GUI
-// **每次启动永久挂起**（无日志、无错误），因为 `registerUserPlugins` 在
-// `RegisterAll` 里对每个 `.lua` 执行它。
-//
-// 审计实测（把调用超时注入为 100ms）：
-//
-//	插件顶层： local n=0 while n < 1e8 do n=n+1 end
-//	RESULT L3: LoadPlugin err=<nil> elapsed=2.9663249s
-//	CONFIRMED L3: 顶层代码在加载期无界执行（elapsed 2.97s，调用超时 100ms）
-//
-// 与调用期超时的一个关键差别：**超时后可以安全地 Close 这个 VM** —— 此时还没有
-// 任何 goroutine 需要保留它（调用期超时的 VM 因为可能仍在被孤儿 goroutine 使用，
-// 只能"poison + 不 Close"）。这里的孤儿 goroutine 仍跑在 L 上，所以 Close 仍有
-// 风险；因此采用与调用期一致的策略：**放弃该 VM 并让调用方丢弃它**（不缓存、
-// 不复用），把 L 留给 GC。这样顶层死循环最多消耗一个 goroutine，不会阻塞启动。
-func (e *LuaEngine) loadProtected(path string) (*lua.LState, error) {
+// loadProtected runs the chunk and its metadata/promotion callback under one
+// VM context. Cancellation must reach the VM, including its coroutines, before
+// this function may close a failed state or publish a successful state.
+func (e *LuaEngine) loadProtected(path string, afterLoad func(*lua.LState) error) (*lua.LState, error) {
 	L, err := e.newSandboxedVM()
 	if err != nil {
 		return nil, err
 	}
-
-	doneCh := make(chan error, 1)
-	callProtected(doneCh, func() error {
-		if derr := L.DoFile(path); derr != nil {
-			return fmt.Errorf("load lua plugin %s: %w", path, derr)
+	err = e.runWithContext(L, e.callTimeout(loadTimeout), func() error {
+		if err := L.DoFile(path); err != nil {
+			return err
+		}
+		if afterLoad != nil {
+			return afterLoad(L)
 		}
 		return nil
 	})
-
-	select {
-	case derr := <-doneCh:
-		if derr != nil {
-			L.Close()
-			return nil, derr
-		}
-		return L, nil
-	case <-time.After(e.callTimeout(loadTimeout)):
-		// 顶层代码超时：不 Close（孤儿 goroutine 可能仍在 L 上执行），
-		// 直接丢弃这个 VM —— 调用方不会缓存它。
-		return nil, fmt.Errorf("loading plugin %s timed out after %s (the top-level chunk did not return) — the plugin is refusing to load and has been abandoned", path, e.callTimeout(loadTimeout))
+	if err != nil {
+		// runWithContext has returned from the execution itself. There is no
+		// detached Lua worker which could still access this state.
+		L.Close()
+		return nil, fmt.Errorf("load lua plugin %s: %w", path, err)
 	}
+	return L, nil
 }
 
 // callTimeout returns def unless a test injected a shorter override.
@@ -144,74 +122,37 @@ func (e *LuaEngine) callTimeout(def time.Duration) time.Duration {
 	return def
 }
 
-// callProtected runs fn on its own goroutine and reports its outcome on
-// doneCh, converting a panic into an error (票 20 / F-04). The goroutine
-// is deliberately detached — a timeout abandons it while it is still
-// inside the Lua VM — so a panic there would otherwise escape the
-// caller's error handling and take down the whole process. doneCh is
-// buffered (cap 1) so a late result can never block the orphan.
-func callProtected(doneCh chan<- error, fn func() error) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				doneCh <- fmt.Errorf("plugin call panicked: %v", r)
-			}
-		}()
-		doneCh <- fn()
+// callProtected converts a panic on the VM owner goroutine to an error. Stack
+// unwinding finishes before the caller can poison, release or close the VM.
+func callProtected(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("plugin call panicked: %v", r)
+		}
 	}()
+	return fn()
 }
 
-// luaActive 统计仍在运行的 Lua 调用 goroutine（含超时后被放弃的孤儿）。
-//
-// 20261021 审计 P2-8：内存看门狗只能看到**进程级** HeapAlloc。如果上一次
-// 调用超时后仍有一个孤儿在 VM 里执行（F-04 的既定行为），它的分配会被算到
-// 下一次调用的基线上 —— 整包测试里曾把一次正常的 `available()` 误判为
-// 64 MiB 超限。规律：**只要还有别的 Lua goroutine 活着，就无法归因**，
-// 此时关闭本次调用的内存监控（时间超时与 ctx 中断仍然生效）。
+// HeapAlloc is process-wide. Count starts as well as active calls so a short
+// overlapping call entirely between samples invalidates the old baseline too.
+// luaSampleMu protects accounting and sample snapshots only, never plugin code.
 var luaActive atomic.Int32
+var luaSampleMu sync.Mutex
+var luaStarts uint64
 
-// luaMemMu 让“内存看门狗”在任一时刻只计量**一个** Lua 调用。
-//
-// 20261021 审计 P2-8：`watchMemory` 比较的是**全进程** HeapAlloc 增量。并行
-// 插件调用（批量安装、GUI 后台任务）时，A 的分配会记到 B 的基线上，可能把
-// 一个正常调用误判为超限。插件调用本身很短，串行化计量的代价远小于误杀。
-//
-// 只有启用监控（limit > 0）时才加锁；`XDEV_LUA_MEM_LIMIT_MB=0` 可同时关闭
-// 监控与串行化。
-var luaMemMu sync.Mutex
+func beginLuaExecution() {
+	luaSampleMu.Lock()
+	luaStarts++
+	luaActive.Add(1)
+	luaSampleMu.Unlock()
+}
 
-// runWithContext 在 **Lua 层可中断**的 context 下执行 fn，并把它自身的 panic
-// 转成错误。
-//
-// 第十一轮审计（Round 10 报告待办 1/2）：此前的超时全靠 `callProtected` 起一个
-// 独立 goroutine，超时后**放弃**它（VM 被 poison 但 goroutine 仍在跑）。这有两个
-// 实际问题：
-//
-//   - **插件线程永不停止**：`while true do end` 的 goroutine 会一直占着 CPU 直到
-//     进程退出（Round 9 的注释已承认这个残留）。宿主「看起来超时了」，但机器上
-//     仍有一个核被吃满。
-//   - **尾递归不受 `CallStackSize` 约束**：gopher-lua 对尾调用复用栈帧，
-//     `local function loop(n) return loop(n+1) end` 的深度**永远不增长**，因此
-//     `CallStackSize: 200` 对它完全无效。
-//
-// gopher-lua 本身提供了 `LState.SetContext`：它把主循环切换到
-// `mainLoopWithContext`，在**每条指令**前检查 `ctx.Done()`，命中即抛出
-// `<file>:<line>: context deadline exceeded`。实测（本机）：
-//
-//	callTimeout 设为 **30 秒**，ctx 设为 **300 毫秒** → 0.63s 返回
-//	`context deadline exceeded`（而不是等 30 秒，更不是永久挂起）
-//
-// 因此改用 ctx 作为**真正**的中断机制。`callProtected` 的 goroutine 仍然保留
-// —— 它负责把 panic 转成错误（Lua 错误是 Go panic），这是 ctx 做不到的。
-//
-// **注意**：`SetMx`（gopher-lua 的内存上限 API）**不可用** —— 它的实现是一个
-// 后台 goroutine 轮询 `runtime.ReadMemStats`，超限直接 `os.Exit(3)`。让宿主进程
-// 因为一个插件的内存用量而退出，比超时更糟（一个失控插件能杀掉整个 CLI）。
-//
-// 第十二轮审计改用**自建内存看门狗**（`watchMemory`）：同样轮询
-// `runtime.ReadMemStats`，但超限时**取消这个 ctx** —— 于是 Lua 主循环在下一条指令
-// 处抛错、插件线程**真的停下**，调用方拿到一个普通错误。既不退出进程，也不需要
-// gopher-lua 层的字节配额（它没有分配钩子：`newLTable` 直接 `make`）。
+// runWithContext owns the VM until fn has actually returned. Pure Lua checks
+// cancellation on every instruction; coroutine resume/wrap rebind that same
+// budget before entering a child VM (see lua_execution.go). No execution worker
+// is abandoned, and context restoration/Close cannot race with Lua execution.
+// A blocking Go callback must return cooperatively: context cannot forcibly
+// interrupt Go/native code. Hard deadlines for those require process isolation.
 func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func() error) error {
 	return e.runWithContextLimited(L, timeout, e.effectiveMemLimit(), fn)
 }
@@ -219,12 +160,8 @@ func (e *LuaEngine) runWithContext(L *lua.LState, timeout time.Duration, fn func
 // runWithContextLimited 是 runWithContext 的完整形态，可注入内存上限
 // （0 表示不监控；测试用小上限来快速触发）。
 func (e *LuaEngine) runWithContextLimited(L *lua.LState, timeout time.Duration, memLimit uint64, fn func() error) error {
-	// 串行化“被计量的 Lua 调用”（见 luaMemMu 注释）。limit=0 时不监控，
-	// 也就不需要串行化。
-	if memLimit > 0 {
-		luaMemMu.Lock()
-		defer luaMemMu.Unlock()
-	}
+	beginLuaExecution()
+	defer luaActive.Add(-1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -245,58 +182,25 @@ func (e *LuaEngine) runWithContextLimited(L *lua.LState, timeout time.Duration, 
 	// 内存看门狗：超限时 cancel 这个 ctx，让 Lua 主循环在下一条指令处中断。
 	// 返回的 stop 会停掉轮询 goroutine（否则每次调用泄漏一个 ticker）；
 	// 返回的 exceeded 用来在下面**区分**「内存中止」与「时间超时」。
-	//
-	// 归因守卫：并发/孤儿 Lua goroutine 存在时，进程级堆增量不再属于本次
-	// 调用，关闭监控（见 luaActive 注释）。
-	luaActive.Add(1)
-	watchLimit := memLimit
-	if watchLimit > 0 && luaActive.Load() > 1 {
-		log.Printf("[plugin] memory watchdog disabled for this call: %d other Lua goroutine(s) still running",
-			luaActive.Load()-1)
-		watchLimit = 0
-	}
-	stopWatch, memExceeded := watchMemory(ctx, cancel, watchLimit)
-	defer stopWatch()
+	stopWatch, memExceeded := watchMemory(ctx, cancel, memLimit)
+	callErr := callProtected(fn)
+	stopWatch() // join the sampler before reading its final verdict
 
-	doneCh := make(chan error, 1)
-	callProtected(doneCh, func() error {
-		defer luaActive.Add(-1)
-		return fn()
-	})
-
-	select {
-	case err := <-doneCh:
-		return err
-	case <-ctx.Done():
-		// ctx 已取消，主循环会在下一条指令处抛错并让 doneCh 收到结果。
-		// 给它一个很短的窗口把错误写出来（通常立刻就到）。
-		detail := "context deadline exceeded"
-		select {
-		case err := <-doneCh:
-			if err != nil {
-				detail = err.Error()
-			}
-		case <-time.After(50 * time.Millisecond):
+	// PCall/pcall and coroutine.resume may catch a cancellation error. The
+	// outer boundary must still report the exhausted budget, even if the
+	// callback returned nil or converted it to a missing metadata field.
+	if ctx.Err() != nil {
+		detail := ctx.Err().Error()
+		if callErr != nil {
+			detail = callErr.Error()
 		}
-
-		// 第十二轮审计：**必须区分内存中止与时间超时**。
-		//
-		// 否则一次 41ms 就被内存看门狗掐掉的调用会报
-		// `timed out after 10s` —— 用户看到「等了 10 秒」，实际只过了 41 毫秒，
-		// 而且完全看不出真正原因是内存。这种**错误归因**比没有错误更糟：
-		// 它会把排查方向引向网络/超时，而真凶是插件的分配量。
 		if memExceeded() {
 			return fmt.Errorf("Lua memory limit exceeded (%d MiB heap growth) — "+
 				"plugin execution aborted: %s", memLimit>>20, detail)
 		}
-
-		// 时间超时：**错误文案必须保留 "timed out"** —— 这是仓库既有契约
-		//（`lua_hardening_test.go` 断言 `strings.Contains(err, "timed out")`，
-		// `vfox_compat.go` 的调用方也按该子串区分「超时」与「插件自身报错」）。
-		// ctx 的原始文案是 `context deadline exceeded`，直接透出会破坏该契约，
-		// 因此统一包装成 `timed out after <d> (Lua execution aborted: <detail>)`。
 		return fmt.Errorf("timed out after %s (Lua execution aborted: %s)", timeout, detail)
 	}
+	return callErr
 }
 
 // luaMemoryLimitDefault 是单次 Lua 调用允许的**堆增长**上限。
@@ -343,11 +247,11 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 	if limit == 0 {
 		return func() {}, func() bool { return false }
 	}
-	var base runtime.MemStats
-	runtime.ReadMemStats(&base)
-
+	base, epoch, valid := luaHeapSample()
 	done := make(chan struct{})
+	joined := make(chan struct{})
 	go func() {
+		defer close(joined)
 		// 20ms 的采样间隔：325 MiB 在 367ms 内产生（约 0.9 MiB/ms），
 		// 20ms 的粒度足以在远超上限前就抓住；同时不会明显增加 CPU 负担。
 		ticker := time.NewTicker(20 * time.Millisecond)
@@ -364,11 +268,14 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				var m runtime.MemStats
-				runtime.ReadMemStats(&m)
+				heap, starts, alone := luaHeapSample()
+				if !alone || !valid || starts != epoch {
+					base, epoch, valid, over = heap, starts, alone, 0
+					continue
+				}
 				var used uint64
-				if m.HeapAlloc > base.HeapAlloc {
-					used = m.HeapAlloc - base.HeapAlloc
+				if heap > base {
+					used = heap - base
 				}
 				if used <= limit {
 					over = 0
@@ -383,7 +290,7 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 				log.Printf("[plugin] Lua memory limit exceeded: used=%.1f MiB > limit=%.1f MiB "+
 					"(base=%.1f MiB, total_heap=%.1f MiB, goroutines=%d, samples=%d) — aborting plugin execution",
 					float64(used)/(1<<20), float64(limit)/(1<<20),
-					float64(base.HeapAlloc)/(1<<20), float64(m.HeapAlloc)/(1<<20),
+					float64(base)/(1<<20), float64(heap)/(1<<20),
 					runtime.NumGoroutine(), over)
 				tripped.Store(true)
 				cancel() // 让 mainLoopWithContext 在下一条指令处中断
@@ -391,7 +298,20 @@ func watchMemory(ctx context.Context, cancel context.CancelFunc, limit uint64) (
 			}
 		}
 	}()
-	return func() { close(done) }, tripped.Load
+	return func() { close(done); <-joined }, tripped.Load
+}
+
+// A sample is usable only during an uninterrupted single-execution interval.
+// If calls overlap, resume sampling from a fresh baseline once they separate.
+func luaHeapSample() (heap, starts uint64, alone bool) {
+	luaSampleMu.Lock()
+	defer luaSampleMu.Unlock()
+	if luaActive.Load() != 1 {
+		return 0, luaStarts, false
+	}
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc, luaStarts, true
 }
 
 // NewLuaEngine creates a new Lua engine.
@@ -399,51 +319,57 @@ func NewLuaEngine() *LuaEngine {
 	return &LuaEngine{vms: make(map[string]*cachedVM)}
 }
 
-// vmFor returns the cached VM for the plugin path, creating and
-// DoFile-ing it on first use. The returned VM is locked for the
-// caller's exclusive use; the caller must unlock it via cv.mu.Unlock()
-// (deferred), and must set cv.poisoned before unlocking if its call
-// timed out.
-//
-// 票 20 / F-04: a timed-out call leaves its goroutine running inside the
-// VM, so that LState can no longer be shared. The timeout branch flags
-// cv.poisoned under cv.mu; here we re-check after taking cv.mu (the mutex
-// provides the happens-before edge that makes the flag visible) and, when
-// poisoned, unlock, drop the cache entry and loop to build a fresh VM.
-// The poisoned LState is deliberately NOT Closed — its orphan goroutine
-// may still be executing on it — so it is simply unreferenced and left to
-// the GC once that goroutine finishes. Known residue: a plugin with an
-// infinite loop keeps its orphan goroutine alive until the process exits.
+// vmFor returns a VM locked for exclusive use by the caller. A newly inserted
+// per-path slot is locked before publication, so same-path callers wait for that
+// initialization; other paths only share the short map lock. Arbitrary plugin
+// code (loading, metadata or promotion) never executes under e.mu.
 func (e *LuaEngine) vmFor(path string, vfox bool) (*lua.LState, *cachedVM, error) {
 	for {
 		e.mu.Lock()
 		cv, ok := e.vms[path]
 		if !ok {
-			// 第十轮审计 P1-2：加载阶段必须有超时（此前 L.DoFile 是裸调用，
-			// 顶层 `while true do end` 会让每次启动永久挂起）。
-			L, err := e.loadProtected(path)
+			cv = &cachedVM{}
+			cv.mu.Lock() // new slot: this cannot wait for another caller
+			e.vms[path] = cv
+			e.mu.Unlock()
+
+			L, err := e.loadProtected(path, func(L *lua.LState) error {
+				promotePluginMethods(L, getGlobalProtected(L, "PLUGIN"))
+				return nil
+			})
 			if err != nil {
+				cv.initErr = err
+				e.mu.Lock()
+				if e.vms[path] == cv {
+					delete(e.vms, path)
+				}
 				e.mu.Unlock()
+				cv.mu.Unlock()
 				return nil, nil, err
 			}
-			// 第八轮审计 A-01：PLUGIN 表本身的读取也要受保护（插件可给它挂抛错的
-			// __index；裸 GetGlobal 会以 Go panic 打崩宿主）。
-			promotePluginMethods(L, getGlobalProtected(L, "PLUGIN"))
-			cv = &cachedVM{L: L}
-			e.vms[path] = cv
+			cv.L = L
+			return L, cv, nil
 		}
 		e.mu.Unlock()
 
 		cv.mu.Lock()
-		if cv.poisoned {
+		if cv.initErr != nil {
+			err := cv.initErr
 			cv.mu.Unlock()
-			// Drop our own (possibly stale) entry only: another waiter
-			// may already have installed a fresh VM for this path.
+			return nil, nil, err
+		}
+		if cv.poisoned {
+			// Execution is synchronous and has exited before poisoning. It
+			// is safe to close now, under the same per-VM ownership lock.
+			if cv.L != nil && !cv.L.IsClosed() {
+				cv.L.Close()
+			}
 			e.mu.Lock()
-			if cur, ok := e.vms[path]; ok && cur == cv {
+			if e.vms[path] == cv {
 				delete(e.vms, path)
 			}
 			e.mu.Unlock()
+			cv.mu.Unlock()
 			continue
 		}
 		return cv.L, cv, nil
@@ -584,6 +510,10 @@ func (e *LuaEngine) newSandboxedVM() (*lua.LState, error) {
 	}
 	L.SetField(registry, "_LOADERS", safeLoaders)
 
+	if err := protectCoroutineResumes(L); err != nil {
+		L.Close()
+		return nil, fmt.Errorf("failed to protect coroutine execution: %w", err)
+	}
 	return L, nil
 }
 

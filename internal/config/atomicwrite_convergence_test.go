@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 )
 
 // ---------------------------------------------------------------------------
@@ -51,37 +54,7 @@ var fixedTmpExceptions = map[string]string{
 // （os.CreateTemp(dir, base+".tmp-*")）不匹配。
 func TestNoFixedTmpIntermediateFiles(t *testing.T) {
 	root := repoRoot(t)
-	fixedRe := regexp.MustCompile(`\+\s*"\.tmp"`)
-
-	var hits []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "dist", "build", "vendor", "testdata":
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if !fixedRe.Match(stripLineComments(data)) {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		hits = append(hits, filepath.ToSlash(rel))
-		return nil
-	})
+	hits, err := fixedTmpHits(os.DirFS(root))
 	if err != nil {
 		t.Fatalf("walk %s: %v", root, err)
 	}
@@ -104,6 +77,77 @@ func TestNoFixedTmpIntermediateFiles(t *testing.T) {
 	}
 }
 
+// fixedTmpHits scans this module's production sources. Auxiliary copies and
+// nested modules/worktrees are separate inventories, not additional call sites.
+func fixedTmpHits(fsys fs.FS) ([]string, error) {
+	fixedRe := regexp.MustCompile(`\+\s*"\.tmp"`)
+	var hits []string
+	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name != "." {
+				switch d.Name() {
+				case ".git", ".scratch", ".bugx", ".worktrees", "worktrees", "node_modules", "dist", "build", "vendor", "testdata":
+					return fs.SkipDir
+				}
+				for _, marker := range []string{".git", "go.mod"} {
+					if _, statErr := fs.Stat(fsys, path.Join(name, marker)); statErr == nil {
+						return fs.SkipDir
+					} else if !os.IsNotExist(statErr) {
+						return statErr
+					}
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return err
+		}
+		if fixedRe.Match(stripLineComments(data)) {
+			hits = append(hits, name)
+		}
+		return nil
+	})
+	return hits, err
+}
+
+func TestFixedTmpGuardScope(t *testing.T) {
+	bad := &fstest.MapFile{Data: []byte(`package fixture; var temp = target + ".tmp"`)}
+	fixture := fstest.MapFS{
+		"go.mod":                                &fstest.MapFile{Data: []byte("module fixture")},
+		"internal/installer/mirror_selector.go": bad,
+		"internal/other/mirror_selector.go":     bad,
+		"main.go":                               bad,
+		".scratch/worktrees/copy/internal/downloader/downloader.go": bad,
+		".bugx/artifacts/source/downloader.go":                      bad,
+		".worktrees/copy/main.go":                                   bad,
+		"worktrees/copy/main.go":                                    bad,
+		"nested/.git":                                               &fstest.MapFile{Data: []byte("gitdir: elsewhere")},
+		"nested/main.go":                                            bad,
+		"module/go.mod":                                             &fstest.MapFile{Data: []byte("module nested")},
+		"module/main.go":                                            bad,
+		"internal/sample_test.go":                                   bad,
+		"internal/testdata/sample.go":                               bad,
+	}
+	hits, err := fixedTmpHits(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"internal/installer/mirror_selector.go", "internal/other/mirror_selector.go", "main.go"}
+	if !reflect.DeepEqual(hits, want) {
+		t.Fatalf("production hits = %v, want %v", hits, want)
+	}
+	if _, exempt := fixedTmpExceptions["internal/other/mirror_selector.go"]; exempt {
+		t.Fatal("same basename at another production path must not inherit an exception")
+	}
+}
+
 // TC-31-1b P1-24 调用清单收敛核验（8+4）：原子写调用点仍存在，且四克隆中
 // 本票负责的两处为 CreateTemp 形态。
 func TestAtomicWriteCallSitesConverged(t *testing.T) {
@@ -118,10 +162,11 @@ func TestAtomicWriteCallSitesConverged(t *testing.T) {
 	// 从 cli 移到了 manifest 包（该包的清单条目本就覆盖）。这不是放宽断言，而是
 	// 把清单同步到一次有意的架构收敛。
 	atomicCallSites := map[string]int{
-		"internal/config/config.go":        2, // saveLocked + UpdateConfigPaths
-		"internal/discovery/scheduler.go":  4, // sniff cache + .bak + manifest 写回
-		"internal/manifest/manifest.go":    3,
-		"internal/gui/app_custom_tools.go": 1,
+		"internal/config/config.go":            2, // saveLocked + UpdateConfigPaths
+		"internal/discovery/scheduler.go":      4, // sniff cache + .bak + manifest 写回
+		"internal/manifest/manifest.go":        2, // YAML updates; cache write moved into the snapshot loader
+		"internal/manifest/catalog_sources.go": 1, // same third call site, now keyed by the parsed source snapshot
+		"internal/gui/app_custom_tools.go":     1,
 	}
 	for rel, want := range atomicCallSites {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))

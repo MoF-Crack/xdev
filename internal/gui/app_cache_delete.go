@@ -1,121 +1,183 @@
-// app_cache_delete.go implements per-file and per-category cache deletion
-// for the size-breakdown drawer (Spec 019 F6). Both methods are security-
-// conscious: paths are confined to the cache directory and only files
-// (never directories) are removed.
+// Cache cleanup uses the same per-generation exclusion as the downloader.
 package gui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/xmdemt/xdev/internal/downloader"
 )
 
-// DeleteCacheFile 删除缓存目录下的单个文件，并顺带删除同名伴生文件
-// （<file>.sha256 与 <file>.part）。path 必须位于 CacheDir 内（防目录穿越），
-// 且不能是目录。文件不存在时视为幂等成功。有实际删除时刷新明细缓存。
+// CacheCleanupReport keeps counts available over Wails even on partial failure.
+// Busy counts skipped generations, while Removed counts individual files.
+type CacheCleanupReport struct {
+	Removed int    `json:"removed"`
+	Busy    int    `json:"busy"`
+	Failed  int    `json:"failed"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+func cacheCleanupReport(result downloader.CleanupResult, err error) CacheCleanupReport {
+	report := CacheCleanupReport{Removed: result.Deleted, Busy: result.SkippedBusy, Failed: result.Failed}
+	if err != nil {
+		report.Detail = err.Error()
+	}
+	return report
+}
+
 func (a *App) DeleteCacheFile(path string) error {
+	_, err := a.deleteCacheFile(path)
+	return err
+}
+
+func (a *App) DeleteCacheFileResult(path string) CacheCleanupReport {
+	return cacheCleanupReport(a.deleteCacheFile(path))
+}
+
+func (a *App) deleteCacheFile(path string) (downloader.CleanupResult, error) {
 	cfg := a.getCfg()
 	if cfg == nil {
-		return fmt.Errorf("config not loaded")
+		return downloader.CleanupResult{Failed: 1}, fmt.Errorf("config not loaded")
 	}
-	cacheDir := filepath.Clean(cfg.Core.CacheDir)
-	cleanPath := filepath.Clean(path)
+	rel, err := filepath.Rel(cfg.Core.CacheDir, filepath.Clean(path))
+	// The drawer lists direct children. Never traverse a directory symlink or accept
+	// an alternate Windows spelling/stream that could alias a stable lock file.
+	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != rel || rel == "." || strings.Contains(rel, ":") || strings.TrimRight(rel, " .") != rel {
+		return downloader.CleanupResult{Failed: 1}, fmt.Errorf("invalid cache file path %q", path)
+	}
+	if protectedPartialName(rel) {
+		return downloader.CleanupResult{Failed: 1}, fmt.Errorf("保留下载锁或未识别的分代文件 %q", rel)
+	}
+	path = filepath.Join(cfg.Core.CacheDir, rel)
+	var result downloader.CleanupResult
+	switch {
+	case isPartialData(rel):
+		result, err = downloader.CleanupPartialPath(path)
+	case isArchiveName(rel):
+		result, err = removeCacheArchive(path)
+	default:
+		result, err = removeCacheFile(path)
+	}
+	return result, a.finishCacheCleanup(result, err)
+}
 
-	// Security (Spec 019 F6): 禁止目录穿越 — path 必须位于 CacheDir 内。
-	rel, err := filepath.Rel(cacheDir, cleanPath)
+// Check lock suffixes case-insensitively as Windows can resolve different case
+// to the same inode. Unknown generation spellings are never sent to os.Remove.
+func protectedPartialName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".part.lock") || ((strings.HasSuffix(lower, ".part") || strings.HasSuffix(lower, ".part.meta")) && !isPartialData(name))
+}
+
+func isPartialData(name string) bool {
+	_, _, ok := downloader.PartialCachePath(name)
+	return ok && !strings.HasSuffix(name, ".lock")
+}
+
+func removeCacheFile(path string) (downloader.CleanupResult, error) {
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.IsDir() {
+			err = fmt.Errorf("refusing to delete cache directory %q", path)
+		} else {
+			err = os.Remove(path)
+		}
+		if err == nil {
+			return downloader.CleanupResult{Deleted: 1}, nil
+		}
+	}
+	if os.IsNotExist(err) {
+		return downloader.CleanupResult{}, nil
+	}
+	return downloader.CleanupResult{Failed: 1}, err
+}
+
+func removeCacheArchive(path string) (downloader.CleanupResult, error) {
+	result, err := downloader.CleanupPartialFileResult(path)
 	if err != nil {
-		return fmt.Errorf("invalid cache file path %q: %v", path, err)
+		return result, err
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return fmt.Errorf("invalid cache file path %q: outside cache directory", path)
+	for _, f := range []string{path, path + ".sha256"} {
+		r, e := removeCacheFile(f)
+		result.Add(r)
+		err = errors.Join(err, e)
 	}
+	return result, err
+}
 
-	// 只允许删除文件，不删除目录。
-	if fi, err := os.Stat(cleanPath); err == nil && fi.IsDir() {
-		return fmt.Errorf("invalid cache file path %q: is a directory", path)
-	}
-
-	// 删除伴生文件（best-effort），再删除文件本体。
-	removed := removeArchiveCompanions(cleanPath)
-	if err := os.Remove(cleanPath); err == nil {
-		removed++
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("删除缓存文件失败 %s: %w", cleanPath, err)
-	}
-
-	if removed > 0 {
-		logInfo("[DeleteCacheFile] removed %d file(s): %s", removed, cleanPath)
+func (a *App) finishCacheCleanup(result downloader.CleanupResult, err error) error {
+	if result.Deleted > 0 {
 		a.InvalidateSizeBreakdown()
 	}
+	if err != nil {
+		err = result.WithError(err)
+		logWarn("[cache] %v", err)
+		return err
+	}
+	logInfo("[cache] 已删除 %d 个文件", result.Deleted)
 	return nil
 }
 
-// removeArchiveCompanions 删除归档文件的伴生文件（<file>.sha256 校验与
-// <file>.part 下载中间态），best-effort：不存在或删除失败仅记日志。
-// 返回实际删除数量（Spec 021 D3 单一实现）。
-func removeArchiveCompanions(path string) int {
-	removed := 0
-	for _, companion := range []string{path + ".sha256", path + ".part"} {
-		if err := os.Remove(companion); err == nil {
-			removed++
-		} else if !os.IsNotExist(err) {
-			logWarn("[cache] 删除伴生文件失败 %s: %v", companion, err)
-		}
-	}
-	return removed
+// CleanCacheCategory keeps the error-only Wails contract. Partial failures
+// include the actual deletion count and the number of busy generations.
+func (a *App) CleanCacheCategory(category string) error {
+	_, err := a.cleanCacheCategory(category)
+	return err
 }
 
-// CleanCacheCategory 按分类删除缓存文件，分类规则与 GetCacheBreakdown 完全一致
-// （单一来源 cache_classify.go 的 cacheEntryCategory）：
-// "archives" | "shaFiles" | "partFiles" | "scanCache" | "otherFiles" | "all"。
-// 仅删除文件，不删除目录。有实际删除时刷新明细缓存。未知分类返回错误。
-func (a *App) CleanCacheCategory(category string) error {
+func (a *App) CleanCacheCategoryResult(category string) CacheCleanupReport {
+	return cacheCleanupReport(a.cleanCacheCategory(category))
+}
+
+func (a *App) cleanCacheCategory(category string) (downloader.CleanupResult, error) {
 	switch category {
 	case "archives", "shaFiles", "partFiles", "scanCache", "otherFiles", "all":
 	default:
-		return fmt.Errorf("未知的缓存分类: %s", category)
+		return downloader.CleanupResult{Failed: 1}, fmt.Errorf("未知的缓存分类: %s", category)
 	}
-
 	cfg := a.getCfg()
 	if cfg == nil {
-		return fmt.Errorf("config not loaded")
+		return downloader.CleanupResult{Failed: 1}, fmt.Errorf("config not loaded")
 	}
-	entries, err := os.ReadDir(cfg.Core.CacheDir)
+	entries, err := downloader.ReadCacheDir(cfg.Core.CacheDir)
+	if os.IsNotExist(err) {
+		return downloader.CleanupResult{}, nil
+	}
 	if err != nil {
-		return fmt.Errorf("读取缓存目录失败: %w", err)
+		return downloader.CleanupResult{Failed: 1}, fmt.Errorf("读取缓存目录失败: %w", err)
 	}
-
-	removed := 0
+	var result downloader.CleanupResult
+	seen := make(map[string]bool)
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue // 不删除目录
-		}
 		name := entry.Name()
-		if category == "all" {
-			// 第七轮审计 F-06：`all` 只删**真缓存**（归档 / .sha256 / .part）。
-			// 用户状态与派生索引（favorites.json、ignored_tools.json、
-			// custom_tools.json、keystore.dat、shim-index.v1、sniff-cache.json、
-			// tool_scan_cache.json、*.lock）必须显式点名分类才删——否则一次
-			// 「清理所有缓存」会静默清空收藏、忽略列表、自定义工具与密钥库。
-			if isCacheMetadata(name) {
-				continue
-			}
-			if c := cacheEntryCategory(name); c != "archives" && c != "shaFiles" && c != "partFiles" {
-				continue
-			}
-		} else if cacheEntryCategory(name) != category {
+		c := cacheEntryCategory(name)
+		if protectedPartialName(name) || (entry.IsDir() && c != "partFiles") {
 			continue
 		}
-		if err := os.Remove(filepath.Join(cfg.Core.CacheDir, name)); err == nil {
-			removed++
-		} else if !os.IsNotExist(err) {
-			logWarn("[CleanCacheCategory] 删除缓存文件失败 %s: %v", name, err)
+		if category == "all" {
+			if isCacheMetadata(name) || (c != "archives" && c != "shaFiles" && c != "partFiles") {
+				continue
+			}
+		} else if c != category {
+			continue
 		}
+		path := filepath.Join(cfg.Core.CacheDir, name)
+		var r downloader.CleanupResult
+		var e error
+		if c == "partFiles" {
+			part, _, _ := downloader.PartialCachePath(path)
+			if seen[part] {
+				continue
+			}
+			seen[part] = true
+			r, e = downloader.CleanupPartialPath(part)
+		} else {
+			r, e = removeCacheFile(path)
+		}
+		result.Add(r)
+		err = errors.Join(err, e)
 	}
-	if removed > 0 {
-		logInfo("[CleanCacheCategory] removed %d file(s) (category %s)", removed, category)
-		a.InvalidateSizeBreakdown()
-	}
-	return nil
+	return result, a.finishCacheCleanup(result, err)
 }

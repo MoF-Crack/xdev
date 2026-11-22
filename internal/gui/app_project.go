@@ -10,7 +10,6 @@ package gui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -125,61 +124,36 @@ type RemoteCreateResult struct {
 	Message string `json:"message"`
 }
 
-// ListRemoteInstances 列出远程环境实例
+type RemoteInstanceDiagnostic struct {
+	Path    string `json:"path"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+type RemoteInstanceListResult struct {
+	Instances   []RemoteInstanceInfo       `json:"instances"`
+	Diagnostics []RemoteInstanceDiagnostic `json:"diagnostics"`
+}
+
+// ListRemoteInstances preserves the original bridge for older consumers.
 func (a *App) ListRemoteInstances() []RemoteInstanceInfo {
-	var out []RemoteInstanceInfo
-	// List Docker containers
-	instances, err := orchestrator.ListContainers(context.Background())
-	if err == nil {
-		for _, inst := range instances {
-			out = append(out, RemoteInstanceInfo{
-				ID:        inst.ID,
-				Status:    inst.Status,
-				Addresses: inst.Addresses,
-				Adapter:   "docker",
-			})
+	return a.ListRemoteInstancesWithDiagnostics().Instances
+}
+
+// ListRemoteInstancesWithDiagnostics shares the CLI's instance store and returns
+// one snapshot containing healthy rows and every per-file diagnostic.
+func (a *App) ListRemoteInstancesWithDiagnostics() RemoteInstanceListResult {
+	listing := orchestrator.ListInstancesWithDiagnostics(a.rootContext(), a.getCfg().Core.XMDevDir)
+	out := RemoteInstanceListResult{Instances: []RemoteInstanceInfo{}, Diagnostics: []RemoteInstanceDiagnostic{}}
+	for _, inst := range listing.Instances {
+		adapter := inst.Metadata["adapter"]
+		if adapter == "" {
+			adapter = "ssh"
 		}
+		out.Instances = append(out.Instances, RemoteInstanceInfo{ID: inst.ID, Status: inst.Status, Addresses: inst.Addresses, Adapter: adapter})
 	}
-	// Also list SSH instances from marker files
-	cfg := a.getCfg()
-	instancesDir := filepath.Join(cfg.Core.XMDevDir, "instances")
-	if entries, err := os.ReadDir(instancesDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(instancesDir, e.Name()))
-			if err != nil {
-				continue
-			}
-			var inst orchestrator.Instance
-			if err := json.Unmarshal(data, &inst); err != nil {
-				continue
-			}
-			adapterType := inst.Metadata["adapter"]
-			if adapterType == "" {
-				adapterType = "ssh"
-			}
-			// Skip if already added from Docker listing
-			alreadyListed := false
-			for _, existing := range out {
-				if existing.ID == inst.ID {
-					alreadyListed = true
-					break
-				}
-			}
-			if !alreadyListed {
-				out = append(out, RemoteInstanceInfo{
-					ID:        inst.ID,
-					Status:    inst.Status,
-					Addresses: inst.Addresses,
-					Adapter:   adapterType,
-				})
-			}
-		}
-	}
-	if out == nil {
-		out = []RemoteInstanceInfo{}
+	for _, d := range listing.Diagnostics {
+		out.Diagnostics = append(out.Diagnostics, RemoteInstanceDiagnostic{Path: d.Path, Kind: d.Kind, Message: d.Message})
 	}
 	return out
 }
@@ -219,12 +193,12 @@ func (a *App) CreateRemoteInstance(adapter, image, sshHost string, sshPort int, 
 	// (<home>/instances/<id>.json) so `xdev remote list` (CLI) sees instances
 	// created from the GUI. Before this the GUI never wrote anything, so
 	// "CLI and GUI see the same instance" only held in the CLI→GUI direction.
-	// SaveInstance deliberately never persists credentials (SSHTarget
-	// password is excluded).
-	if saveErr := orchestrator.SaveInstance(a.getCfg().Core.XMDevDir, inst); saveErr != nil {
-		// Non-fatal: the instance exists, only the persisted record failed.
-		logWarn("[CreateRemoteInstance] failed to persist instance %s: %v", inst.ID, saveErr)
+	// Only the versioned, non-sensitive connection record is persisted.
+	home := a.getCfg().Core.XMDevDir
+	if saveErr := orchestrator.SaveInstance(home, inst); saveErr != nil {
+		return &RemoteCreateResult{ID: inst.ID}, fmt.Errorf("remote environment %s was created but its connection record could not be saved: %w", inst.ID, saveErr)
 	}
+	a.remoteSSHSession.Remember(home, inst, sshPassword)
 	return &RemoteCreateResult{
 		ID:      inst.ID,
 		Message: fmt.Sprintf("Remote environment created: %s (%s)", inst.ID, adapter),
@@ -296,19 +270,55 @@ func (a *App) ExecRemoteInstance(adapter, id string, cmd []string) (string, erro
 	if err := validateIsolateCommand(cmd); err != nil {
 		return "", err
 	}
-	adapterImpl, err := orchestrator.NewAdapter(orchestrator.AdapterType(adapter))
+	adapterImpl, err := a.remoteAdapterForInstance(adapter, id)
 	if err != nil {
 		return "", err
 	}
-	result, err := adapterImpl.Exec(context.Background(), id, cmd)
-	if err != nil {
-		return "", err
+	result, execErr := adapterImpl.Exec(a.rootContext(), id, cmd)
+	output := ""
+	if result != nil {
+		output = result.Stdout
+		if result.Stderr != "" {
+			if output != "" {
+				output += "\n"
+			}
+			output += result.Stderr
+		}
 	}
-	output := result.Stdout
-	if result.Stderr != "" {
-		output += "\n" + result.Stderr
+	if execErr != nil || (result != nil && result.ExitCode != 0) {
+		exitCode := util.ExitCode(execErr)
+		if result != nil {
+			exitCode = result.ExitCode
+		}
+		if execErr == nil {
+			execErr = fmt.Errorf("command returned a nonzero exit status")
+		}
+		// Wails rejects promises using Error(), so carry output in both the
+		// result and error text. Existing UI failure rendering retains it.
+		if result == nil {
+			return "", fmt.Errorf("remote execution failed (exit %d): %w", exitCode, execErr)
+		}
+		return output, fmt.Errorf("remote execution failed (exit %d): %w\nstdout:\n%s\nstderr:\n%s", exitCode, execErr, result.Stdout, result.Stderr)
+	}
+	if result == nil {
+		return "", fmt.Errorf("remote execution returned no result")
 	}
 	return output, nil
+}
+
+func (a *App) remoteAdapterForInstance(adapter, id string) (orchestrator.Adapter, error) {
+	if orchestrator.AdapterType(adapter) != orchestrator.AdapterSSH {
+		return orchestrator.NewAdapter(orchestrator.AdapterType(adapter))
+	}
+	home := a.getCfg().Core.XMDevDir
+	inst, err := orchestrator.LoadSavedInstance(home, id)
+	if err != nil {
+		return nil, err
+	}
+	if stored := inst.Metadata["adapter"]; stored != "" && stored != "ssh" {
+		return nil, fmt.Errorf("instance %s does not use the SSH adapter", id)
+	}
+	return orchestrator.NewAdapterForInstance(inst, a.remoteSSHSession.Password(home, inst))
 }
 
 // ========== cd hook ==========

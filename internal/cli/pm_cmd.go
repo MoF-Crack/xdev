@@ -46,7 +46,10 @@ func newPMListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List package managers and whether they are installed",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			defs := loadPMDefs()
+			defs, err := loadPMDefs()
+			if err != nil {
+				return err
+			}
 
 			// 默认只列本平台适用的；--all 列全部。
 			type row struct {
@@ -55,6 +58,10 @@ func newPMListCmd() *cobra.Command {
 			var rows []row
 			for _, d := range defs {
 				if !flagAll && !pmPlatformMatches(d.Platform) {
+					continue
+				}
+				if err := d.Origin.Authorize(""); err != nil {
+					rows = append(rows, row{d.Name, d.DisplayName, "", d.Origin.Kind + " (not probed)"})
 					continue
 				}
 				installed, version := detectPM(d)
@@ -69,7 +76,7 @@ func newPMListCmd() *cobra.Command {
 				default:
 					status = "manual"
 				}
-				rows = append(rows, row{d.Name, d.DisplayName, version, status})
+				rows = append(rows, row{d.Name, d.DisplayName + " [" + d.Origin.Kind + "]", version, status})
 			}
 
 			if len(rows) == 0 {
@@ -104,19 +111,29 @@ func newPMListCmd() *cobra.Command {
 // 其余情况给出明确指引：要么用 `xdev install <tool>`，要么按 hint 手动装。
 func newPMInstallCmd() *cobra.Command {
 	var flagDryRun bool
+	var trustDigest string
 	cmd := &cobra.Command{
 		Use:   "install <name>",
-		Short: "Run the official install script for a package manager",
-		Long: `install runs the official install command declared in
-manifests/package-managers.yaml for the given package manager.
+		Short: "Run a trusted package manager install script",
+		Long: `Preview the install definition with --dry-run. The official catalog is
+package-managers.yaml in the manifest directory. Put user-defined entries in
+local/package-managers.yaml and select local/<name> with --trust-digest.
 
 Only package managers that declare install_command are supported.
 Others either come with an xdev tool (use 'xdev install <tool>') or
 must be installed manually.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if flagDryRun && !globalCtx.initialized {
+				if err := initPreviewContext(XMDevDirOverride(), Verbose(), NoColor(), NoPathFix()); err != nil {
+					return err
+				}
+			}
 			name := strings.ToLower(strings.TrimSpace(args[0]))
-			defs := loadPMDefs()
+			defs, err := loadPMDefs()
+			if err != nil {
+				return err
+			}
 
 			d, ok := pm.Find(defs, name)
 			if !ok {
@@ -125,16 +142,6 @@ must be installed manually.`,
 
 			if !pmPlatformMatches(d.Platform) {
 				return fmt.Errorf("%q does not support this platform (declared platform: %q)", d.Name, d.Platform)
-			}
-
-			// 已经装了就不重复执行安装脚本。
-			if installed, version := detectPM(d); installed {
-				fmt.Printf("%s is already installed", d.DisplayName)
-				if version != "" {
-					fmt.Printf(" (version %s)", version)
-				}
-				fmt.Println()
-				return nil
 			}
 
 			if d.InstallCommand == "" {
@@ -150,21 +157,27 @@ must be installed manually.`,
 				return fmt.Errorf("%q has no install script; %s", d.Name, hint)
 			}
 
+			if flagDryRun {
+				fmt.Fprintf(cmd.OutOrStdout(), "[dry-run] %s\n", d.Summary())
+				return nil
+			}
+			if err := d.Origin.Authorize(trustDigest); err != nil {
+				return err
+			}
+			if installed, version := detectPM(d); installed {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s is already installed (%s)\n", d.DisplayName, version)
+				return nil
+			}
 			if d.RequiresAdmin && !pmIsAdmin() {
 				return fmt.Errorf("%q requires administrator privileges; re-run from an elevated shell", d.Name)
 			}
 
 			shell, shellArgs := installShell(d.ExecutionEnv)
 			if shell == "" {
-				return fmt.Errorf("%q declares unsupported execution_env %q", d.Name, d.ExecutionEnv)
+				return fmt.Errorf("%q requires an available %q shell", d.Name, d.ExecutionEnv)
 			}
 
-			if flagDryRun {
-				fmt.Printf("[dry-run] would run via %s:\n  %s\n", d.ExecutionEnv, d.InstallCommand)
-				return nil
-			}
-
-			fmt.Printf("Installing %s via %s...\n  %s\n", d.DisplayName, d.ExecutionEnv, d.InstallCommand)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installing %s (%s, digest %s) via %s...\n  %s\n", d.Name, d.Origin.Kind, d.Origin.Digest, d.ExecutionEnv, d.InstallCommand)
 
 			c := exec.Command(shell, append(shellArgs, d.InstallCommand)...)
 			c.Stdout = os.Stdout
@@ -179,17 +192,27 @@ must be installed manually.`,
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&trustDigest, "trust-digest", "", "approve the exact local/third-party definition digest shown by --dry-run")
 	cmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "print the command without executing it")
 	return cmd
 }
 
+// isPMPreview examines the parsed command identity, never a raw argv substring.
+func isPMPreview(cmd *cobra.Command) bool {
+	if cmd.Name() != "install" || cmd.Parent() == nil || cmd.Parent().Name() != "pm" {
+		return false
+	}
+	dry, err := cmd.Flags().GetBool("dry-run")
+	return err == nil && dry
+}
+
 // loadPMDefs 从配置的 manifest 目录加载包管理器定义。
-func loadPMDefs() []pm.Def {
+func loadPMDefs() ([]pm.Def, error) {
 	dir := ""
 	if cfg := Cfg(); cfg != nil {
 		dir = cfg.Core.ManifestDir
 	}
-	return pm.LoadOrDefault(dir)
+	return pm.Load(dir)
 }
 
 // detectPM 检测包管理器是否已安装并取版本号。

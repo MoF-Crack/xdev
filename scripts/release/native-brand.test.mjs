@@ -132,7 +132,7 @@ function mockBuild(dir, { os = 'windows', arch = 'arm64', fail = false, signedIn
   writeFileSync(mock, `import { existsSync, readFileSync, writeFileSync, readdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 const args = process.argv.slice(2);
-const event = { args, os: process.env.GOOS, arch: process.env.GOARCH, signedManifestDir: process.env.XDEV_SIGNED_MANIFEST_DIR, syso: readdirSync(process.cwd()).filter(n => n.endsWith('.syso')) };
+const event = { args, os: process.env.GOOS, arch: process.env.GOARCH, signedManifestDir: process.env.XDEV_SIGNED_MANIFEST_DIR, verifyLinkedRoot: process.env.XDEV_VERIFY_LINKED_ROOT, requireCoverage: process.env.XDEV_REQUIRE_SIGNATURE_COVERAGE, syso: readdirSync(process.cwd()).filter(n => n.endsWith('.syso')) };
 const overlayIndex = args.indexOf('-overlay');
 if (overlayIndex >= 0) event.overlay = JSON.parse(readFileSync(args[overlayIndex + 1], 'utf8'));
 if (args[0] === 'version' && args[1] === '-m') { console.log('build\\tvcs.modified=false'); process.exit(0); }
@@ -196,6 +196,14 @@ test('release build embeds staged signed manifests through an overlay and keeps 
     assert.equal(event.overlay.Replace[trackedManifest], stagedManifest);
     assert.equal(event.signedManifestDir, join(dir, 'build/signed-release-input/manifests'));
   }
+  const verification = events[0];
+  assert.equal(verification.requireCoverage, '1');
+  assert.equal(verification.verifyLinkedRoot, '1');
+  assert.equal(verification.args[verification.args.indexOf('-ldflags') + 1], '-X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=fixture-key');
+  assert.match(verification.args[verification.args.indexOf('-run') + 1], /TestEmbeddedPMSignature_VerifyExactYAML/);
+  assert.match(verification.args[verification.args.indexOf('-run') + 1], /TestReleaseEmbeddedRootMatchesVerificationKey/);
+  assert.equal(verification.os, undefined, 'release verification must use the builder host');
+  assert.equal(verification.arch, undefined, 'release verification must not execute the target architecture');
   assert.equal(readFileSync(trackedManifest, 'utf8'), 'checkout yaml');
   const overlayPath = events[0].args[events[0].args.indexOf('-overlay') + 1];
   assert.equal(existsSync(overlayPath), false, 'temporary overlay must be removed after build');

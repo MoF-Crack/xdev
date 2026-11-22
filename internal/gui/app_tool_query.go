@@ -369,7 +369,13 @@ func (a *App) GetInstalledVersions(toolName string) []VersionInfo {
 					Installed: true,
 					Active:    v == activeVer,
 				}
-				integrity := installer.VerifyInstallIntegrity(t, filepath.Join(cfg.Core.InstallDir, toolName, v))
+				installPath, dirErr := t.InstallDir(cfg.Core.InstallDir, v)
+				if dirErr != nil {
+					vi.Integrity = dirErr.Error()
+					result = append(result, vi)
+					continue
+				}
+				integrity := installer.VerifyInstallIntegrity(t, installPath)
 				vi.Intact = integrity.OK
 				if !integrity.OK {
 					vi.Integrity = integrity.Reason
@@ -432,7 +438,7 @@ func (a *App) GetAvailableVersions(toolName string) []VersionInfo {
 	}
 
 	versions := append([]manifest.Version(nil), t.VersionList...)
-	manifest.SortVersionsByRelease(versions)
+	manifest.SortToolVersionsByRelease(toolName, versions)
 
 	var result []VersionInfo
 	for _, v := range versions {

@@ -15,6 +15,7 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -278,7 +279,7 @@ func partArtifactsInDir(t *testing.T, dir string) []string {
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".part.lock") {
+		if strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".part.meta") {
 			out = append(out, name)
 		}
 	}
@@ -326,10 +327,8 @@ func TestP2_5_FailedCandidateResidueCleaned(t *testing.T) {
 	}
 }
 
-// TestP2_5_CleanupHelpersRemovePartLocks：CleanupPartialFile /
-// CleanupAllPartialsInDir 必须一并删除 <part>.lock —— 修复前
-// util.AcquireFileLock 创建的锁文件没有任何代码删除。
-func TestP2_5_CleanupHelpersRemovePartLocks(t *testing.T) {
+// Cleaning residue must preserve all stable synchronization identities.
+func TestP2_5_CleanupHelpersRetainPartLocks(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "archive.zip")
 	partA := partPathFor(dest, "https://a.test/archive.zip")
@@ -369,6 +368,11 @@ func TestP2_5_CleanupHelpersRemovePartLocks(t *testing.T) {
 	if err := CleanupAllPartialsInDir(dir); err != nil {
 		t.Fatalf("CleanupAllPartialsInDir: %v", err)
 	}
+	for _, path := range []string{partA + ".lock", partB + ".lock", dest + ".part.lock", orphanLock} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("missing stable lock: %v", err)
+		}
+	}
 	if left := partArtifactsInDir(t, dir); len(left) != 0 {
 		t.Errorf("CleanupAllPartialsInDir left artifacts behind: %v", left)
 	}
@@ -399,7 +403,7 @@ func TestP2_5_InFlightGenerationIsNotDeleted(t *testing.T) {
 	}
 	defer held.Release()
 
-	if err := removePartialFiles(dest, finishedURL, inflightURL); err != nil {
+	if err := removePartialFiles(dest, finishedURL, inflightURL); !errors.Is(err, ErrPartialBusy) {
 		t.Fatalf("removePartialFiles: %v", err)
 	}
 

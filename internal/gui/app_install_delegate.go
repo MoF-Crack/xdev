@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,13 +30,19 @@ func (a *App) guiDownloadFunc(taskID, toolName, displayVersion string) installer
 			}
 			a.emitInstallProgress(taskID, toolName, displayVersion, message, pct, "", "")
 		}
-		if err := ctx.Err(); err != nil {
+		root := a.rootContext()
+		if err := root.Err(); err != nil {
+			return fmt.Errorf("installation stopped by app shutdown: %w", err)
+		}
+		request, stop := context.WithTimeout(ctx, time.Hour)
+		defer stop()
+		if err := a.dlMgr.StartDownloadContext(request, taskID, toolName, displayVersion, opts); err != nil {
 			return err
 		}
-		if err := a.dlMgr.StartDownload(taskID, toolName, displayVersion, opts); err != nil {
-			return err
+		finishCancelled := func(cause error) error {
+			cleanupErr := a.dlMgr.Cancel(taskID)
+			return errors.Join(cause, cleanupErr, a.dlMgr.RemoveTask(taskID))
 		}
-		defer a.dlMgr.RemoveTask(taskID)
 		if view, ok := a.installSessions.update(taskID, func(v *InstallSession) {
 			if v.Status != "cancelling" {
 				v.Status = "downloading"
@@ -44,38 +51,38 @@ func (a *App) guiDownloadFunc(taskID, toolName, displayVersion string) installer
 		}); ok {
 			a.emitInstallSession(view)
 		}
-
-		tick := time.NewTicker(50 * time.Millisecond)
-		defer tick.Stop()
-		timeout := time.NewTimer(time.Hour)
-		defer timeout.Stop()
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
-				_ = a.dlMgr.Cancel(taskID)
-				return ctx.Err()
-			case <-timeout.C:
-				_ = a.dlMgr.Cancel(taskID)
-				return fmt.Errorf("installation download timed out")
-			case <-tick.C:
+			case <-request.Done():
+				return finishCancelled(request.Err())
+			case <-root.Done():
+				return finishCancelled(fmt.Errorf("installation stopped by app shutdown: %w", root.Err()))
+			case <-ticker.C:
 			}
 			task, err := a.dlMgr.GetTask(taskID)
 			if err != nil {
 				return err
 			}
 			snap := task.GetSnapshot()
+			if cause := request.Err(); cause != nil {
+				return finishCancelled(cause)
+			}
 			switch snap.Status {
 			case downloader.StatusCompleted:
-				// Manager.Cancel returns nil for a completed download. The
-				// session context and BeforeCommit still prevent installation.
 				if view, ok := a.installSessions.update(taskID, func(v *InstallSession) { v.CanPause = false; v.Paused = false }); ok {
 					a.emitInstallSession(view)
 				}
-				return ctx.Err()
+				return errors.Join(ctx.Err(), a.dlMgr.RemoveTask(taskID))
 			case downloader.StatusFailed:
-				return fmt.Errorf("download failed: %s", snap.ErrorMessage)
+				msg := snap.ErrorMessage
+				if msg == "" {
+					msg = "下载失败"
+				}
+				return errors.Join(errors.New(msg), a.dlMgr.RemoveTask(taskID))
 			case downloader.StatusCancelled:
-				return context.Canceled
+				return finishCancelled(fmt.Errorf("下载已取消: %w", context.Canceled))
 			}
 		}
 	}

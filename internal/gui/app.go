@@ -61,6 +61,7 @@ import (
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/isolator"
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/orchestrator"
 	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/shim"
@@ -415,8 +416,9 @@ type App struct {
 	// 执行的（MigrateAllLocalTools 最多 4 路并发 worker），并发写会让
 	// util.AtomicWriteFile 的固定 "<path>.tmp" 临时文件互相截断。用互斥锁
 	// 让写请求排队（不是 TryLock 跳过），保证每次调用都真正落盘。
-	cacheWriteMu sync.Mutex
-	dlMgr        *downloader.Manager // 下载管理器
+	cacheWriteMu     sync.Mutex
+	dlMgr            *downloader.Manager     // 下载管理器
+	remoteSSHSession orchestrator.SSHSession // credentials scoped to this App session
 
 	// rootCtx 是应用级根上下文（F-20 / D18）：在 startup 创建、shutdown
 	// 取消。所有后台任务（安装轮询、延迟刷新等）应派生自它，以便应用
@@ -896,7 +898,13 @@ func (a *App) currentVersion(toolName string) (string, bool) {
 // gopath / export_templates / unsafe-version-blocked 等辅助目录。
 func (a *App) installedVersions(toolName string) []string {
 	cfg := a.getCfg()
-	versions, err := util.ListVersionDirNames(filepath.Join(cfg.Core.InstallDir, toolName))
+	var versions []string
+	var err error
+	if p, ok := a.registry.Get(toolName); ok {
+		versions, err = plugin.InstalledVersions(p, cfg.Core.InstallDir)
+	} else {
+		versions, err = util.ListVersionDirNames(filepath.Join(cfg.Core.InstallDir, toolName))
+	}
 	if err != nil {
 		return nil
 	}

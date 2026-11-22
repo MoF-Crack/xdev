@@ -28,8 +28,10 @@ func TestInstallFormControlsDownloadedArchiveAndInstalledBytes(t *testing.T) {
 	selected := manifest.Archive{OS: runtime.GOOS, Arch: manifest.CanonicalArch(runtime.GOOS, runtime.GOARCH), URL: "https://example.test/gui.zip", Format: "zip", Form: "gui", Strip: 1}
 	p := &formInstallPlugin{fakePlugin: base, manifest: &manifest.Tool{Name: base.name, VersionList: []manifest.Version{{Version: "1.0.0", Archives: []manifest.Archive{*base.archive, selected}}}}}
 	calls := 0
+	var downloadedPath string
 	res, err := ins.InstallWithProgress(context.Background(), p, "1.0.0", nil, InstallOptions{NoActivate: true, Form: "gui", DownloadFunc: func(ctx context.Context, opts downloader.Options) error {
 		calls++
+		downloadedPath = opts.Dest
 		if opts.URL != selected.URL {
 			t.Fatalf("downloaded %s, want %s", opts.URL, selected.URL)
 		}
@@ -41,6 +43,16 @@ func TestInstallFormControlsDownloadedArchiveAndInstalledBytes(t *testing.T) {
 	}
 	if calls != 1 || res.URL != selected.URL {
 		t.Fatalf("selected metadata lost: %+v calls=%d", res, calls)
+	}
+	if res.ArchivePath == "" || res.ArchivePath != downloadedPath {
+		t.Fatalf("retention archive path %q differs from downloaded file %q", res.ArchivePath, downloadedPath)
+	}
+	if _, err := os.Stat(res.ArchivePath); err != nil {
+		t.Fatalf("reported cache archive missing: %v", err)
+	}
+	reused, err := ins.InstallWithProgress(context.Background(), p, "1.0.0", nil, InstallOptions{NoActivate: true, Form: "gui"})
+	if err != nil || reused.ArchivePath != downloadedPath {
+		t.Fatalf("already-installed selection lost archive path: %+v, %v", reused, err)
 	}
 	path, err := p.InstallDir(cfg.Core.InstallDir, "1.0.0")
 	if err != nil {

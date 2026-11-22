@@ -43,14 +43,16 @@ import (
 //   - "package-manager": official script (scoop/brew/choco) or catalog tool
 //   - "sub-tool": corepack enable / pip|uv|npm method
 type InstallSpec struct {
-	SessionID string `json:"sessionId"`
-	Tool      string `json:"tool"`
-	Version   string `json:"version"`
-	Form      string `json:"form"`
-	Confirmed bool   `json:"confirmed"`
-	Force     bool   `json:"force"`
-	Kind      string `json:"kind"`   // "", "tool", "package-manager", "sub-tool"
-	Method    string `json:"method"` // sub-tool install method (pip / uv / corepack / npm)
+	SessionID    string `json:"sessionId"`
+	Tool         string `json:"tool"`
+	Version      string `json:"version"`
+	Form         string `json:"form"`
+	Confirmed    bool   `json:"confirmed"`
+	Force        bool   `json:"force"`
+	Kind         string `json:"kind"`     // "", "tool", "package-manager", "sub-tool"
+	Method       string `json:"method"`   // sub-tool install method (pip / uv / corepack / npm)
+	PMDigest     string `json:"pmDigest"` // explicit approval of the loaded PM definition
+	pmDefinition *pmDef // snapshot authorized before acquiring the resource
 }
 
 // InstallTool installs a tool at the specified version.
@@ -162,7 +164,10 @@ func (a *App) runToolInstall(ctx context.Context, taskID string, spec InstallSpe
 		a.emitActivationWarning(toolName, version, res.ActivationError)
 	}
 	a.refreshAndSaveLocalCache()
-	a.applyArchiveRetention(toolName)
+	if res != nil && res.ArchivePath != "" {
+		_ = a.applyArchivePathRetention(res.ArchivePath)
+	}
+
 	return nil
 }
 

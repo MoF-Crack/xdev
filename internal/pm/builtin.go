@@ -5,8 +5,8 @@ package pm
 //
 // # 为什么要有内置副本
 //
-// 数据文件可能缺失（老部署、用户误删）或损坏（手改 YAML 写错）。
-// 包管理器检测是只读能力，不该因为一个文件问题就整个不可用。
+// 外部数据文件可能缺失（老部署）。可执行检测与安装都必须遵守同一信任边界；
+// 有效二进制内置来源不等于外部文件通过了验签。
 //
 // # 两份数据的一致性
 //
@@ -31,8 +31,8 @@ func builtinDefs() []Def {
 			Name: "yarn", DisplayName: "Yarn",
 			Description: "快速、可靠的依赖管理工具",
 			DetectCmd:   "yarn", DetectArgs: []string{"--version"},
-			ToolName:    "node",
-			InstallHint: "需先安装 Node.js，然后通过 corepack enable 或 npm install -g yarn 安装",
+			ToolName:      "node",
+			InstallHint:   "需先安装 Node.js，然后通过 corepack enable 或 npm install -g yarn 安装",
 			EnableCommand: "corepack enable yarn",
 			ParentTool:    "node",
 			InstallMethods: []InstallMethod{
@@ -44,8 +44,8 @@ func builtinDefs() []Def {
 			Name: "pnpm", DisplayName: "PNPM",
 			Description: "快速、节省磁盘的包管理器",
 			DetectCmd:   "pnpm", DetectArgs: []string{"--version"},
-			ToolName:    "node",
-			InstallHint: "需先安装 Node.js，然后通过 corepack enable 或 npm install -g pnpm 安装",
+			ToolName:      "node",
+			InstallHint:   "需先安装 Node.js，然后通过 corepack enable 或 npm install -g pnpm 安装",
 			EnableCommand: "corepack enable pnpm",
 			ParentTool:    "node",
 			InstallMethods: []InstallMethod{
@@ -131,5 +131,6 @@ func Builtin() []Def {
 	src := builtinDefs()
 	out := make([]Def, len(src))
 	copy(out, src)
+	stamp(out, "builtin", "xdev binary", "")
 	return out
 }

@@ -45,7 +45,7 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
           }), positiveText: t('btn.install'), negativeText: t('btn.cancel'),
         }))) return null;
         method = selected.value;
-      } else if (!methods.length) {
+      } else if (!methods.length && !/^(local|third-party)\//.test(tool.name)) {
         const enable = Boolean(tool.enableCommand);
         if (!(await confirmInstallAction(dialog, {
           title: t(enable ? 'pm.enable_confirm_title' : 'pm.install_confirm_title', { name }),
@@ -54,7 +54,20 @@ export function usePackageManagers({ t, message, dialog, refreshTools, selectedT
           negativeText: t('btn.cancel'),
         }))) return null;
       }
-      return { tool: tool.name, kind: methods.length || tool.enableCommand ? 'sub-tool' : 'package-manager', method, confirmed: true };
+      let pmDigest = '';
+      if (/^(local|third-party)\//.test(tool.name)) {
+        // The list row is only a display snapshot. Bind explicit approval to the
+        // current full definition, keeping the shared lease through confirmation.
+        const plan = await window.go.gui.App.PlanPackageManager(tool.name);
+        if (!plan?.digest || !plan?.summary) throw new Error('Missing package manager trust plan');
+        if (!(await confirmInstallAction(dialog, {
+          title: t('pm.install_confirm_title', { name }),
+          content: () => h('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto' }, plan.summary),
+          positiveText: t('btn.install'), negativeText: t('btn.cancel'),
+        }))) return null;
+        pmDigest = plan.digest;
+      }
+      return { tool: tool.name, kind: methods.length || tool.enableCommand ? 'sub-tool' : 'package-manager', method, confirmed: true, pmDigest };
     });
   }
 

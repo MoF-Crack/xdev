@@ -327,7 +327,19 @@ func (w *windowsTaskScheduler) Status() (*ServiceStatus, error) {
 
 // linuxCron manages a user crontab entry that runs the sniff command
 // daily.
-type linuxCron struct{}
+type linuxCron struct {
+	// executable is an optional test seam; production resolves os.Executable.
+	executable func() (string, error)
+}
+
+const sniffCronMarker = "xdev-sniff:v1"
+
+func (l *linuxCron) executablePath() (string, error) {
+	if l.executable != nil {
+		return l.executable()
+	}
+	return xdevPath()
+}
 
 func (l *linuxCron) Install(schedule string) error {
 	schedule = normalizeSchedule(schedule)
@@ -337,43 +349,50 @@ func (l *linuxCron) Install(schedule string) error {
 		return err
 	}
 
-	exe, err := xdevPath()
+	exe, err := l.executablePath()
 	if err != nil {
 		return err
 	}
-
-	// crontab 行由 /bin/sh 执行 —— 可执行路径用单引号包裹并转义内部单引号，
-	// 防止含空格/特殊字符的路径被注入。
+	if strings.ContainsAny(exe, "\x00\r\n") {
+		return fmt.Errorf("xdev executable path contains cron control characters")
+	}
 	quotedExe := "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
-	cronLine := schedule + " " + quotedExe + " sniff --all --headless\n"
+	// Cron processes percent signs before passing the line to /bin/sh,
+	// including percent signs inside shell quotes.
+	quotedExe = strings.ReplaceAll(quotedExe, "%", `\%`)
+	cronLine := strings.Join(strings.Fields(schedule), " ") + " " + quotedExe + " sniff --all --headless # " + sniffCronMarker
 
-	// Read existing crontab.
-	existing, _ := l.readCrontab()
-
-	// Remove any existing xdev sniff line.
+	existing, err := l.readCrontab()
+	if err != nil {
+		return err
+	}
 	var filtered []string
 	for _, line := range existing {
-		if !strings.Contains(line, "xdev sniff") {
+		if _, owned := managedSniffCron(line, exe); !owned {
 			filtered = append(filtered, line)
 		}
 	}
-
-	// Append new line.
 	filtered = append(filtered, cronLine)
-
 	return l.writeCrontab(filtered)
 }
 
 func (l *linuxCron) Uninstall() error {
 	existing, err := l.readCrontab()
 	if err != nil {
-		return nil // No crontab → nothing to uninstall.
+		return err
+	}
+	exe, err := l.executablePath()
+	if err != nil {
+		return err
 	}
 	var filtered []string
 	for _, line := range existing {
-		if !strings.Contains(line, "xdev sniff") {
+		if _, owned := managedSniffCron(line, exe); !owned {
 			filtered = append(filtered, line)
 		}
+	}
+	if len(filtered) == len(existing) {
+		return nil
 	}
 	return l.writeCrontab(filtered)
 }
@@ -381,14 +400,17 @@ func (l *linuxCron) Uninstall() error {
 func (l *linuxCron) Status() (*ServiceStatus, error) {
 	existing, err := l.readCrontab()
 	if err != nil {
-		return &ServiceStatus{Installed: false}, nil
+		return nil, err
 	}
-
-	status := &ServiceStatus{Installed: false}
+	exe, err := l.executablePath()
+	if err != nil {
+		return nil, err
+	}
+	status := &ServiceStatus{}
 	for _, line := range existing {
-		if strings.Contains(line, "xdev sniff") {
+		if schedule, owned := managedSniffCron(line, exe); owned {
 			status.Installed = true
-			status.Schedule = strings.TrimSpace(strings.Split(line, " xdev")[0])
+			status.Schedule = schedule
 			break
 		}
 	}
@@ -397,10 +419,19 @@ func (l *linuxCron) Status() (*ServiceStatus, error) {
 
 func (l *linuxCron) readCrontab() ([]string, error) {
 	cmd := execCommand("crontab", "-l")
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
 	util.HideWindow(cmd)
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		// crontab(1) uses exit 1 for both absent tables and real errors.
+		// Only its explicit C-locale absent-table diagnostic is empty state.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			message := strings.TrimSpace(string(exitErr.Stderr))
+			if strings.HasPrefix(message, "no crontab for ") && !strings.Contains(message, "\n") {
+				return nil, nil
+			}
+		}
+		return nil, fmt.Errorf("read crontab: %w", err)
 	}
 	lines := strings.Split(string(output), "\n")
 	// Remove trailing empty line.
@@ -412,7 +443,7 @@ func (l *linuxCron) readCrontab() ([]string, error) {
 
 func (l *linuxCron) writeCrontab(lines []string) error {
 	content := strings.Join(lines, "\n")
-	if !strings.HasSuffix(content, "\n") && len(lines) > 0 {
+	if len(lines) > 0 {
 		content += "\n"
 	}
 

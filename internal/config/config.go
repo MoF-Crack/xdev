@@ -57,6 +57,7 @@ import (
 	"time"
 
 	"github.com/xmdemt/xdev/internal/env"
+	"github.com/xmdemt/xdev/internal/pathmode"
 	"github.com/xmdemt/xdev/internal/util"
 	"gopkg.in/yaml.v3"
 )
@@ -225,19 +226,22 @@ func (c *Config) SetProxy(http, https, noProxy string, enabled bool) error {
 	if err := util.ValidateProxyURL(https); err != nil {
 		return fmt.Errorf("https proxy: %w", err)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.Proxy.HTTP = http
-	c.Proxy.HTTPS = https
-	c.Proxy.NoProxy = noProxy
-	c.Proxy.Enabled = enabled
-	return c.saveLocked()
+	return c.Update(func(next *Config) error {
+		next.Proxy = ProxyConfig{HTTP: http, HTTPS: https, NoProxy: noProxy, Enabled: enabled}
+		return nil
+	})
 }
 
 // Clone 返回配置的深拷贝快照（Spec 021 D17 / F-19）：复制所有 map/slice
 // 字段并重置内部互斥锁。调用方可安全读取副本，不受其他协程对原配置
 // 的并发修改影响；副本上的修改不会写回原配置。
 func (c *Config) Clone() *Config {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cloneLocked()
+}
+
+func (c *Config) cloneLocked() *Config {
 	cp := Config{
 		Core:            c.Core,
 		Path:            c.Path,
@@ -273,15 +277,7 @@ func (c *Config) Clone() *Config {
 // P3 已恢复 hook 的真实输出（基于 .xdev.yaml 解析），auto 重新变为有效值。
 // 存量 config 里的 "symlink"（历史遗留、无任何实现）仍静默降级为 "shim"。
 func (c *Config) GetPathMode() string {
-	if c.Path.Mode == "" {
-		return "shim"
-	}
-	switch c.Path.Mode {
-	case "shim", "direct", "auto":
-		return c.Path.Mode
-	default:
-		return "shim"
-	}
+	return pathmode.Normalize(c.Path.Mode)
 }
 
 // SetPathMode updates the PATH management mode and saves the config.
@@ -292,16 +288,13 @@ func (c *Config) GetPathMode() string {
 // cli/hook.go 的 hook 命令是空实现，auto 与 shim 行为完全相同。
 // P3 恢复了 hook 输出，auto 重新有意义，因此重新接受。
 func (c *Config) SetPathMode(mode string) error {
-	switch mode {
-	case "shim", "direct", "auto":
-		// ok
-	default:
+	if !pathmode.Valid(mode) {
 		return fmt.Errorf("invalid path mode: %q (must be 'shim', 'direct' or 'auto')", mode)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.Path.Mode = mode
-	return c.saveLocked()
+	return c.Update(func(next *Config) error {
+		next.Path.Mode = mode
+		return nil
+	})
 }
 
 // GetArchiveRetention returns the download archive retention policy,
@@ -328,10 +321,10 @@ func (c *Config) SetArchiveRetention(v string) error {
 	default:
 		return fmt.Errorf("invalid archive retention policy: %q", v)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.Core.ArchiveRetention = v
-	return c.saveLocked()
+	return c.Update(func(next *Config) error {
+		next.Core.ArchiveRetention = v
+		return nil
+	})
 }
 
 // GetMigrationMode returns the local-tool migration mode, defaulting to
@@ -354,10 +347,10 @@ func (c *Config) SetMigrationMode(mode string) error {
 	if mode != "junction" && mode != "move" {
 		return fmt.Errorf("invalid migration mode: %q", mode)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.Migration.MigrationMode = mode
-	return c.saveLocked()
+	return c.Update(func(next *Config) error {
+		next.Migration.MigrationMode = mode
+		return nil
+	})
 }
 
 // Load reads and returns the Config stored at xmdeDir.
@@ -367,7 +360,18 @@ func (c *Config) SetMigrationMode(mode string) error {
 // the `init` command) decides whether to persist them via Save().
 // Legacy path migration runs at most once per process via sync.Once.
 func Load(xmdeDir string) (*Config, error) {
-	xmdeDir, err := resolveXMDevDir(xmdeDir)
+	return loadConfig(xmdeDir, true)
+}
+
+// LoadReadOnly applies the same defaults, redirects and integrity validation as
+// Load, without legacy moves, selection rewrites, PATH changes or config saves.
+// Use it for previews that must not initialize or migrate a host installation.
+func LoadReadOnly(xmdeDir string) (*Config, error) {
+	return loadConfig(xmdeDir, false)
+}
+
+func loadConfig(xmdeDir string, migrate bool) (*Config, error) {
+	xmdeDir, err := resolveXMDevDirWithMigration(xmdeDir, migrate)
 	if err != nil {
 		return nil, err
 	}
@@ -497,17 +501,19 @@ func Load(xmdeDir string) (*Config, error) {
 	// Check if XMDevDir contains a legacy path and auto-migrate.
 	// Use sync.Once to prevent concurrent Load calls from both
 	// triggering migration and double-saving.
-	migrateOnce.Do(func() {
-		if migrated := migrateLegacyPathValue(cfg.Core.XMDevDir); migrated != cfg.Core.XMDevDir {
-			cfg.Core.XMDevDir = migrated
-			cfg.ResolvePaths(migrated)
-			// Update config.yaml with new paths
-			UpdateConfigPaths(migrated)
-			// Save the updated config
-			cfg.Save()
-			InvalidateHomeCache()
-		}
-	})
+	if migrate {
+		migrateOnce.Do(func() {
+			if migrated := migrateLegacyPathValue(cfg.Core.XMDevDir); migrated != cfg.Core.XMDevDir {
+				cfg.Core.XMDevDir = migrated
+				cfg.ResolvePaths(migrated)
+				// Update config.yaml with new paths
+				UpdateConfigPaths(migrated)
+				// Save the updated config
+				cfg.Save()
+				InvalidateHomeCache()
+			}
+		})
+	}
 
 	return cfg, nil
 }
@@ -672,20 +678,42 @@ func (c *Config) computeIntegrityHMAC() string {
 func (c *Config) Save() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Compute and store integrity HMAC before saving
-	c.Integrity = c.computeIntegrityHMAC()
-	c.IntegritySchema = integritySchemaVersion
 	return c.saveLocked()
+}
+
+// Update changes a private snapshot and publishes it only after the atomic
+// config write succeeds. The callback must only mutate the supplied snapshot.
+func (c *Config) Update(change func(*Config) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := c.cloneLocked()
+	if err := change(next); err != nil {
+		return err
+	}
+	if err := next.saveLocked(); err != nil {
+		return err
+	}
+	c.Core, c.Path, c.Proxy = next.Core, next.Path, next.Proxy
+	c.Mirror, c.Plugin, c.Aliases = next.Mirror, next.Plugin, next.Aliases
+	c.Sniff, c.Migration, c.CustomTools = next.Sniff, next.Migration, next.CustomTools
+	c.Integrity, c.IntegritySchema = next.Integrity, next.IntegritySchema
+	return nil
 }
 
 // saveLocked writes the config to disk in YAML form using atomic write.
 // The caller must hold c.mu. The atomic pattern (tmp + rename) ensures
 // that a crash mid-write leaves the original file intact.
 func (c *Config) saveLocked() error {
-	if err := os.MkdirAll(c.Core.XMDevDir, 0o755); err != nil {
+	next := c.cloneLocked()
+	next.Integrity = next.computeIntegrityHMAC()
+	if next.Integrity == "" {
+		return fmt.Errorf("compute config integrity: empty HMAC")
+	}
+	next.IntegritySchema = integritySchemaVersion
+	if err := os.MkdirAll(next.Core.XMDevDir, 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
-	data, err := yaml.Marshal(c)
+	data, err := yaml.Marshal(next)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
@@ -696,6 +724,7 @@ func (c *Config) saveLocked() error {
 	if err := util.AtomicWriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
+	c.Integrity, c.IntegritySchema = next.Integrity, next.IntegritySchema
 	return nil
 }
 
@@ -836,7 +865,11 @@ func (c *Config) ResolvePaths(xmdeDir string) {
 // 漂移（跨进程注册表与缓存写入落到错误位置）。归一失败（CWD 不可用等
 // 极端情况）时保留原值，不因归一失败而拒绝启动。
 func resolveXMDevDir(explicit string) (string, error) {
-	dir, err := resolveXMDevDirRaw(explicit)
+	return resolveXMDevDirWithMigration(explicit, true)
+}
+
+func resolveXMDevDirWithMigration(explicit string, migrate bool) (string, error) {
+	dir, err := resolveXMDevDirRawWithMigration(explicit, migrate)
 	if err != nil {
 		return "", err
 	}
@@ -847,12 +880,16 @@ func resolveXMDevDir(explicit string) (string, error) {
 	if absErr != nil {
 		return dir, nil
 	}
-	return abs, nil
+	return resolveRootRedirect(abs)
 }
 
 // resolveXMDevDirRaw implements the precedence chain documented above;
 // callers must use resolveXMDevDir so the absolute-path invariant holds.
 func resolveXMDevDirRaw(explicit string) (string, error) {
+	return resolveXMDevDirRawWithMigration(explicit, true)
+}
+
+func resolveXMDevDirRawWithMigration(explicit string, migrate bool) (string, error) {
 	if explicit != "" {
 		return expandHome(explicit)
 	}
@@ -900,7 +937,10 @@ func resolveXMDevDirRaw(explicit string) (string, error) {
 			if sel.InstallDir != "" {
 				if fi, err := os.Stat(sel.InstallDir); err == nil && fi.IsDir() {
 					// Check if the stored path is a legacy path that needs migration
-					migrated := migrateLegacyPathValue(sel.InstallDir)
+					migrated := sel.InstallDir
+					if migrate {
+						migrated = migrateLegacyPathValue(sel.InstallDir)
+					}
 					if migrated != sel.InstallDir {
 						// Update last_selection.json with the new path (with fresh HMAC)
 						newHMACData, _ := json.Marshal(struct {
@@ -938,7 +978,7 @@ func resolveXMDevDirRaw(explicit string) (string, error) {
 		if alt := saferWindowsHome(); alt != "" {
 			// Auto-migrate: if the new XDev path doesn't exist but a
 			// legacy xmdevenvmt directory does, rename it in-place.
-			if _, err := os.Stat(alt); err != nil {
+			if _, err := os.Stat(alt); err != nil && migrate {
 				tryMigrateLegacy(alt)
 			}
 			return alt, nil
@@ -952,7 +992,7 @@ func resolveXMDevDirRaw(explicit string) (string, error) {
 	// Platform-specific default home directory
 	newPath := getDefaultHomeDir()
 	// Auto-migrate legacy directory to new path
-	if _, err := os.Stat(newPath); err != nil {
+	if _, err := os.Stat(newPath); err != nil && migrate {
 		legacy := getLegacyDir()
 		if legacy != "" {
 			if fi, err2 := os.Stat(legacy); err2 == nil && fi.IsDir() {
@@ -1335,36 +1375,62 @@ func scanForExistingInstall() string {
 // processes via a small cache file on the local disk, avoiding
 // repeated drive scanning on Windows.
 var (
-	homeOnce sync.Once
-	homeVal  string
+	homeMu    sync.Mutex // serializes resolution and cache invalidation
+	homeReady bool
+	homeEpoch uint64
+	homeVal   string
 )
 
 // ResetHomeDirForTest resets the cached home directory so that the
 // next call to ResolveHomeDir re-reads the XMDEV_HOME environment
 // variable.  This is intended ONLY for use in tests.
 func ResetHomeDirForTest() {
-	homeOnce = sync.Once{}
+	homeMu.Lock()
+	defer homeMu.Unlock()
+	homeReady = false
+	homeEpoch++
 	homeVal = ""
 }
 
 func ResolveHomeDir() string {
-	homeOnce.Do(func() {
-		// If XMDEV_HOME is set, use it directly (no scanning needed).
-		if v := os.Getenv("XMDEV_HOME"); v != "" {
-			homeVal = v
-			return
+	for {
+		homeMu.Lock()
+		if homeReady {
+			value := homeVal
+			homeMu.Unlock()
+			return value
 		}
-		// Try to read from cross-process cache file.
-		homeVal = readHomeCache()
-		if homeVal != "" {
-			return
+		epoch := homeEpoch
+		cached := ""
+		if os.Getenv("XMDEV_HOME") == "" {
+			cached = readHomeCache()
 		}
-		// Full resolution with drive scanning.
-		dir, _ := resolveXMDevDir("")
-		homeVal = dir
-		writeHomeCache(homeVal)
-	})
-	return homeVal
+		homeMu.Unlock()
+		// Resolution can itself migrate a legacy selection and invalidate the
+		// cache, so do not hold homeMu across it.
+		var dir string
+		var err error
+		if cached != "" {
+			dir, err = resolveRootRedirect(cached)
+		}
+		if dir == "" || err != nil {
+			dir, err = resolveXMDevDir("")
+		}
+		if err != nil {
+			log.Printf("[config] resolve home: %v", err)
+		}
+		homeMu.Lock()
+		if epoch != homeEpoch {
+			homeMu.Unlock()
+			continue
+		}
+		homeVal, homeReady = dir, true
+		if dir != "" && os.Getenv("XMDEV_HOME") == "" {
+			writeHomeCache(dir)
+		}
+		homeMu.Unlock()
+		return dir
+	}
 }
 
 // InvalidateHomeCache deletes the cross-process home directory cache.
@@ -1385,10 +1451,13 @@ func ResolveHomeDir() string {
 // （自更新）继续用**旧 home** → shim 分发失效或写回已迁移走的目录，直到重启进程。
 // 这与历史上 sync.Once 粘滞引发的大事故同源。
 func InvalidateHomeCache() {
+	homeMu.Lock()
+	defer homeMu.Unlock()
 	os.Remove(homeCachePath())
 	os.Remove(fallbackCachePath())
 	// 进程内缓存必须一并失效，否则长驻进程仍会拿到旧 home。
-	homeOnce = sync.Once{}
+	homeReady = false
+	homeEpoch++
 	homeVal = ""
 }
 

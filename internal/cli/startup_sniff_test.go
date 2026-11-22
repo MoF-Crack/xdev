@@ -178,23 +178,26 @@ func TestHasStartupSniff_StrategyAndIntervalTTL(t *testing.T) {
 	}
 }
 
-// TC-34-2 OnInitialize 不再挂 OnStartup：Scheduler 仍被创建（供 Shutdown
-// 刷缓存），但 sniff 触发只来自交互入口。
-func TestOnInitialize_DoesNotTriggerStartupSniff(t *testing.T) {
+// Normal commands still construct the scheduler, but only interactive commands
+// start it. PM previews bypass construction itself (it writes a cache lock).
+func TestInitialization_DoesNotTriggerStartupSniff(t *testing.T) {
 	data, err := os.ReadFile("root.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(data)
-	initBlock := regexp.MustCompile(`(?s)cobra\.OnInitialize\(func\(\)\s*\{(.*?)\n\t\}\)`).FindStringSubmatch(src)
+	initBlock := regexp.MustCompile(`(?s)root\.PersistentPreRunE = func\(cmd \*cobra\.Command, args \[\]string\) error \{(.*?)\n\t\}`).FindStringSubmatch(src)
 	if initBlock == nil {
-		t.Fatal("root.go: cobra.OnInitialize block not found")
+		t.Fatal("root pre-run block not found")
 	}
 	body := initBlock[1]
 	if !strings.Contains(body, "discovery.NewScheduler(") {
-		t.Error("OnInitialize 必须仍创建 Scheduler（Shutdown 需要它刷缓存）")
+		t.Error("normal commands must initialize scheduler")
 	}
 	if strings.Contains(body, ".OnStartup(") {
-		t.Error("OnInitialize 不得再调用 OnStartup（票 34：cd-hook/env 也会触发嗅探）")
+		t.Error("initialization must not directly start sniffing")
+	}
+	if strings.Contains(src, "cobra.OnInitialize(") {
+		t.Error("global initializer would bypass command-specific preview policy")
 	}
 }

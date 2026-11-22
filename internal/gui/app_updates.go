@@ -22,6 +22,12 @@ type UpdateInfo struct {
 	CurrentVersion string `json:"currentVersion"`
 	LatestVersion  string `json:"latestVersion"`
 	Command        string `json:"command"`
+	Stale          bool   `json:"stale,omitempty"`
+	RefreshStatus  string `json:"refreshStatus,omitempty"`
+	RefreshError   string `json:"refreshError,omitempty"`
+	LastSuccess    string `json:"lastSuccess,omitempty"`
+	LastAttempt    string `json:"lastAttempt,omitempty"`
+	RetryAfter     string `json:"retryAfter,omitempty"`
 }
 
 // SniffConfigInfo exposes the current sniff configuration to the frontend.
@@ -65,35 +71,15 @@ func (a *App) GetAvailableUpdates() []UpdateInfo {
 
 	var updates []UpdateInfo
 	for toolName, result := range cache.Tools {
-		if len(result.Versions) == 0 || result.Error != "" || result.Unsupported {
+		latest, known := manifest.NewestToolVersion(toolName, result.Versions)
+		if !known {
 			continue
 		}
 		activeVer, hasActive := a.currentVersion(toolName)
 		if !hasActive || activeVer == "" {
 			continue
 		}
-		// Skip non-version directory names (corrupt installs / bad strip
-		// leftovers). They cannot be compared as semver and would otherwise
-		// stay in the updates list forever.
-		if !isComparableVersion(activeVer) {
-			logDebug("[updates] skip %s: active dir %q is not a comparable version", toolName, activeVer)
-			continue
-		}
-		latest := ""
-		for _, v := range result.Versions {
-			if v == "" || !isComparableVersion(v) {
-				continue
-			}
-			if latest == "" || util.CompareSemver(v, latest) > 0 {
-				latest = v
-			}
-		}
-		if latest == "" {
-			continue
-		}
-		// Only report when latest is strictly newer than active.
-		// Equal versions (including equal after string normalize) are skipped.
-		if util.CompareSemver(latest, activeVer) <= 0 {
+		if order, comparable := manifest.CompareToolVersions(toolName, latest, activeVer); !comparable || order <= 0 {
 			continue
 		}
 		updates = append(updates, UpdateInfo{
@@ -101,6 +87,12 @@ func (a *App) GetAvailableUpdates() []UpdateInfo {
 			CurrentVersion: activeVer,
 			LatestVersion:  latest,
 			Command:        fmt.Sprintf("xdev install %s@%s", toolName, latest),
+			Stale:          result.Error != "" || (result.Status != "" && result.Status != discovery.SniffSuccess),
+			RefreshStatus:  string(result.Status),
+			RefreshError:   result.Error,
+			LastSuccess:    sniffTime(result.LastSuccess),
+			LastAttempt:    sniffTime(result.LastAttempt),
+			RetryAfter:     sniffTime(result.RetryAfter),
 		})
 	}
 
@@ -119,39 +111,11 @@ func (a *App) GetAvailableUpdates() []UpdateInfo {
 	return updates
 }
 
-// isComparableVersion reports whether s looks like a version string that
-// CompareVersions / IsVersionNewer can reason about. Rejects empty strings
-// and garbage directory names (e.g. "lld_is_a_generic_driver._").
-func isComparableVersion(s string) bool {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
+func sniffTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
-	// Must start with a digit or "v"+digit (semver-ish). Pure letter names
-	// and underscore-heavy garbage paths are not versions.
-	s = strings.TrimPrefix(s, "v")
-	s = strings.TrimPrefix(s, "V")
-	if s == "" {
-		return false
-	}
-	if s[0] < '0' || s[0] > '9' {
-		return false
-	}
-	// At least one numeric segment; allow dots and common separators.
-	for _, c := range s {
-		if (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_' || c == '+' {
-			continue
-		}
-		// Allow a single letter prerelease prefix like "1.2.3-rc1" handled
-		// by CompareSemver (strips after '-'). Reject other letters mid-token
-		// only if the whole string has no digit-dot structure — already
-		// started with digit, so letters after '-' are fine.
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-			continue
-		}
-		return false
-	}
-	return true
+	return t.Format(time.RFC3339)
 }
 
 // SniffNow triggers a sniff for a single tool.
@@ -340,13 +304,7 @@ func (a *App) GetLatestVersionForTool(toolName string) string {
 	scheduler := a.sniffScheduler()
 	cache, err := scheduler.LoadCache()
 	if err == nil && cache != nil {
-		if result, ok := cache.Tools[toolName]; ok && len(result.Versions) > 0 {
-			latest := result.Versions[0]
-			for _, v := range result.Versions[1:] {
-				if util.CompareSemver(v, latest) > 0 {
-					latest = v
-				}
-			}
+		if latest, ok := manifest.NewestToolVersion(toolName, cache.Tools[toolName].Versions); ok {
 			return latest
 		}
 	}

@@ -140,7 +140,10 @@ func TestLuaMemoryLimit_AbortsRunawayAllocation(t *testing.T) {
 // 这条证明「拦截确实来自内存看门狗」，而不是别的副作用（比如 ctx 恰好过期）。
 // 没有它，上面那条守卫可能是绿的而原因完全不对。
 func TestLuaMemoryLimit_ZeroDisablesWatchdog(t *testing.T) {
-	_, p := newMemPlugin(t, manyTablesPlugin, u64ptr(0))
+	e, p := newMemPlugin(t, manyTablesPlugin, u64ptr(0))
+	// This control checks that the full allocation succeeds. Race builds
+	// can spend more than 10s in the interpreter even with no watchdog.
+	e.callTimeoutOverride = time.Minute
 
 	start := time.Now()
 	_, err := p.ArchiveFor("1.0.0")

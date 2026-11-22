@@ -83,6 +83,7 @@ try {
   else if (args.has('--release')) throw new Error('Release build requires an Ed25519 public key');
   if (args.has('--release')) {
     env.XDEV_REQUIRE_SIGNATURE_COVERAGE = '1';
+    env.XDEV_VERIFY_LINKED_ROOT = '1';
     env.XDEV_MANIFEST_VERIFY_PUBKEY = key;
     if (manifestOverlay) env.XDEV_SIGNED_MANIFEST_DIR = join(manifestOverlay.signedRoot, 'manifests');
     // Verification runs on the builder host, even when packaging another arch.
@@ -91,7 +92,7 @@ try {
     for (const key of nativeKeys) delete env[key];
     env.CGO_ENABLED = '0';
     try {
-      run(go, goArgs(['test', '.', '-run', '^(TestManifestSignatureCoverage|TestEmbeddedReleaseInputsMatchStagedFiles)$', '-count=1']), root);
+      run(go, goArgs(['test', '.', '-ldflags', `-X github.com/xmdemt/xdev/internal/signer.rootPublicKeyB64=${key}`, '-run', '^(TestManifestSignatureCoverage|TestEmbeddedPMSignature_VerifyExactYAML|TestEmbeddedReleaseInputsMatchStagedFiles|TestReleaseEmbeddedRootMatchesVerificationKey)$', '-count=1']), root);
     } finally {
       for (const key of nativeKeys) {
         if (saved[key] === undefined) delete env[key]; else env[key] = saved[key];

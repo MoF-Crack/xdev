@@ -26,6 +26,7 @@ import (
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/localmigrate"
+	"github.com/xmdemt/xdev/internal/pathmode"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
 )
@@ -38,59 +39,58 @@ func (a *App) ScanLegacyDir() []localmigrate.LegacyDirInfo {
 	return found
 }
 
-// MigrateLegacyDir 执行旧版目录迁移，将旧目录内容复制到新目录并删除旧目录。
+// MigrateLegacyDir copies and verifies the selected legacy root, commits the
+// new config selection, and keeps the old tree for recovery.
 func (a *App) MigrateLegacyDir(legacyDir string) error {
-	logInfo("[MigrateLegacyDir] 开始迁移 %s", legacyDir)
-
-	// Security (F-10): legacyDir 将被子目录迁移后 RemoveAll，
-	// 必须校验为绝对路径、存在、非符号链接、且不在 xdev 主目录内。
-	if legacyDir == "" || !filepath.IsAbs(legacyDir) {
-		return fmt.Errorf("legacy dir must be absolute: %q", legacyDir)
-	}
-	li, err := os.Lstat(legacyDir)
-	if err != nil {
-		return fmt.Errorf("legacy dir does not exist: %s", legacyDir)
-	}
-	// Go 的 Lstat 对 Windows junction/reparse point 也报告 ModeSymlink。
-	if li.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("legacy dir must not be a symlink/junction: %s", legacyDir)
-	}
-	if !li.IsDir() {
-		return fmt.Errorf("legacy dir is not a directory: %s", legacyDir)
-	}
-	cfg := a.getCfg()
-	if util.ValidateAbsPathUnder(cfg.Core.XMDevDir, legacyDir) == nil {
-		return fmt.Errorf("legacy dir is inside xdev home, refusing to migrate: %s", legacyDir)
-	}
-
-	// 根据旧目录路径推算新目录路径
-	vol := filepath.VolumeName(legacyDir)
-	newDir := filepath.Join(vol, "XDev")
-
-	if err := localmigrate.MigrateLegacyDir(legacyDir, newDir); err != nil {
-		logError("[MigrateLegacyDir] 迁移失败: %v", err)
+	if err := validateInitBaseDir(legacyDir); err != nil {
 		return err
 	}
-
-	logInfo("[MigrateLegacyDir] 迁移完成: %s -> %s", legacyDir, newDir)
-
-	// 更新配置中的路径（如果当前配置指向旧目录）
-	a.cfgMu.Lock()
-	cfg = a.cfg
-	normalized := strings.ReplaceAll(strings.ToLower(cfg.Core.XMDevDir), "/", "\\")
-	legacyLower := strings.ReplaceAll(strings.ToLower(legacyDir), "/", "\\")
-	if strings.Contains(normalized, legacyLower) || normalized == legacyLower {
-		cfg.Core.XMDevDir = newDir
-		cfg.ResolvePaths(newDir)
-		cfg.Save()
-		config.UpdateConfigPaths(newDir)
-		config.InvalidateHomeCache()
+	legacyDir = filepath.Clean(legacyDir)
+	name := filepath.Base(legacyDir)
+	if !strings.EqualFold(filepath.Base(filepath.Dir(legacyDir)), "XimuLocalDev") || (!strings.EqualFold(name, "xmdevenvmt") && !strings.EqualFold(name, "xdev")) {
+		return fmt.Errorf("not a recognized legacy root: %s", legacyDir)
 	}
-	a.cfgMu.Unlock()
-
-	// 刷新本地缓存
-	a.refreshAndSaveLocalCache()
-
+	newDir := filepath.Join(filepath.Dir(filepath.Dir(legacyDir)), "XDev")
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	info, err := os.Lstat(legacyDir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("legacy root must be a real directory")
+	}
+	equalPath := func(x, y string) bool {
+		x, y = filepath.Clean(x), filepath.Clean(y)
+		if real, e := filepath.EvalSymlinks(x); e == nil {
+			x = real
+		}
+		if real, e := filepath.EvalSymlinks(y); e == nil {
+			y = real
+		}
+		if os.PathSeparator == 92 {
+			return strings.EqualFold(x, y)
+		}
+		return x == y
+	}
+	if !equalPath(a.cfg.Core.XMDevDir, legacyDir) && !equalPath(a.cfg.Core.XMDevDir, newDir) {
+		return fmt.Errorf("select the legacy root or its empty destination before migrating: %s", legacyDir)
+	}
+	next := a.cfg.Clone()
+	if !equalPath(a.cfg.Core.XMDevDir, legacyDir) {
+		// Preserve the source's settings when the first-run screen already has
+		// the proposed empty destination selected.
+		next, err = config.LoadReadOnly(legacyDir)
+		if err != nil {
+			return err
+		}
+	}
+	next.SetRootDir(legacyDir)
+	if err := next.MigrateRoot(newDir); err != nil {
+		return err
+	}
+	a.cfg = next
+	logInfo("[MigrateLegacyDir] copied and selected %s; recovery tree retained at %s", newDir, legacyDir)
 	return nil
 }
 
@@ -227,61 +227,15 @@ func (a *App) InitConfig(baseDir string) error {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 
-	// If the user selected a legacy directory, rename it to the new XDev path automatically.
-	baseDir = a.migrateLegacyDir(baseDir)
-
-	// Auto-migrate from legacy xmdevenvmt directory if the new dir is empty.
-	if _, err := os.Stat(filepath.Join(baseDir, "install")); err != nil {
-		vol := filepath.VolumeName(baseDir)
-		if vol != "" {
-			legacies := []string{
-				filepath.Join(vol, "XimuLocalDev", "xmdevenvmt"),
-			}
-			for _, legacy := range legacies {
-				if fi, err := os.Stat(filepath.Join(legacy, "install")); err == nil && fi.IsDir() {
-					// Migrate: copy install/, cache/, shims/, env/ to new dir
-					for _, sub := range []string{"install", "cache", "shims", "env"} {
-						src := filepath.Join(legacy, sub)
-						dst := filepath.Join(baseDir, sub)
-						if fi, err := os.Stat(src); err == nil && fi.IsDir() {
-							os.Rename(src, dst)
-						}
-					}
-					// Copy config if it exists
-					if data, err := os.ReadFile(filepath.Join(legacy, "config.yaml")); err == nil {
-						os.MkdirAll(baseDir, 0o755)
-						os.WriteFile(filepath.Join(baseDir, "config.yaml"), data, 0o644)
-					}
-					break
-				}
-			}
-		}
-	}
-
-	// 第七轮审计 F-07：切换 home 时必须**先清空派生子目录字段**再 ResolvePaths。
-	// config.ResolvePaths 对非空字段是 no-op（每个字段都是 `if c.Core.X == ""` 守卫），
-	// 因此只设 XMDevDir 再调用它，会让 InstallDir/ShimDir/CacheDir/ManifestDir/
-	// DownloadDir/EnvDir **继续指向旧 home** —— 用户看到「已切换到新目录」，
-	// 实际工具树、shim、缓存仍落在旧目录，且 Save() 会把这种不一致持久化。
-	// CLI 的同一场景（internal/cli/init.go:105-112）正是显式清空这 6 个字段后才
-	// ResolvePaths；此处与它对齐。
-	a.cfg.Core.XMDevDir = baseDir
-	a.cfg.Core.DownloadDir = ""
-	a.cfg.Core.InstallDir = ""
-	a.cfg.Core.ShimDir = ""
-	a.cfg.Core.CacheDir = ""
-	a.cfg.Core.EnvDir = ""
-	a.cfg.Core.ManifestDir = ""
-	a.cfg.ResolvePaths(baseDir)
-	if err := a.cfg.EnsureDirs(); err != nil {
-		logError("[InitConfig] EnsureDirs failed: %v", err)
+	// First-run selection is not an implicit move. Migration is an explicit,
+	// verified operation through MigrateLegacyDir; never rename a live old tree.
+	if err := a.cfg.Update(func(next *config.Config) error {
+		next.SetRootDir(baseDir)
+		return next.EnsureDirs()
+	}); err != nil {
 		return err
 	}
-	if err := a.cfg.Save(); err != nil {
-		logError("[InitConfig] Save failed: %v", err)
-		return err
-	}
-
+	config.InvalidateHomeCache()
 	// Now that the directory is set up, initialise the log file.
 	logDir := filepath.Join(baseDir, "logs")
 	InitLogger(logDir)
@@ -323,7 +277,7 @@ func (a *App) cleanupUserPath(cfg *config.Config, baseDir string) {
 		return
 	}
 	mode := cfg.GetPathMode()
-	shimDir := filepath.Join(baseDir, "shims")
+	shimDir := cfg.Core.ShimDir
 	// 票 11（P0-13）：home 锚定——仅清理 baseDir 下的 xdev 自有条目，
 	// 用户无关目录（如 D:\xdev）不再被误删。
 	changed, err := env.CleanupUserPath(baseDir, shimDir, mode)
@@ -332,57 +286,6 @@ func (a *App) cleanupUserPath(cfg *config.Config, baseDir string) {
 	} else if changed {
 		logInfo("[cleanupUserPath] 已清理用户 PATH (%s 模式)", mode)
 	}
-}
-
-// migrateLegacyDir checks if the given directory is a legacy path
-// and renames it to the new XDev path. Returns the (possibly updated) path.
-func (a *App) migrateLegacyDir(dir string) string {
-	// Normalize to forward slashes for comparison
-	normalized := strings.ReplaceAll(strings.ToLower(dir), "/", "\\")
-
-	legacyPatterns := []struct {
-		pattern     string
-		replacement func(string) string
-	}{
-		{`\ximulocaldev\xmdevenvmt`, func(vol string) string { return vol + "\\XDev" }},
-		{`\ximulocaldev\xdev`, func(vol string) string { return vol + "\\XDev" }},
-	}
-
-	for _, lp := range legacyPatterns {
-		if strings.Contains(normalized, lp.pattern) {
-			vol := filepath.VolumeName(dir)
-			newPath := lp.replacement(vol)
-			logInfo("[migrateLegacyDir] detected legacy dir %s, renaming to %s", dir, newPath)
-
-			// If the legacy dir exists, try to rename it
-			if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-				// Check if newPath already exists
-				if _, err := os.Stat(newPath); err == nil {
-					// newPath exists, move contents instead
-					logInfo("[migrateLegacyDir] %s already exists, moving contents", newPath)
-					for _, sub := range []string{"install", "cache", "shims", "env", "downloads", "manifests", "config.yaml"} {
-						src := filepath.Join(dir, sub)
-						dst := filepath.Join(newPath, sub)
-						if _, err := os.Stat(src); err == nil {
-							os.Rename(src, dst)
-						}
-					}
-					// Remove the now-empty legacy dir
-					os.Remove(dir)
-				} else if err := os.Rename(dir, newPath); err != nil {
-					logError("[migrateLegacyDir] rename failed: %v", err)
-					return dir // fallback to original
-				}
-				// Update config.yaml with new paths
-				config.UpdateConfigPaths(newPath)
-				config.InvalidateHomeCache()
-				return newPath
-			}
-			// Legacy dir doesn't exist, just use the new path
-			return newPath
-		}
-	}
-	return dir
 }
 
 // SelectDirectory opens a native directory picker dialog.
@@ -770,7 +673,7 @@ func (a *App) postMigrateSetup(tool localmigrate.LocalTool, cfg *config.Config) 
 	}
 
 	// 创建 shim 文件
-	if cfg.GetPathMode() == "shim" {
+	if pathmode.UsesShims(cfg.GetPathMode()) {
 		ins := a.newInstaller(cfg)
 		shimExe := ins.ResolveShimExe()
 		for _, shimName := range p.Shims() {
@@ -792,25 +695,26 @@ func (a *App) postMigrateSetup(tool localmigrate.LocalTool, cfg *config.Config) 
 	// setUserEnvVars 同语义对齐：
 	//   - PATH 一律跳过（大小写不敏感）——由 xdev 的 shim/目录注入机制管理；
 	//   - 其余键走 SetUserEnvVarTrusted（受保护键拒绝 + 路径型值 X-08 校验）。
-	vars := p.EnvVars(installPath)
-	if len(vars) > 0 && !a.noEnvWrite {
-		// Windows registry writes must be serialized to prevent lost updates
-		regMu.Lock()
-		for k, v := range vars {
-			if strings.EqualFold(k, "PATH") {
-				logWarn("[postMigrateSetup] 跳过 manifest 声明的 %s（PATH 由 xdev 目录注入机制管理，迁移不覆写用户 PATH）", k)
-				continue
-			}
-			if err := env.SetUserEnvVarTrusted(k, v); err != nil {
-				logWarn("[postMigrateSetup] 设置环境变量 %s 失败: %v", k, err)
-			} else {
-				logInfo("[postMigrateSetup] 设置环境变量: %s", k)
-			}
+	vars := make(map[string]string)
+	for k, v := range p.EnvVars(installPath) {
+		if strings.EqualFold(k, "PATH") {
+			logWarn("[postMigrateSetup] skipping manifest PATH; managed by XDev")
+			continue
 		}
-		regMu.Unlock()
+		vars[k] = v
+	}
+	if err := a.applyMigrationEnvVars(vars); err != nil {
+		logWarn("[postMigrateSetup] 环境变量事务失败: %v", err)
 	}
 
 	shim.InvalidateShimIndex()
+}
+
+func (a *App) applyMigrationEnvVars(vars map[string]string) error {
+	if a.noEnvWrite {
+		return nil
+	}
+	return env.ApplyUserEnvVars(vars)
 }
 
 // validateInitBaseDir rejects empty, relative, device, or UNC paths so

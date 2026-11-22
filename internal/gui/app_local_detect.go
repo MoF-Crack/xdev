@@ -27,6 +27,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/hostscan"
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/toolmeta"
 	"github.com/xmdemt/xdev/internal/update"
@@ -544,7 +545,11 @@ func (a *App) MigrateLocalTool(toolName, localPath string) error {
 // 第二阶段串行计算附属工具（enableCommand/installMethods 非空）的动态
 // CanInstall + InstallHint（复用同批次检测结果，避免新增扫描）。
 func (a *App) GetPackageManagers() []PackageManagerInfo {
-	pms := packageManagerDefs()
+	pms, err := a.pmCatalog()
+	if err != nil {
+		logInfo("[PM] rejected catalog: %v", err)
+		return []PackageManagerInfo{{Name: "PM catalog error", DisplayName: "PM catalog rejected", Description: err.Error(), InstallHint: err.Error()}}
+	}
 
 	// Phase 1: 并发检测所有 pmDef 的基础状态（现有逻辑）。
 	results := make([]PackageManagerInfo, len(pms))
@@ -567,6 +572,9 @@ func (a *App) GetPackageManagers() []PackageManagerInfo {
 		}
 	}
 	for i, pm := range pms {
+		if pm.definition.Origin.Authorize("") != nil {
+			continue
+		}
 		if pm.enableCommand == "" && len(pm.installMethods) == 0 {
 			continue // 非附属工具，跳过
 		}
@@ -694,6 +702,17 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 		InstallCommand: pm.installCommand,
 	}
 
+	if pm.definition.Origin.Authorize("") != nil {
+		info.DisplayName = pm.name + " (" + pm.displayName + ")"
+		info.Description = pm.definition.Summary()
+		info.ToolName = ""
+		info.EnableCommand = pm.enableCommand
+		for _, m := range pm.installMethods {
+			info.InstallMethods = append(info.InstallMethods, InstallMethodInfo{Name: m.name, Command: m.command})
+		}
+		info.CanInstall = pmPlatformMatches(pm.platform) && (pm.installCommand != "" || pm.enableCommand != "" || len(pm.installMethods) > 0)
+		return info
+	}
 	// Check if available via PATH. Prefer xdev-managed Node over a stale
 	// PATH hit (e.g. D: leftover pnpm when Node lives in E:\XDev).
 	shimDir := a.getCfg().Core.ShimDir
@@ -837,10 +856,10 @@ func (a *App) detectPackageManager(pm pmDef) PackageManagerInfo {
 	// HasUpdate: only for independently installable, xdev-managed PMs
 	// (detectCmd == toolName, e.g. uv). yarn/pnpm 的 Version 是附属工具
 	// 版本，不能和父工具 node 的 latest 比，否则会画出假「更新」按钮。
-	if info.Installed && info.CanInstall && pm.toolName != "" && pm.detectCmd == pm.toolName && isComparableVersion(info.Version) {
-		if latest := a.GetLatestVersionForTool(pm.toolName); latest != "" && isComparableVersion(latest) {
-			info.HasUpdate = util.CompareSemver(latest, info.Version) > 0
-		}
+	if info.Installed && info.CanInstall && pm.toolName != "" && pm.detectCmd == pm.toolName && manifest.IsComparableToolVersion(pm.toolName, info.Version) {
+		latest := a.GetLatestVersionForTool(pm.toolName)
+		order, comparable := manifest.CompareToolVersions(pm.toolName, latest, info.Version)
+		info.HasUpdate = comparable && order > 0
 	}
 
 	// Spec 027: 收集所有检测到的实例（xdev 管理的 + 系统安装的）。
@@ -1016,28 +1035,8 @@ func (a *App) InstallPackageManager(toolName string) error {
 }
 
 func (a *App) installPackageManager(spec InstallSpec) error {
-	toolName := spec.Tool
-	logInfo("[InstallPackageManager] installing %s", toolName)
-
-	// Spec 025: 先查 pmDef 是否有 script install 命令。
-	if pm, ok := findPMDefByName(toolName); ok && pm.installCommand != "" {
-		return a.installPackageManagerViaScript(pm)
-	}
-
-	p, ok := a.registry.Get(toolName)
-	if !ok {
-		return fmt.Errorf("tool %q not found in registry", toolName)
-	}
-
-	ver := spec.Version
-	if ver == "" {
-		ver = p.DefaultVersion()
-	}
-	if ver == "" {
-		ver = "latest"
-	}
-
-	return a.install(InstallSpec{Tool: toolName, Version: ver, Kind: "tool", Confirmed: spec.Confirmed, Force: spec.Force, Form: spec.Form})
+	spec.Kind = "package-manager"
+	return a.install(spec)
 }
 
 // InstallSubTool 安装附属工具（Spec 026）。
@@ -1058,9 +1057,24 @@ func (a *App) installSubToolContext(parent context.Context, spec InstallSpec) er
 	toolName := spec.Tool
 	method := spec.Method
 	logInfo("[InstallSubTool] %s method=%q", toolName, method)
-	pm, ok := findPMDefByName(toolName)
-	if !ok {
-		return fmt.Errorf("package manager %q not found in pmDef", toolName)
+	var pm pmDef
+	if spec.pmDefinition != nil {
+		pm = *spec.pmDefinition
+	} else {
+		loaded, ok, err := a.lookupPM(toolName)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("package manager %q not found in pmDef", toolName)
+		}
+		pm = loaded
+	}
+	if err := pm.checkExecution(spec.PMDigest); err != nil {
+		return err
+	}
+	if pm.requiresAdmin && !pmExecutionAdmin() {
+		return fmt.Errorf("%s requires administrator privileges", toolName)
 	}
 
 	// 同时有 enableCommand 与 installMethods（yarn/pnpm）时：
@@ -1113,9 +1127,13 @@ func (a *App) installSubToolViaEnableContext(parent context.Context, pm pmDef) e
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	bin := parts[0]
-	if xdevCorepack, ok := a.findXdevManagedCorepack(); ok {
-		logInfo("[InstallSubTool] using xdev-managed corepack: %s (instead of PATH corepack)", xdevCorepack)
-		bin = xdevCorepack
+	// Managed-binary routing may change the location of the executable the
+	// definition names, never replace an unrelated approved command.
+	if parts[0] == "corepack" {
+		if xdevCorepack, ok := a.findXdevManagedCorepack(); ok {
+			logInfo("[InstallSubTool] using xdev-managed corepack: %s (instead of PATH corepack)", xdevCorepack)
+			bin = xdevCorepack
+		}
 	}
 	cmd := exec.CommandContext(ctx, bin, parts[1:]...)
 	// 仅装了 xdev Node 时系统 PATH 可能没有 corepack；前置 shim 目录。
@@ -1149,19 +1167,19 @@ func (a *App) installSubToolViaMethodContext(parent context.Context, pm pmDef, m
 
 	// Spec 026 增量：若 method 是 pip，优先用 xdev 管理的 Python 的 pip。
 	// parts[0] 是 "pip"——替换为 xdev python 的 pip 完整路径。
-	if m.detectCmd == "pip" {
+	if parts[0] == "pip" {
 		if xdevPip, ok := a.findXdevManagedPip(); ok {
 			logInfo("[InstallSubTool] using xdev-managed pip: %s (instead of PATH pip)", xdevPip)
 			parts[0] = xdevPip
 		}
 	}
-	if m.detectCmd == "npm" {
+	if parts[0] == "npm" {
 		if xdevNpm, ok := a.findXdevManagedNpm(); ok {
 			logInfo("[InstallSubTool] using xdev-managed npm: %s (instead of PATH npm)", xdevNpm)
 			parts[0] = xdevNpm
 		}
 	}
-	if m.detectCmd == "corepack" {
+	if parts[0] == "corepack" {
 		if xdevCorepack, ok := a.findXdevManagedCorepack(); ok {
 			logInfo("[InstallSubTool] using xdev-managed corepack: %s (instead of PATH corepack)", xdevCorepack)
 			parts[0] = xdevCorepack
@@ -1301,10 +1319,17 @@ func formatMethodNames(methods []installMethod) string {
 // 复制目录到 xdev install dir + 创建 current 链接（类似 MigrateLocalTool）。
 func (a *App) MigratePackageManager(toolName string) error {
 	logInfo("[MigratePackageManager] migrating %s", toolName)
-	pm, ok := findPMDefByName(toolName)
+	pm, ok, err := a.lookupPM(toolName)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		// 前端曾误传父工具名（pip.toolName=python）；按 toolName 字段反查一次。
-		if alt, found := findPMDefByToolName(toolName); found {
+		defs, err := a.pmCatalog()
+		if err != nil {
+			return err
+		}
+		if alt, found := findParentPM(defs, toolName); found {
 			pm = alt
 			ok = true
 			logInfo("[MigratePackageManager] resolved %q via toolName to pm %q", toolName, pm.name)
@@ -1314,6 +1339,9 @@ func (a *App) MigratePackageManager(toolName string) error {
 		return fmt.Errorf("package manager %q not found in pmDef", toolName)
 	}
 
+	if err := pm.checkExecution(""); err != nil {
+		return err
+	}
 	// 查找系统安装的实例（非 xdev 管理的）。
 	var systemPath string
 	instances := a.collectPMInstances(pm, PackageManagerInfo{LocalPath: ""})
@@ -1468,11 +1496,14 @@ func findPMDefByName(name string) (pmDef, bool) {
 // findPMDefByToolName 按父工具/xdev 工具名反查附属 PM（pip→python）。
 // 多个附属工具共享同一 toolName 时返回第一个，仅作兼容兜底。
 func findPMDefByToolName(toolName string) (pmDef, bool) {
+	return findParentPM(packageManagerDefs(), toolName)
+}
+func findParentPM(defs []pmDef, toolName string) (pmDef, bool) {
 	if toolName == "" {
 		return pmDef{}, false
 	}
-	for _, pm := range packageManagerDefs() {
-		if pm.toolName == toolName && pm.detectCmd != pm.toolName {
+	for _, pm := range defs {
+		if pm.definition.Origin.Authorize("") == nil && pm.toolName == toolName && pm.detectCmd != pm.toolName {
 			return pm, true
 		}
 	}
@@ -1546,8 +1577,8 @@ func (a *App) installPackageManagerViaScriptContext(parent context.Context, pm p
 	}
 
 	// 管理员权限检查（Windows）
-	if pm.requiresAdmin && runtime.GOOS == "windows" {
-		if !isWindowsAdmin() {
+	if pm.requiresAdmin {
+		if !pmExecutionAdmin() {
 			return fmt.Errorf("%s 需要管理员权限。请以管理员身份重启 xdev，或在管理员 PowerShell 中手动执行以下命令：\n\n%s", pm.displayName, pm.installCommand)
 		}
 	}
@@ -1591,13 +1622,20 @@ func (a *App) installPackageManagerViaScriptContext(parent context.Context, pm p
 // 非 Windows 实现在 is_windows_admin_other.go（返回 false）。
 // 调用方应在 runtime.GOOS=="windows" 时才依赖其返回值。
 
+func pmExecutionAdmin() bool {
+	if runtime.GOOS == "windows" {
+		return isWindowsAdmin()
+	}
+	return os.Geteuid() == 0
+}
+
 // pmPlatformMatches 报告 pmDef.platform 是否匹配当前 runtime.GOOS。
 // 支持的平台值：windows / darwin / linux / unix（=darwin+linux）/ any。
 // Spec 025 L3 审查阻塞项2：brew platform 从 "any" 改为 "unix"，避免
 // 在 Windows 上尝试运行 Homebrew。
 func pmPlatformMatches(platform string) bool {
 	switch platform {
-	case "any":
+	case "any", "":
 		return true
 	case "windows":
 		return runtime.GOOS == "windows"
@@ -1630,7 +1668,14 @@ func pmCanInstall(pm pmDef) bool {
 func (a *App) UpdatePackageManager(toolName string) error {
 	logInfo("[UpdatePackageManager] updating %s", toolName)
 	installName := toolName
-	if pm, ok := findPMDefByName(toolName); ok {
+	pm, ok, err := a.lookupPM(toolName)
+	if err != nil {
+		return err
+	}
+	if ok {
+		if err := pm.checkExecution(""); err != nil {
+			return err
+		}
 		if pm.toolName != "" && pm.detectCmd != pm.toolName {
 			return fmt.Errorf("%s 是 %s 的附属工具，请在详情抽屉启用/安装，不能按独立工具更新", pm.displayName, pm.toolName)
 		}
@@ -1644,7 +1689,10 @@ func (a *App) UpdatePackageManager(toolName string) error {
 		return fmt.Errorf("no versions available for %s", installName)
 	}
 
-	latestVer := versions[0].Version // first is latest after SortVersionsByRelease
+	latestVer := versions[0].Version // GetAvailableVersions ranks comparable releases first.
+	if !manifest.IsComparableToolVersion(installName, latestVer) {
+		return fmt.Errorf("no comparable versions available for %s", installName)
+	}
 	// Frontend already confirmed sniff-discovered versions (Naive dialog).
 	// Passing Confirmed skips the native Wails MessageDialog, which is
 	// hidden behind the frameless window and looks like "cancelled by user".

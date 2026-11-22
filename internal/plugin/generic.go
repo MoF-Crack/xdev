@@ -180,7 +180,22 @@ func (g *Generic) ResolveVersion(spec string) (string, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	available := g.M.Versions()
+	if (parsed.Kind == resolver.KindLatest && g.M.Latest == "") || (parsed.Kind == resolver.KindLTS && g.M.LTS == "") {
+		if best, ok := manifest.NewestToolVersion(g.M.Name, available); ok {
+			return best, nil
+		}
+		return "", fmt.Errorf("no comparable release for %s %q; specify an exact version", g.M.Name, spec)
+	}
 	return resolver.Resolve(parsed, available, g.M.Latest, g.M.LTS)
+}
+
+// VersionComparer is an optional plugin capability for tool-specific releases.
+type VersionComparer interface {
+	CompareVersions(a, b string) (order int, comparable bool)
+}
+
+func (g *Generic) CompareVersions(a, b string) (int, bool) {
+	return manifest.CompareToolVersions(g.Name(), a, b)
 }
 
 // ArchiveFor picks the right Archive for the current OS/Arch.
@@ -198,7 +213,7 @@ func (g *Generic) ArchiveFor(version string) (*manifest.Archive, error) {
 			// 在写方等待时会死锁），直接读 g.M.Name。
 			return nil, fmt.Errorf("no download URL for %s@%s on %s/%s — sniff found the version but could not derive an archive URL from the existing manifest (re-sniff after updating the tool, or install a pinned version)", g.M.Name, version, HostOS(), HostArch())
 		}
-		return nil, fmt.Errorf("no archive for %s/%s in %s", HostOS(), HostArch(), version)
+		return nil, fmt.Errorf("no installable archive for %s/%s in %s (check platform, download URL and format)", HostOS(), HostArch(), version)
 	}
 	return a, nil
 }

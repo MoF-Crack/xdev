@@ -14,6 +14,67 @@ function setup(overrides = {}) {
   const pm = usePackageManagers({ t: key => key, message, dialog, refreshTools, selectedTool: ref({}), coordinator });
   return { ...h, coordinator, pm, message, dialog, refreshTools };
 }
+describe('package manager trust plan through sessions', () => {
+  it.each([
+    [{ name: 'local/pipx', installMethods: [{ name: 'test', command: 'cached command' }] }, 'sub-tool', 'test'],
+    [{ name: 'third-party/demo', installCommand: 'cached command' }, 'package-manager', ''],
+    [{ name: 'local/pnpm', enableCommand: 'cached command' }, 'sub-tool', ''],
+  ])('requires positive approval of the current full definition for $0.name', async (tool, kind, method) => {
+    const plan = { source: 'local', path: 'package-managers.yaml', digest: 'a'.repeat(64), summary: 'source: local\nfull YAML fixture command' };
+    const legacy = { InstallSubToolTrusted: vi.fn(), InstallPackageManagerTrusted: vi.fn(), InstallSubTool: vi.fn(), InstallPackageManager: vi.fn() };
+    const h = setup({ PlanPackageManager: vi.fn(async () => plan), ...legacy });
+    const pending = h.pm.installPackageManager(tool); await flush();
+    expect(h.app.PlanPackageManager).toHaveBeenCalledWith(tool.name);
+    expect(h.app.StartInstall).not.toHaveBeenCalled();
+    expect(h.coordinator.acquire('single')).toBeNull();
+    const confirm = h.dialog.warning.mock.calls[0][0];
+    expect(confirm.content().children).toBe(plan.summary);
+    confirm.onPositiveClick(); await flush();
+    expect(h.app.StartInstall).toHaveBeenCalledWith(expect.objectContaining({ tool: tool.name, kind, method, pmDigest: plan.digest }));
+    for (const fn of Object.values(legacy)) expect(fn).not.toHaveBeenCalled();
+    expect(h.message.success).not.toHaveBeenCalled();
+    const spec = h.app.StartInstall.mock.calls[0][0];
+    h.emit(spec.sessionId, { status: 'completed' }); await pending;
+    expect(h.refreshTools).toHaveBeenCalledOnce(); expect(h.coordinator.busy.value).toBe(false);
+  });
+  it.each(['onNegativeClick', 'onClose', 'onEsc', 'onMaskClick'])('dismisses trust confirmation through %s without execution and replans retry', async close => {
+    let digest = 'first';
+    const h = setup({ PlanPackageManager: vi.fn(async () => ({ digest, summary: digest })) });
+    const tool = { name: 'local/demo' };
+    const pending = h.pm.installPackageManager(tool); await flush();
+    h.dialog.warning.mock.calls[0][0][close](); await pending;
+    expect(h.app.StartInstall).not.toHaveBeenCalled(); expect(h.coordinator.busy.value).toBe(false);
+    digest = 'changed'; const retry = h.pm.installPackageManager(tool); await flush();
+    expect(h.app.PlanPackageManager).toHaveBeenCalledTimes(2);
+    expect(h.dialog.warning.mock.calls[1][0].content().children).toBe('changed');
+    h.dialog.warning.mock.calls[1][0].onPositiveClick(); await flush();
+    const spec = h.app.StartInstall.mock.calls[0][0]; expect(spec.pmDigest).toBe('changed');
+    h.emit(spec.sessionId, { status: 'error', error: 'definition changed after approval' }); await retry;
+    expect(h.message.success).not.toHaveBeenCalled(); expect(h.message.error).toHaveBeenCalledOnce();
+  });
+  it('keeps a selected external method through its separate current-definition confirmation', async () => {
+    const h = setup({ PlanPackageManager: vi.fn(async () => ({ digest: 'current', summary: 'all methods YAML' })) });
+    const pending = h.pm.installPackageManager({ name: 'local/pipx', installMethods: [{ name: 'pip', command: 'pip' }, { name: 'uv', command: 'uv' }] });
+    const selector = h.dialog.warning.mock.calls[0][0]; selector.content().props['onUpdate:value']('uv'); selector.onPositiveClick(); await flush();
+    expect(h.app.StartInstall).not.toHaveBeenCalled(); expect(h.coordinator.busy.value).toBe(true);
+    h.dialog.warning.mock.calls[1][0].onPositiveClick(); await flush();
+    const spec = h.app.StartInstall.mock.calls[0][0]; expect(spec).toMatchObject({ method: 'uv', pmDigest: 'current' });
+    h.emit(spec.sessionId, { status: 'completed' }); await pending;
+  });
+  it.each([null, {}, { digest: 'x' }])('fails closed for incomplete trust plan %j', async plan => {
+    const h = setup({ PlanPackageManager: vi.fn(async () => plan) });
+    await h.pm.installPackageManager({ name: 'local/demo' });
+    expect(h.app.StartInstall).not.toHaveBeenCalled(); expect(h.message.error).toHaveBeenCalledOnce();
+    expect(h.coordinator.busy.value).toBe(false);
+  });
+  it('releases ownership on a rejected plan fetch', async () => {
+    const h = setup({ PlanPackageManager: vi.fn(async () => { throw Error('broken YAML'); }) });
+    await h.pm.installPackageManager({ name: 'third-party/demo' });
+    expect(h.app.StartInstall).not.toHaveBeenCalled(); expect(h.message.error).toHaveBeenCalledOnce();
+    expect(h.coordinator.busy.value).toBe(false);
+  });
+});
+
 describe('package manager session ownership', () => {
   it.each([
     [{ name: 'pipx', installMethods: [{ name: 'pip', command: 'pip install pipx' }] }, 'sub-tool', 'pip', false],

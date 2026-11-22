@@ -54,53 +54,48 @@ func (e *LuaEngine) LoadVfoxPlugin(path string) (*VfoxPlugin, error) {
 // PLUGIN fields directly. It validates required functions based on the
 // specs and returns a populated luaBasePlugin.
 func (e *LuaEngine) loadLuaBase(path string, specs luaCallSpecs, vfox bool) (*luaBasePlugin, error) {
-	// 第十轮审计 P1-2（P1）：加载必须走**带超时**的 loadProtected。
-	//
-	// 此前这里是裸 `L.DoFile(path)`（且 `defer L.Close()`）—— 插件顶层
-	// `while true do end` 就能让 CLI/TUI/GUI **每次启动永久挂起**（无日志、无错误），
-	// 因为 `registerUserPlugins` 在 `RegisterAll` 里对每个 `.lua` 执行它。
-	// 注意这条路径**不经过 `vmFor`**（它自建 VM 并在返回前 Close），所以只在
-	// `vmFor` 里加超时是不够的 —— 必须同时修这里。
-	//
-	// 超时后**不能** `L.Close()`：孤儿 goroutine 仍在 L 上执行（见 loadProtected 的
-	// 注释），Close 会与它竞争。loadProtected 在超时分支直接丢弃 VM，因此这里改为
-	// 只在成功路径 Close。
-	L, err := e.loadProtected(path)
+	var base *luaBasePlugin
+	L, err := e.loadProtected(path, func(L *lua.LState) error {
+		var err error
+		base, err = e.readLuaMetadata(L, path, specs, vfox)
+		return err
+	})
 	if err != nil {
-		label := "lua"
-		if vfox {
-			label = "vfox"
-		}
-		if strings.Contains(err.Error(), "timed out") {
-			return nil, err
-		}
-		return nil, fmt.Errorf("load %s plugin %s: %w", label, path, err)
+		return nil, fmt.Errorf("load %s plugin %s: %w", pluginLabel(vfox), path, err)
 	}
-	defer L.Close()
+	L.Close() // the chunk, metamethods and promotion have all returned
+	return base, nil
+}
+
+// readLuaMetadata may run arbitrary __index functions. Its caller must keep the
+// complete operation inside loadProtected's execution budget. Ordinary missing
+// or throwing optional fields retain their compatibility defaults; cancellation
+// is checked again by the outer boundary and cannot become a successful load.
+func (e *LuaEngine) readLuaMetadata(L *lua.LState, path string, specs luaCallSpecs, vfox bool) (*luaBasePlugin, error) {
 
 	// 第八轮审计 A-01（P0）：PLUGIN 表本身的读取必须走受保护调用 —— 插件可以给
 	// PLUGIN 挂抛错的 __index 元方法，裸 L.GetGlobal/L.GetField 会以 Go panic
 	// 打崩宿主（`xdev available` 即 exit 2）。
-	pluginTable := getGlobalProtected(L, "PLUGIN")
+	pluginTable := L.GetGlobal("PLUGIN") // errors propagate through the owning load boundary
 	if pluginTable.Type() != lua.LTTable {
 		return nil, fmt.Errorf("%s plugin %s: PLUGIN table not found", pluginLabel(vfox), path)
 	}
 
 	var name, displayName string
 	if vfox {
-		infoTable := getFieldProtected(L, pluginTable, "info")
+		infoTable := L.GetField(pluginTable, "info")
 		if infoTable.Type() == lua.LTTable {
-			name = getFieldString(L, infoTable, "name")
+			name = luaNameField(L, infoTable)
 			displayName = getFieldString(L, infoTable, "display_name")
 		}
 		if name == "" {
-			name = getFieldString(L, pluginTable, "name")
+			name = luaNameField(L, pluginTable)
 		}
 		if name == "" {
 			return nil, fmt.Errorf("vfox plugin %s: PLUGIN.info.name is required", path)
 		}
 	} else {
-		name = getFieldString(L, pluginTable, "name")
+		name = luaNameField(L, pluginTable)
 		if name == "" {
 			return nil, fmt.Errorf("lua plugin %s: PLUGIN.name is required", path)
 		}
@@ -145,6 +140,13 @@ func (e *LuaEngine) loadLuaBase(path string, specs luaCallSpecs, vfox bool) (*lu
 		engine:      e,
 		specs:       specs,
 	}, nil
+}
+
+// A missing name can fall back, while a throwing name lookup must surface its
+// original Lua error. This runs only on the protected, disposable load state.
+func luaNameField(L *lua.LState, table lua.LValue) string {
+	name, _ := L.GetField(table, "name").(lua.LString)
+	return string(name)
 }
 
 func pluginLabel(vfox bool) string {

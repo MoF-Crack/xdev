@@ -81,17 +81,25 @@ current directory. With no project config it prints nothing.`,
 
 			appCfg := Cfg()
 			installRoot := appCfg.Core.InstallDir
+			cat, err := manifest.LoadCatalogCached(appCfg.Core.ManifestDir, appCfg.Core.CacheDir)
+			if err != nil {
+				return nil
+			}
+			reg := plugin.BuildRegistry(cat, pluginsDir())
 
 			var binPaths []string
 			vars := map[string]string{}
 
 			for _, toolName := range cfg.ToolNames() {
 				spec, _ := cfg.Spec(toolName)
-				ver, ok := project.ResolveInstalled(installRoot, toolName, spec)
+				p, ok := reg.Get(toolName)
+				if !ok {
+					continue
+				}
+				dir, ok := project.ResolvePluginInstalled(installRoot, p, spec)
 				if !ok {
 					continue // 未安装：静默跳过（shim 路径会给出提示）
 				}
-				dir := project.DirFor(installRoot, toolName, ver)
 
 				// PATH：优先 bin/，没有则用安装根（与 shim.FindInDir 同源逻辑）。
 				binDir := filepath.Join(dir, "bin")
@@ -110,7 +118,7 @@ current directory. With no project config it prints nothing.`,
 				// 环境变量：复用 manifest 的声明（需加载 catalog 拿插件）。
 				// 路径型值做 Clean —— 与 envctx.Resolve 保持同一套语义，
 				// 否则 `export GOPATH='.../1.27.3/../gopath'` 会带着 `..` 进入用户 shell。
-				for k, v := range toolEnvVars(appCfg, toolName, dir) {
+				for k, v := range p.EnvVars(dir) {
 					if strings.ContainsAny(v, `\\/`) {
 						v = filepath.Clean(v)
 					}

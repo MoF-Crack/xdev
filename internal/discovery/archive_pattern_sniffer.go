@@ -63,6 +63,7 @@ func buildArchiveTemplate(existingVersion string, existingArchives []manifest.Ar
 	templates := make([]manifest.Archive, len(existingArchives))
 	for i, a := range existingArchives {
 		t := a
+		t.MirrorURLs = append([]string(nil), a.MirrorURLs...)
 		// Replace the existing version string in the URL with the
 		// placeholder.  Prefer exact version occurrence to avoid
 		// false positives in repo name or path.
@@ -139,25 +140,29 @@ type archivePatternSniffer struct{}
 
 func (s *archivePatternSniffer) Name() string { return "archive_pattern" }
 
-// Supports returns true when the tool has no explicit remote (or
-// remote type is "none"/"") AND at least one existing version has an
-// archive URL from which a GitHub repo can be extracted.
+// Supports performs the same local preparation as Sniff, before the scheduler
+// reserves a token. A recognizable repository without a usable template cannot
+// perform a discovery query.
 func (s *archivePatternSniffer) Supports(t *manifest.Tool) bool {
-	// Only activate when there is no explicit remote config.
 	rt := strings.ToLower(t.Remote.Type)
-	if rt == "github" || rt == "json" || rt == "html" {
+	if rt != "" && rt != "none" {
 		return false
 	}
+	_, _, _, _, ok := archivePatternSource(t)
+	return ok
+}
 
-	// Look for any existing version with a GitHub download URL.
+func archivePatternSource(t *manifest.Tool) (owner, repo, existingVer string, template []manifest.Archive, ok bool) {
 	for _, v := range t.VersionList {
 		for _, a := range v.Archives {
-			if _, _, ok := extractGitHubRepoFromURL(a.URL); ok {
-				return true
+			if o, r, found := extractGitHubRepoFromURL(a.URL); found {
+				if tpl, usable := buildArchiveTemplate(v.Version, v.Archives); usable {
+					return o, r, v.Version, tpl, true
+				}
 			}
 		}
 	}
-	return false
+	return "", "", "", nil, false
 }
 
 // Sniff derives a GitHub repo from the tool's existing archive URLs,
@@ -167,37 +172,10 @@ func (s *archivePatternSniffer) Supports(t *manifest.Tool) bool {
 // All returned versions have Unverified: true because the archive URLs
 // are inferred, not from an explicit configuration.
 func (s *archivePatternSniffer) Sniff(ctx context.Context, t *manifest.Tool) ([]DiscoveredVersion, error) {
-	// Step 1: Find the first existing version with GitHub archives
-	// and extract the repo info.
-	var existingVer string
-	var existingArchives []manifest.Archive
-	var owner, repo string
-
-	for _, v := range t.VersionList {
-		for _, a := range v.Archives {
-			if o, r, ok := extractGitHubRepoFromURL(a.URL); ok {
-				existingVer = v.Version
-				existingArchives = v.Archives
-				owner, repo = o, r
-				break
-			}
-		}
-		if owner != "" {
-			break
-		}
-	}
-
-	if owner == "" {
-		// No GitHub-derived repo found — silently unsupported.
-		return nil, nil
-	}
-
-	// Step 2: Build archive template from existing archives.
-	template, ok := buildArchiveTemplate(existingVer, existingArchives)
+	owner, repo, existingVer, template, ok := archivePatternSource(t)
 	if !ok {
-		// Cannot derive a template — silently unsupported.
 		return nil, nil
-	}
+	} // direct callers retain the unsupported contract
 
 	// Step 3: Discover new tags from GitHub.
 	ghRemote := manifest.RemoteSource{

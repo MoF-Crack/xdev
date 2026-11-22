@@ -166,6 +166,15 @@ describe('DashboardPage', () => {
     wrapper.unmount();
   });
 
+  it('shows the retained upgrade and refresh error together', () => {
+    const updates = [{ tool: 'android-ndk', currentVersion: 'r26', latestVersion: 'r29', stale: true, refreshError: 'offline' }];
+    const wrapper = mount(DashboardPage, { props: { t: (key, params) => params?.reason || key, updates } });
+    const row = wrapper.get('.dashboard-updates tbody tr').text();
+    expect(row).toContain('r26 → r29');
+    expect(row).toContain('offline');
+    wrapper.unmount();
+  });
+
   // Ticket 12 (audit-fixes / G-02) — B-5: the "Update All" button is
   // disabled while a batch is running, so the re-entry path is blocked at
   // the UI level too (the composable guards remain the authoritative gate).

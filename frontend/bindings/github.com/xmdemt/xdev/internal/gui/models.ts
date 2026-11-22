@@ -176,6 +176,40 @@ export class CacheBreakdown {
 }
 
 /**
+ * CacheCleanupReport keeps counts available over Wails even on partial failure.
+ * Busy counts skipped generations, while Removed counts individual files.
+ */
+export class CacheCleanupReport {
+    "removed": number;
+    "busy": number;
+    "failed": number;
+    "detail"?: string;
+
+    /** Creates a new CacheCleanupReport instance. */
+    constructor($$source: Partial<CacheCleanupReport> = {}) {
+        if (!("removed" in $$source)) {
+            this["removed"] = 0;
+        }
+        if (!("busy" in $$source)) {
+            this["busy"] = 0;
+        }
+        if (!("failed" in $$source)) {
+            this["failed"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CacheCleanupReport instance from a string or object.
+     */
+    static createFrom($$source: any = {}): CacheCleanupReport {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CacheCleanupReport($$parsedSource as Partial<CacheCleanupReport>);
+    }
+}
+
+/**
  * CategoryInfo represents a tool category.
  */
 export class CategoryInfo {
@@ -1224,6 +1258,11 @@ export class InstallSpec {
      */
     "method": string;
 
+    /**
+     * explicit approval of the loaded PM definition
+     */
+    "pmDigest": string;
+
     /** Creates a new InstallSpec instance. */
     constructor($$source: Partial<InstallSpec> = {}) {
         if (!("sessionId" in $$source)) {
@@ -1249,6 +1288,9 @@ export class InstallSpec {
         }
         if (!("method" in $$source)) {
             this["method"] = "";
+        }
+        if (!("pmDigest" in $$source)) {
+            this["pmDigest"] = "";
         }
 
         Object.assign(this, $$source);
@@ -1521,6 +1563,39 @@ export class PMInstanceInfo {
     static createFrom($$source: any = {}): PMInstanceInfo {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new PMInstanceInfo($$parsedSource as Partial<PMInstanceInfo>);
+    }
+}
+
+export class PMTrustPlan {
+    "source": string;
+    "path": string;
+    "digest": string;
+    "summary": string;
+
+    /** Creates a new PMTrustPlan instance. */
+    constructor($$source: Partial<PMTrustPlan> = {}) {
+        if (!("source" in $$source)) {
+            this["source"] = "";
+        }
+        if (!("path" in $$source)) {
+            this["path"] = "";
+        }
+        if (!("digest" in $$source)) {
+            this["digest"] = "";
+        }
+        if (!("summary" in $$source)) {
+            this["summary"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PMTrustPlan instance from a string or object.
+     */
+    static createFrom($$source: any = {}): PMTrustPlan {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PMTrustPlan($$parsedSource as Partial<PMTrustPlan>);
     }
 }
 
@@ -1835,6 +1910,35 @@ export class RemoteCreateResult {
     }
 }
 
+export class RemoteInstanceDiagnostic {
+    "path": string;
+    "kind": string;
+    "message": string;
+
+    /** Creates a new RemoteInstanceDiagnostic instance. */
+    constructor($$source: Partial<RemoteInstanceDiagnostic> = {}) {
+        if (!("path" in $$source)) {
+            this["path"] = "";
+        }
+        if (!("kind" in $$source)) {
+            this["kind"] = "";
+        }
+        if (!("message" in $$source)) {
+            this["message"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RemoteInstanceDiagnostic instance from a string or object.
+     */
+    static createFrom($$source: any = {}): RemoteInstanceDiagnostic {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RemoteInstanceDiagnostic($$parsedSource as Partial<RemoteInstanceDiagnostic>);
+    }
+}
+
 /**
  * RemoteInstanceInfo 远程环境实例信息
  */
@@ -1872,6 +1976,39 @@ export class RemoteInstanceInfo {
             $$parsedSource["addresses"] = $$createField2_0($$parsedSource["addresses"]);
         }
         return new RemoteInstanceInfo($$parsedSource as Partial<RemoteInstanceInfo>);
+    }
+}
+
+export class RemoteInstanceListResult {
+    "instances": RemoteInstanceInfo[];
+    "diagnostics": RemoteInstanceDiagnostic[];
+
+    /** Creates a new RemoteInstanceListResult instance. */
+    constructor($$source: Partial<RemoteInstanceListResult> = {}) {
+        if (!("instances" in $$source)) {
+            this["instances"] = [];
+        }
+        if (!("diagnostics" in $$source)) {
+            this["diagnostics"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RemoteInstanceListResult instance from a string or object.
+     */
+    static createFrom($$source: any = {}): RemoteInstanceListResult {
+        const $$createField0_0 = $$createType18;
+        const $$createField1_0 = $$createType20;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("instances" in $$parsedSource) {
+            $$parsedSource["instances"] = $$createField0_0($$parsedSource["instances"]);
+        }
+        if ("diagnostics" in $$parsedSource) {
+            $$parsedSource["diagnostics"] = $$createField1_0($$parsedSource["diagnostics"]);
+        }
+        return new RemoteInstanceListResult($$parsedSource as Partial<RemoteInstanceListResult>);
     }
 }
 
@@ -2238,6 +2375,12 @@ export class UpdateInfo {
     "currentVersion": string;
     "latestVersion": string;
     "command": string;
+    "stale"?: boolean;
+    "refreshStatus"?: string;
+    "refreshError"?: string;
+    "lastSuccess"?: string;
+    "lastAttempt"?: string;
+    "retryAfter"?: string;
 
     /** Creates a new UpdateInfo instance. */
     constructor($$source: Partial<UpdateInfo> = {}) {
@@ -2331,3 +2474,7 @@ const $$createType13 = InstallMethodInfo.createFrom;
 const $$createType14 = $Create.Array($$createType13);
 const $$createType15 = PMInstanceInfo.createFrom;
 const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = RemoteInstanceInfo.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = RemoteInstanceDiagnostic.createFrom;
+const $$createType20 = $Create.Array($$createType19);

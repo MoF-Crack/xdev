@@ -86,6 +86,12 @@ explicitly when the gaps are understood and accepted.`,
 			// `return nil`——「全部签名写失败」在 CI 里也是 exit 0，整批未签出的
 			// manifest 会被当成发布成功（与 fill-sha256 已修的 R5 同型）。
 			failed := 0
+			if ok, err := signPMCatalog(manifestsDir, outDir, privKey); err != nil {
+				fmt.Fprintf(os.Stderr, "package-managers.yaml: %v\n", err)
+				failed++
+			} else if ok {
+				signed++
+			}
 			for _, tool := range tools {
 				// F7：工具名来自磁盘 manifest（不可信数据），进入 .sig 输出路径前
 				// 必须通过路径安全校验（拒绝分隔符/盘符冒号/".."）。

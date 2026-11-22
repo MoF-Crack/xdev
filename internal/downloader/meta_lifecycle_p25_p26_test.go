@@ -32,7 +32,7 @@ func listPartialArtifacts(t *testing.T, dir string) []string {
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
-		if strings.Contains(name, ".part") {
+		if strings.HasSuffix(name, ".part") || strings.HasSuffix(name, ".part.meta") {
 			out = append(out, name)
 		}
 	}

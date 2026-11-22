@@ -1,241 +1,207 @@
-﻿package localmigrate
+package localmigrate
 
 import (
+	"crypto/sha256"
 	"fmt"
-	"log"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/xmdemt/xdev/internal/env"
-	"github.com/xmdemt/xdev/internal/util"
 )
 
-// LegacyDirInfo 描述一个发现的旧版目录
+// LegacyDirInfo describes an old root and its suggested replacement.
 type LegacyDirInfo struct {
-	Path    string `json:"path"`    // 旧目录完整路径，如 E:\XimuLocalDev\xmdevenvmt
-	NewPath string `json:"newPath"` // 对应的新目录路径，如 E:\XDev
+	Path    string `json:"path"`
+	NewPath string `json:"newPath"`
 }
 
-// ScanLegacyDir 扫描所有驱动器，查找 X:\XimuLocalDev\xmdevenvmt 目录是否存在。
-// 返回所有发现的旧版目录列表。
 func ScanLegacyDir() []LegacyDirInfo {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
-
 	var found []LegacyDirInfo
-
-	// 扫描 A: 到 Z: 所有驱动器
 	for c := 'A'; c <= 'Z'; c++ {
 		drive := string(c) + ":"
-		// 检查驱动器是否存在
-		if _, err := os.Stat(drive + string(os.PathSeparator)); err != nil {
+		legacy := filepath.Join(drive, "XimuLocalDev", "xmdevenvmt")
+		if fi, err := os.Stat(legacy); err != nil || !fi.IsDir() {
 			continue
 		}
-
-		legacyPath := filepath.Join(drive, "XimuLocalDev", "xmdevenvmt")
-		fi, err := os.Stat(legacyPath)
-		if err != nil || !fi.IsDir() {
-			continue
+		_, installErr := os.Stat(filepath.Join(legacy, "install"))
+		_, configErr := os.Stat(filepath.Join(legacy, "config.yaml"))
+		if installErr == nil || configErr == nil {
+			found = append(found, LegacyDirInfo{legacy, filepath.Join(drive, "XDev")})
 		}
-
-		// 验证它看起来像 xdev 主目录（包含 install/ 或 config.yaml）
-		looksValid := false
-		if _, err := os.Stat(filepath.Join(legacyPath, "install")); err == nil {
-			looksValid = true
-		}
-		if _, err := os.Stat(filepath.Join(legacyPath, "config.yaml")); err == nil {
-			looksValid = true
-		}
-		if !looksValid {
-			continue
-		}
-
-		newPath := filepath.Join(drive, "XDev")
-		found = append(found, LegacyDirInfo{
-			Path:    legacyPath,
-			NewPath: newPath,
-		})
 	}
-
 	return found
 }
 
-// MigrateLegacyDir 将旧目录下的子目录内容迁移到新版本目录。
-// 迁移逻辑：
-//   - install/ → 将旧 install/ 下的工具目录复制到新 install/
-//   - cache/ → 合并到新 cache/
-//   - downloads/ → 合并到新 downloads/
-//   - shims/ → 跳过（新版本会重新生成）
-//   - env/ → 合并到新 env/
-//   - manifests/ → 跳过（新版本自带）
-//   - config.yaml → 跳过（新版本有自己的配置）
-//   - current/ → 跳过（通过 xdev use 重新激活）
-//
-// 迁移完成后删除旧目录，并清理 PATH 中的旧条目。
+// MigrateLegacyDir copies a legacy root into an empty destination, verifies every
+// copied file, and leaves the source intact. Root config and discovery metadata
+// are owned by the caller's subsequent config commit. Arbitrary data, manifests,
+// and shims are preserved. Internal symlinks are reanchored; external, broken and
+// unsupported special files fail closed. It never changes PATH or deletes data.
+// The caller must stop writers to the source and serialize destination writers.
+// A failed copy leaves a partial destination for inspection, never a usable
+// config commit; use a fresh empty destination on retry.
 func MigrateLegacyDir(legacyDir, newDir string) error {
-	// Security (F-10): legacyDir 迁移后会被 RemoveAll —— 校验绝对路径
-	// 且不等于目标目录，避免误删。
-	if legacyDir == "" || !filepath.IsAbs(legacyDir) {
-		return fmt.Errorf("legacy dir must be absolute: %q", legacyDir)
+	if !filepath.IsAbs(legacyDir) || !filepath.IsAbs(newDir) || strings.HasPrefix(newDir, `\\`) || strings.HasPrefix(newDir, "//") {
+		return fmt.Errorf("source and target must be local absolute paths")
 	}
-	if filepath.Clean(legacyDir) == filepath.Clean(newDir) {
-		return fmt.Errorf("legacy dir must differ from target dir: %q", legacyDir)
+	info, err := os.Lstat(legacyDir)
+	if err != nil {
+		return err
 	}
-
-	// 确保新目录存在
-	if err := os.MkdirAll(newDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create new directory: %w", err)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("source must be a real directory")
 	}
-
-	// 需要迁移的子目录（合并模式）
-	mergeDirs := []string{"install", "cache", "downloads", "env"}
-
-	// 第六轮审计（M1）：CopyDir 对不可解析/断链条目的「跳过」必须先于源删除被
-	// 汇总可见（票 09/N-01 同型——app_migration.go 的本地工具迁移已消费
-	// CopyDirReport，此调用点此前仍在用丢弃计数的 CopyDir）。清理/跳过计数在
-	// RemoveAll(legacyDir) 之前落日志：一旦旧目录被删，跳过的内容即不可恢复。
-	totalSkipped := 0
-	totalFiles := 0
-
-	for _, sub := range mergeDirs {
-		srcDir := filepath.Join(legacyDir, sub)
-		dstDir := filepath.Join(newDir, sub)
-
-		// 检查源目录是否存在
-		srcInfo, err := os.Stat(srcDir)
-		if err != nil || !srcInfo.IsDir() {
-			continue
+	src, err := filepath.EvalSymlinks(legacyDir)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Clean(newDir)
+	// Resolve the nearest existing ancestor without creating a nested target.
+	ancestor := dst
+	var suffix []string
+	for {
+		actual, e := filepath.EvalSymlinks(ancestor)
+		if e == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				actual = filepath.Join(actual, suffix[i])
+			}
+			dst = actual
+			break
 		}
-
-		// 确保目标目录存在
-		if err := os.MkdirAll(dstDir, 0o755); err != nil {
-			return fmt.Errorf("failed to create target directory %s: %w", dstDir, err)
+		p := filepath.Dir(ancestor)
+		if p == ancestor {
+			return e
 		}
-
-		// 读取源目录下的条目
-		entries, err := os.ReadDir(srcDir)
+		suffix = append(suffix, filepath.Base(ancestor))
+		ancestor = p
+	}
+	if within(src, dst) || within(dst, src) {
+		return fmt.Errorf("source and target directories overlap")
+	}
+	entries, err := os.ReadDir(dst)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".root-switch.lock" {
+			return fmt.Errorf("target must be empty: %s", dst)
+		}
+	}
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
 		if err != nil {
-			return fmt.Errorf("failed to read source directory %s: %w", srcDir, err)
+			return err
 		}
-
-		for _, entry := range entries {
-			srcPath := filepath.Join(srcDir, entry.Name())
-			dstPath := filepath.Join(dstDir, entry.Name())
-
-			// 检查目标路径是否已存在同名条目，避免覆盖
-			if _, err := os.Stat(dstPath); err == nil {
-				// 目标已存在，跳过（不覆盖）
-				continue
-			}
-
-			if entry.IsDir() {
-				files, skipped, err := util.CopyDirReport(srcPath, dstPath, nil)
-				if err != nil {
-					return fmt.Errorf("failed to copy directory %s to %s: %w", srcPath, dstPath, err)
+		if rel == "." {
+			return nil
+		}
+		if filepath.Dir(rel) == "." {
+			switch rel {
+			case "config.yaml", ".root-redirect.json", ".root-switch.lock", ".home.cache":
+				if entry.IsDir() {
+					return fmt.Errorf("reserved metadata is a directory: %s", path)
 				}
-				totalFiles += files
-				if skipped > 0 {
-					totalSkipped += skipped
-					log.Printf("[migrate] WARNING: %s → %s 复制时跳过 %d 个无法解析/断链的条目（详见 [copydir] 日志）——旧目录删除后这些内容不可恢复", srcPath, dstPath, skipped)
-				}
-			} else {
-				if err := util.CopyFile(srcPath, dstPath); err != nil {
-					return fmt.Errorf("failed to copy file %s to %s: %w", srcPath, dstPath, err)
-				}
-				totalFiles++
+				return nil
 			}
 		}
-	}
-
-	// 删除旧目录
-	//
-	// M1：若存在被跳过的条目，此处不再无条件删除旧目录——断链条目本身虽是死
-	// 指针，但自引用/循环型 junction 的内容可能仍可达；把决定权交给迁移调用方
-	//（GUI 弹窗确认）或至少要求人工清理。返回带哨兵前缀的错误，调用方可以按
-	// 前缀识别并在确认后重跑。
-	if totalSkipped > 0 {
-		return fmt.Errorf("MIGRATE_SKIPPED_ENTRIES: 旧目录 %s 暂不删除——复制阶段跳过了 %d 个无法解析/断链的条目（共迁移 %d 个文件）；请检查 [copydir] 日志确认这些条目无需保留，处理完后重跑迁移", legacyDir, totalSkipped, totalFiles)
-	}
-	if err := os.RemoveAll(legacyDir); err != nil {
-		// 删除失败不影响迁移结果，仅记录
-		// 可能有文件被锁定
-		_ = err
-	}
-
-	// 尝试删除父目录 XimuLocalDev（如果为空）
-	parentDir := filepath.Dir(legacyDir)
-	os.Remove(parentDir)
-
-	// 清理用户 PATH 中旧的 xmdevenvmt 相关条目
-	cleanupLegacyPath(legacyDir)
-
-	return nil
-}
-
-// cleanupLegacyPath 清理用户 PATH 中旧版 xmdevenvmt 目录相关的条目
-//
-// Ticket 10 (audit-fixes / P0-11)：读改写全程走 env.WithUserPathLock。注意
-// 本文件无 build tag（全平台编译）而 env.WithUserPathLock 只在 Windows 实现
-// （win_path_other.go 提供直通 stub）——锁调用放在既有 GOOS guard 内，
-// stub 防未来跨平台漏网。
-func cleanupLegacyPath(legacyDir string) {
-	if runtime.GOOS != "windows" {
-		return
-	}
-	_ = env.WithUserPathLock(func() error {
-		cleanupLegacyPathLocked(legacyDir)
+		target := filepath.Join(dst, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			actual, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return fmt.Errorf("resolve link %s: %w", path, err)
+			}
+			if !within(src, actual) {
+				return fmt.Errorf("external link requires manual migration: %s", path)
+			}
+			linkRel, err := filepath.Rel(src, actual)
+			if err != nil {
+				return err
+			}
+			// Relative links keep working if the copy is subsequently renamed.
+			mapped, err := filepath.Rel(filepath.Dir(target), filepath.Join(dst, linkRel))
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(mapped, target); err != nil {
+				return fmt.Errorf("copy link %s: %w", path, err)
+			}
+			got, err := os.Readlink(target)
+			if err != nil || got != mapped {
+				return fmt.Errorf("verify link %s: %v", target, err)
+			}
+			return nil
+		}
+		if info.IsDir() {
+			return os.Mkdir(target, info.Mode().Perm()|0700)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported file type: %s", path)
+		}
+		if err := copyVerified(path, target, info.Mode().Perm()); err != nil {
+			return err
+		}
 		return nil
 	})
 }
 
-func cleanupLegacyPathLocked(legacyDir string) {
-	// 读取当前用户 PATH
-	current, err := env.ReadUserPath()
-	if err != nil {
-		return
+func within(root, path string) bool {
+	if runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+		path = strings.ToLower(path)
 	}
-
-	// 将旧目录路径标准化（小写，反斜杠）
-	legacyLower := strings.ToLower(filepath.Clean(legacyDir))
-	if !strings.HasSuffix(legacyLower, "\\") {
-		legacyLower += "\\"
-	}
-
-	parts := strings.Split(current, ";")
-	var kept []string
-	changed := false
-
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed == "" {
-			changed = true
-			continue
-		}
-		// 检查是否包含旧目录路径
-		normalized := strings.ToLower(filepath.Clean(trimmed))
-		if strings.HasPrefix(normalized, legacyLower) {
-			changed = true
-			continue
-		}
-		// 也检查 \ximulocaldev\xmdevenvmt 模式
-		if strings.Contains(normalized, "\\ximulocaldev\\xmdevenvmt") {
-			changed = true
-			continue
-		}
-		kept = append(kept, trimmed)
-	}
-
-	if changed {
-		newPath := strings.Join(kept, ";")
-		if err := env.WriteUserPath(newPath); err == nil {
-			env.BroadcastEnvironmentChange()
-		}
-	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
 }
 
-// getCommonInstallPaths / isVersionLike 已收口到 internal/toolmeta
-// （Spec 033 R4/R3）：env 侧统一调用 toolmeta.CommonInstallPaths /
-// toolmeta.IsVersionLike，见 scan_local.go 与版本解析路径。
+func copyVerified(src, dst string, mode fs.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(out, h), in)
+	syncErr := out.Sync()
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if syncErr != nil {
+		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	check, err := os.Open(dst)
+	if err != nil {
+		return err
+	}
+	defer check.Close()
+	actual := sha256.New()
+	if _, err := io.Copy(actual, check); err != nil {
+		return err
+	}
+	if string(actual.Sum(nil)) != string(h.Sum(nil)) {
+		return fmt.Errorf("copy checksum mismatch: %s", dst)
+	}
+	return nil
+}

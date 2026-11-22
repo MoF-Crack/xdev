@@ -209,6 +209,9 @@ func TestNPMInstall_SkipsDownloadAndRunsNPM(t *testing.T) {
 	if res.InstallPath == "" || !strings.HasPrefix(res.InstallPath, cfg.Core.InstallDir) {
 		t.Errorf("InstallPath = %q, want under %s", res.InstallPath, cfg.Core.InstallDir)
 	}
+	if res.ArchivePath != "" {
+		t.Errorf("npm-kind install must not advertise a cache archive for retention: %q", res.ArchivePath)
+	}
 	// No archive was downloaded for the bogus URL: cache holds no dsh tarball.
 	if _, err := os.Stat(filepath.Join(cfg.Core.CacheDir, "dsh-0.1.2-rc.1.tar.gz")); err == nil {
 		t.Error("npm-kind install must not download the archive")

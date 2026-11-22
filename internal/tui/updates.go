@@ -18,6 +18,7 @@ import (
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/discovery"
+	"github.com/xmdemt/xdev/internal/manifest"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -26,9 +27,10 @@ const KeyUpdates = "x"
 
 // toolUpdate 表示一条可用更新（嗅探结果）。
 type toolUpdate struct {
-	Tool    string
-	Current string
-	Latest  string
+	Tool              string
+	Current           string
+	Latest            string
+	RefreshDiagnostic string
 }
 
 // computeUpdates 读取 sniff 缓存并计算可用更新（当前激活版本 < 嗅探最新版本）。
@@ -46,21 +48,20 @@ func computeUpdates(cfg *config.Config) []toolUpdate {
 		return out
 	}
 	for toolName, result := range cache.Tools {
-		if result.Unsupported || result.Error != "" || len(result.Versions) == 0 {
+		latest, known := manifest.NewestToolVersion(toolName, result.Versions)
+		if !known {
 			continue
 		}
 		active, ok := util.ActiveVersion(cfg.Core.XMDevDir, toolName)
 		if !ok || active == "" {
 			continue
 		}
-		latest := ""
-		for _, v := range result.Versions {
-			if latest == "" || util.CompareSemver(v, latest) > 0 {
-				latest = v
+		if order, comparable := manifest.CompareToolVersions(toolName, latest, active); comparable && order > 0 {
+			diagnostic := result.Error
+			if diagnostic == "" && result.Status != discovery.SniffSuccess {
+				diagnostic = string(result.Status)
 			}
-		}
-		if latest != "" && util.CompareSemver(latest, active) > 0 {
-			out = append(out, toolUpdate{Tool: toolName, Current: active, Latest: latest})
+			out = append(out, toolUpdate{Tool: toolName, Current: active, Latest: latest, RefreshDiagnostic: diagnostic})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Tool < out[j].Tool })
@@ -134,6 +135,9 @@ func (m Model) updatesViewString() string {
 			sb.WriteString(fmt.Sprintf("  %-20s %s → %s\n",
 				lipgloss.NewStyle().Bold(true).Render(u.Tool), u.Current,
 				StyleBold.Render(u.Latest)))
+			if u.RefreshDiagnostic != "" {
+				sb.WriteString(fmt.Sprintf("    上次成功结果，最近刷新：%s\n", u.RefreshDiagnostic))
+			}
 		}
 	}
 	// Spec 036 N1: render errMsg inline — the main view's errBar is never

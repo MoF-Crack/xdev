@@ -26,17 +26,14 @@
 //
 // # 内置回退
 //
-// 数据文件缺失或损坏时回退到 builtinDefs()（与 YAML 内容一致）。
-// 这样：
-//   - 用户删掉/改坏数据文件不会让包管理器功能整个消失；
-//   - 但**回退只用于容错**，不用于「用户自定义」——自定义应改数据文件，
-//     改坏了就回退到内置，语义清楚。
+// 没有外部官方文件时使用二进制内置定义；无密钥开发构建也可明确忽略与内置一致的未签副本。
+// 其他缺签、坏签和损坏的官方文件均报错。自定义条目放入 local/package-managers.yaml，
+// 第三方条目放入 third-party/package-managers.yaml；运行前须确认具体定义摘要。
 package pm
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -49,8 +46,8 @@ const FileName = "package-managers.yaml"
 // InstallMethod 描述附属工具的一种安装方式。
 // 例如 pipx 可通过 pip install pipx 或 uv tool install pipx 安装。
 type InstallMethod struct {
-	Name      string `yaml:"name"`      // 方法标识（如 "pip" / "uv"），前端用于选项对话框
-	Command   string `yaml:"command"`   // 执行命令（如 "pip install pipx"）
+	Name      string `yaml:"name"`       // 方法标识（如 "pip" / "uv"），前端用于选项对话框
+	Command   string `yaml:"command"`    // 执行命令（如 "pip install pipx"）
 	DetectCmd string `yaml:"detect_cmd"` // 检测该方法前置工具是否可用的命令名
 }
 
@@ -59,6 +56,7 @@ type InstallMethod struct {
 // 字段与历史 gui.pmDef 一一对应（只是从 Go 结构体搬到了 YAML），
 // 避免迁移时改变任何既有语义。
 type Def struct {
+	Origin      Origin `yaml:"-" json:"-"`
 	Name        string `yaml:"name"`
 	DisplayName string `yaml:"display_name"`
 	Description string `yaml:"description"`
@@ -99,22 +97,7 @@ type file struct {
 	PackageManagers []Def `yaml:"package_managers"`
 }
 
-// Load 从 manifestDir 读取 package-managers.yaml。
-//
-// 行为：
-//   - 文件不存在 → 返回内置定义（不是错误：老部署没有这个文件）；
-//   - 文件存在但解析失败 → 返回错误（让调用方决定是否回退）。
-//
-// 调用方通常用 LoadOrDefault 而不是直接用本函数。
-func Load(manifestDir string) ([]Def, error) {
-	if manifestDir == "" {
-		return nil, os.ErrNotExist
-	}
-	path := filepath.Join(manifestDir, FileName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+func parse(data []byte, path string) ([]Def, error) {
 	var f file
 	if err := yaml.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
@@ -128,17 +111,7 @@ func Load(manifestDir string) ([]Def, error) {
 	return f.PackageManagers, nil
 }
 
-// LoadOrDefault 读数据文件；任何失败都回退到内置定义。
-//
-// 这是 gui 与 CLI 应该用的入口：包管理器检测是只读能力，
-// 不该因为一个损坏的 YAML 就整个不可用。
-func LoadOrDefault(manifestDir string) []Def {
-	defs, err := Load(manifestDir)
-	if err != nil {
-		return Builtin()
-	}
-	return defs
-}
+var validID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 // validate 做最基本的完整性校验。
 //
@@ -152,10 +125,28 @@ func validate(defs []Def) error {
 		if d.Name == "" {
 			return fmt.Errorf("entry #%d has empty name", i)
 		}
-		if seen[d.Name] {
-			return fmt.Errorf("duplicate package manager name %q", d.Name)
+		id := strings.ToLower(d.Name)
+		if !validID.MatchString(d.Name) || seen[id] {
+			return fmt.Errorf("invalid or duplicate package manager name %q", d.Name)
 		}
-		seen[d.Name] = true
+		seen[id] = true
+		switch d.Platform {
+		case "", "any", "windows", "linux", "darwin", "unix":
+		default:
+			return fmt.Errorf("unsupported PM platform %q", d.Platform)
+		}
+		switch d.ExecutionEnv {
+		case "", "powershell", "bash":
+		default:
+			return fmt.Errorf("unsupported execution_env %q", d.ExecutionEnv)
+		}
+		methods := map[string]bool{}
+		for _, m := range d.InstallMethods {
+			if !validID.MatchString(m.Name) || methods[m.Name] || strings.TrimSpace(m.Command) == "" {
+				return fmt.Errorf("invalid or duplicate PM method %q", m.Name)
+			}
+			methods[m.Name] = true
+		}
 
 		// 有安装命令就必须有执行环境 —— 否则不知道用哪个 shell 跑。
 		if d.InstallCommand != "" && d.ExecutionEnv == "" {

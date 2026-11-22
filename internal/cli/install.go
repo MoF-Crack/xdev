@@ -37,6 +37,7 @@ import (
 	"github.com/xmdemt/xdev/internal/env"
 	"github.com/xmdemt/xdev/internal/installer"
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/plugin"
 	"github.com/xmdemt/xdev/internal/util"
 )
 
@@ -163,8 +164,9 @@ func newUseCmd() *cobra.Command {
 			}
 			// 清理用户 PATH 中残留的 xdev install 目录条目
 			if !NoPathFix() {
-				shimDir := filepath.Join(Cfg().Core.XMDevDir, "shims")
-				if changed, _ := env.CleanupUserPath(Cfg().Core.XMDevDir, shimDir, Cfg().GetPathMode()); changed {
+				if changed, err := env.CleanupUserPath(Cfg().Core.XMDevDir, Cfg().Core.ShimDir, Cfg().GetPathMode()); err != nil {
+					return fmt.Errorf("activated %s@%s, but PATH cleanup failed: %w", name, ver, err)
+				} else if changed {
 					fmt.Println("  (cleaned up stale PATH entries)")
 				}
 			}
@@ -224,18 +226,44 @@ func newListCmd() *cobra.Command {
 				}
 				return err
 			}
-			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+			_, reg := loadCatalogAndRegistry()
+			tools := make(map[string]bool)
+			groups := make(map[string]bool)
+			for _, p := range reg.All() {
+				tools[p.Name()] = true
+				// Reserve container roots so their children cannot be mistaken
+				// for versions of an unregistered tool (e.g. SDK components).
+				if dir, err := plugin.InstalledVersionsDir(p, installRoot); err == nil {
+					if rel, err := filepath.Rel(installRoot, dir); err == nil {
+						parts := strings.Split(rel, string(os.PathSeparator))
+						if len(parts) > 1 {
+							groups[parts[0]] = true
+						}
+					}
+				}
+			}
+			// Preserve the existing one-level inventory for legacy tools
+			// without a registered plugin; never recursively search trees.
+			for _, e := range entries {
+				if e.IsDir() && !groups[e.Name()] {
+					tools[e.Name()] = true
+				}
+			}
+			names := make([]string, 0, len(tools))
+			for name := range tools {
+				names = append(names, name)
+			}
+			sort.Strings(names)
 			headers := []string{"Tool", "Installed", "Active"}
 			var rows [][]string
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
+			for _, tool := range names {
+				var versions []string
+				var verr error
+				if p, ok := reg.Get(tool); ok {
+					versions, verr = plugin.InstalledVersions(p, installRoot)
+				} else {
+					versions, verr = util.ListVersionDirNames(filepath.Join(installRoot, tool))
 				}
-				tool := e.Name()
-				// 20261021 审计 P1-4：只枚举“看起来是版本”的目录。
-				// 空工具目录（实测 perl）与只含辅助目录的工具（gopath /
-				// export_templates / unsafe-version-blocked）不再显示。
-				versions, verr := util.ListVersionDirNames(filepath.Join(installRoot, tool))
 				if verr != nil || len(versions) == 0 {
 					continue
 				}
@@ -308,8 +336,10 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 			status := ""
 			if v == active {
 				status = "★ active"
-			} else if _, err := os.Stat(filepath.Join(installRoot, tool, v)); err == nil {
-				status = "installed"
+			} else if dir, err := p.InstallDir(installRoot, v); err == nil {
+				if info, err := os.Stat(dir); err == nil && info.IsDir() {
+					status = "installed"
+				}
 			}
 			rows = append(rows, []string{v, status})
 		}
@@ -318,8 +348,7 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 	}
 
 	// list local installed versions
-	path := filepath.Join(installRoot, tool)
-	entries, err := os.ReadDir(path)
+	versions, err := plugin.InstalledVersions(p, installRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Printf("(no %s versions installed)\n", tool)
@@ -334,15 +363,12 @@ func listTool(tool, installRoot, currentRoot string, remote bool) error {
 	}
 	headers := []string{"Version", "Status"}
 	rows := make([][]string, 0)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
+	for _, v := range versions {
 		status := ""
-		if e.Name() == active {
+		if v == active {
 			status = "★ active"
 		}
-		rows = append(rows, []string{e.Name(), status})
+		rows = append(rows, []string{v, status})
 	}
 	renderTable(headers, rows)
 	return nil
@@ -420,17 +446,14 @@ func upgradeIndicator(tool, activeVersion string, cache *discovery.SniffCache) s
 		return ""
 	}
 	result, ok := cache.Tools[tool]
-	if !ok || result.Unsupported || result.Error != "" || len(result.Versions) == 0 {
+	if !ok {
 		return ""
 	}
-	// Find the latest version in the sniff results.
-	latest := result.Versions[0]
-	for _, v := range result.Versions[1:] {
-		if util.CompareSemver(v, latest) > 0 {
-			latest = v
+	latest, _ := manifest.NewestToolVersion(tool, result.Versions)
+	if order, comparable := manifest.CompareToolVersions(tool, latest, activeVersion); comparable && order > 0 {
+		if diag := sniffRefreshDiagnostic(result); diag != "" {
+			return fmt.Sprintf("(↑%s cached; refresh: %s)", latest, diag)
 		}
-	}
-	if util.CompareSemver(latest, activeVersion) > 0 {
 		return fmt.Sprintf("(↑%s available)", latest)
 	}
 	return ""

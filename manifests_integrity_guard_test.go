@@ -23,6 +23,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,6 +36,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/xmdemt/xdev/internal/manifest"
+	"github.com/xmdemt/xdev/internal/pm"
 	"github.com/xmdemt/xdev/internal/signer"
 )
 
@@ -215,6 +217,118 @@ func TestEmbeddedReleaseInputsMatchStagedFiles(t *testing.T) {
 	}
 }
 
+// verifyPMReleaseInput uses the actual PM consumer. Unlike tool signatures, a
+// PM .sig is base64 Ed25519 over domain-separated complete YAML bytes, not JSON.
+// Stage only a private snapshot so verification never executes PM commands or
+// mutates the checked-out manifest tree.
+func verifyPMReleaseInput(t *testing.T, data, signature []byte, pub ed25519.PublicKey) error {
+	t.Helper()
+	if len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid PM verification public key")
+	}
+	prior, err := signer.RootPublicKeyChecked()
+	if err != nil {
+		return err
+	}
+	signer.SetRootPublicKeyForTesting(base64.StdEncoding.EncodeToString(pub))
+	defer signer.SetRootPublicKeyForTesting(base64.StdEncoding.EncodeToString(prior))
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, pm.FileName), data, 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, pm.FileName+".sig"), signature, 0o600); err != nil {
+		return err
+	}
+	defs, err := pm.Load(dir)
+	if err != nil {
+		return err
+	}
+	if len(defs) == 0 {
+		return fmt.Errorf("signed PM release input has no definitions")
+	}
+	for _, def := range defs {
+		if def.Origin.Kind != "official" {
+			return fmt.Errorf("PM release verification fell back to %q", def.Origin.Kind)
+		}
+	}
+	return nil
+}
+
+func TestReleaseEmbeddedRootMatchesVerificationKey(t *testing.T) {
+	if os.Getenv("XDEV_VERIFY_LINKED_ROOT") != "1" {
+		t.Skip("set XDEV_VERIFY_LINKED_ROOT to require a keyed release test binary")
+	}
+	want, _ := verifyPublicKey(t)
+	got, err := signer.RootPublicKeyChecked()
+	if err != nil || len(got) != ed25519.PublicKeySize || !bytes.Equal(got, want) {
+		t.Fatalf("linked release root differs from staged verification key (decoded=%d, err=%v)", len(got), err)
+	}
+}
+
+func TestEmbeddedPMSignature_VerifyExactYAML(t *testing.T) {
+	data, err := fs.ReadFile(manifestFS, manifestsDir+"/"+pm.FileName)
+	if err != nil {
+		t.Fatalf("embedded official PM catalog is missing: %v", err)
+	}
+	signature, err := fs.ReadFile(sigFS, manifestsDir+"/"+pm.FileName+".sig")
+	if err != nil {
+		if os.Getenv("XDEV_REQUIRE_SIGNATURE_COVERAGE") != "1" && os.IsNotExist(err) {
+			t.Skip("development checkout has no official PM signature; release requires complete coverage")
+		}
+		t.Fatalf("release official PM signature is required: %v", err)
+	}
+	pub, keySource := verifyPublicKey(t)
+	if err := verifyPMReleaseInput(t, data, signature, pub); err != nil {
+		t.Fatalf("embedded official PM catalog does not verify against %s: %v", keySource, err)
+	}
+}
+
+func TestPMReleaseVerificationContract(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	data := []byte("package_managers:\n - name: release-probe\n   detect_cmd: must-not-execute\n   install_command: must-not-execute\n   execution_env: bash\n")
+	if err := os.WriteFile(filepath.Join(dir, pm.FileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pm.SignFile(dir, dir, priv); err != nil || !ok {
+		t.Fatalf("sign PM fixture: %t, %v", ok, err)
+	}
+	sig, err := os.ReadFile(filepath.Join(dir, pm.FileName+".sig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPMReleaseInput(t, data, sig, pub); err != nil {
+		t.Fatalf("valid raw PM signature rejected: %v", err)
+	}
+	if err := verifyPMReleaseInput(t, append(append([]byte(nil), data...), []byte("# modified YAML\n")...), sig, pub); err == nil {
+		t.Fatal("PM verification ignored changed raw YAML bytes")
+	}
+	if err := verifyPMReleaseInput(t, data, nil, pub); err == nil {
+		t.Fatal("PM release verification accepted a missing signature")
+	}
+	wrongPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPMReleaseInput(t, data, sig, wrongPub); err == nil {
+		t.Fatal("PM release verification accepted the wrong root key")
+	}
+	toolSig, err := signer.SignManifest(priv, "package-managers", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyJSON, err := json.Marshal(toolSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPMReleaseInput(t, data, legacyJSON, pub); err == nil {
+		t.Fatal("PM release verification accepted tool signature format")
+	}
+}
+
 func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
 	pub, keySource := verifyPublicKey(t)
 	embeddedYAML := map[string]bool{}
@@ -230,6 +344,15 @@ func TestEmbeddedSignatures_VerifyAgainstCommittedPublicKey(t *testing.T) {
 		data, err := fs.ReadFile(sigFS, manifestsDir+"/"+name)
 		if err != nil {
 			t.Errorf("read embedded %s: %v", name, err)
+			continue
+		}
+		if name == pm.FileName+".sig" {
+			pmYAML, err := fs.ReadFile(manifestFS, manifestsDir+"/"+pm.FileName)
+			if err != nil {
+				t.Errorf("read embedded PM catalog: %v", err)
+			} else if err := verifyPMReleaseInput(t, pmYAML, data, pub); err != nil {
+				t.Errorf("embedded %s does not verify against %s: %v", name, keySource, err)
+			}
 			continue
 		}
 		var ms signer.ManifestSignature

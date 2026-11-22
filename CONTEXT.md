@@ -16,7 +16,7 @@ Single-context vocabulary for contributors and architecture reviews. Prefer thes
 - **Catalog** — in-memory tool collection. Disk loading and cache fingerprinting share the top-level plus `third-party/` source set. A directory containing only third-party manifests is not empty and does not trigger repository fallback.
 - **Disk precedence** — top-level manifests load first, then third-party manifests; the later same-name disk entry wins. Embedded manifests then retain trusted fields of their existing versions; disk-only versions may be appended.
 - **Latest promotion** — a disk latest must exist in the merged list, be installable and newer than the embedded effective default. Stable defaults cannot advance to prereleases; prereleases may advance within the same channel or to a newer stable release. Arbitrary labels do not establish upgrade ordering. `DefaultVersion` consumers use the accepted default, including the original LTS/first-entry fallback.
-- **Catalog fingerprint** — source root, relative paths, modification times and sizes. It invalidates on normal file additions, removals and metadata-changing updates; it is not a content hash of every YAML file.
+- **Catalog fingerprint** — schema-2 identity over platform, source, relative paths and SHA-256 of the same top-level/third-party byte snapshots that are parsed. Content changes invalidate across processes even when size and mtime are unchanged; unreadable sources cannot produce a falsely fresh cache.
 
 ## Host scan
 
@@ -27,7 +27,7 @@ Single-context vocabulary for contributors and architecture reviews. Prefer thes
 
 ## Install session
 
-- **InstallSpec** — session input: sessionId, tool, version, form, confirmed, force, kind and method.
+- **InstallSpec** — session input: sessionId, tool, version, form, confirmed, force, kind, method and pmDigest. pmDigest approves the exact local/third-party PM definition; it does not bypass session/resource/cancellation coordination.
 - **InstallSession** — authoritative backend snapshot identified by a unique sessionId, independent of tool/version display fields. A monotonic revision lets the UI ignore reordered snapshots. The resource key prevents concurrent writers to the same resource.
 - **Acceptance** — `StartInstall` returns an identity, not installation success. The frontend subscribes before starting and queries `GetInstallSession` to recover fast completion or uncertain IPC responses.
 - **Terminal outcome** — completed, error, cancelled or needs-repair. A session terminates once; needs-repair represents an existing incomplete installation. Retrying uses a new identity.

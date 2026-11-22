@@ -16,19 +16,19 @@
 package gui
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/xmdemt/xdev/internal/config"
 	"github.com/xmdemt/xdev/internal/env"
-	"github.com/xmdemt/xdev/internal/plugin"
+	"github.com/xmdemt/xdev/internal/pathmode"
 	"github.com/xmdemt/xdev/internal/remote"
 	"github.com/xmdemt/xdev/internal/shim"
 	"github.com/xmdemt/xdev/internal/util"
@@ -148,133 +148,95 @@ func (a *App) SetPathMode(mode string) error {
 	if err := a.requireEnvWrite(); err != nil {
 		return err
 	}
-	cfg := a.getCfg()
-	oldMode := cfg.GetPathMode()
-	if mode == oldMode {
+	if !pathmode.Valid(mode) {
+		return fmt.Errorf("invalid path mode: %s", mode)
+	}
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	cfg := a.cfg.Clone()
+	if cfg.GetPathMode() == mode {
 		return nil
 	}
-	if mode != "shim" && mode != "direct" && mode != "auto" {
-		// 2026-10-25：与 config.SetPathMode 保持同一套枚举（含 auto）。
-		// auto = shim + cd hook 项目级切换（P3 已实现 hook 输出）。
-		return fmt.Errorf("invalid path mode: %s (must be 'shim', 'direct' or 'auto')", mode)
-	}
-
-	logInfo("[SetPathMode] switching from %s to %s", oldMode, mode)
-
-	// 获取所有已激活的工具
 	currentDir := filepath.Join(cfg.Core.XMDevDir, "current")
 	entries, err := os.ReadDir(currentDir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read active tools: %w", err)
+	}
+	var aliases, bins []string
+	for _, entry := range entries {
+		if shim.IsStaleResidueName(entry.Name()) {
+			continue
+		}
+		current := filepath.Join(currentDir, entry.Name())
+		info, e := os.Stat(current)
+		if e != nil || !info.IsDir() {
+			continue
+		}
+		if p, ok := a.registry.Get(entry.Name()); ok {
+			aliases = append(aliases, p.Shims()...)
+			bins = append(bins, env.ToolBinPaths(entry.Name(), current)...)
+		}
+	}
+	filename := filepath.Join(cfg.Core.XMDevDir, "config.yaml")
+	oldBytes, err := os.ReadFile(filename)
+	existed := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("snapshot config before path mode change: %w", err)
+	}
+	oldPerm := os.FileMode(0600)
+	if existed {
+		if info, e := os.Stat(filename); e == nil {
+			oldPerm = info.Mode().Perm()
+		}
+	}
+	next := cfg.Clone()
+	err = env.WithUserPathTransactionLock(func() error {
+		// Transform performs its single atomic PATH write after this callback. All
+		// fallible filesystem work happens first; no PATH compensation is necessary
+		// when the final registry write fails (the old value and type remain intact).
+		saved := false
+		undo := func() error { return nil }
+		finish := func() {}
+		defer func() { finish() }()
+		_, changeErr := pathModeTransform(func(current string) (string, bool, error) {
+			target := pathModePath(current, cfg.Core.XMDevDir, cfg.Core.ShimDir, mode, bins)
+			if e := pathModeSave(next, mode); e != nil {
+				return "", false, fmt.Errorf("save path mode: %w", e)
+			}
+			saved = true
+			if pathmode.UsesShims(mode) {
+				var e error
+				undo, finish, e = a.prepareModeShims(next, aliases)
+				if e != nil {
+					undo = func() error { return nil }
+					finish = func() {}
+					return "", false, e
+				}
+			}
+			return target, target != current, nil
+		})
+		if changeErr != nil {
+			rollbackErr := undo()
+			var configErr error
+			if saved {
+				if existed {
+					configErr = util.AtomicWriteFile(filename, oldBytes, oldPerm)
+				} else {
+					configErr = os.Remove(filename)
+					if os.IsNotExist(configErr) {
+						configErr = nil
+					}
+				}
+			}
+			return errors.Join(fmt.Errorf("change path mode: %w", changeErr), rollbackErr, configErr)
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("failed to read current directory: %w", err)
+		return err
 	}
-
-	var activeTools []struct {
-		name string
-		p    plugin.Plugin
-	}
-	for _, e := range entries {
-		// 第十轮审计 P3-8（P3）：current/ 下可能残留 xdev 自己的旁路条目
-		// （`.stale-*` 来自 removeLinkEntry 的重命名，`.tmp-*` 来自 Activate
-		// 的临时链接名）。它们不是工具，绝不能被当成"已激活工具"参与
-		// PATH 迁移 —— 否则会把残留目录的 bin 路径写进 PATH，或为其创建
-		// shim。过滤规则与 shim 反向索引共用同一份定义。
-		if shim.IsStaleResidueName(e.Name()) {
-			continue
-		}
-		// 检查是否是有效的 Junction/目录。
-		//
-		// 第十轮审计附带发现（**P0 级**，由本项守卫暴露）：不能用 `e.IsDir()`。
-		// `current/<tool>` 在 Windows 上是**目录联接（junction）**，而
-		// `os.ReadDir` 的 `DirEntry.IsDir()` 对重解析点返回 **false**
-		// （本机实测：`IsDir()=false`、`Type=?---------`；同一路径 `os.Stat`
-		// 的 `IsDir()` 为 **true**）。于是旧代码的 `!e.IsDir() { continue }`
-		// 会**跳过每一个真实工具** —— `SetPathMode("direct")` 静默地一个 bin
-		// 路径都不加，用户切到 direct 后 PATH 里没有工具，且没有任何报错。
-		//
-		// 正确判据是「**跟随**链接后确实是目录」，即 `os.Stat`（而非 Lstat）。
-		// 这同时保留原有语义：悬空链接会被 `os.Stat` 判为不存在而跳过。
-		linkPath := filepath.Join(currentDir, e.Name())
-		fi, statErr := os.Stat(linkPath)
-		if statErr != nil || !fi.IsDir() {
-			continue
-		}
-		if p, ok := a.registry.Get(e.Name()); ok {
-			activeTools = append(activeTools, struct {
-				name string
-				p    plugin.Plugin
-			}{name: e.Name(), p: p})
-		}
-	}
-
-	if mode == "direct" {
-		// shim → direct: 移除 shim 目录，添加 current/<tool>/bin 路径
-		// 1. 为每个活跃工具添加 current/<tool>/bin 到 PATH
-		for _, at := range activeTools {
-			toolCurrentDir := filepath.Join(cfg.Core.XMDevDir, "current", at.name)
-			binPaths := env.ToolBinPaths(at.name, toolCurrentDir)
-			if len(binPaths) > 0 {
-				if err := env.AddCurrentBinPaths(binPaths); err != nil {
-					logWarn("[SetPathMode] failed to add %s bin paths: %v", at.name, err)
-				} else {
-					logInfo("[SetPathMode] added %s bin paths to PATH", at.name)
-				}
-			}
-		}
-		// 2. 从 PATH 中移除 shim 目录
-		if err := env.RemoveFromUserPath(cfg.Core.ShimDir); err != nil {
-			logWarn("[SetPathMode] failed to remove shim dir from PATH: %v", err)
-		} else {
-			logInfo("[SetPathMode] removed shim dir from PATH")
-		}
-		// 3. 删除 shim 文件（节省磁盘空间）
-		for _, at := range activeTools {
-			for _, shimName := range at.p.Shims() {
-				shimPath := filepath.Join(cfg.Core.ShimDir, shimName)
-				os.Remove(shimPath)
-				if runtime.GOOS == "windows" {
-					os.Remove(shimPath + ".exe")
-				}
-			}
-		}
-		logInfo("[SetPathMode] removed shim files")
-	} else {
-		// direct → shim: 移除 current/<tool>/bin 路径，添加 shim 目录，创建 shim 文件
-		// 1. 从 PATH 中移除所有 current/ 前缀的条目
-		if err := env.RemoveAllCurrentPaths(currentDir); err != nil {
-			logWarn("[SetPathMode] failed to remove current paths from PATH: %v", err)
-		} else {
-			logInfo("[SetPathMode] removed current paths from PATH")
-		}
-		// 2. 将 shim 目录添加到 PATH 最前面
-		if err := env.SetWindowsUserPath(cfg.Core.ShimDir); err != nil {
-			logWarn("[SetPathMode] failed to add shim dir to PATH: %v", err)
-		} else {
-			logInfo("[SetPathMode] added shim dir to PATH")
-		}
-		// 3. 为每个活跃工具创建 shim 文件
-		ins := a.newInstaller(cfg)
-		for _, at := range activeTools {
-			for _, shimName := range at.p.Shims() {
-				shimExe := ins.ResolveShimExe()
-				if err := shim.InstallShim(cfg.Core.ShimDir, shimName, shimExe); err != nil {
-					logWarn("[SetPathMode] failed to create shim %s: %v", shimName, err)
-				} else {
-					logInfo("[SetPathMode] created shim: %s", shimName)
-				}
-			}
-		}
-	}
-
-	// 保存配置（F-19/D17：写锁内操作实时配置，快照上的修改不会落盘）
-	if err := a.mutateCfg(func(c *config.Config) error {
-		return c.SetPathMode(mode)
-	}); err != nil {
-		logWarn("[SetPathMode] failed to save config: %v", err)
-	}
+	a.cfg = next
 	shim.InvalidateShimIndex()
-	env.BroadcastEnvironmentChange()
-
-	logInfo("[SetPathMode] mode switched to %s", mode)
 	return nil
 }
 

@@ -232,15 +232,17 @@ func TestVMTimeout_SecondCallFreshVMNoPanic(t *testing.T) {
 		t.Fatal("timed-out VM was not marked poisoned — the next caller would reuse its corrupted LState")
 	}
 
-	// Restore the production timeout and call again: this must drop the
-	// poisoned VM, build a fresh one and return the real version list.
+	// Replace the disposable fixture with a fast implementation at the same
+	// path. Seeing its new value proves the next call reloaded source and
+	// keeps the test independent of race-detector interpreter throughput.
+	writeVersionPlugin(t, dir, "slowvm", `{"10.0.0"}`)
 	engine.callTimeoutOverride = 0
 	got, err := p.ResolveVersion("latest")
 	if err != nil {
 		t.Fatalf("second ResolveVersion() after a timeout: %v (want a fresh VM and a normal result)", err)
 	}
-	if got != "9.9.9" {
-		t.Errorf("second ResolveVersion() = %q, want %q", got, "9.9.9")
+	if got != "10.0.0" {
+		t.Errorf("second ResolveVersion() = %q, want %q", got, "10.0.0")
 	}
 
 	engine.mu.Lock()
@@ -292,35 +294,13 @@ func TestVMPoisoned_EvictedAndRebuilt(t *testing.T) {
 	}
 }
 
-// LU6 (票 20 / F-04): the call goroutine is detached from the caller so a
-// timeout can abandon it. A panic inside such a detached plugin call must
-// be converted into a doneCh error — otherwise it would take down the
-// process (and with it the GUI) long after the caller has moved on.
-func TestOrphanCall_PanicRecoveredToDoneCh(t *testing.T) {
-	doneCh := make(chan error, 1)
-	callProtected(doneCh, func() error { panic("plugin boom") })
-
-	select {
-	case err := <-doneCh:
-		if err == nil {
-			t.Fatal("panic must surface as a non-nil error on doneCh")
-		}
-		if !strings.Contains(err.Error(), "panicked") || !strings.Contains(err.Error(), "plugin boom") {
-			t.Errorf("error = %q, want it to mention the panic and its value", err.Error())
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no result on doneCh after a panicking call")
+// LU6: a panic must unwind on the VM owner and become an ordinary call error.
+func TestLuaCall_PanicRecovered(t *testing.T) {
+	err := callProtected(func() error { panic("plugin boom") })
+	if err == nil || !strings.Contains(err.Error(), "panicked: plugin boom") {
+		t.Fatalf("panic result = %v", err)
 	}
-
-	// A normal call still reports its result through the same channel.
-	okCh := make(chan error, 1)
-	callProtected(okCh, func() error { return nil })
-	select {
-	case err := <-okCh:
-		if err != nil {
-			t.Errorf("normal call reported %v, want nil", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("no result on doneCh after a normal call")
+	if err := callProtected(func() error { return nil }); err != nil {
+		t.Fatalf("normal result = %v", err)
 	}
 }
