@@ -61,8 +61,15 @@ func TestLegacyCopyLinks(t *testing.T) {
 					t.Fatal(err)
 				}
 				actual, e := filepath.EvalSymlinks(filepath.Join(dst, "link"))
-				if e != nil || actual != filepath.Join(dst, "payload") {
-					t.Fatal("link not reanchored", actual, e)
+				expected, expectedErr := filepath.EvalSymlinks(filepath.Join(dst, "payload"))
+				if e != nil || expectedErr != nil || actual != expected {
+					t.Fatal("link not reanchored", actual, expected, e, expectedErr)
+				}
+				copied, copiedErr := os.Stat(filepath.Join(dst, "payload"))
+				resolved, resolvedErr := os.Stat(actual)
+				original, originalErr := os.Stat(filepath.Join(src, "payload"))
+				if copiedErr != nil || resolvedErr != nil || originalErr != nil || !os.SameFile(copied, resolved) || os.SameFile(original, resolved) {
+					t.Fatal("link must resolve to the copied file, not the original source", copiedErr, resolvedErr, originalErr)
 				}
 			} else {
 				if err == nil {
@@ -73,6 +80,45 @@ func TestLegacyCopyLinks(t *testing.T) {
 				t.Fatal("source link lost", err)
 			}
 		})
+	}
+}
+
+func TestLegacyCopyLinksThroughAliasedParent(t *testing.T) {
+	physical := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Skipf("parent alias unavailable: %v", err)
+	}
+	src := filepath.Join(physical, "source")
+	dst := filepath.Join(alias, "copy")
+	if err := os.Mkdir(src, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "payload"), []byte("contents"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("payload", filepath.Join(src, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateLegacyDir(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	actual, actualErr := filepath.EvalSymlinks(filepath.Join(dst, "link"))
+	expected, expectedErr := filepath.EvalSymlinks(filepath.Join(dst, "payload"))
+	if actualErr != nil || expectedErr != nil || actual != expected {
+		t.Fatal("aliased destination link not reanchored", actual, expected, actualErr, expectedErr)
+	}
+	copyInfo, copyErr := os.Stat(expected)
+	sourceInfo, sourceErr := os.Stat(filepath.Join(src, "payload"))
+	if copyErr != nil || sourceErr != nil || os.SameFile(copyInfo, sourceInfo) {
+		t.Fatal("copy points back into original source", copyErr, sourceErr)
+	}
+	data, err := os.ReadFile(actual)
+	if err != nil || string(data) != "contents" {
+		t.Fatal("copied payload changed", string(data), err)
+	}
+	if _, err := os.Lstat(filepath.Join(src, "link")); err != nil {
+		t.Fatal("original source link lost", err)
 	}
 }
 
