@@ -236,7 +236,15 @@ test('DMG consumes XDev.app, generated icns, plist and optional Applications lin
   // that exact requested link through a mock there; Unix exercises real ln.
   if (process.platform === 'win32') writeFileSync(join(mocks, 'ln'), '#!/bin/bash\n[[ "$1" == -s && "$2" == /Applications && "$3" == */dmg/Applications ]] || exit 9\nprintf link > "$PWD/link-observed"\n');
   writeFileSync(join(mocks, 'sips'), '#!/bin/bash\n[[ "$1" == -z && -f "$4" && "$5" == --out ]] || exit 5\ncp "$4" "$6"\n');
-  writeFileSync(join(mocks, 'iconutil'), '#!/bin/bash\n[[ "$1" == -c && "$2" == icns && "$4" == -o ]] || exit 5\n[[ $(find "$3" -name "*.png" | wc -l) == 10 ]] || exit 6\nprintf icns > "$5"\n');
+  writeFileSync(join(mocks, 'iconutil'), `#!/bin/bash
+[[ "$1" == -c && "$2" == icns && "$4" == -o ]] || exit 5
+COUNT="$(find "$3" -name "*.png" | wc -l)"
+# BSD wc pads counts; retain the actual enumeration and require exactly ten.
+COUNT="       $COUNT"
+if [[ -n "\${XDEV_MOCK_ICON_COUNT_OVERRIDE:-}" ]]; then COUNT="$XDEV_MOCK_ICON_COUNT_OVERRIDE"; fi
+[[ "$COUNT" -eq 10 ]] || exit 6
+printf icns > "$5"
+`);
   writeFileSync(join(mocks, 'hdiutil'), `#!/bin/bash
 while [[ "$1" != -srcfolder ]]; do shift; done
 APP="$2/XDev.app"
@@ -253,6 +261,10 @@ printf dmg > "\${@: -1}"
     assert.match(readFileSync(join(dir, 'plist-observed'), 'utf8'), /1\.0\.0b2/);
     assert.equal(existsSync(join(dir, 'link-observed')), link === '1');
     assert.ok(existsSync(join(dir, 'dist/xdev-darwin-arm64-v1.0.0-beta.2.dmg')));
+  }
+  for (const invalidCount of ['9', '11']) {
+    const rejected = spawnSync(bash, ['-c', driver], { cwd: dir, encoding: 'utf8', env: { ...process.env, NATIVE_NODE: process.execPath.replaceAll('\\', '/'), XDEV_DMG_APPLICATIONS_LINK: '0', XDEV_MOCK_ICON_COUNT_OVERRIDE: invalidCount } });
+    assert.equal(rejected.status, 6, `incorrect icon count ${invalidCount} must still fail: ${rejected.stdout}${rejected.stderr}`);
   }
 });
 

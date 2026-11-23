@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -277,6 +278,8 @@ func runRunningBinaryHelper(t *testing.T, fixture *updateProxyFixture, rootPath,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer childStdin.Close()
+	defer stdin.Close()
 	cmd := exec.Command(target, "-test.run=^TestRunningBinaryWindowsHelper$", "-test.timeout=2m")
 	cmd.Dir = filepath.Dir(target)
 	cmd.Stdin = childStdin
@@ -302,18 +305,24 @@ func runRunningBinaryHelper(t *testing.T, fixture *updateProxyFixture, rootPath,
 		_ = stdin.Close()
 		t.Fatalf("start copied running xdev.exe helper: %v", err)
 	}
+	_ = childStdin.Close()
+	exited := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(exited)
+	}()
 	finished := false
 	defer func() {
 		_ = stdin.Close()
-		_ = childStdin.Close()
 		if !finished {
 			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
+			<-exited // Always join, including a failed liveness probe.
 		}
 	}()
 
 	if lockTarget {
-		report := waitRunningBinaryReport(t, reportPath, "ready", cmd, &stdout, &stderr)
+		report := waitRunningBinaryReport(t, reportPath, "ready", exited, &stdout, &stderr)
 		if report.PID != cmd.Process.Pid {
 			t.Fatalf("ready helper PID = %d, process PID = %d", report.PID, cmd.Process.Pid)
 		}
@@ -325,22 +334,23 @@ func runRunningBinaryHelper(t *testing.T, fixture *updateProxyFixture, rootPath,
 			_ = syscall.CloseHandle(lock)
 			t.Fatalf("release helper to attempt locked replacement: %v", err)
 		}
-		report = waitRunningBinaryReport(t, reportPath, "error", cmd, &stdout, &stderr)
+		report = waitRunningBinaryReport(t, reportPath, "error", exited, &stdout, &stderr)
 		_ = syscall.CloseHandle(lock)
-		assertHelperHeartbeat(t, heartbeatPath)
+		assertHelperHeartbeat(t, stdin, heartbeatPath, exited)
 		verifyWhileAlive(report)
 		if err := stdin.Close(); err != nil {
 			t.Errorf("close helper stdin: %v", err)
 		}
-		if err := cmd.Wait(); err != nil {
-			t.Fatalf("running helper exit: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+		<-exited
+		if waitErr != nil {
+			t.Fatalf("running helper exit: %v\nstdout:\n%s\nstderr:\n%s", waitErr, stdout.String(), stderr.String())
 		}
 		finished = true
 		return report
 	}
 
-	report := waitRunningBinaryReport(t, reportPath, "", cmd, &stdout, &stderr)
-	assertHelperHeartbeat(t, heartbeatPath)
+	report := waitRunningBinaryReport(t, reportPath, "", exited, &stdout, &stderr)
+	assertHelperHeartbeat(t, stdin, heartbeatPath, exited)
 	if report.PID != cmd.Process.Pid {
 		t.Fatalf("helper PID = %d, process PID = %d", report.PID, cmd.Process.Pid)
 	}
@@ -348,8 +358,9 @@ func runRunningBinaryHelper(t *testing.T, fixture *updateProxyFixture, rootPath,
 	if err := stdin.Close(); err != nil {
 		t.Errorf("close helper stdin: %v", err)
 	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("running helper exit: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	<-exited
+	if waitErr != nil {
+		t.Fatalf("running helper exit: %v\nstdout:\n%s\nstderr:\n%s", waitErr, stdout.String(), stderr.String())
 	}
 	finished = true
 	return report
@@ -369,11 +380,12 @@ func TestRunningBinaryWindowsHelper(t *testing.T) {
 	if filepath.Base(exe) != binaryNameInArchive() {
 		t.Fatalf("helper executable basename = %q, want %q", filepath.Base(exe), binaryNameInArchive())
 	}
+	stdin := bufio.NewReader(os.Stdin)
 	if mode == "locked" {
 		if err := writeRunningBinaryReport(reportPath, runningBinaryReport{State: "ready", PID: os.Getpid(), Target: exe}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := bufio.NewReader(os.Stdin).ReadString('\n'); err != nil {
+		if _, err := stdin.ReadString('\n'); err != nil {
 			t.Fatalf("wait for parent to hold target lock: %v", err)
 		}
 	}
@@ -409,11 +421,6 @@ func TestRunningBinaryWindowsHelper(t *testing.T) {
 	if mode != "success" && applyErr == nil {
 		t.Fatal("ApplyToWithProgress unexpectedly succeeded")
 	}
-	// Publish liveness before the report so the parent can check the old helper
-	// process has remained alive across replacement without a scheduler race.
-	if err := os.WriteFile(heartbeatPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
-		t.Fatalf("publish helper liveness: %v", err)
-	}
 	state := "ok"
 	errText := ""
 	if applyErr != nil {
@@ -423,21 +430,28 @@ func TestRunningBinaryWindowsHelper(t *testing.T) {
 		t.Fatalf("write update result: %v", err)
 	}
 
-	done := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(io.Discard, os.Stdin)
-		close(done)
-	}()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	if err := serveHelperHeartbeat(stdin, heartbeatPath); err != nil {
+		t.Fatalf("serve liveness heartbeat: %v", err)
+	}
+}
+
+// The same stdin reader handles the lock-mode "go" handshake and liveness
+// requests. EOF still releases the old executable only when the parent is done.
+func serveHelperHeartbeat(stdin *bufio.Reader, path string) error {
 	for {
-		select {
-		case <-done:
-			return
-		case now := <-ticker.C:
-			if err := os.WriteFile(heartbeatPath, []byte(now.UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
-				t.Fatalf("write liveness heartbeat: %v", err)
-			}
+		request, err := stdin.ReadString('\n')
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		nonce, ok := strings.CutPrefix(strings.TrimSuffix(request, "\n"), "heartbeat ")
+		if !ok || nonce == "" {
+			return fmt.Errorf("invalid heartbeat request %q", request)
+		}
+		if err := os.WriteFile(path, []byte(nonce), 0o600); err != nil {
+			return fmt.Errorf("write heartbeat acknowledgement: %w", err)
 		}
 	}
 }
@@ -466,7 +480,7 @@ func writeRunningBinaryReport(path string, report runningBinaryReport) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func waitRunningBinaryReport(t *testing.T, path, expected string, cmd *exec.Cmd, stdout, stderr *bytes.Buffer) runningBinaryReport {
+func waitRunningBinaryReport(t *testing.T, path, expected string, exited <-chan struct{}, stdout, stderr *bytes.Buffer) runningBinaryReport {
 	t.Helper()
 	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
@@ -481,36 +495,85 @@ func waitRunningBinaryReport(t *testing.T, path, expected string, cmd *exec.Cmd,
 					t.Fatalf("helper paused unexpectedly: %+v", report)
 					return report
 				}
-				if report.State == "error" && expected == "" {
-					t.Fatalf("helper update failed: %s\nstdout:\n%s\nstderr:\n%s", report.Error, stdout.String(), stderr.String())
-					return report
-				}
 				if report.State == "ok" && expected != "" {
 					t.Fatalf("helper unexpectedly succeeded while failure was expected: %+v", report)
 					return report
 				}
 			}
 		}
-		if cmd.ProcessState != nil {
+		select {
+		case <-exited:
 			t.Fatalf("helper exited before publishing %q report\nstdout:\n%s\nstderr:\n%s", expected, stdout.String(), stderr.String())
 			return runningBinaryReport{}
+		case <-time.After(50 * time.Millisecond):
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for helper report %q\nstdout:\n%s\nstderr:\n%s", expected, stdout.String(), stderr.String())
+	// Output buffers may still be written until Wait finishes.
+	t.Fatalf("timed out waiting for helper report %q", expected)
 	return runningBinaryReport{}
 }
 
-func assertHelperHeartbeat(t *testing.T, path string) {
+func assertHelperHeartbeat(t *testing.T, stdin *os.File, path string, exited <-chan struct{}) {
 	t.Helper()
-	first, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("helper did not publish liveness heartbeat after update: %v", err)
+	if err := probeHelperHeartbeat(stdin, path, exited, 10*time.Second); err != nil {
+		t.Fatalf("old updater process was not demonstrably alive after replace: %v", err)
 	}
-	time.Sleep(250 * time.Millisecond)
-	second, err := os.ReadFile(path)
-	if err != nil || bytes.Equal(first, second) {
-		t.Fatalf("old updater process was not demonstrably alive after replace: before=%q after=%q err=%v", first, second, err)
+}
+
+func probeHelperHeartbeat(stdin *os.File, path string, exited <-chan struct{}, timeout time.Duration) error {
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return fmt.Errorf("generate heartbeat nonce: %w", err)
+	}
+	nonce := hex.EncodeToString(token[:])
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	// Include pipe backpressure in the bound. Close the owned pipe and join
+	// the writer if the child exits or the deadline expires during the write.
+	written := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(stdin, "heartbeat "+nonce+"\n")
+		written <- err
+	}()
+	writePending := true
+	defer func() {
+		if writePending {
+			_ = stdin.Close()
+			<-written
+		}
+	}()
+	select {
+	case <-exited:
+		return fmt.Errorf("helper exited before heartbeat acknowledgement")
+	case <-timer.C:
+		return fmt.Errorf("timed out sending heartbeat request after %s", timeout)
+	case err := <-written:
+		writePending = false
+		if err != nil {
+			return fmt.Errorf("send heartbeat request: %w", err)
+		}
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	var lastReadErr error
+	for {
+		data, err := os.ReadFile(path)
+		lastReadErr = err
+		select {
+		case <-exited:
+			return fmt.Errorf("helper exited before heartbeat acknowledgement")
+		default:
+		}
+		if err == nil && string(data) == nonce {
+			return nil
+		}
+		select {
+		case <-exited:
+			return fmt.Errorf("helper exited before heartbeat acknowledgement")
+		case <-timer.C:
+			return fmt.Errorf("timed out waiting for heartbeat acknowledgement after %s (last read error: %v)", timeout, lastReadErr)
+		case <-ticker.C:
+		}
 	}
 }
 
